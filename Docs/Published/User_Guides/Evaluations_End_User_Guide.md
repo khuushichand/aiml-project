@@ -252,7 +252,7 @@ Batch Results:
 
 ### 2. A/B Testing Different Models
 
-**Use Case**: Compare outputs from GPT-4 vs Claude.
+**Use Case**: Compare outputs from GPT-4o vs Claude Opus.
 
 **Process**:
 1. Generate same content with both models
@@ -309,8 +309,8 @@ Batch Results:
 
 ### 4. Cost Optimization
 
-- **Development**: Use cheaper models (GPT-3.5)
-- **Production**: Use better models (GPT-4)
+- **Development**: Use cheaper models (mini tiers)
+- **Production**: Use flagship models (e.g., GPT-4o / Claude Opus)
 - **Batch Processing**: Evaluate multiple items together
 - **Caching**: Store results to avoid re-evaluation
 
@@ -354,11 +354,13 @@ Batch Results:
 
 ### Typical Costs per Evaluation
 
+Pricing varies by provider and model. Treat the table below as rough examples and verify current pricing.
+
 | Provider | Per Evaluation | 1000 Evaluations |
 |----------|---------------|------------------|
-| GPT-3.5 | $0.001-0.003 | $1-3 |
-| GPT-4 | $0.01-0.03 | $10-30 |
-| Claude | $0.008-0.024 | $8-24 |
+| OpenAI (mini tier) | $0.001-0.003 | $1-3 |
+| OpenAI (flagship tier) | $0.01-0.03 | $10-30 |
+| Claude (flagship tier) | $0.008-0.024 | $8-24 |
 | Local LLM | Free | Free |
 
 ### Cost Optimization Tips
@@ -368,8 +370,8 @@ Batch Results:
    - Focus on high-risk content
 
 2. **Choose Models Wisely**:
-   - GPT-3.5 for development/testing
-   - GPT-4 for production/critical
+   - Mini-tier models for development/testing
+   - Flagship models for production/critical
    - Local models for high volume
 
 3. **Batch Processing**:

@@ -1,7 +1,7 @@
 import React, { useEffect } from "react"
 import { Alert, Empty, Tabs } from "antd"
 import type { TabsProps } from "antd"
-import { BookOpen, Highlighter, FileText, ArrowLeftRight } from "lucide-react"
+import { BookOpen, Highlighter, FileText, ArrowLeftRight, CalendarClock } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { PageShell } from "@/components/Common/PageShell"
@@ -11,6 +11,7 @@ import { ReadingItemsList } from "./ReadingList/ReadingItemsList"
 import { HighlightsList } from "./Highlights/HighlightsList"
 import { TemplatesList } from "./Templates/TemplatesList"
 import { ImportExportPanel } from "./ImportExport/ImportExportPanel"
+import { DigestSchedulesPanel } from "./Digests/DigestSchedulesPanel"
 
 /**
  * CollectionsPlaygroundPage
@@ -63,6 +64,16 @@ export const CollectionsPlaygroundPage: React.FC = () => {
         </span>
       ),
       children: <TemplatesList />
+    },
+    {
+      key: "digests",
+      label: (
+        <span className="flex items-center gap-2">
+          <CalendarClock className="h-4 w-4" />
+          {t("collections:tabs.digests", "Digest Schedules")}
+        </span>
+      ),
+      children: <DigestSchedulesPanel />
     },
     {
       key: "import-export",

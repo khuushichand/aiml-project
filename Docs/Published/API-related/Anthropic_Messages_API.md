@@ -61,7 +61,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/messages/count_tokens \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: $API_KEY" \
   -d '{
-    "model": "anthropic/claude-3-5-haiku-20241022",
+    "model": "anthropic/claude-opus-4-20250514",
     "messages": [{"role":"user","content":"Count my tokens."}]
   }'
 ```

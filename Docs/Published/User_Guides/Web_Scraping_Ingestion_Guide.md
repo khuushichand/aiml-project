@@ -203,11 +203,14 @@ Supported request fields:
 - `max_archived_threads_per_board`: optional scan cap for archived threads per board.
   - Range: `1..500`.
   - Default: `min(max_threads_per_board, 50)` (or server override).
+- `result_count`: optional global cap on the final number of results returned.
+  - This limit is applied **after** per-board scans and deduplication/merge, not per-board. Unless explicitly specified as a per-board override, `result_count` truncates the combined global result set across all boards.
 
 Behavior notes:
 
-- Live catalog and archived thread results are deduped by `(board, thread_no)`.
-- When a duplicate exists, non-archived items are preferred and merged with best available metadata.
+- Per-board scans (live catalog and, optionally, archived threads) run independently for each board.
+- Results from all boards are then combined and deduped globally by `(board, thread_no)`: when a duplicate exists, non-archived items are preferred and metadata is merged from both sources.
+- After deduplication, the global result set is truncated to `result_count`. Because this truncation happens after the cross-board merge, the final count may include threads from any combination of the requested boards.
 - Board failures are fail-soft: one board can fail while others still return results.
 - Warning metadata is returned when a board fails; if all boards fail, result set is empty and `error` is populated.
 

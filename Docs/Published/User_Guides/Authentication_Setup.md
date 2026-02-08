@@ -13,6 +13,7 @@ cp .env.authnz.template .env
 # 2. Generate a secure API key (new format)
 python -m tldw_Server_API.app.core.AuthNZ.initialize
 # Choose "Generate secure keys" and copy SINGLE_USER_API_KEY
+# This also generates MCP_JWT_SECRET and MCP_API_KEY_SALT if missing.
 
 # 3. Add the generated key to your .env file
 # Edit .env and replace SINGLE_USER_API_KEY value
@@ -50,11 +51,15 @@ cp .env.authnz.template .env
 # 2. Generate secure keys
 python -c "import secrets; print('JWT_SECRET_KEY=' + secrets.token_urlsafe(32))"
 python -c "from cryptography.fernet import Fernet; print('SESSION_ENCRYPTION_KEY=' + Fernet.generate_key().decode())"
+# MCP Unified secrets (required in production; initializer can generate if missing)
+python -c "import secrets; print('MCP_JWT_SECRET=' + secrets.token_urlsafe(32))"
+python -c "import secrets; print('MCP_API_KEY_SALT=' + secrets.token_urlsafe(32))"
 
 # 3. Edit .env file:
 #    - Set AUTH_MODE=multi_user
 #    - Add generated JWT_SECRET_KEY
 #    - Add generated SESSION_ENCRYPTION_KEY
+#    - Add MCP_JWT_SECRET and MCP_API_KEY_SALT (required for MCP Unified in production)
 #      (the server writes Config_Files/session_encryption.key with 0600 permissions; keep manual copies owner-readable only)
 #    - Configure database settings
 
@@ -88,6 +93,8 @@ Key settings in `.env`:
 | `AUTH_MODE` | `single_user` or `multi_user` | `multi_user` |
 | `JWT_SECRET_KEY` | Secret for JWT signing (multi-user) | Required for multi-user |
 | `SINGLE_USER_API_KEY` | API key for single-user mode | Required for single-user |
+| `MCP_JWT_SECRET` | MCP Unified JWT signing secret | Required for MCP in production |
+| `MCP_API_KEY_SALT` | MCP API key hashing salt | Required for MCP in production |
 | `ENABLE_REGISTRATION` | Allow new user registration | `false` |
 | `DATABASE_URL` | User database location | `sqlite:///./Databases/users.db` |
 | `ROTATE_REFRESH_TOKENS` | Rotate refresh tokens on use | `true` |
@@ -132,7 +139,8 @@ Key settings in `.env`:
     ```bash
     export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
     ```
-  - See Multi-User Deployment Guide for more details.
+  - For a focused walkthrough, see `Docs/User_Guides/Multi-User_Postgres_Setup.md`.
+  - See Multi-User Deployment Guide for broader production guidance.
 
 ### Security Best Practices
 
@@ -174,6 +182,7 @@ Rotation guidance: see `Docs/Operations/JWT_Rotation_Runbook.md`.
 ### Documentation
 
 - AuthNZ API Guide: `../API-related/AuthNZ-API-Guide.md`
+- Family/Guardian setup: `Docs/User_Guides/Family_Guardian_Setup.md`
 
 ## Quick Setup (Multi-User with SQLite - Dev)
 
@@ -198,6 +207,7 @@ open http://localhost:8080/login   # macOS (run the Next.js client separately)
 Notes
 - This is suitable for development and light testing. For production multi-user, use PostgreSQL for `DATABASE_URL`.
 - The login flow posts to `/api/v1/auth/register` and `/api/v1/auth/login` and shows the access token.
+- For a deeper explanation of how multi-user SQLite is wired (AuthNZ DB + per-user storage) and common limitations, see `Docs/User_Guides/Multi-User_SQLite_Setup.md`.
 
 ## Using config.txt for AuthNZ
 

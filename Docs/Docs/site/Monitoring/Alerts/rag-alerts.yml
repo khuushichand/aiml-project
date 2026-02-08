@@ -1,0 +1,235 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: tldw-rag
+    folder: TLDW
+    interval: 1m
+    rules:
+      # LLM reranker timeouts rate exceeds threshold
+      - uid: tldw_rag_reranker_timeouts
+        title: RAG LLM reranker timeouts high
+        condition: B
+        for: 5m
+        annotations:
+          summary: 'LLM reranker timeouts > 1/min'
+          description: 'sum(rate(rag_reranker_llm_timeouts_total[5m])) > 1'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(rag_reranker_llm_timeouts_total[5m]))
+              instant: false
+              interval: ""
+              legendFormat: "timeouts"
+              range: true
+              refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              params:
+                - 1
+              refId: B
+
+      # LLM reranker budget exhaustions rate exceeds threshold
+      - uid: tldw_rag_reranker_budget
+        title: RAG LLM reranker budget exhausted
+        condition: B
+        for: 5m
+        annotations:
+          summary: 'LLM reranker budget exhaustions > 0.5/min'
+          description: 'sum(rate(rag_reranker_llm_budget_exhausted_total[5m])) > 0.5'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(rag_reranker_llm_budget_exhausted_total[5m]))
+              instant: false
+              interval: ""
+              legendFormat: "budget_exhausted"
+              range: true
+              refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              params:
+                - 0.5
+              refId: B
+
+      # LLM reranker exceptions rate exceeds threshold
+      - uid: tldw_rag_reranker_exceptions
+        title: RAG LLM reranker exceptions high
+        condition: B
+        for: 5m
+        annotations:
+          summary: 'LLM reranker exceptions > 0.5/min'
+          description: 'sum(rate(rag_reranker_llm_exceptions_total[5m])) > 0.5'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(rag_reranker_llm_exceptions_total[5m]))
+              instant: false
+              interval: ""
+              legendFormat: "exceptions"
+              range: true
+              refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              params:
+                - 0.5
+              refId: B
+
+      # LLM reranker docs scored near zero (potentially stuck/disabled)
+      - uid: tldw_rag_reranker_docs_low
+        title: RAG LLM reranker docs scored low
+        condition: D
+        for: 15m
+        annotations:
+          summary: 'LLM reranker docs scored ~0 for 15m'
+          description: 'sum(rate(rag_reranker_llm_docs_scored_total[15m])) < 0.01'
+        labels:
+          severity: info
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(rag_reranker_llm_docs_scored_total[15m]))
+              instant: false
+              interval: ""
+              legendFormat: "docs_scored"
+              range: true
+              refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: math
+              expression: 0.01 - A
+              refId: C
+          - refId: D
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              params:
+                - 0
+              refId: D
+
+      # LLM reranker docs scored low BUT only when there is active RAG traffic
+      - uid: tldw_rag_reranker_docs_low_with_traffic
+        title: RAG LLM reranker docs scored low with traffic
+        condition: F
+        for: 15m
+        annotations:
+          summary: 'LLM reranker docs scored ~0 for 15m while RAG traffic is present'
+          description: '(0.01 - docs_rate) > 0 AND (rag_http_rate - 0.1) > 0'
+        labels:
+          severity: info
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(rag_reranker_llm_docs_scored_total[15m]))
+              instant: false
+              interval: ""
+              legendFormat: "docs_scored"
+              range: true
+              refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+          - refId: B
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(http_requests_total{endpoint=~"/api/v1/rag.*"}[15m]))
+              instant: false
+              interval: ""
+              legendFormat: "rag_http"
+              range: true
+              refId: B
+            relativeTimeRange:
+              from: 900
+              to: 0
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: math
+              expression: 0.01 - A
+              refId: C
+          - refId: D
+            datasourceUid: __expr__
+            model:
+              type: math
+              expression: B - 0.1
+              refId: D
+          - refId: E
+            datasourceUid: __expr__
+            model:
+              type: math
+              expression: C * D
+              refId: E
+          - refId: F
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              params:
+                - 0
+              refId: F
+
+      # Adaptive rerun budget exhaustion signals (alerts when budget breaches occur)
+      - uid: tldw_rag_adaptive_rerun_budget
+        title: RAG adaptive rerun budget exhausted
+        condition: B
+        for: 5m
+        annotations:
+          summary: 'Adaptive rerun budget exhaustions > 0.5/min'
+          description: 'sum(rate(rag_phase_budget_exhausted_total{phase="adaptive_rerun"}[5m])) > 0.5'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(rag_phase_budget_exhausted_total{phase="adaptive_rerun"}[5m]))
+              instant: false
+              interval: ""
+              legendFormat: "budget_exhausted"
+              range: true
+              refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              params:
+                - 0.5
+              refId: B

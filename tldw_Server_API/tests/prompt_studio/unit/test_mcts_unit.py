@@ -1,6 +1,7 @@
 import os
 import pytest
 
+import tldw_Server_API.app.core.Prompt_Management.prompt_studio.mcts_optimizer as mcts_module
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.mcts_optimizer import MCTSOptimizer
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_quality import PromptQualityScorer
@@ -285,3 +286,89 @@ async def test_feedback_knobs_change_refinement_behavior(monkeypatch, temp_ps_db
     assert enabled_result["final_score"] > zero_retry_result["final_score"]
     assert enabled_result["final_metrics"]["applied_params"]["feedback_enabled"] is True
     assert enabled_result["final_metrics"]["applied_params"]["feedback_max_retries"] == 2
+
+
+@pytest.mark.asyncio
+async def test_mcts_error_metrics_emit_all_required_labels(monkeypatch, temp_ps_db):
+    prompt_id, test_ids = _seed_prompt_and_tests(temp_ps_db, n_tests=1)
+    prompt = temp_ps_db.get_prompt(prompt_id) or {}
+    optimization = temp_ps_db.create_optimization(
+        project_id=int(prompt["project_id"]),
+        name="mcts-errors",
+        initial_prompt_id=prompt_id,
+        optimizer_type="mcts",
+        optimization_config={
+            "optimizer_type": "mcts",
+            "target_metric": "accuracy",
+            "strategy_params": {
+                "mcts_simulations": 1,
+                "mcts_max_depth": 1,
+            },
+        },
+        max_iterations=1,
+        status="running",
+    )
+
+    mcts = MCTSOptimizer(temp_ps_db, TestRunner(temp_ps_db))
+    monkeypatch.setattr(mcts.decomposer, "decompose_text", lambda _: ["seg"])  # type: ignore[attr-defined]
+
+    async def _fake_props(system_so_far, segment_text, k):
+        return [
+            system_so_far + " FAILSCORE",
+            system_so_far + " LOWQ",
+            system_so_far + " GOOD_A",
+            system_so_far + " GOOD_B",
+        ]
+
+    async def _fake_score_prompt_async(*, system_text: str, user_text: str) -> float:
+        if system_text.endswith("FAILSCORE"):
+            raise RuntimeError("scorer failure")
+        if system_text.endswith("LOWQ"):
+            return 0.05
+        if system_text.endswith("GOOD_A"):
+            return 0.82
+        return 0.84
+
+    async def _timeout_run_single_test(self, *, prompt_id: int, test_case_id: int, model_config, metrics=None):
+        raise TimeoutError("evaluation timed out")
+
+    emitted: list[tuple[str, int]] = []
+
+    def _capture_mcts_error(*, error: str, count: int = 1, strategy: str = "mcts") -> None:
+        emitted.append((str(error), int(count)))
+
+    monkeypatch.setattr(mcts, "_propose_candidates", _fake_props, raising=True)
+    monkeypatch.setattr(mcts.scorer, "score_prompt_async", _fake_score_prompt_async, raising=True)
+    monkeypatch.setattr(TestRunner, "run_single_test", _timeout_run_single_test, raising=True)
+    monkeypatch.setattr(mcts_module.prompt_studio_metrics, "record_mcts_error", _capture_mcts_error, raising=True)
+
+    result = await mcts.optimize(
+        initial_prompt_id=prompt_id,
+        optimization_id=int(optimization["id"]),
+        test_case_ids=test_ids,
+        model_config={"model": "dummy"},
+        max_iterations=1,
+        target_metric=MetricType.ACCURACY,
+        strategy_params={
+            "mcts_simulations": 1,
+            "mcts_max_depth": 1,
+            "prompt_candidates_per_node": 4,
+            "score_dedup_bin": 0.1,
+            "min_quality": 0.2,
+            "feedback_enabled": False,
+        },
+    )
+
+    labels = {label for label, _count in emitted}
+    assert {
+        "prune_low_quality",
+        "prune_dedup",
+        "scorer_failure",
+        "evaluator_timeout",
+    }.issubset(labels)
+
+    errors = result["final_metrics"]["errors"]
+    assert int(errors["prune_low_quality"]) >= 1
+    assert int(errors["prune_dedup"]) >= 1
+    assert int(errors["scorer_failures"]) >= 1
+    assert int(errors["evaluator_timeouts"]) >= 1

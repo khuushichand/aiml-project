@@ -1073,6 +1073,9 @@ def build_call_params_from_request(
             "history_message_limit",
             "history_message_order",
             "slash_command_injection_mode",
+            "persona_exemplar_budget_tokens",
+            "persona_exemplar_strategy",
+            "persona_debug",
         },
     )
 

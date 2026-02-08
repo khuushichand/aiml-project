@@ -1,0 +1,8419 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentation for the tldw_server project">
+      
+      
+      
+        <link rel="canonical" href="https://rmusser01.github.io/tldw_server/User_Guides/Household_Multi_User_Walkthrough/">
+      
+      
+      
+      
+      <link rel="icon" href="../../assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.21">
+    
+    
+      
+        <title>Household Multi-User Walkthrough - tldw Server Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.2a3383ac.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../css/timeago.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#household-multi-user-walkthrough" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="tldw Server Docs" class="md-header__button md-logo" aria-label="tldw Server Docs" data-md-component="logo">
+      
+  <img src="../../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            tldw Server Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Household Multi-User Walkthrough
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-hidden="true"  type="radio" name="__palette" id="__palette_0">
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-hidden="true"  type="radio" name="__palette" id="__palette_1">
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/rmusser01/tldw_server" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.0.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    rmusser01/tldw_server
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../Overview/Feature_Status/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Overview
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../Workflows_PRD/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Workflows
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../API-related/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  API
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../Code_Documentation/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Code
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../Deployment/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Deployment
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../Env_Vars/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Environment Variables
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../Evaluations/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Evaluations
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../Monitoring/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Monitoring
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../RELEASE_NOTES.md" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Release Notes
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../MCP/Unified_Overview/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  MCP Unified
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="tldw Server Docs" class="md-nav__button md-logo" aria-label="tldw Server Docs" data-md-component="logo">
+      
+  <img src="../../assets/logo.png" alt="logo">
+
+    </a>
+    tldw Server Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/rmusser01/tldw_server" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.0.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    rmusser01/tldw_server
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Overview/Feature_Status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Workflows
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Workflows
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Workflows_PRD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Workflows PRD
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Workflows_Runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Runbook
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Workflows_RAG_Config_Optimization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    RAG Config Optimization
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Workflows_Embeddings_ABTest/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embeddings A/B Test
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Workflows_Performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Performance
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Workflows_Examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Examples & CLI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Workflows_Debugging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Debugging
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../API-related/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    API
+    
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Design & Reference
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            Design & Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/API_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    API Design
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/API_Notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    API Notes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/API_README/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    API README
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/API_Tags_Index/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    API Tag Index
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Old_API_Map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Old API Map
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Core APIs
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            Core APIs
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Chat_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chat API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Chat_Module_Integration_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chat Module Integration
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/RAG_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    RAG API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/RAG-API-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    RAG API Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Embeddings_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embeddings API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Embeddings_Module_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embeddings Module
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Embeddings-API-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embeddings API Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Audio & Speech
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_4">
+            <span class="md-nav__icon md-icon"></span>
+            Audio & Speech
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Audio_Transcription_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Audio Transcription API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Audio_Jobs_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Audio Jobs API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/TTS_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TTS API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_5" id="__nav_4_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Character Chat
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_5">
+            <span class="md-nav__icon md-icon"></span>
+            Character Chat
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/CHARACTER_CHAT_API_DOCUMENTATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Character Chat API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Character_Chat_Sessions_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Character Sessions API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Character_Messages_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Character Messages API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_6" id="__nav_4_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Content & Storage
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_6">
+            <span class="md-nav__icon md-icon"></span>
+            Content & Storage
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Chatbook_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chatbook API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Chatbook_Features_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chatbook Features API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Notes_Graph_API.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Notes Graph API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Items_API.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Items API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Reading_List_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reading List API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Collections_Feeds_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Collections Feeds API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Storage_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Storage API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/File_Artifacts_API.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    File Artifacts API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Sync_API.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Sync API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_7" id="__nav_4_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Processing
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_7">
+            <span class="md-nav__icon md-icon"></span>
+            Processing
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Chunking_Templates_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chunking Templates API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/OCR_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OCR API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Transcript_Segmentation_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Transcript Segmentation API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Email_Processing_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Email Processing API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Media_Ingest_Jobs_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Media Ingest Jobs API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Evaluations
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            Evaluations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Evaluations_API_Reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluations API Reference
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Evaluations_API_Unified_Reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluations API (Unified)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/tldw_Evaluations_API_Reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluations API (Legacy)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_9" id="__nav_4_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Admin & Auth
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_9">
+            <span class="md-nav__icon md-icon"></span>
+            Admin & Auth
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Admin_RBAC_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Admin RBAC API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Admin_Orgs_Teams/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Admin Orgs & Teams
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/AuthNZ-API-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AuthNZ API Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/User_Registration_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    User Registration API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Audit_Configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Audit Configuration
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Audit_Export/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Audit Export
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Virtual_Keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Virtual Keys
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_10" id="__nav_4_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Tools & Extensions
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_10">
+            <span class="md-nav__icon md-icon"></span>
+            Tools & Extensions
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Prompt_Studio_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Prompt Studio API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Providers_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Providers API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Anthropic_Messages_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Anthropic Messages API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Sandbox_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Sandbox API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Tools_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tools API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Vector_Stores_Admin_and_Query/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Vector Stores API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Quizzes_API.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Quizzes API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Writing_API.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Writing API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Data_Tables_API.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Data Tables API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API-related/Feedback_API.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Feedback API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API/Slides/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Slides API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../API/Voice_Assistant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Voice Assistant API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../Code_Documentation/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    Code
+    
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Code
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Architecture
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_2">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Code_Map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Code Map
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Database/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Database Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Database-Backends/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Database Backends
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Services_Module/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Services Module
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Databases
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_3">
+            <span class="md-nav__icon md-icon"></span>
+            Databases
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Databases/ChaChaNotes_DB/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ChaChaNotes DB
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Databases/Media_DB_v2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Media DB v2
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Chat & Characters
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_4">
+            <span class="md-nav__icon md-icon"></span>
+            Chat & Characters
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Chat_Developer_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chat Developer Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Character_Chat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Character Chat
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Chatbook_Developer_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chatbook Developer Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    RAG & Embeddings
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_5">
+            <span class="md-nav__icon md-icon"></span>
+            RAG & Embeddings
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/RAG-Developer-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    RAG Developer Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/RAG-Functional-Pipeline-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    RAG Functional Pipeline
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Embeddings-Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embeddings Documentation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Embeddings-Developer-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embeddings Developer Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Content Processing
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6">
+            <span class="md-nav__icon md-icon"></span>
+            Content Processing
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Chunking-Module/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chunking Module
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Chunking_Templates_Developer_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chunking Templates
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Pieces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Pieces
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Proposition_Chunking_and_Evals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Proposition Chunking and Evals
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_7" id="__nav_5_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Ingestion Pipelines
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_7">
+            <span class="md-nav__icon md-icon"></span>
+            Ingestion Pipelines
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Ingestion_Media_Processing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Media Processing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Ingestion_Pipeline_Audio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Audio Pipeline
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Ingestion_Pipeline_Documents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Documents Pipeline
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Ingestion_Pipeline_Ebooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Ebooks Pipeline
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Ingestion_Pipeline_MediaWiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MediaWiki Pipeline
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Ingestion_Pipeline_PDF/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PDF Pipeline
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Ingestion_Pipeline_Video/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Video Pipeline
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../Code_Documentation/Evaluations/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    Claims & Evaluations
+    
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5_8" id="__nav_5_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_8">
+            <span class="md-nav__icon md-icon"></span>
+            Claims & Evaluations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Claims_API_and_Schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Claims API and Schema
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Claims_Extraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Claims Extraction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Answer_Time_Claims_Engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Answer-Time Claims Engine
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Evaluations_Developer_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluations Developer Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_9" id="__nav_5_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Jobs & Background Processing
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_9">
+            <span class="md-nav__icon md-icon"></span>
+            Jobs & Background Processing
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Jobs_Module/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Jobs Module
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Jobs_Manager/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Jobs Manager
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Jobs_Admin_Examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Jobs Admin Examples
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_10" id="__nav_5_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    AI & Models
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_10">
+            <span class="md-nav__icon md-icon"></span>
+            AI & Models
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Local_LLM/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Local LLM
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/VLM_Backends/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    VLM Backends
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Moderation-Guardrails/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Moderation Guardrails
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_11" id="__nav_5_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Auth & Security
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_11">
+            <span class="md-nav__icon md-icon"></span>
+            Auth & Security
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/AuthNZ-Developer-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AuthNZ Developer Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_12" id="__nav_5_12_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Workflows
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_12">
+            <span class="md-nav__icon md-icon"></span>
+            Workflows
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Workflows_Module/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Workflows Module
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_13" id="__nav_5_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    WebUI & Setup
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_13">
+            <span class="md-nav__icon md-icon"></span>
+            WebUI & Setup
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Setup_UI_Developer_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Setup UI Developer Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Tutorial_System_Developer_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial System Developer Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_14" id="__nav_5_14_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Testing & Misc
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_14">
+            <span class="md-nav__icon md-icon"></span>
+            Testing & Misc
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/STT_TESTING_DOCUMENTATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    STT Testing Documentation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Email_Archive_Formats_WIP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Email Archive Formats (WIP)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Docs_Site_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Documentation Site Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_15" id="__nav_5_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Code Guides
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_15">
+            <span class="md-nav__icon md-icon"></span>
+            Code Guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Guides/AuthNZ_Code_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AuthNZ Code Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Guides/Audit_Module_Code_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Audit Module Code Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Guides/Character_Chat_Code_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Character Chat Code Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Guides/Chatbooks_Code_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chatbooks Code Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Guides/Chunking_Code_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chunking Code Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Code_Documentation/Guides/Evaluations_Code_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluations Code Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Development/DB-Backends-Query-FTS-Guidelines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    DB Backends - Placeholders & FTS
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../Deployment/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    Deployment
+    
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Deployment
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Deployment/First_Time_Production_Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    First-Time Production Setup
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Deployment/Long_Term_Admin_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Long-Term Admin Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Deployment/Postgres_Migration_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL Migration Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Deployment/Embeddings-Deployment-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embeddings Deployment Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Deployment/Reverse_Proxy_Examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reverse Proxy Examples
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Deployment/Sidecar_Workers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Sidecar Workers
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Deployment/OpenAI_Compat_Strict_Mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OpenAI Compat Strict Mode
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_9" id="__nav_6_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Operations
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_9">
+            <span class="md-nav__icon md-icon"></span>
+            Operations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Deployment/Operations/JWT_Rotation_Runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    JWT Rotation Runbook
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Deployment/Operations/MCP_Rate_Limits_Tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MCP Rate Limits Tuning
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_10" id="__nav_6_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    FTS
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_10">
+            <span class="md-nav__icon md-icon"></span>
+            FTS
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Deployment/FTS/pg-synonyms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL Synonyms
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Env_Vars/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Environment Variables
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../Evaluations/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    Evaluations
+    
+  </span>
+  
+
+            </a>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            Evaluations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../Monitoring/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    Monitoring
+    
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_9" id="__nav_9_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            Monitoring
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Monitoring/Metrics_Cheatsheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Metrics Cheatsheet
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Monitoring/Alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Alerts
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../Monitoring/Exemplars/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Exemplars
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    User Guides
+    
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_10" id="__nav_10_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            User Guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_2" id="__nav_10_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Getting Started
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Installation-Setup-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Installation & Setup
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Authentication_Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Authentication Setup
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    User Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CLI_Reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    CLI Reference
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_3" id="__nav_10_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Content & Media
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_3">
+            <span class="md-nav__icon md-icon"></span>
+            Content & Media
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Media_to_RAG_Evals_Workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Media→Embeddings→RAG→Evals Workflow
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Web_Scraping_Ingestion_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Web Scraping and Ingestion
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../EPUB_Reader_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    EPUB Reader Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Chatbook_User_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chatbook User Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Chatbook_Tools_Getting_Started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chatbook Tools Getting Started
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Chunking_Templates_User_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chunking Templates User Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Templated_Chunking_Incoming_Documents_HowTo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Templated Chunking HowTo
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_4" id="__nav_10_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    RAG & Evaluations
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_4">
+            <span class="md-nav__icon md-icon"></span>
+            RAG & Evaluations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../RAG_Deployment_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    RAG Deployment Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../RAG_Production_Configuration_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    RAG Production Configuration
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Evaluations_User_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluations User Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Evaluations_Deployment_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluations Deployment Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Evaluations_End_User_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluations End User Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Evaluations_Production_Deployment_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluations Production Deployment
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_5" id="__nav_10_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Chat & AI
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_5">
+            <span class="md-nav__icon md-icon"></span>
+            Chat & AI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Chat_Pages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Chat Pages
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Setting_up_a_local_LLM/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Setting up a local LLM
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Prompt_Engineering_Notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Prompt Engineering Notes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../context_mcp_search/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Context MCP Search
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_6" id="__nav_10_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Audio & TTS
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_6">
+            <span class="md-nav__icon md-icon"></span>
+            Audio & TTS
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Voice_Agent_Setup_Guide.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Voice Agent Setup Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../TTS_Getting_Started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TTS Getting Started
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_7" id="__nav_10_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Organizations & Admin
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_7">
+            <span class="md-nav__icon md-icon"></span>
+            Organizations & Admin
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Organizations_and_Sharing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Organizations and Sharing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Organization_Administration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Organization Administration
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Multi-User_Postgres_Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multi-User Postgres Setup
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Multi-User_Deployment_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multi-User Deployment Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Production_Hardening_Checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Production Hardening Checklist
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Usage_Module/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Usage Module
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_8" id="__nav_10_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Keys & Backups
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_8">
+            <span class="md-nav__icon md-icon"></span>
+            Keys & Backups
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BYOK_User_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    BYOK User Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Backups_Using_Litestream/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Backups using Litestream
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_9" id="__nav_10_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Examples & Tutorials
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_9">
+            <span class="md-nav__icon md-icon"></span>
+            Examples & Tutorials
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Workflows_Examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Workflows Examples
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Project2025-RAG-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Project2025 RAG Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Kanban_Board_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Kanban Board Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Setup-Supertonic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Setup Supertonic
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Setup-Supertonic2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Setup Supertonic 2
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../RELEASE_NOTES.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Release Notes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    MCP Unified
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            MCP Unified
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../MCP/Unified_Overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../MCP/Unified_Client_Snippets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Client Snippets
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../MCP/Tool_Catalogs_Quick_Reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tool Catalogs (Quick Ref)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-what-youll-end-up-with" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. What You'll End Up With
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. What You&#39;ll End Up With">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-multi-user-mode-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      How Multi-User Mode Works
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Prerequisites
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Prerequisites">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hardware" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hardware
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#software" class="md-nav__link">
+    <span class="md-ellipsis">
+      Software
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-choose-your-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Choose Your Path
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-initial-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Initial Setup
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Initial Setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#4a-install-tldw_server" class="md-nav__link">
+    <span class="md-ellipsis">
+      4a. Install tldw_server
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4a. Install tldw_server">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bare-metal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bare Metal
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docker" class="md-nav__link">
+    <span class="md-ellipsis">
+      Docker
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4b-configure-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      4b. Configure Environment
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4b. Configure Environment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sqlite-path-recommended-for-households" class="md-nav__link">
+    <span class="md-ellipsis">
+      SQLite Path (Recommended for Households)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#postgres-path-alternative" class="md-nav__link">
+    <span class="md-ellipsis">
+      Postgres Path (Alternative)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4c-initialize-authnz-and-create-admin-account" class="md-nav__link">
+    <span class="md-ellipsis">
+      4c. Initialize AuthNZ and Create Admin Account
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4c. Initialize AuthNZ and Create Admin Account">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#docker-alternative" class="md-nav__link">
+    <span class="md-ellipsis">
+      Docker Alternative
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4d-start-the-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      4d. Start the Server
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4d. Start the Server">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bare-metal_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bare Metal
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docker_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Docker
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4e-verify-admin-login" class="md-nav__link">
+    <span class="md-ellipsis">
+      4e. Verify Admin Login
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-create-family-member-accounts" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Create Family Member Accounts
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Create Family Member Accounts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#5a-option-a-admin-creates-accounts-directly-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      5a. Option A: Admin Creates Accounts Directly (Recommended)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5b-option-b-registration-codes-self-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      5b. Option B: Registration Codes (Self-Service)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5c-verification-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      5c. Verification Checklist
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-configure-guardrails" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Configure Guardrails
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Configure Guardrails">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#close-registration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Close Registration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rate-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      Rate Limits
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#disable-byok" class="md-nav__link">
+    <span class="md-ellipsis">
+      Disable BYOK
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#roles-user-vs-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      Roles: User vs Viewer
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#virtual-keys-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      Virtual Keys (Optional)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-daily-use" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. Daily Use
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Daily Use">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-users-log-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      How Users Log In
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-refresh" class="md-nav__link">
+    <span class="md-ellipsis">
+      Token Refresh
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-each-user-can-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      What Each User Can Do
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-admin-can-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      What the Admin Can Do
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-optional-remote-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. Optional: Remote Access
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Optional: Remote Access">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reverse-proxy-with-nginx-https" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reverse Proxy with nginx (HTTPS)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tls-with-lets-encrypt" class="md-nav__link">
+    <span class="md-ellipsis">
+      TLS with Let's Encrypt
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cors-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      CORS Configuration
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-backups" class="md-nav__link">
+    <span class="md-ellipsis">
+      9. Backups
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Backups">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sqlite-backups" class="md-nav__link">
+    <span class="md-ellipsis">
+      SQLite Backups
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#postgres-backups" class="md-nav__link">
+    <span class="md-ellipsis">
+      Postgres Backups
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-user-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Per-User Data
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backup-schedule-recommendation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Backup Schedule Recommendation
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      10. Troubleshooting
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#jwt_secret_key-not-set-or-server-wont-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      "JWT_SECRET_KEY not set" or server won't start
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#database-is-locked-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      "Database is locked" errors
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#login-returns-401-unauthorized" class="md-nav__link">
+    <span class="md-ellipsis">
+      Login returns 401 Unauthorized
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#regular-user-gets-403-on-an-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      Regular user gets 403 on an endpoint
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-user-directories-not-created" class="md-nav__link">
+    <span class="md-ellipsis">
+      Per-user directories not created
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-expired-token-is-invalid" class="md-nav__link">
+    <span class="md-ellipsis">
+      Token expired / "Token is invalid"
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cant-connect-from-another-device-on-lan" class="md-nav__link">
+    <span class="md-ellipsis">
+      Can't connect from another device on LAN
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-to-check-active-sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      How to check active sessions
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-to-deactivate-a-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      How to deactivate a user
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-quick-reference-card" class="md-nav__link">
+    <span class="md-ellipsis">
+      11. Quick Reference Card
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. Quick Reference Card">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#commands-used-in-this-guide" class="md-nav__link">
+    <span class="md-ellipsis">
+      Commands Used in This Guide
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#key-api-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Key API Endpoints
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#key-environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      Key Environment Variables
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Related Documentation
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/rmusser01/tldw_server/edit/main/User_Guides/Household_Multi_User_Walkthrough.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/rmusser01/tldw_server/raw/main/User_Guides/Household_Multi_User_Walkthrough.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="household-multi-user-walkthrough">Household Multi-User Walkthrough<a class="headerlink" href="#household-multi-user-walkthrough" title="Permanent link">&para;</a></h1>
+<p>A complete, step-by-step guide to setting up tldw_server for a household of 3 users (1 admin + 2 regular users). Follow this from top to bottom to go from a fresh install to a working multi-user setup.</p>
+<blockquote>
+<p><strong>Companion guide</strong>: For guardrails and parental controls after setup, see <a href="../Family_Guardian_Setup/">Family_Guardian_Setup.md</a>.</p>
+</blockquote>
+<hr />
+<h2 id="1-what-youll-end-up-with">1. What You'll End Up With<a class="headerlink" href="#1-what-youll-end-up-with" title="Permanent link">&para;</a></h2>
+<p>By the end of this guide you will have:</p>
+<ul>
+<li><strong>1 admin account</strong> (parent/household manager) with full control</li>
+<li><strong>2 regular user accounts</strong> (family members) with isolated data</li>
+<li>Each user gets their own media library, notes, chats, RAG collections, and prompts</li>
+<li>JWT-based authentication (login with username + password, get a token)</li>
+<li>Registration locked down so no one else can create accounts</li>
+</ul>
+<h3 id="how-multi-user-mode-works">How Multi-User Mode Works<a class="headerlink" href="#how-multi-user-mode-works" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Concept</th>
+<th>What It Means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>AuthNZ DB</strong></td>
+<td>Central database storing users, sessions, roles, permissions, and API keys. Shared by all users.</td>
+</tr>
+<tr>
+<td><strong>Per-user data</strong></td>
+<td>Each user gets a private directory under <code>Databases/user_databases/&lt;user_id&gt;/</code> containing their media DB, notes, prompts, evaluations, vector store, etc.</td>
+</tr>
+<tr>
+<td><strong>JWT</strong></td>
+<td>JSON Web Token. After logging in, users include this token in API requests. The WebUI handles this automatically.</td>
+</tr>
+<tr>
+<td><strong>RBAC</strong></td>
+<td>Role-Based Access Control. Admins can manage users and settings; regular users can only access their own data.</td>
+</tr>
+<tr>
+<td><strong>Virtual Key</strong></td>
+<td>A per-user API key with optional provider/model allowlists and usage budgets.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="2-prerequisites">2. Prerequisites<a class="headerlink" href="#2-prerequisites" title="Permanent link">&para;</a></h2>
+<h3 id="hardware">Hardware<a class="headerlink" href="#hardware" title="Permanent link">&para;</a></h3>
+<p>Any modern machine works. For a household of 3:
+- <strong>CPU</strong>: Any x86_64 or ARM64 processor
+- <strong>RAM</strong>: 4 GB minimum (8 GB recommended if using local transcription)
+- <strong>Disk</strong>: 2 GB for the application + space for your media/data</p>
+<h3 id="software">Software<a class="headerlink" href="#software" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Requirement</th>
+<th>How to Check</th>
+<th>Install</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Python 3.10+</td>
+<td><code>python3 --version</code></td>
+<td><a href="https://www.python.org/downloads/">python.org</a></td>
+</tr>
+<tr>
+<td>pip</td>
+<td><code>pip --version</code></td>
+<td>Included with Python</td>
+</tr>
+<tr>
+<td>ffmpeg</td>
+<td><code>ffmpeg -version</code></td>
+<td><code>brew install ffmpeg</code> (macOS) / <code>sudo apt install ffmpeg</code> (Ubuntu)</td>
+</tr>
+<tr>
+<td>Git</td>
+<td><code>git --version</code></td>
+<td><code>brew install git</code> / <code>sudo apt install git</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Requirement</th>
+<th>When You Need It</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Docker + Docker Compose</td>
+<td>If you prefer containerized deployment</td>
+</tr>
+<tr>
+<td>PostgreSQL 13+</td>
+<td>If you want a more robust AuthNZ backend (not needed for a small household)</td>
+</tr>
+<tr>
+<td>CUDA-capable GPU</td>
+<td>For accelerated audio transcription</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3-choose-your-path">3. Choose Your Path<a class="headerlink" href="#3-choose-your-path" title="Permanent link">&para;</a></h2>
+<p>For a household of 3 users on a home LAN, the simplest path is <strong>SQLite + bare metal + LAN-only</strong>. Use this decision matrix if your situation differs:</p>
+<table>
+<thead>
+<tr>
+<th>Decision</th>
+<th>Option A (Simple)</th>
+<th>Option B (Robust)</th>
+<th>Recommendation for 3-User Household</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>AuthNZ DB</strong></td>
+<td>SQLite</td>
+<td>PostgreSQL</td>
+<td>SQLite is fine for &lt;10 users</td>
+</tr>
+<tr>
+<td><strong>Runtime</strong></td>
+<td>Bare metal (pip)</td>
+<td>Docker Compose</td>
+<td>Bare metal is simpler to debug</td>
+</tr>
+<tr>
+<td><strong>Access</strong></td>
+<td>LAN-only (http)</td>
+<td>Remote (HTTPS + reverse proxy)</td>
+<td>Start LAN-only, add remote later</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Note</strong>: SQLite multi-user is not supported when <code>tldw_production=true</code>. For a home setup this is fine since you won't set that flag. If you later want production mode, switch to Postgres (see <a href="../Multi-User_Postgres_Setup/">Multi-User_Postgres_Setup.md</a>).</p>
+</blockquote>
+<p>This guide covers all paths. Follow the sections marked with your choice.</p>
+<hr />
+<h2 id="4-initial-setup">4. Initial Setup<a class="headerlink" href="#4-initial-setup" title="Permanent link">&para;</a></h2>
+<h3 id="4a-install-tldw_server">4a. Install tldw_server<a class="headerlink" href="#4a-install-tldw_server" title="Permanent link">&para;</a></h3>
+<h4 id="bare-metal">Bare Metal<a class="headerlink" href="#bare-metal" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Clone the repository</span>
+git<span class="w"> </span>clone<span class="w"> </span>https://github.com/your-org/tldw_server2.git
+<span class="nb">cd</span><span class="w"> </span>tldw_server2
+
+<span class="c1"># Create and activate a virtual environment</span>
+python3<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>.venv
+<span class="nb">source</span><span class="w"> </span>.venv/bin/activate<span class="w">  </span><span class="c1"># On Windows: .venv\Scripts\activate</span>
+
+<span class="c1"># Install with multi-user extras</span>
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[multiplayer]&quot;</span>
+</code></pre></div>
+<h4 id="docker">Docker<a class="headerlink" href="#docker" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/your-org/tldw_server2.git
+<span class="nb">cd</span><span class="w"> </span>tldw_server2
+
+<span class="c1"># Build and start (Postgres included in compose file)</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>Dockerfiles/docker-compose.yml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
+</code></pre></div>
+<h3 id="4b-configure-environment">4b. Configure Environment<a class="headerlink" href="#4b-configure-environment" title="Permanent link">&para;</a></h3>
+<p>Copy the template:</p>
+<div class="highlight"><pre><span></span><code>cp<span class="w"> </span>tldw_Server_API/Config_Files/.env.authnz.template<span class="w"> </span>.env
+</code></pre></div>
+<p>Now generate secrets. Run each command and paste the output into your <code>.env</code> file:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># JWT secret (required)</span>
+python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import secrets; print(secrets.token_urlsafe(32))&quot;</span>
+
+<span class="c1"># Session encryption key (required)</span>
+python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())&quot;</span>
+
+<span class="c1"># MCP secrets (optional for LAN-only, required for production)</span>
+python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import secrets; print(secrets.token_urlsafe(32))&quot;</span>
+python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import secrets; print(secrets.token_urlsafe(32))&quot;</span>
+</code></pre></div>
+<p>Edit <code>.env</code> with the generated values. Here is the complete set of settings you need:</p>
+<h4 id="sqlite-path-recommended-for-households">SQLite Path (Recommended for Households)<a class="headerlink" href="#sqlite-path-recommended-for-households" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># --- Core Auth ---</span>
+<span class="nv">AUTH_MODE</span><span class="o">=</span>multi_user
+<span class="nv">DATABASE_URL</span><span class="o">=</span>sqlite:///./Databases/users.db
+<span class="nv">JWT_SECRET_KEY</span><span class="o">=</span>&lt;paste<span class="w"> </span>your<span class="w"> </span>JWT<span class="w"> </span>secret<span class="w"> </span>here&gt;
+<span class="nv">SESSION_ENCRYPTION_KEY</span><span class="o">=</span>&lt;paste<span class="w"> </span>your<span class="w"> </span>Fernet<span class="w"> </span>key<span class="w"> </span>here&gt;
+
+<span class="c1"># --- MCP Secrets (paste generated values) ---</span>
+<span class="nv">MCP_JWT_SECRET</span><span class="o">=</span>&lt;paste<span class="w"> </span>here&gt;
+<span class="nv">MCP_API_KEY_SALT</span><span class="o">=</span>&lt;paste<span class="w"> </span>here&gt;
+
+<span class="c1"># --- User Data ---</span>
+<span class="nv">USER_DB_BASE_DIR</span><span class="o">=</span>./Databases/user_databases
+<span class="nv">TLDW_SQLITE_WAL_MODE</span><span class="o">=</span><span class="nb">true</span>
+
+<span class="c1"># --- Registration (locked down) ---</span>
+<span class="nv">ENABLE_REGISTRATION</span><span class="o">=</span><span class="nb">false</span>
+<span class="nv">REQUIRE_REGISTRATION_CODE</span><span class="o">=</span><span class="nb">true</span>
+
+<span class="c1"># --- BYOK (disable unless family members bring their own API keys) ---</span>
+<span class="nv">BYOK_ENABLED</span><span class="o">=</span><span class="nb">false</span>
+
+<span class="c1"># --- Rate Limits (sensible household defaults) ---</span>
+<span class="nv">RATE_LIMIT_ENABLED</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">RATE_LIMIT_PER_MINUTE</span><span class="o">=</span><span class="m">60</span>
+<span class="nv">RATE_LIMIT_BURST</span><span class="o">=</span><span class="m">10</span>
+
+<span class="c1"># --- Provider Keys (add the ones you use) ---</span>
+<span class="nv">OPENAI_API_KEY</span><span class="o">=</span>
+<span class="nv">ANTHROPIC_API_KEY</span><span class="o">=</span>
+</code></pre></div>
+<h4 id="postgres-path-alternative">Postgres Path (Alternative)<a class="headerlink" href="#postgres-path-alternative" title="Permanent link">&para;</a></h4>
+<p>If you chose Postgres, replace the <code>DATABASE_URL</code> line:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">DATABASE_URL</span><span class="o">=</span>postgresql://tldw_user:YourStrongPassword@localhost:5432/tldw_users
+</code></pre></div>
+<p>And ensure Postgres is running (via Docker or system install). See <a href="../Multi-User_Postgres_Setup/">Multi-User_Postgres_Setup.md</a> for details.</p>
+<h3 id="4c-initialize-authnz-and-create-admin-account">4c. Initialize AuthNZ and Create Admin Account<a class="headerlink" href="#4c-initialize-authnz-and-create-admin-account" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>tldw_Server_API.app.core.AuthNZ.initialize
+</code></pre></div>
+<p>You'll be prompted to create the admin account:</p>
+<div class="highlight"><pre><span></span><code>Enter admin username: householder
+Enter admin email: admin@example.com
+Enter admin password: ********
+Confirm password: ********
+</code></pre></div>
+<blockquote>
+<p><strong>Tip</strong>: Choose a strong password. This account has full control over all users and settings.</p>
+</blockquote>
+<h4 id="docker-alternative">Docker Alternative<a class="headerlink" href="#docker-alternative" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>Dockerfiles/docker-compose.yml<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>app<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>python<span class="w"> </span>-m<span class="w"> </span>tldw_Server_API.app.core.AuthNZ.initialize
+</code></pre></div>
+<h3 id="4d-start-the-server">4d. Start the Server<a class="headerlink" href="#4d-start-the-server" title="Permanent link">&para;</a></h3>
+<h4 id="bare-metal_1">Bare Metal<a class="headerlink" href="#bare-metal_1" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>uvicorn<span class="w"> </span>tldw_Server_API.app.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload
+</code></pre></div>
+<blockquote>
+<p><strong><code>--host 0.0.0.0</code></strong> makes the server accessible from other devices on your LAN (not just localhost). Omit this if you only want access from the machine itself.</p>
+</blockquote>
+<h4 id="docker_1">Docker<a class="headerlink" href="#docker_1" title="Permanent link">&para;</a></h4>
+<p>The server starts automatically with <code>docker compose up</code>.</p>
+<h3 id="4e-verify-admin-login">4e. Verify Admin Login<a class="headerlink" href="#4e-verify-admin-login" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/auth/login<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;username&quot;:&quot;householder&quot;,&quot;password&quot;:&quot;YOUR_ADMIN_PASSWORD&quot;}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+</code></pre></div>
+<p>Expected response (truncated):</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;access_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJ...&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;token_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bearer&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;householder&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;admin&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="err">...</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Save the <code>access_token</code> value for the next steps:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">ADMIN_JWT</span><span class="o">=</span><span class="s2">&quot;eyJ...&quot;</span>
+</code></pre></div>
+<hr />
+<h2 id="5-create-family-member-accounts">5. Create Family Member Accounts<a class="headerlink" href="#5-create-family-member-accounts" title="Permanent link">&para;</a></h2>
+<h3 id="5a-option-a-admin-creates-accounts-directly-recommended">5a. Option A: Admin Creates Accounts Directly (Recommended)<a class="headerlink" href="#5a-option-a-admin-creates-accounts-directly-recommended" title="Permanent link">&para;</a></h3>
+<p>This is the simplest approach for a household. The admin creates accounts for everyone.</p>
+<p><strong>Create User 2 (e.g., "alex")</strong>:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/admin/users<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$ADMIN_JWT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">    &quot;username&quot;: &quot;alex&quot;,</span>
+<span class="s1">    &quot;email&quot;: &quot;alex@example.com&quot;,</span>
+<span class="s1">    &quot;password&quot;: &quot;AlexSecurePass123!&quot;,</span>
+<span class="s1">    &quot;is_active&quot;: true</span>
+<span class="s1">  }&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+</code></pre></div>
+<p><strong>Create User 3 (e.g., "jordan")</strong>:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/admin/users<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$ADMIN_JWT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">    &quot;username&quot;: &quot;jordan&quot;,</span>
+<span class="s1">    &quot;email&quot;: &quot;jordan@example.com&quot;,</span>
+<span class="s1">    &quot;password&quot;: &quot;JordanSecurePass123!&quot;,</span>
+<span class="s1">    &quot;is_active&quot;: true</span>
+<span class="s1">  }&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+</code></pre></div>
+<p>Each response returns the created user's details including their <code>id</code>.</p>
+<h3 id="5b-option-b-registration-codes-self-service">5b. Option B: Registration Codes (Self-Service)<a class="headerlink" href="#5b-option-b-registration-codes-self-service" title="Permanent link">&para;</a></h3>
+<p>If you'd rather let family members register themselves:</p>
+<ol>
+<li><strong>Generate registration codes</strong> (one per person):</li>
+</ol>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>tldw_Server_API.app.core.AuthNZ.initialize<span class="w"> </span>--create-registration-code
+</code></pre></div>
+<ol>
+<li><strong>Temporarily enable registration</strong> in <code>.env</code>:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="nv">ENABLE_REGISTRATION</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">REQUIRE_REGISTRATION_CODE</span><span class="o">=</span><span class="nb">true</span>
+</code></pre></div>
+<p>Restart the server for the change to take effect.</p>
+<ol>
+<li><strong>Share the code</strong> with each family member. They register via:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/auth/register<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">    &quot;username&quot;: &quot;alex&quot;,</span>
+<span class="s1">    &quot;email&quot;: &quot;alex@example.com&quot;,</span>
+<span class="s1">    &quot;password&quot;: &quot;AlexSecurePass123!&quot;,</span>
+<span class="s1">    &quot;registration_code&quot;: &quot;THE_CODE_YOU_GENERATED&quot;</span>
+<span class="s1">  }&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+</code></pre></div>
+<ol>
+<li><strong>Lock registration again</strong> after everyone has signed up:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="nv">ENABLE_REGISTRATION</span><span class="o">=</span><span class="nb">false</span>
+</code></pre></div>
+<p>Restart the server.</p>
+<h3 id="5c-verification-checklist">5c. Verification Checklist<a class="headerlink" href="#5c-verification-checklist" title="Permanent link">&para;</a></h3>
+<p>Run these checks to confirm everything works.</p>
+<p><strong>Each user can log in</strong>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Alex logs in</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/auth/login<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;username&quot;:&quot;alex&quot;,&quot;password&quot;:&quot;AlexSecurePass123!&quot;}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+
+<span class="c1"># Jordan logs in</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/auth/login<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;username&quot;:&quot;jordan&quot;,&quot;password&quot;:&quot;JordanSecurePass123!&quot;}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+</code></pre></div>
+<p><strong>Each user can see their own profile</strong>:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">ALEX_JWT</span><span class="o">=</span><span class="s2">&quot;&lt;paste alex&#39;s access_token&gt;&quot;</span>
+
+curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:8000/api/v1/auth/me<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$ALEX_JWT</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+</code></pre></div>
+<p>Expected: returns alex's profile with <code>"role": "user"</code>.</p>
+<p><strong>Per-user directories exist</strong>:</p>
+<div class="highlight"><pre><span></span><code>ls<span class="w"> </span>-la<span class="w"> </span>Databases/user_databases/
+</code></pre></div>
+<p>You should see directories for each user ID (created on first access to any data endpoint).</p>
+<blockquote>
+<p><strong>Note</strong>: Per-user directories are created lazily. If a user just logged in but hasn't accessed any data endpoints yet, their directory may not exist yet. That's normal.</p>
+</blockquote>
+<p><strong>Regular users cannot access admin endpoints</strong>:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>GET<span class="w"> </span>http://127.0.0.1:8000/api/v1/admin/users<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$ALEX_JWT</span><span class="s2">&quot;</span>
+</code></pre></div>
+<p>Expected: <code>403 Forbidden</code> response.</p>
+<hr />
+<h2 id="6-configure-guardrails">6. Configure Guardrails<a class="headerlink" href="#6-configure-guardrails" title="Permanent link">&para;</a></h2>
+<p>With accounts created, apply sensible defaults for a household.</p>
+<h3 id="close-registration">Close Registration<a class="headerlink" href="#close-registration" title="Permanent link">&para;</a></h3>
+<p>If you haven't already, ensure registration is locked:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># In .env</span>
+<span class="nv">ENABLE_REGISTRATION</span><span class="o">=</span><span class="nb">false</span>
+<span class="nv">REQUIRE_REGISTRATION_CODE</span><span class="o">=</span><span class="nb">true</span>
+</code></pre></div>
+<h3 id="rate-limits">Rate Limits<a class="headerlink" href="#rate-limits" title="Permanent link">&para;</a></h3>
+<p>These defaults prevent any single user from overwhelming the server:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># In .env</span>
+<span class="nv">RATE_LIMIT_ENABLED</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">RATE_LIMIT_PER_MINUTE</span><span class="o">=</span><span class="m">60</span>
+<span class="nv">RATE_LIMIT_BURST</span><span class="o">=</span><span class="m">10</span>
+</code></pre></div>
+<h3 id="disable-byok">Disable BYOK<a class="headerlink" href="#disable-byok" title="Permanent link">&para;</a></h3>
+<p>Unless family members need to add their own API keys:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># In .env</span>
+<span class="nv">BYOK_ENABLED</span><span class="o">=</span><span class="nb">false</span>
+</code></pre></div>
+<p>If you do want BYOK, you can restrict which providers are allowed:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">BYOK_ENABLED</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">BYOK_ALLOWED_PROVIDERS</span><span class="o">=</span>openai,anthropic
+</code></pre></div>
+<p>See <a href="../BYOK_User_Guide/">BYOK_User_Guide.md</a> for details.</p>
+<h3 id="roles-user-vs-viewer">Roles: User vs Viewer<a class="headerlink" href="#roles-user-vs-viewer" title="Permanent link">&para;</a></h3>
+<p>By default, new users get the <code>user</code> role which grants access to all standard features (media, chat, RAG, notes, prompts). If you want a more restricted account that can only read/search but not create content, assign the <code>viewer</code> role:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>PATCH<span class="w"> </span>http://127.0.0.1:8000/api/v1/admin/users/&lt;USER_ID&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$ADMIN_JWT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;role&quot;: &quot;viewer&quot;}&#39;</span>
+</code></pre></div>
+<h3 id="virtual-keys-optional">Virtual Keys (Optional)<a class="headerlink" href="#virtual-keys-optional" title="Permanent link">&para;</a></h3>
+<p>Virtual keys let you set per-user budgets and model restrictions. See <a href="../Family_Guardian_Setup/">Family_Guardian_Setup.md</a> for detailed virtual key setup.</p>
+<hr />
+<h2 id="7-daily-use">7. Daily Use<a class="headerlink" href="#7-daily-use" title="Permanent link">&para;</a></h2>
+<h3 id="how-users-log-in">How Users Log In<a class="headerlink" href="#how-users-log-in" title="Permanent link">&para;</a></h3>
+<p><strong>WebUI</strong>: Open <code>http://&lt;server-ip&gt;:3000</code> (Next.js frontend) or <code>http://&lt;server-ip&gt;:8000/docs</code> (API docs). Enter username and password. The WebUI stores the JWT automatically.</p>
+<p><strong>API</strong>: POST to <code>/api/v1/auth/login</code> with username/password, receive a JWT, include it as <code>Authorization: Bearer &lt;token&gt;</code> in subsequent requests.</p>
+<h3 id="token-refresh">Token Refresh<a class="headerlink" href="#token-refresh" title="Permanent link">&para;</a></h3>
+<p>JWTs expire after a configurable period (default: 24 hours). When a token expires:
+- <strong>WebUI</strong>: Automatically refreshes or prompts for re-login
+- <strong>API</strong>: Call <code>/api/v1/auth/refresh</code> with the current token before it expires to get a new one</p>
+<h3 id="what-each-user-can-do">What Each User Can Do<a class="headerlink" href="#what-each-user-can-do" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Regular User</th>
+<th>Admin</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Media ingestion (video, audio, PDF, etc.)</td>
+<td>Own library only</td>
+<td>Own library</td>
+</tr>
+<tr>
+<td>Chat with LLMs</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>RAG search</td>
+<td>Own collections</td>
+<td>Own collections</td>
+</tr>
+<tr>
+<td>Notes and prompts</td>
+<td>Own data</td>
+<td>Own data</td>
+</tr>
+<tr>
+<td>Character chat</td>
+<td>Own sessions</td>
+<td>Own sessions</td>
+</tr>
+<tr>
+<td>Manage other users</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>View all sessions</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Adjust server settings</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Create/delete accounts</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+<h3 id="what-the-admin-can-do">What the Admin Can Do<a class="headerlink" href="#what-the-admin-can-do" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Create, deactivate, and delete user accounts</li>
+<li>Reset user passwords</li>
+<li>View active sessions across all users</li>
+<li>Configure virtual keys and permission overrides</li>
+<li>Access server health and metrics endpoints</li>
+</ul>
+<hr />
+<h2 id="8-optional-remote-access">8. Optional: Remote Access<a class="headerlink" href="#8-optional-remote-access" title="Permanent link">&para;</a></h2>
+<p>If you want to access your household server from outside your home network.</p>
+<blockquote>
+<p><strong>Warning</strong>: Exposing your server to the internet requires proper security. Do not skip TLS.</p>
+</blockquote>
+<h3 id="reverse-proxy-with-nginx-https">Reverse Proxy with nginx (HTTPS)<a class="headerlink" href="#reverse-proxy-with-nginx-https" title="Permanent link">&para;</a></h3>
+<p>Install nginx and create a site config:</p>
+<div class="highlight"><pre><span></span><code><span class="k">server</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">443</span><span class="w"> </span><span class="s">ssl</span><span class="w"> </span><span class="s">http2</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">tldw.yourdomain.com</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kn">ssl_certificate</span><span class="w">     </span><span class="s">/etc/letsencrypt/live/tldw.yourdomain.com/fullchain.pem</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">ssl_certificate_key</span><span class="w"> </span><span class="s">/etc/letsencrypt/live/tldw.yourdomain.com/privkey.pem</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:8000</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Real-IP</span><span class="w"> </span><span class="nv">$remote_addr</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-For</span><span class="w"> </span><span class="nv">$proxy_add_x_forwarded_for</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-Proto</span><span class="w"> </span><span class="nv">$scheme</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1"># WebSocket support (for streaming transcription and MCP)</span>
+<span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/api/v1/audio/stream/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:8000</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_http_version</span><span class="w"> </span><span class="mi">1</span><span class="s">.1</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Upgrade</span><span class="w"> </span><span class="nv">$http_upgrade</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Connection</span><span class="w"> </span><span class="s">&quot;upgrade&quot;</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_read_timeout</span><span class="w"> </span><span class="s">3600s</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/api/v1/mcp/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:8000</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_http_version</span><span class="w"> </span><span class="mi">1</span><span class="s">.1</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Upgrade</span><span class="w"> </span><span class="nv">$http_upgrade</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Connection</span><span class="w"> </span><span class="s">&quot;upgrade&quot;</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1"># Redirect HTTP to HTTPS</span>
+<span class="k">server</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">80</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">tldw.yourdomain.com</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">return</span><span class="w"> </span><span class="mi">301</span><span class="w"> </span><span class="s">https://</span><span class="nv">$host$request_uri</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="tls-with-lets-encrypt">TLS with Let's Encrypt<a class="headerlink" href="#tls-with-lets-encrypt" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>certbot<span class="w"> </span>python3-certbot-nginx
+sudo<span class="w"> </span>certbot<span class="w"> </span>--nginx<span class="w"> </span>-d<span class="w"> </span>tldw.yourdomain.com
+</code></pre></div>
+<h3 id="cors-configuration">CORS Configuration<a class="headerlink" href="#cors-configuration" title="Permanent link">&para;</a></h3>
+<p>Add your domain to the allowed origins in <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">ALLOWED_ORIGINS</span><span class="o">=</span>https://tldw.yourdomain.com
+</code></pre></div>
+<p>For multiple origins (e.g., if the WebUI is on a different port):</p>
+<div class="highlight"><pre><span></span><code><span class="nv">ALLOWED_ORIGINS</span><span class="o">=</span><span class="s1">&#39;[&quot;https://tldw.yourdomain.com&quot;, &quot;https://tldw.yourdomain.com:3000&quot;]&#39;</span>
+</code></pre></div>
+<p>See <a href="../Production_Hardening_Checklist/">Production_Hardening_Checklist.md</a> for more details.</p>
+<hr />
+<h2 id="9-backups">9. Backups<a class="headerlink" href="#9-backups" title="Permanent link">&para;</a></h2>
+<h3 id="sqlite-backups">SQLite Backups<a class="headerlink" href="#sqlite-backups" title="Permanent link">&para;</a></h3>
+<p>The simplest approach is to copy the database files while the server is stopped (or use SQLite's <code>.backup</code> command):</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Stop the server first (or use WAL mode for hot backups)</span>
+cp<span class="w"> </span>-r<span class="w"> </span>Databases/<span class="w"> </span>Databases_backup_<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d<span class="k">)</span>/
+</code></pre></div>
+<p>For automated continuous backups, see <a href="../Backups_Using_Litestream/">Backups_Using_Litestream.md</a>.</p>
+<h3 id="postgres-backups">Postgres Backups<a class="headerlink" href="#postgres-backups" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>pg_dump<span class="w"> </span>-U<span class="w"> </span>tldw_user<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>tldw_users<span class="w"> </span>&gt;<span class="w"> </span>authnz_backup_<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d<span class="k">)</span>.sql
+</code></pre></div>
+<h3 id="per-user-data">Per-User Data<a class="headerlink" href="#per-user-data" title="Permanent link">&para;</a></h3>
+<p>Always include the per-user directory in backups:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># This contains all user media DBs, notes, prompts, vector stores, etc.</span>
+cp<span class="w"> </span>-r<span class="w"> </span>Databases/user_databases/<span class="w"> </span>user_data_backup_<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d<span class="k">)</span>/
+</code></pre></div>
+<h3 id="backup-schedule-recommendation">Backup Schedule Recommendation<a class="headerlink" href="#backup-schedule-recommendation" title="Permanent link">&para;</a></h3>
+<p>For a household:
+- <strong>Weekly</strong>: Full backup of <code>Databases/</code> directory
+- <strong>Before upgrades</strong>: Always back up before updating tldw_server</p>
+<hr />
+<h2 id="10-troubleshooting">10. Troubleshooting<a class="headerlink" href="#10-troubleshooting" title="Permanent link">&para;</a></h2>
+<h3 id="jwt_secret_key-not-set-or-server-wont-start">"JWT_SECRET_KEY not set" or server won't start<a class="headerlink" href="#jwt_secret_key-not-set-or-server-wont-start" title="Permanent link">&para;</a></h3>
+<p>Your <code>.env</code> file is missing required secrets or isn't being loaded.</p>
+<p><strong>Fix</strong>: Verify <code>.env</code> exists in the repo root and contains <code>JWT_SECRET_KEY</code>, <code>SESSION_ENCRYPTION_KEY</code>, and <code>AUTH_MODE=multi_user</code>. Ensure the values are not the template defaults.</p>
+<h3 id="database-is-locked-errors">"Database is locked" errors<a class="headerlink" href="#database-is-locked-errors" title="Permanent link">&para;</a></h3>
+<p>SQLite can't handle many concurrent writes.</p>
+<p><strong>Fix</strong>: Ensure <code>TLDW_SQLITE_WAL_MODE=true</code> is set in <code>.env</code>. For persistent issues with &gt;5 concurrent users, switch to Postgres.</p>
+<h3 id="login-returns-401-unauthorized">Login returns 401 Unauthorized<a class="headerlink" href="#login-returns-401-unauthorized" title="Permanent link">&para;</a></h3>
+<p>Wrong username or password.</p>
+<p><strong>Fix</strong>: Double-check credentials. If you've forgotten the admin password, reset it:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>tldw_Server_API.app.core.AuthNZ.initialize<span class="w"> </span>--reset-admin-password
+</code></pre></div>
+<h3 id="regular-user-gets-403-on-an-endpoint">Regular user gets 403 on an endpoint<a class="headerlink" href="#regular-user-gets-403-on-an-endpoint" title="Permanent link">&para;</a></h3>
+<p>The user's role doesn't have permission for that endpoint.</p>
+<p><strong>Fix</strong>: This is expected for admin endpoints. If a regular user needs access to a specific feature, check available permissions:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$ADMIN_JWT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>http://127.0.0.1:8000/api/v1/admin/permissions
+</code></pre></div>
+<p>Then grant an override if appropriate:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/admin/users/&lt;USER_ID&gt;/overrides<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$ADMIN_JWT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;permission_name&quot;:&quot;&lt;permission&gt;&quot;,&quot;effect&quot;:&quot;allow&quot;}&#39;</span>
+</code></pre></div>
+<h3 id="per-user-directories-not-created">Per-user directories not created<a class="headerlink" href="#per-user-directories-not-created" title="Permanent link">&para;</a></h3>
+<p>Directories under <code>Databases/user_databases/</code> are created lazily on first data access.</p>
+<p><strong>Fix</strong>: Have the user make any data request (e.g., search media, create a note). The directory will be created automatically.</p>
+<h3 id="token-expired-token-is-invalid">Token expired / "Token is invalid"<a class="headerlink" href="#token-expired-token-is-invalid" title="Permanent link">&para;</a></h3>
+<p>JWTs expire after a set period.</p>
+<p><strong>Fix</strong>: Log in again to get a fresh token. For the WebUI, refresh the page or log out and back in.</p>
+<h3 id="cant-connect-from-another-device-on-lan">Can't connect from another device on LAN<a class="headerlink" href="#cant-connect-from-another-device-on-lan" title="Permanent link">&para;</a></h3>
+<p>The server may only be listening on <code>127.0.0.1</code>.</p>
+<p><strong>Fix</strong>: Start uvicorn with <code>--host 0.0.0.0</code>:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>uvicorn<span class="w"> </span>tldw_Server_API.app.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+</code></pre></div>
+<p>Then access via <code>http://&lt;server-ip&gt;:8000</code> from other devices. Find your server's IP with <code>hostname -I</code> (Linux) or <code>ipconfig getifaddr en0</code> (macOS).</p>
+<h3 id="how-to-check-active-sessions">How to check active sessions<a class="headerlink" href="#how-to-check-active-sessions" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:8000/api/v1/admin/sessions<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$ADMIN_JWT</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+</code></pre></div>
+<h3 id="how-to-deactivate-a-user">How to deactivate a user<a class="headerlink" href="#how-to-deactivate-a-user" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>PATCH<span class="w"> </span>http://127.0.0.1:8000/api/v1/admin/users/&lt;USER_ID&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$ADMIN_JWT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;is_active&quot;: false}&#39;</span>
+</code></pre></div>
+<hr />
+<h2 id="11-quick-reference-card">11. Quick Reference Card<a class="headerlink" href="#11-quick-reference-card" title="Permanent link">&para;</a></h2>
+<h3 id="commands-used-in-this-guide">Commands Used in This Guide<a class="headerlink" href="#commands-used-in-this-guide" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Install</td>
+<td><code>pip install -e ".[multiplayer]"</code></td>
+</tr>
+<tr>
+<td>Generate JWT secret</td>
+<td><code>python3 -c "import secrets; print(secrets.token_urlsafe(32))"</code></td>
+</tr>
+<tr>
+<td>Generate Fernet key</td>
+<td><code>python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"</code></td>
+</tr>
+<tr>
+<td>Initialize AuthNZ</td>
+<td><code>python -m tldw_Server_API.app.core.AuthNZ.initialize</code></td>
+</tr>
+<tr>
+<td>Start server (LAN)</td>
+<td><code>python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000</code></td>
+</tr>
+<tr>
+<td>Start server (local only)</td>
+<td><code>python -m uvicorn tldw_Server_API.app.main:app --reload</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="key-api-endpoints">Key API Endpoints<a class="headerlink" href="#key-api-endpoints" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Method</th>
+<th>Endpoint</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Log in</td>
+<td>POST</td>
+<td><code>/api/v1/auth/login</code></td>
+</tr>
+<tr>
+<td>Register (if enabled)</td>
+<td>POST</td>
+<td><code>/api/v1/auth/register</code></td>
+</tr>
+<tr>
+<td>View own profile</td>
+<td>GET</td>
+<td><code>/api/v1/auth/me</code></td>
+</tr>
+<tr>
+<td>Refresh token</td>
+<td>POST</td>
+<td><code>/api/v1/auth/refresh</code></td>
+</tr>
+<tr>
+<td>Change own password</td>
+<td>POST</td>
+<td><code>/api/v1/auth/change-password</code></td>
+</tr>
+<tr>
+<td>Admin: create user</td>
+<td>POST</td>
+<td><code>/api/v1/admin/users</code></td>
+</tr>
+<tr>
+<td>Admin: list users</td>
+<td>GET</td>
+<td><code>/api/v1/admin/users</code></td>
+</tr>
+<tr>
+<td>Admin: update user</td>
+<td>PATCH</td>
+<td><code>/api/v1/admin/users/&lt;id&gt;</code></td>
+</tr>
+<tr>
+<td>Admin: list permissions</td>
+<td>GET</td>
+<td><code>/api/v1/admin/permissions</code></td>
+</tr>
+<tr>
+<td>Admin: set permission override</td>
+<td>POST</td>
+<td><code>/api/v1/admin/users/&lt;id&gt;/overrides</code></td>
+</tr>
+<tr>
+<td>Admin: create virtual key</td>
+<td>POST</td>
+<td><code>/api/v1/admin/users/&lt;id&gt;/virtual-keys</code></td>
+</tr>
+<tr>
+<td>Admin: view sessions</td>
+<td>GET</td>
+<td><code>/api/v1/admin/sessions</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="key-environment-variables">Key Environment Variables<a class="headerlink" href="#key-environment-variables" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AUTH_MODE</code></td>
+<td>Authentication mode</td>
+<td><code>multi_user</code></td>
+</tr>
+<tr>
+<td><code>DATABASE_URL</code></td>
+<td>AuthNZ database location</td>
+<td><code>sqlite:///./Databases/users.db</code></td>
+</tr>
+<tr>
+<td><code>JWT_SECRET_KEY</code></td>
+<td>Signs JWT tokens</td>
+<td><code>&lt;32+ char random string&gt;</code></td>
+</tr>
+<tr>
+<td><code>SESSION_ENCRYPTION_KEY</code></td>
+<td>Encrypts session data</td>
+<td><code>&lt;Fernet key&gt;</code></td>
+</tr>
+<tr>
+<td><code>USER_DB_BASE_DIR</code></td>
+<td>Per-user data root</td>
+<td><code>./Databases/user_databases</code></td>
+</tr>
+<tr>
+<td><code>ENABLE_REGISTRATION</code></td>
+<td>Allow new signups</td>
+<td><code>false</code></td>
+</tr>
+<tr>
+<td><code>REQUIRE_REGISTRATION_CODE</code></td>
+<td>Require code to register</td>
+<td><code>true</code></td>
+</tr>
+<tr>
+<td><code>BYOK_ENABLED</code></td>
+<td>Allow user-provided API keys</td>
+<td><code>false</code></td>
+</tr>
+<tr>
+<td><code>RATE_LIMIT_ENABLED</code></td>
+<td>Enable rate limiting</td>
+<td><code>true</code></td>
+</tr>
+<tr>
+<td><code>RATE_LIMIT_PER_MINUTE</code></td>
+<td>Requests per minute per user</td>
+<td><code>60</code></td>
+</tr>
+<tr>
+<td><code>ALLOWED_ORIGINS</code></td>
+<td>CORS allowed origins</td>
+<td><code>https://tldw.yourdomain.com</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../Family_Guardian_Setup/">Family_Guardian_Setup.md</a> - Guardrails, virtual keys, and parental controls</li>
+<li><a href="../Authentication_Setup/">Authentication_Setup.md</a> - Single-user and multi-user auth overview</li>
+<li><a href="../Multi-User_SQLite_Setup/">Multi-User_SQLite_Setup.md</a> - SQLite multi-user technical details</li>
+<li><a href="../Multi-User_Postgres_Setup/">Multi-User_Postgres_Setup.md</a> - PostgreSQL AuthNZ setup</li>
+<li><a href="../Multi-User_Deployment_Guide/">Multi-User_Deployment_Guide.md</a> - Production multi-user deployment</li>
+<li><a href="../Production_Hardening_Checklist/">Production_Hardening_Checklist.md</a> - Security hardening for internet-facing deployments</li>
+<li><a href="../BYOK_User_Guide/">BYOK_User_Guide.md</a> - Bring Your Own Key configuration</li>
+<li><a href="../Backups_Using_Litestream/">Backups_Using_Litestream.md</a> - Continuous SQLite backup with Litestream</li>
+</ul>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Last update">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-timeago" title="February 8, 2026 22:21:09 UTC"><span class="timeago" datetime="2026-02-08T22:21:09+00:00" locale="en"></span></span><span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_date" title="February 8, 2026 22:21:09 UTC">2026-02-08</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Created">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-timeago" title="February 8, 2026 22:21:09 UTC"><span class="timeago" datetime="2026-02-08T22:21:09+00:00" locale="en"></span></span><span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_date" title="February 8, 2026 22:21:09 UTC">2026-02-08</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      © 2024-2025 tldw_Server - v0.1.19 - <a href="https://github.com/rmusser01/tldw_server">GitHub</a>
+
+    </div>
+  
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/rmusser01/tldw_server" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.tabs", "navigation.top", "navigation.tracking", "navigation.indexes", "navigation.footer", "content.code.copy", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "v0.1.19"}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.f55a23d4.min.js"></script>
+      
+        <script src="../../js/timeago.min.js"></script>
+      
+        <script src="../../js/timeago_mkdocs_material.js"></script>
+      
+    
+  </body>
+</html>

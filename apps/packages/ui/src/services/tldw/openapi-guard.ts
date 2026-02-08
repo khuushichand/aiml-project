@@ -143,6 +143,8 @@ export type ClientPath =
   | "/api/v1/reading/import/jobs"
   | "/api/v1/reading/import/jobs/{job_id}"
   | "/api/v1/reading/export"
+  | "/api/v1/reading/digests/schedules"
+  | "/api/v1/reading/digests/schedules/{schedule_id}"
   | "/api/v1/writing/version"
   | "/api/v1/writing/capabilities"
   | "/api/v1/writing/sessions"

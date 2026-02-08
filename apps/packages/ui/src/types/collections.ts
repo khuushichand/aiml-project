@@ -323,6 +323,81 @@ export interface ExportRequest {
 export type ExportResponse = Blob
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Reading Digest Schedule Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ReadingDigestFormat = "md" | "html"
+export type ReadingDigestSuggestionStatus = "saved" | "reading" | "read" | "archived"
+
+export interface ReadingDigestSuggestionsConfig {
+  enabled: boolean
+  limit?: number
+  status?: ReadingDigestSuggestionStatus[]
+  exclude_tags?: string[]
+  max_age_days?: number
+  include_read?: boolean
+  include_archived?: boolean
+}
+
+export interface ReadingDigestScheduleFilters {
+  status?: ReadingDigestSuggestionStatus[]
+  tags?: string[]
+  favorite?: boolean
+  domain?: string
+  q?: string
+  date_from?: string
+  date_to?: string
+  sort?: "updated_desc" | "updated_asc" | "created_desc" | "created_asc" | "title_asc" | "title_desc" | "relevance"
+  limit?: number
+  suggestions?: ReadingDigestSuggestionsConfig
+}
+
+export interface ReadingDigestSchedule {
+  id: string
+  name?: string | null
+  cron: string
+  timezone?: string | null
+  enabled: boolean
+  require_online: boolean
+  format: ReadingDigestFormat
+  template_id?: number | null
+  template_name?: string | null
+  retention_days?: number | null
+  filters?: ReadingDigestScheduleFilters | null
+  last_run_at?: string | null
+  next_run_at?: string | null
+  last_status?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface CreateReadingDigestScheduleRequest {
+  name?: string
+  cron: string
+  timezone?: string
+  enabled?: boolean
+  require_online?: boolean
+  format?: ReadingDigestFormat
+  template_id?: number
+  template_name?: string
+  retention_days?: number
+  filters?: ReadingDigestScheduleFilters
+}
+
+export interface UpdateReadingDigestScheduleRequest {
+  name?: string
+  cron?: string
+  timezone?: string
+  enabled?: boolean
+  require_online?: boolean
+  format?: ReadingDigestFormat
+  template_id?: number
+  template_name?: string
+  retention_days?: number
+  filters?: ReadingDigestScheduleFilters
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Prompt Collections Types (minimal for now)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -339,7 +414,7 @@ export interface PromptCollection {
 // UI Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type CollectionsTab = "reading" | "highlights" | "templates" | "import-export"
+export type CollectionsTab = "reading" | "highlights" | "templates" | "digests" | "import-export"
 
 export interface CollectionsFilterState {
   status: ReadingStatus | "all"

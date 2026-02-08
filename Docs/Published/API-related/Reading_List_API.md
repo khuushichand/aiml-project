@@ -192,7 +192,7 @@ Form fields:
 - `merge_tags`: `true|false`
 
 Example:
-```text
+```
 multipart form
   file = (pocket.json)
   source = pocket
@@ -200,7 +200,7 @@ multipart form
 ```
 
 Response (202 Accepted):
-```json
+```
 {
   "job_id": 42,
   "job_uuid": "b7fbd5a0-3b37-4a2d-b6c2-0d0b9d3a6c1c",
@@ -215,7 +215,7 @@ Response (202 Accepted):
 `POST /api/v1/reading/digests/schedules`
 
 Request:
-```json
+```
 {
   "name": "Morning Digest",
   "cron": "0 8 * * *",
@@ -230,7 +230,7 @@ Request:
 ```
 
 Optional suggestions block:
-```json
+```
 {
   "filters": {
     "status": ["saved"],
@@ -250,7 +250,7 @@ Optional suggestions block:
 ```
 
 Response:
-```json
+```
 { "id": "5a6f0e9d3d1b4b2f8c3d5a9c7b1a2e3f" }
 ```
 
@@ -259,7 +259,7 @@ Response:
 `GET /api/v1/reading/digests/schedules`
 
 Response:
-```json
+```
 [
   {
     "id": "5a6f0e9d3d1b4b2f8c3d5a9c7b1a2e3f",
@@ -303,7 +303,7 @@ The output template receives:
 - `suggestions_meta`: `{count, scores, reasons}` keyed by item id (optional).
 
 Sample template snippet:
-```jinja
+```
 {% if suggestions %}
 ## Suggested reads
 {% for item in suggestions %}
@@ -317,7 +317,7 @@ Sample template snippet:
 `GET /api/v1/reading/digests/outputs`
 
 Response:
-```json
+```
 {
   "items": [
     {
@@ -344,7 +344,7 @@ Notes:
 `GET /api/v1/reading/import/jobs`
 
 Response:
-```json
+```
 {
   "jobs": [
     {
@@ -371,7 +371,7 @@ Response:
 `GET /api/v1/reading/import/jobs/{job_id}`
 
 Response:
-```json
+```
 {
   "job_id": 42,
   "job_uuid": "b7fbd5a0-3b37-4a2d-b6c2-0d0b9d3a6c1c",
@@ -398,7 +398,7 @@ Query params:
 - optional flags: `include_metadata`, `include_clean_html`, `include_text`, `include_highlights`
 
 JSONL line example:
-```json
+```
 {"id":123,"url":"https://example.com/article","canonical_url":"https://example.com/article","domain":"example.com","title":"Example Article","summary":"...","notes":null,"status":"saved","favorite":0,"tags":["ai"],"created_at":"2025-10-19T09:15:00Z","updated_at":"2025-10-19T09:15:00Z","read_at":null,"published_at":null,"origin_type":"manual","metadata":{"import_source":"pocket"}}
 ```
 
@@ -407,7 +407,7 @@ JSONL line example:
 `POST /api/v1/reading/items/{id}/archive`
 
 Request:
-```json
+```
 {
   "format": "html",
   "source": "auto",
@@ -416,7 +416,7 @@ Request:
 ```
 
 Response:
-```json
+```
 {
   "output_id": 101,
   "title": "Example Article (archive 20251021_120000)",

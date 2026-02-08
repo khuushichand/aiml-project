@@ -119,6 +119,9 @@ from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_selector i
     PersonaExemplarSelectorConfig,
     select_character_exemplars,
 )
+from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_telemetry import (
+    compute_persona_exemplar_telemetry,
+)
 from tldw_Server_API.app.core.Chat.chat_exceptions import (
     ChatDatabaseError,
     ChatErrorCode,
@@ -551,6 +554,20 @@ def _resolve_persona_strategy(raw_strategy: str | None) -> str:
     if normalized not in allowed:
         return "default"
     return normalized
+
+
+def _extract_assistant_text_from_completion_payload(payload: dict[str, Any]) -> str:
+    """Extract first assistant message text from a non-stream completion payload."""
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return ""
+    message_block = first_choice.get("message")
+    if not isinstance(message_block, dict):
+        return ""
+    return _extract_text_from_message_content(message_block.get("content"))
 
 
 async def _increment_active_request(user_id: str) -> int:
@@ -2148,6 +2165,7 @@ async def create_chat_completion(
         final_conversation_id: str | None = request_data.conversation_id
         persona_debug_requested = bool(getattr(request_data, "persona_debug", False))
         persona_debug_meta: dict[str, Any] | None = None
+        persona_selected_exemplars: list[dict[str, Any]] = []
 
         try:
             # In TEST_MODE or when explicitly enabled via config/env, allow
@@ -2317,6 +2335,7 @@ async def create_chat_completion(
                         config=selector_config,
                         embedding_score_fn=embedding_callback,
                     )
+                    persona_selected_exemplars = list(selected_result.selected)
                     persona_guidance_block = _format_persona_exemplar_guidance(selected_result.selected)
                     if persona_guidance_block:
                         if final_system_message and final_system_message.strip():
@@ -2796,6 +2815,21 @@ async def create_chat_completion(
                     and persona_debug_meta is not None
                     and isinstance(encoded_payload, dict)
                 ):
+                    assistant_text = _extract_assistant_text_from_completion_payload(encoded_payload)
+                    persona_debug_meta["telemetry"] = compute_persona_exemplar_telemetry(
+                        output_text=assistant_text,
+                        selected_exemplars=persona_selected_exemplars,
+                    )
+                    try:
+                        logger.debug(
+                            "Persona telemetry debug_id={} ioo={} ior={} lcs={}",
+                            persona_debug_meta.get("debug_id"),
+                            persona_debug_meta["telemetry"].get("ioo"),
+                            persona_debug_meta["telemetry"].get("ior"),
+                            persona_debug_meta["telemetry"].get("lcs"),
+                        )
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                        pass
                     meta_payload = encoded_payload.get("meta")
                     if not isinstance(meta_payload, dict):
                         meta_payload = {}

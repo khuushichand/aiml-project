@@ -26,6 +26,8 @@ OpenAPI tags: `rag-unified`, `rag-health`
 ### Available Endpoints
 - `POST /search`              - Unified RAG search (all features via params)
 - `POST /search/stream`       - Streaming answer chunks (NDJSON)
+- `POST /batch`               - Batch multiple queries concurrently
+- `POST /batch/resume/{id}`   - Resume an interrupted batch run
 - `GET  /simple`              - Simple search (query param)
 - `GET  /advanced`            - Advanced search with common flags
 - `GET  /capabilities`        - Pipeline capabilities and defaults
@@ -85,44 +87,16 @@ interface UnifiedSearchRequest {
   keyword_filter?: string[];                  // Optional
   enable_generation?: boolean;                // Include model-generated answer
   enable_citations?: boolean;                 // Include citations
-  enable_query_classification?: boolean;      // Default: false. LLM-based query router
-  enable_research_loop?: boolean;             // Default: false. Iterative research (requires enable_query_classification=true)
-  search_depth_mode?: 'speed' | 'balanced' | 'quality'; // Default: null (no preset). Sets parameter presets
-  enable_suggestions?: boolean;               // Default: false. Follow-up suggestion generation
-  num_suggestions?: number;                   // Default: 5, range 1–10. Only used when enable_suggestions=true
+  enable_query_classification?: boolean;      // Search-Agent router toggle, Default: false
+  enable_research_loop?: boolean;             // Iterative research mode, Default: false
+  search_depth_mode?: 'speed' | 'balanced' | 'quality'; // Default: 'balanced'
+  enable_suggestions?: boolean;               // Follow-up suggestion generation, Default: false
+  num_suggestions?: number;                   // 1-10, Default: 5
   enable_structured_response?: boolean;       // XML context + citation-oriented writer
   enable_image_search?: boolean;              // Media search action (images)
   enable_video_search?: boolean;              // Media search action (videos)
 }
 ```
-
-#### Request Flag Defaults & Constraints
-
-| Flag | Type | Default | Allowed Values | Constraints |
-|------|------|---------|----------------|-------------|
-| `search_depth_mode` | string \| null | `null` | `"speed"`, `"balanced"`, `"quality"` | When set, applies parameter presets (see table below). Explicit per-field values override mode presets. |
-| `enable_query_classification` | bool | `false` | `true`, `false` | **Required** when `enable_research_loop=true`. Enables LLM-based query routing and reformulation. |
-| `enable_research_loop` | bool | `false` | `true`, `false` | Requires `enable_query_classification=true`; server returns **422** if violated. |
-| `enable_suggestions` | bool | `false` | `true`, `false` | When `true`, generates follow-up question suggestions. `num_suggestions` controls the count. |
-| `num_suggestions` | int | `5` | `1`–`10` | Only meaningful when `enable_suggestions=true`. Ignored otherwise. Values outside 1–10 return **422**. |
-
-**Inter-flag dependencies:**
-
-- **`enable_research_loop` → `enable_query_classification`** — Setting `enable_research_loop=true` without `enable_query_classification=true` produces a `422 Validation Error`. The research loop needs the query classifier to route and reformulate iterative queries.
-- **`num_suggestions` → `enable_suggestions`** — `num_suggestions` is only consumed when `enable_suggestions=true`. When suggestions are disabled the value is silently ignored (no error, no suggestions returned).
-- **`search_depth_mode` → latency** — `"speed"` minimises processing (fewer results, no reranking/expansion), `"balanced"` enables reranking and query expansion, `"quality"` enables all features including HyDE and web fallback. Expect increasing latency in that order.
-
-**`search_depth_mode` presets** — when a mode is selected these defaults are applied; any parameter you set explicitly overrides the preset:
-
-| Parameter | `speed` | `balanced` | `quality` |
-|-----------|---------|------------|-----------|
-| `top_k` | 3 | 10 | 25 |
-| `enable_reranking` | false | true | true |
-| `reranking_strategy` | — | `"flashrank"` | `"two_tier"` |
-| `expand_query` | false | true | true |
-| `enable_hyde` | false | — | true |
-| `enable_web_fallback` | false | — | true |
-| `enable_multi_vector_passages` | false | — | true |
 
 Response (UnifiedRAGResponse excerpt):
 ```typescript
@@ -134,55 +108,33 @@ interface UnifiedSearchResponse {
   timings: Record<string, number>;
   generated_answer?: string;
   citations?: object[];
-  research_summary?: ResearchSummary;         // Present when enable_research_loop=true. Mirrors metadata.research
-  suggestions?: string[];                     // Present when enable_suggestions=true. Mirrors metadata.suggestions
-  images?: ImageResult[];                     // Present when enable_image_search=true. Mirrors metadata.images
-  videos?: VideoResult[];                     // Present when enable_video_search=true. Mirrors metadata.videos
+  research_summary?: ResearchSummary;          // Mirrors metadata.research when enabled
+  suggestions?: string[];                     // Mirrors metadata.suggestions when enabled
+  images?: ImageResult[];                     // Mirrors metadata.images when enabled
+  videos?: VideoResult[];                     // Mirrors metadata.videos when enabled
 }
 
-// Research loop output (research_summary)
 interface ResearchSummary {
-  total_iterations: number;                   // Total iterations executed
-  total_results: number;                      // Total results collected
-  completed: boolean;                         // Whether the loop completed normally
-  final_reasoning: string;                    // LLM's final reasoning text
-  max_iterations_requested: number;           // Iterations requested
-  url_scraping_enabled: boolean;
-  discussion_platforms: string[];             // Platforms searched (e.g. ["reddit"])
-  url_dedup: Record<string, any>;            // URL deduplication metadata
-  steps: ResearchStep[];                      // Per-iteration breakdown
+  title?: string;           // Short title for the research summary
+  summary: string;          // Human-readable summary of retrieved context
+  sources?: string[];       // Source identifiers or URLs used in the summary
 }
 
-interface ResearchStep {
-  iteration: number;                          // 1-based iteration index
-  action: string;                             // e.g. "web_search", "url_scrape"
-  reasoning: string;                          // LLM's reasoning for this step
-  result_count: number;                       // Results returned by this step
-  duration_sec: number;                       // Step wall-clock time
-}
-
-// Image search result element (images[])
 interface ImageResult {
-  title: string;                              // Image title / caption
-  url: string;                                // Full image URL
-  thumbnail_url: string;                      // Thumbnail URL
-  source: string;                             // Source URL or domain
-  description: string;                        // Image description / snippet
-  width?: number;                             // Image width (when available)
-  height?: number;                            // Image height (when available)
+  url: string;              // Image URL
+  caption?: string;         // Descriptive caption
+  alt?: string;             // Alt text for accessibility
+  width?: number;           // Width in pixels
+  height?: number;          // Height in pixels
 }
 
-// Video search result element (videos[])
 interface VideoResult {
-  title: string;                              // Video title
-  url: string;                                // Video URL (e.g. YouTube link)
-  thumbnail_url: string;                      // Thumbnail image URL
-  source: string;                             // Source identifier (e.g. "youtube")
-  description: string;                        // Video description / snippet
+  url: string;              // Video URL
+  title?: string;           // Video title
+  durationSeconds?: number; // Duration in seconds
+  thumbnailUrl?: string;    // Thumbnail image URL
 }
 ```
-
-> **Note:** The `research_summary`, `suggestions`, `images`, and `videos` top-level response fields mirror the identically-named keys inside the `metadata` object (`metadata.research`, `metadata.suggestions`, `metadata.images`, `metadata.videos`). Both locations carry the same data; the top-level fields are provided for convenience so clients don't need to dig into the metadata bag.
 
 #### Example
 ```javascript
@@ -207,16 +159,61 @@ const data = await response.json();
 Search-Agent defaults for omitted request fields:
 - The server applies `[Search-Agent]` defaults from `tldw_Server_API/Config_Files/config.txt`.
 - Environment variables override config values.
-- Only fields **not** explicitly provided by the caller are filled from config/env.
-- `num_suggestions` has no env/config override; the schema default of `5` always applies.
-- Toggles and their env / config keys:
-  - `enable_query_classification` ← `SEARCH_QUERY_CLASSIFICATION` / `search_query_classification` (schema default `false`)
-  - `enable_research_loop` ← `SEARCH_RESEARCH_LOOP` / `search_research_loop` (schema default `false`)
-  - `enable_suggestions` ← `SEARCH_SUGGESTIONS` / `search_suggestions` (schema default `false`)
-  - `enable_structured_response` ← `SEARCH_STRUCTURED_RESPONSE` / `search_structured_response` (schema default `false`)
-  - `enable_image_search` ← `SEARCH_IMAGE_SEARCH` / `search_image_search` (schema default `false`)
-  - `enable_video_search` ← `SEARCH_VIDEO_SEARCH` / `search_video_search` (schema default `false`)
-  - `search_depth_mode` ← `SEARCH_DEFAULT_MODE` / `search_default_mode` (schema default `null`; must be one of `speed`, `balanced`, `quality`)
+- Router, research, and depth defaults:
+  - `enable_query_classification` ← `SEARCH_QUERY_CLASSIFICATION` / `search_query_classification` (default `false`)
+  - `enable_research_loop` ← `SEARCH_RESEARCH_LOOP` / `search_research_loop` (default `false`)
+  - `search_depth_mode` ← `SEARCH_DEFAULT_MODE` / `search_default_mode` (default `'balanced'`)
+  - `num_suggestions` ← schema default only, no env/config override (default `5`)
+- Round 2 toggles and defaults:
+  - `enable_suggestions` ← `SEARCH_SUGGESTIONS` / `search_suggestions` (default `false`)
+  - `enable_structured_response` ← `SEARCH_STRUCTURED_RESPONSE` / `search_structured_response` (default `false`)
+  - `enable_image_search` ← `SEARCH_IMAGE_SEARCH` / `search_image_search` (default `false`)
+  - `enable_video_search` ← `SEARCH_VIDEO_SEARCH` / `search_video_search` (default `false`)
+
+### 1a. Batch Search - `POST /batch`
+
+Run multiple queries concurrently with shared parameters. When `enable_checkpoint=true`, the server emits a `checkpoint_id` and saves per-query progress so you can resume later.
+
+Request (subset):
+```typescript
+interface UnifiedBatchRequest {
+  queries: string[];                 // Required, 1-100
+  max_concurrent?: number;           // Default: 5
+  enable_checkpoint?: boolean;       // Default: false
+  // ...all other UnifiedRAGRequest fields apply to every query
+}
+```
+
+Response (excerpt):
+```typescript
+interface UnifiedBatchResponse {
+  results: UnifiedRAGResponse[];
+  total_queries: number;
+  successful: number;
+  failed: number;
+  total_time: number;
+  checkpoint_id?: string;           // Present when enable_checkpoint=true
+}
+```
+
+Resume:
+```bash
+curl -X POST http://localhost:8000/api/v1/rag/batch/resume/{checkpoint_id} \
+  -H "X-API-KEY: your-api-key"
+```
+
+Example:
+```bash
+curl -X POST http://localhost:8000/api/v1/rag/batch \
+  -H "X-API-KEY: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "queries": ["What is RAG?", "Explain vector search"],
+    "max_concurrent": 5,
+    "enable_checkpoint": true,
+    "enable_generation": true
+  }'
+```
 
 ### 2. Advanced Search - `GET /advanced`
 

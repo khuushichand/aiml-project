@@ -12,6 +12,7 @@ Use the links below to jump to common areas, or the sidebar to browse all topics
 - Database Overview: Database.md
 - Media DB v2: Databases/Media_DB_v2.md
 - ChaChaNotes DB (Chats/Notes/Characters): Databases/ChaChaNotes_DB.md
+- Generated Files Storage Guide: Guides/Generated_Files_Storage_Code_Guide.md
 
 ## Ingestion & Media Processing
 - Ingestion Overview: Ingestion_Media_Processing.md
@@ -34,6 +35,9 @@ Use the links below to jump to common areas, or the sidebar to browse all topics
 ## Chat & Knowledge
 - Chat Developer Guide: Chat_Developer_Guide.md
 - Chatbook Developer Guide: Chatbook_Developer_Guide.md
+
+## Voice Assistant
+- Voice Assistant Module: VoiceAssistant_Module.md
 
 ## Evaluations
 - Evaluations Developer Guide: Evaluations_Developer_Guide.md

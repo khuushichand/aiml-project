@@ -166,15 +166,16 @@ Restart PostgreSQL:
 sudo systemctl restart postgresql
 ```
 
-### 4. Initialize Database Schema
+### 4. Initialize AuthNZ Schema (after `.env` is configured)
+
+AuthNZ schema creation and RBAC seeding are handled by the initializer:
 
 ```bash
-# Download schema file
-wget https://raw.githubusercontent.com/your-repo/tldw_server/main/tldw_Server_API/Databases/Postgres/Schema/postgresql_users.sql
-
-# Apply schema
-psql -U tldw_user -h localhost -d tldw_multiuser -f postgresql_users.sql
+python -m tldw_Server_API.app.core.AuthNZ.initialize
 ```
+
+This bootstraps the Postgres tables for users, sessions, RBAC, orgs/teams, API keys, and usage.
+For a focused walkthrough, see `Docs/User_Guides/Multi-User_Postgres_Setup.md`.
 
 ---
 

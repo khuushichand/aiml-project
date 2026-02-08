@@ -180,7 +180,7 @@ evaluation = await svc.create_evaluation(
 # Start a run
 run = await svc.create_run(
     eval_id=evaluation["id"],
-    target_model="gpt-3.5-turbo",
+    target_model="gpt-4o",
     config={"temperature": 0.0},
     created_by="dev"
 )
@@ -203,7 +203,7 @@ eval_id = db.create_evaluation(
     eval_type="model_graded",
     eval_spec={"sub_type": "summarization", "metrics": ["fluency", "relevance"], "model": "gpt-4"}
 )
-run_id = db.create_run(eval_id=eval_id, target_model="gpt-3.5-turbo", config={"temperature": 0.0})
+run_id = db.create_run(eval_id=eval_id, target_model="gpt-4o", config={"temperature": 0.0})
 await runner.run_evaluation(run_id=run_id, eval_id=eval_id, eval_config={"eval_type": "model_graded"})
 results = db.get_run_results(run_id)
 ```

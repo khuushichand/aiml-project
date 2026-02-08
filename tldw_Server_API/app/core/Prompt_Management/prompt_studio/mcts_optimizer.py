@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError, PromptStudioDatabase
 
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (
     EventBroadcaster,
@@ -36,6 +37,7 @@ _MCTS_NONCRITICAL_EXCEPTIONS = (
     ConnectionError,
     TimeoutError,
     sqlite3.Error,
+    DatabaseError,
 )
 
 try:
@@ -47,7 +49,6 @@ except _MCTS_IMPORT_EXCEPTIONS:  # pragma: no cover - optional in minimal builds
     ws_connection_manager = None
 import contextlib
 
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.testing import is_truthy
 
 
@@ -310,6 +311,18 @@ class MCTSOptimizer:
                         max_iterations=n_sims,
                         current_metric=float(score),
                         best_metric=float(best_score),
+                        extra_data={
+                            "strategy": "mcts",
+                            "sim_index": sim,
+                            "depth": int(node.segment_index),
+                            "reward": float(score),
+                            "best_reward": float(best_score),
+                            "token_spend_so_far": int(self._tokens_spent),
+                            "trace_summary": {
+                                "prompt_id": prompt_id,
+                                "system_hash": sys_hash,
+                            },
+                        },
                     )
 
             # Persist iteration record (throttled similarly to WS)

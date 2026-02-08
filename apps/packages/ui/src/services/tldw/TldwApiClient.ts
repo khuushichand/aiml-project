@@ -16,15 +16,47 @@ import {
 } from "@/services/tldw/data-tables"
 import type { DataTableColumn } from "@/types/data-tables"
 import type {
+  CreateReadingDigestScheduleRequest,
   ImportSource,
+  ReadingDigestSchedule,
   ReadingImportJobResponse,
   ReadingImportJobStatus,
-  ReadingImportJobsListResponse
+  ReadingImportJobsListResponse,
+  UpdateReadingDigestScheduleRequest
 } from "@/types/collections"
 
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 const CHARACTER_CACHE_TTL_MS = 5 * 60 * 1000
 const CHAT_MESSAGES_CACHE_TTL_MS = 60 * 1000
+
+const normalizeReadingDigestSchedule = (schedule: any): ReadingDigestSchedule => ({
+  ...schedule,
+  id: String(schedule?.id ?? ""),
+  name: schedule?.name ?? null,
+  cron: String(schedule?.cron ?? ""),
+  timezone: schedule?.timezone ?? null,
+  enabled: Boolean(schedule?.enabled),
+  require_online: Boolean(schedule?.require_online),
+  format: schedule?.format === "html" ? "html" : "md",
+  template_id:
+    typeof schedule?.template_id === "number" && Number.isFinite(schedule.template_id)
+      ? schedule.template_id
+      : null,
+  template_name: schedule?.template_name ?? null,
+  retention_days:
+    typeof schedule?.retention_days === "number" && Number.isFinite(schedule.retention_days)
+      ? schedule.retention_days
+      : null,
+  filters:
+    schedule?.filters && typeof schedule.filters === "object" && !Array.isArray(schedule.filters)
+      ? schedule.filters
+      : null,
+  last_run_at: schedule?.last_run_at ?? null,
+  next_run_at: schedule?.next_run_at ?? null,
+  last_status: schedule?.last_status ?? null,
+  created_at: schedule?.created_at ?? null,
+  updated_at: schedule?.updated_at ?? null
+})
 
 export interface TldwConfig {
   serverUrl: string
@@ -4534,6 +4566,68 @@ export class TldwApiClient {
     const filename = filenameMatch?.[1] || "reading_export.jsonl"
     const blob = new Blob([response.data], { type: headers.get("content-type") || "application/octet-stream" })
     return { blob, filename }
+  }
+
+  async createReadingDigestSchedule(
+    data: CreateReadingDigestScheduleRequest
+  ): Promise<{ id: string }> {
+    const payload: Record<string, unknown> = { ...data }
+    if (!payload.format) payload.format = "md"
+    if (typeof payload.enabled !== "boolean") payload.enabled = true
+    if (typeof payload.require_online !== "boolean") payload.require_online = false
+    const response = await bgRequest<{ id: string }>({
+      path: "/api/v1/reading/digests/schedules",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+    return { id: String(response?.id ?? "") }
+  }
+
+  async listReadingDigestSchedules(params?: {
+    limit?: number
+    offset?: number
+  }): Promise<ReadingDigestSchedule[]> {
+    const query = new URLSearchParams()
+    if (typeof params?.limit === "number" && Number.isFinite(params.limit)) {
+      query.set("limit", String(Math.max(1, Math.floor(params.limit))))
+    }
+    if (typeof params?.offset === "number" && Number.isFinite(params.offset)) {
+      query.set("offset", String(Math.max(0, Math.floor(params.offset))))
+    }
+    const qs = query.toString()
+    const path = `/api/v1/reading/digests/schedules${qs ? `?${qs}` : ""}` as const
+    const rows = await bgRequest<any>({ path, method: "GET" })
+    if (!Array.isArray(rows)) {
+      return []
+    }
+    return rows.map((row) => normalizeReadingDigestSchedule(row))
+  }
+
+  async getReadingDigestSchedule(scheduleId: string): Promise<ReadingDigestSchedule> {
+    const path = `/api/v1/reading/digests/schedules/${encodeURIComponent(scheduleId)}` as const
+    const schedule = await bgRequest<any>({ path, method: "GET" })
+    return normalizeReadingDigestSchedule(schedule)
+  }
+
+  async updateReadingDigestSchedule(
+    scheduleId: string,
+    data: UpdateReadingDigestScheduleRequest
+  ): Promise<ReadingDigestSchedule> {
+    const path = `/api/v1/reading/digests/schedules/${encodeURIComponent(scheduleId)}` as const
+    const schedule = await bgRequest<any>({
+      path,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: data
+    })
+    return normalizeReadingDigestSchedule(schedule)
+  }
+
+  async deleteReadingDigestSchedule(scheduleId: string): Promise<{ ok: boolean }> {
+    const path = `/api/v1/reading/digests/schedules/${encodeURIComponent(scheduleId)}` as const
+    const response = await bgRequest<{ ok?: boolean }>({ path, method: "DELETE" })
+    return { ok: Boolean(response?.ok) }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
