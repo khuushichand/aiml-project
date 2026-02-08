@@ -1182,7 +1182,7 @@ stable_only = false
 disable =
 
 # Comma-separated list of route keys to force-enable (useful when stable_only = true)
-enable = tools, jobs, acp
+enable = tools, jobs, acp, workflows, scheduler
 
 # Optionally extend the curated experimental set (comma-separated)
 experimental_routes =

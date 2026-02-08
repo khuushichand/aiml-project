@@ -467,6 +467,13 @@ const getProcessingStatusLabels = (data: ProcessingResultPayload): string[] =>
     .map((item) => normalizeStatusLabel(item.status))
     .filter(Boolean)
 
+function titleFromPayload(data: ProcessingResultPayload): string | null {
+  const items = extractProcessingItems(data)
+  if (items.length === 0) return null
+  const title = items[0]?.title || items[0]?.metadata?.title
+  return typeof title === "string" && title.trim() ? title.trim() : null
+}
+
 const cloneObject = <T extends Record<string, any>>(value: T): T | null => {
   try {
     return structuredClone(value)
@@ -4655,7 +4662,8 @@ export const QuickIngestModal: React.FC<Props> = ({
             firstResultWithMedia,
             reviewBatchId,
             processOnly,
-            mediaIdFromPayload
+            mediaIdFromPayload,
+            titleFromPayload
           }}
           actions={{
             retryFailedUrls,

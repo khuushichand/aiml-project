@@ -143,6 +143,79 @@ def test_build_references_cache_key_includes_reference_index(mock_db):
     assert ":idx:3" in key
 
 
+def test_find_reference_section_rejects_inline_references_mentions():
+    content = (
+        "This section references prior work in many fields.\n"
+        "The references therein are useful context.\n"
+        "But there is no references heading in this document.\n"
+    )
+    assert refs_mod._find_reference_section(content) is None
+
+
+def test_find_reference_section_accepts_markdown_bold_heading():
+    content = (
+        "## Method\n"
+        "Some body text.\n\n"
+        "### **References**\n"
+        "Smith, J. 2020. Example reference.\n"
+    )
+    section = refs_mod._find_reference_section(content)
+    assert section is not None
+    assert "Smith, J. 2020. Example reference." in section
+
+
+def test_find_reference_section_accepts_bold_heading_without_markdown_hash():
+    content = (
+        "Discussion\n"
+        "Some body text.\n\n"
+        "**References**\n"
+        "Smith, J. 2020. Example reference.\n"
+    )
+    section = refs_mod._find_reference_section(content)
+    assert section is not None
+    assert "Smith, J. 2020. Example reference." in section
+
+
+def test_find_reference_section_stops_before_appendix_heading():
+    content = (
+        "References\n"
+        "Akari Asai et al. 2020. Learning to retrieve reasoning paths.\n\n"
+        "A Appendix\n"
+        "A.1 Prompts for Query Decomposition\n"
+    )
+    section = refs_mod._find_reference_section(content)
+    assert section is not None
+    assert "Akari Asai" in section
+    assert "A Appendix" not in section
+    assert "A.1 Prompts" not in section
+
+
+def test_split_references_filters_appendix_like_noise():
+    refs_text = (
+        "Akari Asai et al. 2020. Learning to retrieve reasoning paths.\n\n"
+        "Appendix A. Additional notes.\n\n"
+        "Jinze Bai et al. 2023. Qwen technical report. arXiv:2309.16609.\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert any("Akari Asai" in r for r in refs)
+    assert any("Qwen technical report" in r for r in refs)
+    assert all("Appendix A." not in r for r in refs)
+
+
+def test_split_references_filters_figure_noise_blocks():
+    refs_text = (
+        "Figure 3. Retrieval pipeline overview.\n\n"
+        "Akari Asai et al. 2020. Learning to retrieve reasoning paths.\n\n"
+        "Table 2. Ablation metrics.\n\n"
+        "Jinze Bai et al. 2023. Qwen technical report. arXiv:2309.16609.\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert any("Akari Asai" in r for r in refs)
+    assert any("Qwen technical report" in r for r in refs)
+    assert all("Figure 3" not in r for r in refs)
+    assert all("Table 2" not in r for r in refs)
+
+
 @pytest.mark.asyncio
 async def test_references_endpoint_enriches_only_requested_reference_index(mock_user, mock_db):
     content = (

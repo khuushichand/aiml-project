@@ -34,6 +34,7 @@ type ResultsPanelProps = {
     reviewBatchId?: string | null
     processOnly: boolean
     mediaIdFromPayload: (payload: unknown) => string | number | null
+    titleFromPayload: (payload: unknown) => string | null
   }
   actions: {
     retryFailedUrls: () => void
@@ -64,7 +65,8 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
     firstResultWithMedia,
     reviewBatchId,
     processOnly,
-    mediaIdFromPayload
+    mediaIdFromPayload,
+    titleFromPayload
   } = context
   const {
     retryFailedUrls,
@@ -84,26 +86,33 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
         item.status === "ok" && shouldStoreRemote
           ? mediaIdFromPayload(item.data)
           : null
+      const title =
+        item.status === "ok" ? titleFromPayload(item.data) : null
 
       return {
         ...item,
-        mediaId
+        mediaId,
+        title
       }
     })
-  }, [results, shouldStoreRemote, mediaIdFromPayload])
+  }, [results, shouldStoreRemote, mediaIdFromPayload, titleFromPayload])
 
-  const mediaIdCache = React.useMemo(() => {
-    return new Map<string, ResultItemWithMediaId["mediaId"]>(
-      resultsWithMediaIds.map((item) => [item.id, item.mediaId])
+  const enrichmentCache = React.useMemo(() => {
+    return new Map<string, { mediaId: ResultItemWithMediaId["mediaId"]; title: string | null | undefined }>(
+      resultsWithMediaIds.map((item) => [item.id, { mediaId: item.mediaId, title: item.title }])
     )
   }, [resultsWithMediaIds])
 
   const visibleResultsWithMediaIds = React.useMemo<ResultItemWithMediaId[]>(() => {
-    return visibleResults.map((item) => ({
-      ...item,
-      mediaId: mediaIdCache.get(item.id) ?? null
-    }))
-  }, [mediaIdCache, visibleResults])
+    return visibleResults.map((item) => {
+      const cached = enrichmentCache.get(item.id)
+      return {
+        ...item,
+        mediaId: cached?.mediaId ?? null,
+        title: cached?.title ?? null
+      }
+    })
+  }, [enrichmentCache, visibleResults])
   const hasErrors = React.useMemo(
     () => results.some((item) => item.status === "error"),
     [results]

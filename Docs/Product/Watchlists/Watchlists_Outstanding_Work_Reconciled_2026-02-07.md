@@ -52,12 +52,17 @@ Scope audited:
 
 - [ ] Optional: implement server-side YouTube resolver for `@handle`/vanity URLs (currently out-of-scope for v1, still called out as a nice-to-have).
   - Source: `Docs/Product/Watchlists/Watchlists_Subscriptions_Bridge_PRD.md:62`.
-- [ ] Decide whether to ship richer template presets/deeper per-job default UX beyond current template editor.
-  - Source backlog item: `Docs/Product/Watchlists/Watchlist_PRD.md:28`.
-- [ ] Clarify and, if needed, implement any remaining "Media DB aggregation export" behavior beyond current output ingestion flow.
-  - Source backlog item: `Docs/Product/Watchlists/Watchlist_PRD.md:29`.
-- [ ] Phase-3 platform scope decisions (planned, not v1 blockers): forum productionization, multi-tenant sharing, optional Postgres backend.
-  - Source: `Docs/Product/Watchlists/Watchlist_PRD.md:267`.
+- [x] Decision made: ship richer template UX as a two-lane model (guided presets + advanced Jinja editor), while reusing existing template/version APIs and per-job defaults.
+  - Decision log: `Docs/Product/Watchlists/Watchlists_Decisions_TemplateUX_MediaDB_Phase3_2026-02-08.md`.
+- [x] Clarification made: "Media DB aggregation export" is fulfilled by current output artifact ingest flow (`POST /watchlists/outputs` + `ingest_to_media_db=true`); no separate endpoint required for v0.2.x.
+  - Decision log: `Docs/Product/Watchlists/Watchlists_Decisions_TemplateUX_MediaDB_Phase3_2026-02-08.md`.
+- [x] Phase-3 scope decision made: focus on forum productionization, multi-tenant sharing, and optional Postgres parity/hardening; remove WS logs from Phase-3 backlog.
+  - Decision log: `Docs/Product/Watchlists/Watchlists_Decisions_TemplateUX_MediaDB_Phase3_2026-02-08.md`.
+
+Decision-derived implementation follow-ups (still open):
+- [ ] Implement Template UX Phase A (preset selector + per-job defaults UX wiring).
+- [ ] Implement Template UX Phase B polish (advanced editor helpers, preview/lint affordances, version diff/restore UX).
+- [ ] Execute Phase-3 streams (forums productionization, sharing model, Postgres parity) with explicit acceptance criteria.
 
 ## 3) Explicitly Not Outstanding (Closed or Superseded)
 

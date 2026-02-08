@@ -28,6 +28,7 @@ import type { WorkflowStepType, WorkflowNode, WorkflowNodeData } from "@/types/w
 import { useWorkflowEditorStore } from "@/store/workflow-editor"
 import { buildWorkflowNodeTypes } from "./nodes/WorkflowNode"
 import { getStepMetadata } from "./step-registry"
+import { isEditableEventTarget } from "./keyboard-shortcuts"
 
 interface WorkflowCanvasProps {
   className?: string
@@ -99,6 +100,10 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
   // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isEditableEventTarget(e.target)) {
+        return
+      }
+
       // Delete selected nodes/edges
       if (e.key === "Delete" || e.key === "Backspace") {
         const selectedNodes = useWorkflowEditorStore.getState().selectedNodeIds

@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, ValidationError
 from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import oauth2_scheme
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
     is_single_user_ip_allowed,
     resolve_client_ip,
@@ -61,6 +61,7 @@ _USER_DB_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     ValueError,
     UnicodeDecodeError,
+    DatabaseError,
     HTTPException,
     InvalidTokenError,
     TokenExpiredError,
@@ -1166,7 +1167,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 if row:
                     key_org_id = _coerce_int(row.get("org_id"))
                     key_team_id = _coerce_int(row.get("team_id"))
-            except _USER_DB_NONCRITICAL_EXCEPTIONS as exc:
+            except Exception as exc:
                 logger.debug("API key scope fallback lookup failed: {}", exc)
 
         # Attach context for downstream consumers

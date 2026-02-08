@@ -32,6 +32,7 @@ export type ResultOutcome = "ingested" | "processed" | "skipped" | "failed"
 
 export type ResultItemWithMediaId = ResultItem & {
   mediaId: string | number | null
+  title?: string | null
 }
 
 export type ResultSummary = {

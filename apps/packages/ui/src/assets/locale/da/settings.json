@@ -588,8 +588,7 @@
           "value": {
             "label": "Header-værdi",
             "placeholder": "Bearer-token"
-          },
-          "add": "Tilføj header"
+          }
         },
         "help": "Hvis du har forbindelsesproblemer med serveren, kan du konfigurere en brugerdefineret oprindelses-URL. For mere information, <anchor>klik her</anchor>."
       }

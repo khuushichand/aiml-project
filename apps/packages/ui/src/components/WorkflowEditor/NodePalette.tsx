@@ -6,7 +6,7 @@
  */
 
 import { useState, useMemo } from "react"
-import { Input, Collapse, Tooltip, Spin } from "antd"
+import { Input, Collapse, Tooltip, Spin, Alert, Button } from "antd"
 import { Search, GripVertical } from "lucide-react"
 import type { WorkflowStepType } from "@/types/workflow-editor"
 import { useWorkflowEditorStore } from "@/store/workflow-editor"
@@ -123,6 +123,7 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
   const stepRegistry = useWorkflowEditorStore((s) => s.stepRegistry)
   const stepTypesStatus = useWorkflowEditorStore((s) => s.stepTypesStatus)
   const stepTypesError = useWorkflowEditorStore((s) => s.stepTypesError)
+  const loadStepTypes = useWorkflowEditorStore((s) => s.loadStepTypes)
 
   const categories = useMemo(
     () => getCategorizedSteps(stepRegistry),
@@ -150,6 +151,10 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
   const handleDragStart = (e: React.DragEvent, stepType: WorkflowStepType) => {
     e.dataTransfer.setData("application/workflow-step", stepType)
     e.dataTransfer.effectAllowed = "copy"
+  }
+
+  const handleRetryStepTypes = () => {
+    void loadStepTypes(true)
   }
 
   const collapseItems = filteredCategories.map((cat) => ({
@@ -195,6 +200,26 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
         />
       </div>
 
+      {stepTypesStatus === "error" && (
+        <div className="px-3 pt-2">
+          <Alert
+            type="warning"
+            showIcon
+            message="Limited node library"
+            description={
+              <span className="text-xs">
+                Could not load server step types. Showing fallback steps.
+              </span>
+            }
+            action={
+              <Button size="small" onClick={handleRetryStepTypes}>
+                Retry
+              </Button>
+            }
+          />
+        </div>
+      )}
+
       {/* Node Categories */}
       <div className="flex-1 overflow-y-auto p-2">
         {stepTypesStatus === "loading" ? (
@@ -208,6 +233,16 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
             <p className="text-sm">
               {stepTypesError ? "Unable to load step types" : "No nodes found"}
             </p>
+            {stepTypesError && (
+              <Button
+                type="link"
+                size="small"
+                onClick={handleRetryStepTypes}
+                className="mt-2"
+              >
+                Retry loading step types
+              </Button>
+            )}
           </div>
         ) : (
           <Collapse

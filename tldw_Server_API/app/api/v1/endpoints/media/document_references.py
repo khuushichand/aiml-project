@@ -50,27 +50,19 @@ REFERENCE_ENRICH_EXCEPTIONS = (
 )
 
 # Reference section detection patterns
-REFERENCES_PARSER_VERSION = "4"
-REFERENCE_SECTION_PATTERNS = [
-    # Common headings (optional numbering/roman numerals, optional colon)
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*references?\s*:?\s*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*bibliography\s*:?\s*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*works\s+cited\s*:?\s*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*literature\s+cited\s*:?\s*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*cited\s+references?\s*:?\s*$",
-    # Markdown-style headings
-    r"(?im)^#+\s*references?\s*$",
-    r"(?im)^#+\s*bibliography\s*$",
-]
+REFERENCES_PARSER_VERSION = "6"
 
-# Looser fallback headings (allow trailing text like "References and Notes")
-REFERENCE_SECTION_FALLBACK_PATTERNS = [
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*references?\b.*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*bibliography\b.*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*works\s+cited\b.*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*literature\s+cited\b.*$",
-    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*cited\s+references?\b.*$",
-]
+REFERENCE_HEADING_CORE_PATTERN = re.compile(
+    r"(?i)^(?:\d+|[ivxlc]+)?(?:\.\d+)?\s*"
+    r"(?:references?|bibliography|works\s+cited|literature\s+cited|cited\s+references?)"
+    r"(?:\s*(?:and|&)\s*(?:notes?|citations?))?\s*:?\s*$"
+)
+
+REFERENCE_SECTION_END_CORE_PATTERN = re.compile(
+    r"(?i)^(?:[A-Z](?:\.\d+)*|\d+(?:\.\d+)*)?\s*"
+    r"(?:appendix|acknowledg(?:e)?ments?|supplement(?:ary|al)?|"
+    r"data\s+availability|code\s+availability)\b.*$"
+)
 
 # DOI/arXiv extraction patterns
 DOI_PATTERN = r"(?:https?://(?:dx\.)?doi\.org/)?10\.\d{4,}/[^\s\]\)>\"']+"
@@ -186,32 +178,75 @@ def _set_provider_cooldown(provider: str) -> None:
 
 def _find_reference_section(content: str) -> str | None:
     """Find and extract the references section from document content."""
-    matches: list[re.Match[str]] = []
-    for pattern in REFERENCE_SECTION_PATTERNS:
-        matches.extend(re.finditer(pattern, content))
-    if not matches:
-        for pattern in REFERENCE_SECTION_FALLBACK_PATTERNS:
-            matches.extend(re.finditer(pattern, content))
-    if not matches:
-        # Fallback: look for the last occurrence of the word "References"
-        fallback_matches = list(re.finditer(r"(?i)\breferences\b", content))
-        if not fallback_matches:
-            return None
-        match = fallback_matches[-1]
-        start = match.end()
-        return content[start:].strip()
+    def _line_offset(line_idx: int, lines: list[str]) -> int:
+        # Keep offsets deterministic without relying on regex line iterators.
+        return sum(len(line) + 1 for line in lines[:line_idx])
 
-    # Use the last match to avoid earlier "References" mentions (e.g., TOC).
-    match = max(matches, key=lambda m: m.start())
+    def _normalize_heading_line(line: str) -> str:
+        line = line.strip()
+        line = re.sub(r"^#{1,6}\s*", "", line)
+        line = line.replace("**", "").replace("__", "")
+        line = line.strip("*_`#:- ")
+        line = re.sub(r"\s+", " ", line)
+        return line.strip()
 
-    # Extract everything after the references heading
-    start = match.end()
-    # Try to find the next section heading to limit scope
-    next_section = re.search(r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*[A-Z][\w\s\-]{2,}$", content[start:])
-    if next_section:
-        end = start + next_section.start()
-        return content[start:end].strip()
-    return content[start:].strip()
+    def _is_heading_candidate(line: str) -> bool:
+        normalized = _normalize_heading_line(line)
+        if not normalized:
+            return False
+        if len(normalized.split()) > 8:
+            return False
+        return bool(REFERENCE_HEADING_CORE_PATTERN.match(normalized))
+
+    lines = content.split("\n")
+    if not lines:
+        return None
+
+    candidate_line_indexes = [idx for idx, line in enumerate(lines) if _is_heading_candidate(line)]
+    if not candidate_line_indexes:
+        return None
+
+    # Use the last heading to avoid TOC/front-matter mentions.
+    heading_line_idx = candidate_line_indexes[-1]
+    start_line_idx = heading_line_idx + 1
+
+    # Skip immediate blank lines after heading.
+    while start_line_idx < len(lines) and not lines[start_line_idx].strip():
+        start_line_idx += 1
+    if start_line_idx >= len(lines):
+        return None
+
+    def _is_section_end_heading(line: str) -> bool:
+        normalized = _normalize_heading_line(line)
+        if not normalized:
+            return False
+        if REFERENCE_SECTION_END_CORE_PATTERN.match(normalized):
+            return True
+        if REFERENCE_HEADING_CORE_PATTERN.match(normalized):
+            return False
+        if re.search(YEAR_PATTERN, normalized):
+            return False
+        # Generic heading fallback for appendix-like trailing sections.
+        stripped = line.strip()
+        if len(normalized.split()) <= 10 and len(normalized) <= 100:
+            return bool(
+                re.match(
+                    r"^(?:[A-Z](?:\.\d+)*|\d+(?:\.\d+)*)?\s*[A-Z][A-Za-z0-9][A-Za-z0-9\s\-:/&]{1,80}$",
+                    stripped,
+                )
+            )
+        return False
+
+    end_line_idx = len(lines)
+    for idx in range(start_line_idx + 1, len(lines)):
+        if _is_section_end_heading(lines[idx]):
+            end_line_idx = idx
+            break
+
+    start = _line_offset(start_line_idx, lines)
+    end = _line_offset(end_line_idx, lines)
+    refs = content[start:end].strip()
+    return refs or None
 
 
 def _split_references(refs_text: str) -> list[str]:
@@ -247,13 +282,45 @@ def _split_references(refs_text: str) -> list[str]:
     def _looks_like_reference(text: str) -> bool:
         if not text or len(text) < 30:
             return False
-        if re.search(DOI_PATTERN, text, re.IGNORECASE):
+        lowered = text.lower().strip()
+        is_numbered = bool(re.match(r"^\s*(?:\[\d+\]|\d+[\.\)])\s+", text))
+        if lowered.startswith(
+            (
+                "appendix",
+                "acknowledgment",
+                "acknowledgement",
+                "copyright",
+                "author contributions",
+                "supplementary material",
+            )
+        ):
+            return False
+        if re.match(r"(?i)^\s*(?:figure|table|algorithm)\b", text):
+            return False
+
+        has_doi = bool(re.search(DOI_PATTERN, text, re.IGNORECASE))
+        has_arxiv = bool(re.search(ARXIV_PATTERN, text, re.IGNORECASE)) or bool(
+            re.search(ARXIV_OLD_PATTERN, text, re.IGNORECASE)
+        )
+        has_year = bool(re.search(YEAR_PATTERN, text))
+
+        if not (has_doi or has_arxiv or has_year):
+            return False
+        if is_numbered and has_year:
             return True
-        if re.search(ARXIV_PATTERN, text, re.IGNORECASE):
+
+        has_authorish_start = bool(
+            re.match(
+                r"^\s*(?:\[\d+\]|\d+[\.\)])?\s*"
+                r"(?:[A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){0,3},\s*[A-Z]|"
+                r"[A-Z][A-Za-z'’.\-]+(?:\s+et\s+al\.)\b)",
+                text,
+            )
+        )
+        if has_authorish_start:
             return True
-        if re.search(ARXIV_OLD_PATTERN, text, re.IGNORECASE):
-            return True
-        return bool(re.search(YEAR_PATTERN, text))
+        # Keep DOI/arXiv-only references even when author parsing fails.
+        return has_doi or has_arxiv
 
     # If still no good split, try single newlines with heuristics
     if len(references) < 5:

@@ -854,38 +854,20 @@ class Settings(BaseSettings):
     @field_validator("SINGLE_USER_ALLOWED_IPS", mode="before")
     @classmethod
     def parse_single_user_allowed_ips(cls, v):
-        """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
-        if not v:
-            return []
-        if isinstance(v, str):
-            return [s.strip() for s in v.split(',') if s.strip()]
-        if isinstance(v, (list, tuple)):
-            return [str(x).strip() for x in v if str(x).strip()]
-        return []
+        """Allow CSV or JSON-list env forms for IP allowlists."""
+        return _split_csv(v)
 
     @field_validator("SERVICE_TOKEN_ALLOWED_IPS", mode="before")
     @classmethod
     def parse_service_token_allowed_ips(cls, v):
-        """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
-        if not v:
-            return []
-        if isinstance(v, str):
-            return [s.strip() for s in v.split(',') if s.strip()]
-        if isinstance(v, (list, tuple)):
-            return [str(x).strip() for x in v if str(x).strip()]
-        return []
+        """Allow CSV or JSON-list env forms for IP allowlists."""
+        return _split_csv(v)
 
     @field_validator("AUTH_TRUSTED_PROXY_IPS", mode="before")
     @classmethod
     def parse_auth_trusted_proxy_ips(cls, v):
-        """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
-        if not v:
-            return []
-        if isinstance(v, str):
-            return [s.strip() for s in v.split(',') if s.strip()]
-        if isinstance(v, (list, tuple)):
-            return [str(x).strip() for x in v if str(x).strip()]
-        return []
+        """Allow CSV or JSON-list env forms for IP allowlists."""
+        return _split_csv(v)
 
     @field_validator("ORG_RBAC_SCOPE_MODE", mode="before")
     @classmethod

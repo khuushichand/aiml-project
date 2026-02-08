@@ -232,6 +232,7 @@ export const HEADER_SHORTCUT_IDS = [
   "prompt-studio",
   "audiobook-studio",
   "acp-playground",
+  "workflows",
   "admin-server",
   "documentation",
   "chatbooks-playground",

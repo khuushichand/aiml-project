@@ -5,7 +5,7 @@ Owner: Core Maintainers
 Target Release: 0.2.x
 
 ## 1) Summary
-A Watchlists feature that lets a user maintain categorized collections of media sources (websites, blogs, news sites, RSS feeds) and schedule scraping/ingestion jobs. The v0.2 implementation ships an end-to-end pipeline: jobs resolve scope (tags/groups/sources), fetch RSS feeds or site front pages, deduplicate items, ingest new content into the Media DB, and persist structured `scraped_items`. Users can review items, mark them as reviewed, generate Markdown or HTML briefings with per-job defaults, and optionally deliver outputs via email or Chatbook generated documents. The WebUI now surfaces watchlist jobs, items, outputs, and template/delivery defaults on the admin tab. Audio/TTS, Media DB aggregation exports, and forum ingestion remain future work.
+A Watchlists feature that lets a user maintain categorized collections of media sources (websites, blogs, news sites, RSS feeds) and schedule scraping/ingestion jobs. The v0.2 implementation ships an end-to-end pipeline: jobs resolve scope (tags/groups/sources), fetch RSS feeds or site front pages, deduplicate items, ingest new content into the Media DB, and persist structured `scraped_items`. Users can review items, mark them as reviewed, generate Markdown or HTML briefings with per-job defaults, and optionally deliver outputs via email or Chatbook generated documents. The WebUI now surfaces watchlist jobs, items, outputs, and template/delivery defaults on the admin tab. Remaining roadmap work focuses on richer template UX and Phase-3 platform items (forum productionization, multi-tenant sharing, optional Postgres parity).
 
 ## 2) Problem Statement
 Users want recurring, customizable content collection without manual effort. Today, users can ingest URLs one-off, but cannot:
@@ -25,8 +25,8 @@ Users want recurring, customizable content collection without manual effort. Tod
 - [x] File-backed template management API plus per-job defaults (v0.2.1)
 - [x] Output retention/versioning with configurable TTLs, email + Chatbook delivery hooks
 - [x] Watchlists tab in WebUI for items/outputs/templates management, including per-job template/retention/delivery configuration
-- [ ] WebUI authoring for rich template creation; MECE/newsletter presets and deeper per-job defaults
-- [ ] Optional TTS/audio briefings and Chatbook/Media DB aggregation exports
+- [ ] WebUI authoring for rich template creation; MECE/newsletter presets and deeper per-job defaults (guided presets + advanced editor lanes)
+- [ ] Optional TTS/audio quality enhancements and richer Chatbook export automation (Media DB artifact ingest via outputs endpoint is already supported)
 
 ### Non-Goals (initial)
 - Full headless browser automation (Playwright/Puppeteer) for heavy JS sites
@@ -54,7 +54,7 @@ Users want recurring, customizable content collection without manual effort. Tod
 - Parsing: HTML article extraction; RSS item parsing; reuse existing ingestion
 - Dedup/change detection: URL canonicalization + content hash
 - Output generation: Markdown/HTML briefings with template store; MECE/HTML variants and TTS are future increments
-- Delivery: Download rendered output; configurable email + Chatbook deliveries via NotificationsService with per-job defaults; Media DB aggregation planned. Templates stored under `Config_Files/templates/watchlists/` (override with `WATCHLIST_TEMPLATE_DIR`).
+- Delivery: Download rendered output; configurable email + Chatbook deliveries via NotificationsService with per-job defaults; optional Media DB artifact ingest via `POST /api/v1/watchlists/outputs` + `ingest_to_media_db=true`. Templates stored under `Config_Files/templates/watchlists/` (override with `WATCHLIST_TEMPLATE_DIR`).
 - Admin WebUI slice: watchlists tab for listing items, creating outputs (with delivery options), and managing templates
 
 ### Out-of-Scope (initial)
@@ -208,7 +208,7 @@ Key Flows
 - Parse: For RSS, parse feed entries → items; For site/forum, get index → extract links → fetch articles → extract main content
 - Dedupe: Normalize URL + SHA256 main text; skip unchanged
 - Persist: Write items and run stats; optional ingest via existing Media DB path
-- Output & Delivery: Render Markdown/HTML, apply template store, enforce retention, and hand off to NotificationsService for email/Chatbook delivery (Media DB aggregation pending); optional MECE summarization via LLM; optional TTS via `/api/v1/audio/speech`
+- Output & Delivery: Render Markdown/HTML, apply template store, enforce retention, and hand off to NotificationsService for email/Chatbook delivery; optional Media DB artifact ingest is supported via outputs endpoint (`ingest_to_media_db=true`); optional MECE summarization via LLM; optional TTS via `/api/v1/audio/speech`
 - Collections Bridge: Stage 1 of Content Collections will introduce a shared `content_items` layer inside Collections DB. Watchlists will dual-write to this layer (in addition to Media DB) to power unified `/items` queries without altering existing Media DB schemas.
 
 Concurrency & Scheduling
@@ -264,7 +264,7 @@ Concurrency & Scheduling
 ## 20) Rollout Plan
 - Phase 1 (complete): RSS + site (front page/top-N) support; Markdown/HTML briefing; manual + interval schedule; API review tools.
 - Phase 2 (active): MECE/newsletter automation + TTS, richer template editing, Media DB ingest toggle. **Delivered:** per-job output defaults, NotificationsService delivery, admin WebUI wiring.
-- Phase 3 (planned): TTS audio (if not completed in Phase 2), Chatbook export enhancements, forum patterns, WS live logs, multi-tenant sharing, optional Postgres backend.
+- Phase 3 (planned): forum productionization, multi-tenant sharing, optional Postgres backend parity/hardening (WS live logs are already shipped).
 
 ## 21) Risks & Mitigations
 - Dynamic JS sites: mark unsupported initially; later headless rendering option
@@ -273,14 +273,16 @@ Concurrency & Scheduling
 - Legal/compliance: user acknowledgment for scraping settings; documentation
 
 ## 22) Open Questions / Next Steps
+Decision log for current scope calls: `Docs/Product/Watchlists/Watchlists_Decisions_TemplateUX_MediaDB_Phase3_2026-02-08.md`.
+
 - Outputs retention/versioning strategy and storage limits.
   **Answer:** Shipped: every output is versioned and stamped with `expires_at`. Global defaults are driven by `WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS` / `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS`, and jobs can override via `output_prefs.retention`. Naming convention `<RUN_NAME>-Output-<n>` holds; add admin UX for managing expirations.
 - Template/editor experience (file-based vs. UI-driven), templating language.
-  **Answer:** File-based templates + CRUD API are live (Jinja2 sandbox). Next iteration: UI-driven editor built atop the same endpoints. Template language remains Jinja2; validation hooks exist server-side.
-- Delivery mechanisms (email, Chatbook, Media DB aggregation).
-  **Answer:** Email delivery (mockable SMTP) and Chatbook generated-document storage ship in v0.2.1 with per-job defaults. Media DB aggregation remains roadmap work.
+  **Answer:** File-based templates + CRUD API are live (Jinja2 sandbox). Decision: ship a two-lane UI (guided presets + advanced Jinja editor) on top of existing `/watchlists/templates` APIs. Template language remains Jinja2; validation hooks remain server-side.
+- Delivery mechanisms (email, Chatbook, Media DB artifact ingest).
+  **Answer:** Email delivery (mockable SMTP) and Chatbook generated-document storage ship in v0.2.1 with per-job defaults. Media DB artifact ingest is shipped via `POST /api/v1/watchlists/outputs` with `ingest_to_media_db=true`; no separate aggregation endpoint is required for v0.2.x.
 - Per-job rate limiting UI; per-user Postgres backend support.
-  **Answer:** Expose rate-limit controls via API first; surface UI later. Postgres backend is deferred until the broader DB abstraction is ready.
+  **Answer:** Expose rate-limit controls via API first; surface UI later. Postgres backend remains a Phase-3 scope item focused on parity/hardening with Watchlists + Collections alignment.
 - WebUI parity for new items/outputs endpoints.
   **Answer:** Achieved: the Next.js admin watchlists tab lists items, previews outputs, edits per-job defaults (template/retention/delivery), and surfaces run stats. Future UI work focuses on template editing and richer item review.
 - Content Collections alignment.

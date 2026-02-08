@@ -775,7 +775,7 @@
       "model": {
         "label": "Modèle d'embedding",
         "required": "Veuillez sélectionner un modèle",
-        "help": "Fortement recommandé d'utiliser des modèles d'embedding comme «momic-embed-text».",
+        "help": "Fortement recommandé d'utiliser des modèles d'embedding comme «nomic-embed-text».",
         "placeholder": "Sélectionner un modèle",
         "helpRecommended": "Recommandé : {{model}} (depuis la config serveur)",
         "helpMissing": "Le modèle d’embeddings enregistré précédemment n’est plus disponible sur le serveur. Veuillez en choisir un autre."

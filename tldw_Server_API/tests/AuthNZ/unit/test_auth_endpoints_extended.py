@@ -127,6 +127,7 @@ async def test_forgot_password_rate_limited_returns_generic_message(monkeypatch)
 async def test_reserve_auth_rg_requests_uses_fallback_when_governor_missing(monkeypatch):
     reset_settings()
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
+    monkeypatch.setattr(auth, "_auth_rg_rate_limits_enabled", lambda: True)
 
     class _Limiter:
         def __init__(self):
@@ -240,6 +241,7 @@ async def test_reserve_auth_rg_requests_ignores_untrusted_forwarded_ip(monkeypat
     reset_settings()
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
+    monkeypatch.setattr(auth, "_auth_rg_rate_limits_enabled", lambda: True)
 
     class _StubGovernor:
         def __init__(self):

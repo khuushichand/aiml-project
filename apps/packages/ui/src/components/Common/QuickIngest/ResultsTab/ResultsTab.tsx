@@ -29,6 +29,7 @@ type ResultsTabProps = {
     reviewBatchId?: string | null
     processOnly: boolean
     mediaIdFromPayload: (payload: unknown) => string | number | null
+    titleFromPayload: (payload: unknown) => string | null
   }
   actions: {
     retryFailedUrls: () => void
