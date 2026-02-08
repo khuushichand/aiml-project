@@ -79,6 +79,12 @@ import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useTldwAudioStatus } from "@/hooks/useTldwAudioStatus"
 import { useMcpTools } from "@/hooks/useMcpTools"
 import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
+import {
+  buildDiscussMediaHint,
+  getMediaChatHandoffMode,
+  normalizeMediaChatHandoffPayload,
+  parseMediaIdAsNumber
+} from "@/services/tldw/media-chat-handoff"
 import { CharacterSelect } from "@/components/Common/CharacterSelect"
 import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import type { Character } from "@/types/character"
@@ -104,6 +110,7 @@ import { DISCUSS_MEDIA_PROMPT_SETTING } from "@/services/settings/ui-settings"
 import { Button as TldwButton } from "@/components/Common/Button"
 import { useSimpleForm } from "@/hooks/useSimpleForm"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
+import { useStoreMessageOption } from "@/store/option"
 import {
   useModelSelector,
   useComposerTokens,
@@ -186,6 +193,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     clearReplyTarget,
     ragPinnedResults
   } = useMessageOption()
+  const setRagMediaIds = useStoreMessageOption((s) => s.setRagMediaIds)
 
   const [autoSubmitVoiceMessage] = useStorage("autoSubmitVoiceMessage", false)
   const isMobileViewport = useMobile()
@@ -339,6 +347,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const isProMode = uiMode === "pro"
   const [contextToolsOpen, setContextToolsOpen] = useStorage(
     "playgroundKnowledgeSearchOpen",
+    false
+  )
+  const [simpleInternetSearch, setSimpleInternetSearch] = useStorage(
+    "isSimpleInternetSearch",
+    true
+  )
+  const [, setDefaultInternetSearchOnSetting] = useStorage(
+    "defaultInternetSearchOn",
     false
   )
   const [knowledgePanelTab, setKnowledgePanelTab] =
@@ -847,26 +863,41 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     return () => window.removeEventListener('tldw:set-composer-message', handler as EventListener)
   }, [form])
 
-  const buildDiscussMediaHint = (payload: {
-    mediaId?: string
-    url?: string
-    title?: string
-    content?: string
-  }): string => {
-    if (payload?.content && (payload.title || payload.mediaId)) {
-      const header = `Chat with this media: ${
-        payload.title || payload.mediaId
-      }`.trim()
-      return `${header}\n\n${payload.content}`.trim()
-    }
-    if (payload?.url) {
-      return `Let's talk about the media I just ingested: ${payload.url}`
-    }
-    if (payload?.mediaId) {
-      return `Let's talk about media ${payload.mediaId}.`
-    }
-    return ""
-  }
+  const applyDiscussMediaPayload = React.useCallback(
+    (
+      rawPayload: unknown,
+      options?: {
+        clearAfterUse?: boolean
+      }
+    ) => {
+      const payload = normalizeMediaChatHandoffPayload(rawPayload)
+      if (!payload) {
+        if (options?.clearAfterUse) {
+          void clearSetting(DISCUSS_MEDIA_PROMPT_SETTING)
+        }
+        return
+      }
+      if (options?.clearAfterUse) {
+        void clearSetting(DISCUSS_MEDIA_PROMPT_SETTING)
+      }
+      const mode = getMediaChatHandoffMode(payload)
+      if (mode === "rag_media") {
+        const mediaId = parseMediaIdAsNumber(payload)
+        if (mediaId != null) {
+          setChatMode("rag")
+          setRagMediaIds([mediaId])
+        }
+      } else {
+        setChatMode("normal")
+        setRagMediaIds(null)
+      }
+      const hint = buildDiscussMediaHint(payload)
+      if (!hint) return
+      setMessageValue(hint, { collapseLarge: true, forceCollapse: true })
+      textAreaFocus()
+    },
+    [setChatMode, setMessageValue, setRagMediaIds, textAreaFocus]
+  )
 
   // Seed composer when a media item requests discussion (e.g., from Quick ingest or Review page)
   React.useEffect(() => {
@@ -874,41 +905,34 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     void (async () => {
       const payload = await getSetting(DISCUSS_MEDIA_PROMPT_SETTING)
       if (cancelled || !payload) return
-      void clearSetting(DISCUSS_MEDIA_PROMPT_SETTING)
-      const hint = buildDiscussMediaHint(payload)
-      if (!hint) return
-      setMessageValue(hint, { collapseLarge: true, forceCollapse: true })
-      textAreaFocus()
+      applyDiscussMediaPayload(payload, { clearAfterUse: true })
     })()
     return () => {
       cancelled = true
     }
-  }, [setMessageValue, textAreaFocus])
+  }, [applyDiscussMediaPayload])
 
   React.useEffect(() => {
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent).detail as any
-      if (!detail) return
-      const hint = buildDiscussMediaHint(detail || {})
-      if (!hint) return
-      setMessageValue(hint, { collapseLarge: true, forceCollapse: true })
-      textAreaFocus()
+      const detail = (event as CustomEvent).detail
+      applyDiscussMediaPayload(detail)
     }
     window.addEventListener("tldw:discuss-media", handler as any)
     return () => {
       window.removeEventListener("tldw:discuss-media", handler as any)
     }
-  }, [setMessageValue, textAreaFocus])
+  }, [applyDiscussMediaPayload])
 
   React.useEffect(() => {
     textAreaFocus()
   }, [textAreaFocus])
 
   React.useEffect(() => {
-    if (defaultInternetSearchOn && !webSearch) {
+    // Apply global default when the preference changes, but do not override per-chat toggles.
+    if (defaultInternetSearchOn) {
       setWebSearch(true)
     }
-  }, [defaultInternetSearchOn, webSearch, setWebSearch])
+  }, [defaultInternetSearchOn, setWebSearch])
 
   React.useEffect(() => {
     if (isConnectionReady) {
@@ -2343,6 +2367,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     [contextToolsOpen, requestKnowledgePanelTab, setContextToolsOpen]
   )
 
+  const handleToggleWebSearch = React.useCallback(() => {
+    setWebSearch(!webSearch)
+  }, [setWebSearch, webSearch])
+
   const handleImageUpload = React.useCallback(() => {
     inputRef.current?.click()
   }, [])
@@ -2797,6 +2825,84 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
         <div className="border-t border-border my-1" />
 
+        {/* WEB SEARCH Section */}
+        <div className="flex flex-col gap-2">
+          <span className="px-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+            {t("playground:tools.webSearch", "Web Search")}
+          </span>
+          {capabilities?.hasWebSearch ? (
+            <>
+              <div className="flex items-center justify-between gap-2 px-2">
+                <span className="flex items-center gap-2 text-sm text-text">
+                  <Globe className="h-4 w-4 text-text-subtle" />
+                  {t(
+                    "playground:tools.webSearchEnabled",
+                    "Enable web search"
+                  )}
+                </span>
+                <Switch
+                  size="small"
+                  checked={webSearch}
+                  onChange={(checked) => setWebSearch(checked)}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2 px-2">
+                <span className="text-sm text-text">
+                  {t(
+                    "playground:tools.webSearchSimpleMode",
+                    "Simple search mode"
+                  )}
+                </span>
+                <Switch
+                  size="small"
+                  checked={simpleInternetSearch}
+                  onChange={(checked) => setSimpleInternetSearch(checked)}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2 px-2">
+                <span className="text-sm text-text">
+                  {t(
+                    "playground:tools.webSearchDefaultOn",
+                    "Default on for new chats"
+                  )}
+                </span>
+                <Switch
+                  size="small"
+                  checked={defaultInternetSearchOn}
+                  onChange={(checked) =>
+                    setDefaultInternetSearchOnSetting(checked)
+                  }
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setToolsPopoverOpen(false)
+                  navigate("/settings")
+                }}
+                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
+              >
+                <span>
+                  {t(
+                    "playground:tools.webSearchOpenSettings",
+                    "Open web search settings"
+                  )}
+                </span>
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </>
+          ) : (
+            <p className="px-2 text-xs text-text-muted">
+              {t(
+                "playground:tools.webSearchUnavailable",
+                "Web search is unavailable on this server."
+              )}
+            </p>
+          )}
+        </div>
+
+        <div className="border-t border-border my-1" />
+
         {/* ADVANCED Section (collapsible) */}
         <button
           type="button"
@@ -2873,12 +2979,20 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     ),
     [
       advancedToolsExpanded,
+      capabilities?.hasWebSearch,
+      defaultInternetSearchOn,
       handleClearContext,
       openKnowledgePanel,
       handleVoiceChatToggle,
       history.length,
       imageProviderControl,
       isSending,
+      navigate,
+      setDefaultInternetSearchOnSetting,
+      setSimpleInternetSearch,
+      setToolsPopoverOpen,
+      setWebSearch,
+      simpleInternetSearch,
       useOCR,
       setUseOCR,
       t,
@@ -2886,7 +3000,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       voiceChatEnabled,
       voiceChat.state,
       voiceChatSettingsFields,
-      voiceChatStatusLabel
+      voiceChatStatusLabel,
+      webSearch
     ]
   )
 
@@ -3937,7 +4052,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           contextToolsOpen={contextToolsOpen}
                           onToggleKnowledgePanel={toggleKnowledgePanel}
                           webSearch={webSearch}
-                          onToggleWebSearch={() => setWebSearch(!webSearch)}
+                          onToggleWebSearch={handleToggleWebSearch}
                           hasWebSearch={!!capabilities?.hasWebSearch}
                           onOpenPromptInsert={() => setPromptInsertOpen(true)}
                           onOpenModelSettings={() => setOpenModelSettings(true)}

@@ -1183,7 +1183,8 @@ const MediaPageContent: React.FC = () => {
       const payload = {
         mediaId: String(selected.id),
         title,
-        content
+        content,
+        mode: 'normal' as const
       }
       void setSetting(DISCUSS_MEDIA_PROMPT_SETTING, payload)
       try {
@@ -1226,6 +1227,18 @@ const MediaPageContent: React.FC = () => {
     setSelectedKnowledge(null as any)
     setRagMediaIds([idNum])
     setChatMode('rag')
+    try {
+      const payload = {
+        mediaId: String(selected.id),
+        mode: 'rag_media' as const
+      }
+      void setSetting(DISCUSS_MEDIA_PROMPT_SETTING, payload)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('tldw:discuss-media', { detail: payload }))
+      }
+    } catch {
+      // ignore storage/event errors
+    }
     navigate('/')
     try {
       if (typeof window !== 'undefined') {
@@ -1277,7 +1290,8 @@ const MediaPageContent: React.FC = () => {
       const payload = {
         mediaId: selected ? String(selected.id) : undefined,
         title: selected?.title || 'Analysis',
-        content: `Please review this analysis and continue the discussion:\n\n${text}`
+        content: `Please review this analysis and continue the discussion:\n\n${text}`,
+        mode: 'normal' as const
       }
       void setSetting(DISCUSS_MEDIA_PROMPT_SETTING, payload)
       window.dispatchEvent(new CustomEvent('tldw:discuss-media', { detail: payload }))

@@ -1360,12 +1360,16 @@ class VoiceManager:
 
         # Delete original upload if exists
         uploads_dir = (voices_path / "uploads").resolve()
-        for upload_file in uploads_dir.glob(f"{voice_id}_*"):
-            try:
-                upload_file.resolve().relative_to(uploads_dir)
-                upload_file.unlink()
-            except (ValueError, RuntimeError):
-                logger.warning(f"Skipping invalid upload file path: {upload_file}")
+        safe_prefix = f"{voice_id}_"
+        if uploads_dir.exists():
+            for upload_file in uploads_dir.iterdir():
+                if not upload_file.is_file() or not upload_file.name.startswith(safe_prefix):
+                    continue
+                try:
+                    upload_file.resolve().relative_to(uploads_dir)
+                    upload_file.unlink()
+                except (ValueError, RuntimeError):
+                    logger.warning(f"Skipping invalid upload file path: {upload_file}")
 
         # Delete reference metadata json if present
         try:

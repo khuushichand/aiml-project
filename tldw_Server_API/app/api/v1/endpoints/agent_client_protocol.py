@@ -4,6 +4,8 @@ import asyncio
 import contextlib
 import inspect
 import json
+import os
+import tempfile
 from types import SimpleNamespace
 from typing import Any
 
@@ -268,31 +270,101 @@ async def acp_session_ssh(
         return
 
     await websocket.accept()
+    ssh_proc: asyncio.subprocess.Process | None = None
+    temp_key_path: str | None = None
     try:
-        import asyncssh  # type: ignore
-    except ImportError:
-        await websocket.close(code=1011)
-        return
+        try:
+            import asyncssh  # type: ignore
+        except ImportError:
+            asyncssh = None  # type: ignore[assignment]
 
-    try:
-        key = asyncssh.import_private_key(ssh_key)
-        async with asyncssh.connect(
-            ssh_host,
-            port=int(ssh_port),
-            username=ssh_user,
-            client_keys=[key],
-            known_hosts=None,
-        ) as conn:
-            process = await conn.create_process(term_type="xterm", term_size=(80, 24))
+        if asyncssh is not None:
+            key = asyncssh.import_private_key(ssh_key)
+            async with asyncssh.connect(
+                ssh_host,
+                port=int(ssh_port),
+                username=ssh_user,
+                client_keys=[key],
+                known_hosts=None,
+            ) as conn:
+                process = await conn.create_process(term_type="xterm", term_size=(80, 24))
 
-            async def _read_output(reader: Any) -> None:
+                async def _read_output(reader: Any) -> None:
+                    while True:
+                        data = await reader.read(4096)
+                        if not data:
+                            return
+                        await websocket.send_bytes(data.encode() if isinstance(data, str) else data)
+
+                async def _write_input() -> None:
+                    while True:
+                        try:
+                            msg = await websocket.receive()
+                        except WebSocketDisconnect:
+                            return
+                        if msg.get("type") == "websocket.disconnect":
+                            return
+                        if msg.get("text"):
+                            text = msg["text"]
+                            try:
+                                payload = json.loads(text)
+                            except json.JSONDecodeError:
+                                payload = None
+                            if isinstance(payload, dict) and payload.get("type") == "resize":
+                                cols = int(payload.get("cols") or 0)
+                                rows = int(payload.get("rows") or 0)
+                                if cols > 0 and rows > 0:
+                                    with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                                        process.set_term_size(cols, rows)
+                                continue
+                            process.stdin.write(text)
+                            await process.stdin.drain()
+                        elif msg.get("bytes"):
+                            process.stdin.write(msg["bytes"])
+                            await process.stdin.drain()
+
+                await asyncio.gather(
+                    _read_output(process.stdout),
+                    _read_output(process.stderr),
+                    _write_input(),
+                )
+        else:
+            with tempfile.NamedTemporaryFile("w", delete=False, prefix="acp_ssh_", suffix="_key") as tmp_key:
+                tmp_key.write(ssh_key)
+                temp_key_path = tmp_key.name
+            os.chmod(temp_key_path, 0o600)
+
+            ssh_proc = await asyncio.create_subprocess_exec(
+                "ssh",
+                "-i",
+                temp_key_path,
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "IdentitiesOnly=yes",
+                "-p",
+                str(ssh_port),
+                f"{ssh_user}@{ssh_host}",
+                "-tt",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            async def _read_output(reader: asyncio.StreamReader | None) -> None:
+                if reader is None:
+                    return
                 while True:
                     data = await reader.read(4096)
                     if not data:
                         return
-                    await websocket.send_bytes(data.encode() if isinstance(data, str) else data)
+                    await websocket.send_bytes(data)
 
             async def _write_input() -> None:
+                if ssh_proc is None or ssh_proc.stdin is None:
+                    return
                 while True:
                     try:
                         msg = await websocket.receive()
@@ -302,31 +374,44 @@ async def acp_session_ssh(
                         return
                     if msg.get("text"):
                         text = msg["text"]
+                        # The ssh fallback cannot resize PTY directly; ignore resize control messages.
                         try:
                             payload = json.loads(text)
                         except json.JSONDecodeError:
                             payload = None
                         if isinstance(payload, dict) and payload.get("type") == "resize":
-                            cols = int(payload.get("cols") or 0)
-                            rows = int(payload.get("rows") or 0)
-                            if cols > 0 and rows > 0:
-                                with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
-                                    process.set_term_size(cols, rows)
                             continue
-                        process.stdin.write(text)
-                        await process.stdin.drain()
+                        ssh_proc.stdin.write(text.encode("utf-8"))
+                        await ssh_proc.stdin.drain()
                     elif msg.get("bytes"):
-                        process.stdin.write(msg["bytes"])
-                        await process.stdin.drain()
+                        ssh_proc.stdin.write(msg["bytes"])
+                        await ssh_proc.stdin.drain()
 
-            await asyncio.gather(
-                _read_output(process.stdout),
-                _read_output(process.stderr),
-                _write_input(),
-            )
+            tasks = {
+                asyncio.create_task(_read_output(ssh_proc.stdout)),
+                asyncio.create_task(_read_output(ssh_proc.stderr)),
+                asyncio.create_task(_write_input()),
+            }
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            for task in pending:
+                with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                    await task
+            for task in done:
+                with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                    _ = task.result()
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
             await websocket.close(code=1011)
+    finally:
+        if ssh_proc is not None and ssh_proc.returncode is None:
+            ssh_proc.terminate()
+            with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                await asyncio.wait_for(ssh_proc.wait(), timeout=2)
+        if temp_key_path:
+            with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                os.unlink(temp_key_path)
 
 async def _handle_client_message(
     client: Any,

@@ -28,6 +28,53 @@ import type { AddSourceTab, WorkspaceSourceType } from "@/types/workspace"
 const { TextArea } = Input
 const { Dragger } = Upload
 
+const toMediaId = (value: unknown): number | null => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return null
+  if (parsed <= 0) return null
+  return Math.trunc(parsed)
+}
+
+const extractMediaFromAddResponse = (
+  response: unknown
+): { mediaId: number | null; title?: string } => {
+  if (!response || typeof response !== "object") {
+    return { mediaId: null }
+  }
+  const root = response as Record<string, unknown>
+  const rootTitle =
+    typeof root.title === "string" && root.title.trim()
+      ? root.title
+      : undefined
+  const candidates: Array<Record<string, unknown>> = []
+  if (Array.isArray(root.results)) {
+    for (const item of root.results) {
+      if (item && typeof item === "object") {
+        candidates.push(item as Record<string, unknown>)
+      }
+    }
+  }
+  if (root.result && typeof root.result === "object") {
+    candidates.push(root.result as Record<string, unknown>)
+  }
+  candidates.push(root)
+
+  for (const candidate of candidates) {
+    const mediaId = toMediaId(
+      candidate.media_id ?? candidate.db_id ?? candidate.id
+    )
+    if (mediaId == null) {
+      continue
+    }
+    const title =
+      typeof candidate.title === "string" && candidate.title.trim()
+        ? candidate.title
+        : rootTitle
+    return { mediaId, title }
+  }
+  return { mediaId: null, title: rootTitle }
+}
+
 /**
  * UploadTab - Upload files via drag-and-drop
  */
@@ -47,13 +94,14 @@ const UploadTab: React.FC<{
         overwrite: "false",
         perform_chunking: "true"
       })
+      const added = extractMediaFromAddResponse(response)
 
-      if (response?.media_id) {
+      if (added.mediaId != null) {
         const type = getSourceTypeFromFile(file)
         onAddSources([
           {
-            mediaId: response.media_id,
-            title: response.title || file.name,
+            mediaId: added.mediaId,
+            title: added.title || file.name,
             type
           }
         ])
@@ -122,13 +170,14 @@ const UrlTab: React.FC<{
     try {
       // Use the media/add endpoint with URL
       const response = await tldwClient.addMedia(url.trim())
+      const added = extractMediaFromAddResponse(response)
 
-      if (response?.media_id) {
+      if (added.mediaId != null) {
         const type = getSourceTypeFromUrl(url)
         onAddSources([
           {
-            mediaId: response.media_id,
-            title: response.title || url,
+            mediaId: added.mediaId,
+            title: added.title || url,
             type
           }
         ])
@@ -209,12 +258,13 @@ const PasteTab: React.FC<{
         overwrite: "false",
         perform_chunking: "true"
       })
+      const added = extractMediaFromAddResponse(response)
 
-      if (response?.media_id) {
+      if (added.mediaId != null) {
         onAddSources([
           {
-            mediaId: response.media_id,
-            title: title || "Pasted Text",
+            mediaId: added.mediaId,
+            title: added.title || title || "Pasted Text",
             type: "text"
           }
         ])
@@ -326,10 +376,11 @@ const SearchTab: React.FC<{
     for (const result of selectedUrls) {
       try {
         const response = await tldwClient.addMedia(result.url || result.link)
-        if (response?.media_id) {
+        const added = extractMediaFromAddResponse(response)
+        if (added.mediaId != null) {
           addedSources.push({
-            mediaId: response.media_id,
-            title: result.title || result.url,
+            mediaId: added.mediaId,
+            title: added.title || result.title || result.url,
             type: "website"
           })
         }

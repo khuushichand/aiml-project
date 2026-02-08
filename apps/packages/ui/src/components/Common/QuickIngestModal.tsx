@@ -2702,7 +2702,8 @@ export const QuickIngestModal: React.FC<Props> = ({
       }
       const payload = {
         mediaId: String(id),
-        url: item.url || sourceUrl
+        url: item.url || sourceUrl,
+        mode: "rag_media" as const
       }
       void setSetting(DISCUSS_MEDIA_PROMPT_SETTING, payload)
       try {

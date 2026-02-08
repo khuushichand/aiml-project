@@ -26,6 +26,11 @@ import {
   initBackground,
   MODEL_WARM_ALARM_NAME
 } from "@/entries/shared/background-init"
+import {
+  buildContextMenuAddPayload,
+  buildContextMenuProcessPayload,
+  resolveContextMenuTargetUrl
+} from "@/entries/shared/ingest-payloads"
 
 type BackgroundDiagnostics = {
   startedAt: number
@@ -1281,29 +1286,27 @@ export default defineBackground({
         )
       } else if (info.menuItemId === "send-to-tldw") {
         try {
-          const pageUrl = info.pageUrl || (tab && tab.url) || ''
-          const targetUrl = (info.linkUrl && /^https?:/i.test(info.linkUrl)) ? info.linkUrl : pageUrl
+          const targetUrl = resolveContextMenuTargetUrl(info, tab)
           if (!targetUrl) return
           await browser.runtime.sendMessage({
-            type: 'tldw:request',
-            payload: { path: '/api/v1/media/add', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { url: targetUrl } }
+            type: "tldw:upload",
+            payload: buildContextMenuAddPayload(targetUrl)
           })
-          notify('tldw_server', 'Sent to tldw_server for processing')
+          notify("tldw_server", "Sent to tldw_server for processing")
         } catch (e) {
-          console.error('Failed to send to tldw_server:', e)
+          console.error("Failed to send to tldw_server:", e)
         }
-      } else if (info.menuItemId === 'process-local-tldw') {
+      } else if (info.menuItemId === "process-local-tldw") {
         try {
-          const pageUrl = info.pageUrl || (tab && tab.url) || ''
-          const targetUrl = (info.linkUrl && /^https?:/i.test(info.linkUrl)) ? info.linkUrl : pageUrl
+          const targetUrl = resolveContextMenuTargetUrl(info, tab)
           if (!targetUrl) return
           await browser.runtime.sendMessage({
-            type: 'tldw:request',
-            payload: { path: getProcessPathForUrl(targetUrl), method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { url: targetUrl } }
+            type: "tldw:request",
+            payload: buildContextMenuProcessPayload(targetUrl)
           })
-          notify('tldw_server', 'Processed page (not saved to server)')
+          notify("tldw_server", "Processed page (not saved to server)")
         } catch (e) {
-          console.error('Failed to process locally:', e)
+          console.error("Failed to process locally:", e)
         }
       } else if (info.menuItemId === "summarize-pa") {
         ensureSidepanelOpen(tab?.id)

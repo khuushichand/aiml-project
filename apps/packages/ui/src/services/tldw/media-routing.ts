@@ -177,6 +177,11 @@ export const inferUploadMediaTypeFromFile = (
   return normalizeMediaTypeForUpload(inferred)
 }
 
+export const inferUploadMediaTypeFromUrl = (
+  rawUrl?: string
+): UploadMediaType =>
+  normalizeMediaTypeForUpload(inferMediaTypeFromUrl(String(rawUrl || "")))
+
 export const getProcessPathForType = (rawType: string): AllowedPath => {
   const t = normalizeMediaType(rawType)
   switch (t) {

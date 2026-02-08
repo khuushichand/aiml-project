@@ -5,6 +5,10 @@ import {
   coerceString,
   defineSetting
 } from "@/services/settings/registry"
+import {
+  normalizeMediaChatHandoffPayload,
+  type MediaChatHandoffPayload
+} from "@/services/tldw/media-chat-handoff"
 
 const THEME_VALUES = ["system", "dark", "light"] as const
 export type ThemeValue = (typeof THEME_VALUES)[number]
@@ -489,38 +493,12 @@ export const MEDIA_REVIEW_FOCUSED_ID_SETTING = defineSetting(
   }
 )
 
-export type DiscussMediaPrompt = {
-  mediaId?: string
-  url?: string
-  title?: string
-  content?: string
-}
-
-const coerceDiscussMediaPrompt = (
-  value: unknown
-): DiscussMediaPrompt | undefined => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
-  const payload = value as Record<string, unknown>
-  const result: DiscussMediaPrompt = {}
-  if (typeof payload.mediaId === "string" && payload.mediaId.length > 0) {
-    result.mediaId = payload.mediaId
-  }
-  if (typeof payload.url === "string" && payload.url.length > 0) {
-    result.url = payload.url
-  }
-  if (typeof payload.title === "string" && payload.title.length > 0) {
-    result.title = payload.title
-  }
-  if (typeof payload.content === "string" && payload.content.length > 0) {
-    result.content = payload.content
-  }
-  return Object.keys(result).length > 0 ? result : undefined
-}
+export type DiscussMediaPrompt = MediaChatHandoffPayload
 
 export const DISCUSS_MEDIA_PROMPT_SETTING = defineSetting(
   "tldw:discussMediaPrompt",
   undefined as DiscussMediaPrompt | undefined,
-  (value) => coerceDiscussMediaPrompt(value),
+  (value) => normalizeMediaChatHandoffPayload(value),
   {
     area: "local",
     localStorageKey: "tldw:discussMediaPrompt",

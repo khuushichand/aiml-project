@@ -464,7 +464,7 @@ export const useMessage = () => {
           await tldwClient.initialize()
           // Optionally ensure server has the page content in the media index
           if (embedURL) {
-            try { await tldwClient.addMedia(embedURL, {}) } catch {}
+            try { await tldwClient.addMedia(embedURL) } catch {}
           }
           const ragRes = await tldwClient.ragSearch(query, { top_k: 4, filters: { url: embedURL } })
           const docs = ragRes?.results || ragRes?.documents || ragRes?.docs || []

@@ -5,6 +5,7 @@ import { isPlaceholderApiKey } from "@/utils/api-key"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import type { AllowedPath, PathOrUrl } from "@/services/tldw/openapi-guard"
 import { appendPathQuery } from "@/services/tldw/path-utils"
+import { inferUploadMediaTypeFromUrl } from "@/services/tldw/media-routing"
 import {
   buildContentPayload,
   mapApiDetailToUi,
@@ -1184,8 +1185,40 @@ export class TldwApiClient {
 
   // Media Methods
   async addMedia(url: string, metadata?: any): Promise<any> {
-    const { timeoutMs, ...rest } = metadata || {}
-    return await bgRequest<any>({ path: '/api/v1/media/add', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { url, ...rest }, timeoutMs })
+    const sourceUrl = String(url || "").trim()
+    const {
+      timeoutMs,
+      media_type,
+      urls: rawUrls,
+      ...rest
+    } = metadata || {}
+    const urls = Array.isArray(rawUrls)
+      ? rawUrls
+          .map((item: unknown) => String(item || "").trim())
+          .filter((item: string) => item.length > 0)
+      : typeof rawUrls === "string" && rawUrls.trim()
+        ? [rawUrls.trim()]
+        : sourceUrl
+          ? [sourceUrl]
+          : []
+    if (urls.length === 0) {
+      throw new Error("addMedia requires a URL")
+    }
+    const resolvedMediaType =
+      typeof media_type === "string" && media_type.trim()
+        ? media_type.trim()
+        : inferUploadMediaTypeFromUrl(urls[0])
+
+    return await bgUpload<any>({
+      path: "/api/v1/media/add",
+      method: "POST",
+      fields: {
+        ...rest,
+        media_type: resolvedMediaType,
+        urls
+      },
+      timeoutMs
+    })
   }
 
   async addMediaForm(fields: Record<string, any>): Promise<any> {

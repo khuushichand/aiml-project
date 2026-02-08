@@ -604,8 +604,25 @@ class ACPSandboxRunnerManager:
             priv = key.export_private_key().decode("utf-8")
             pub = key.export_public_key().decode("utf-8")
             return priv, pub
-        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as e:
-            raise ACPResponseError(f"Failed to generate SSH key: {e}") from e
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+            try:
+                import subprocess
+                import tempfile
+                from pathlib import Path
+
+                with tempfile.TemporaryDirectory(prefix="acp_ssh_key_") as tmpdir:
+                    key_path = Path(tmpdir) / "id_ed25519"
+                    subprocess.run(
+                        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key_path)],
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    )
+                    priv = key_path.read_text(encoding="utf-8")
+                    pub = key_path.with_suffix(".pub").read_text(encoding="utf-8").strip()
+                    return priv, pub
+            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+                raise ACPResponseError(f"Failed to generate SSH key: {e}") from e
 
     async def _allocate_ssh_port(self) -> int:
         async with self._ssh_ports_lock:
