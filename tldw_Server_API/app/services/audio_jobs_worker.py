@@ -333,7 +333,9 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
                 else:
                     ok = False
                     msg_err = f"Unknown job_type: {jtype}"
-            except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
                 ok = False
                 msg_err = str(e)
 
@@ -354,7 +356,9 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
             else:
                 jm.fail_job(int(job["id"]), error=msg_err, retryable=True, worker_id=worker_id, lease_id=str(job.get("lease_id")), completion_token=str(job.get("lease_id")))
 
-        except (OSError, RuntimeError, TypeError, ValueError) as e:
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
             logger.error(f"Audio worker loop error: {e}")
         finally:
             try:

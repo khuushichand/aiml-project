@@ -5,6 +5,7 @@ export type RagPinnedResult = {
   url?: string
   snippet: string
   type?: string
+  mediaId?: number
 }
 
 export type RagCopyFormat = "markdown" | "text"

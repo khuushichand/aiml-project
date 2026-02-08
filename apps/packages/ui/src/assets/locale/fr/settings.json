@@ -10,10 +10,10 @@
   "chatDictionariesNav": "Dictionnaires de chat",
   "charactersNav": "Personnages",
   "mediaNav": "Médias",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian et surveillance",
   "guardian": {
-    "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableTitle": "Paramètres Guardian indisponibles",
+    "unavailableDescription": "Votre serveur actuel n'expose pas les points de terminaison Guardian ou d'auto-surveillance."
   },
   "chatAppearance": {
     "title": "Apparence du chat",
@@ -421,7 +421,7 @@
     "option2": "RAG (recherche)",
     "questionPrompt": "Prompt de question",
     "segmented": {
-      "custom": "Prompts personnalisées",
+      "custom": "Prompts personnalisés",
       "copilot": "Prompts Copilot",
       "helpCustom": "Créez et gérez des prompts réutilisables à insérer dans le chat.",
       "helpCopilot": "Voir et ajuster les prompts Copilot prédéfinis fournis par votre serveur."
@@ -528,7 +528,7 @@
       "url": {
         "label": "URL de partage de page",
         "placeholder": "Entrer l'URL de partage de la page",
-        "required": "Veuillez saisir URL de partage de votre page!",
+        "required": "Veuillez saisir l'URL de partage de votre page.",
         "help": "Pour des raisons de confidentialité, vous pouvez auto-héberger le partage de la page et fournir l'URL ici.<anchor>En savoir plus</anchor>."
       }
     },
@@ -611,7 +611,7 @@
   "switchToSidebar": "Basculer vers la barre latérale",
   "healthPage": {
     "title": "État de santé",
-    "subtitle": "Quick overview of subsystem health endpoints exposed by the server.",
+    "subtitle": "Aperçu rapide des endpoints de santé des sous-systèmes exposés par le serveur.",
     "backToChat": "Retour au chat",
     "openSettings": "Ouvrir les réglages tldw",
     "recheckAll": "Tout revérifier",
@@ -645,7 +645,7 @@
       "chatMetricsDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
       "mcpDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant"
     },
-    "copyDiagnosticsHelp": "Copies JSON diagnostics to clipboard",
+    "copyDiagnosticsHelp": "Copie le diagnostic JSON dans le presse-papiers",
     "statusHealthy": "Sain",
     "statusUnhealthy": "Non sain",
     "statusUnknown": "Inconnu",

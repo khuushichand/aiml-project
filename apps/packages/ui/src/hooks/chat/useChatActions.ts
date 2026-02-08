@@ -1269,7 +1269,12 @@ export const useChatActions = ({
         return
       }
 
-      if (selectedKnowledge) {
+      const hasScopedRagMediaIds =
+        Array.isArray(ragMediaIds) && ragMediaIds.length > 0
+      const shouldUseRag =
+        Boolean(selectedKnowledge) ||
+        (fileRetrievalEnabled && hasScopedRagMediaIds)
+      if (shouldUseRag) {
         markSteeringApplied()
         await ragMode(
           message,
@@ -1607,7 +1612,12 @@ export const useChatActions = ({
         return
       }
 
-      if (selectedKnowledge) {
+      const hasScopedRagMediaIds =
+        Array.isArray(ragMediaIds) && ragMediaIds.length > 0
+      const shouldUseRag =
+        Boolean(selectedKnowledge) ||
+        (fileRetrievalEnabled && hasScopedRagMediaIds)
+      if (shouldUseRag) {
         await ragMode(
           trimmed,
           "",

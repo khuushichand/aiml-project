@@ -19,7 +19,7 @@
 ## Stage 4: Notes Autosave + Dirty State Protection
 **Goal**: Add notes autosave and dirty-state safeguards to prevent losing edits when closing item detail.
 **Success Criteria**: Dirty indicator appears during edits, autosave runs, and close/navigation attempts do not silently drop pending note changes.
-**Tests**: Targeted UI tests for highlight/stale behavior (`HighlightCard.test.tsx`), manual QA run sheet (`Docs/Plans/QA_RUN_SHEET_watchlists_stage3.md`), and Playwright skeleton coverage (`apps/tldw-frontend/e2e/workflows/collections-stage3.spec.ts`).
+**Tests**: Unit tests for autosave debounce and dirty-state detection, integration tests for close/navigation guard behavior, and Playwright coverage (`apps/tldw-frontend/e2e/workflows/collections-stage3.spec.ts`).
 **Status**: Complete
 
 ## Stage 3 Closeout Evidence (2026-02-07)

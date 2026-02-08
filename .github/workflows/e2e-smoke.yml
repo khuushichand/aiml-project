@@ -59,6 +59,16 @@ jobs:
             ${{ runner.os }}-pip-${{ matrix.python-version }}-
             ${{ runner.os }}-pip-
 
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip wheel
+          # Install project with dev extras for pytest and tooling
+          pip install -e .[dev]
+
+      - name: Run critical e2e smoke tests (in-process)
+        run: |
+          python -m pytest tldw_Server_API/tests/e2e/ --critical-only -q
+
       - name: Print server log (single-user)
         if: failure()
         env:
@@ -79,16 +89,6 @@ jobs:
         with:
           name: server-log-single-${{ matrix.os }}-py${{ matrix.python-version }}
           path: server-single.log
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip wheel
-          # Install project with dev extras for pytest and tooling
-          pip install -e .[dev]
-
-      - name: Run critical e2e smoke tests (in-process)
-        run: |
-          python -m pytest tldw_Server_API/tests/e2e/ --critical-only -q
 
       - name: Run E2E tests (multi-user) - exclude Jobs
         env:
@@ -128,5 +128,5 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: server-log-multi
+          name: server-log-multi-${{ matrix.os }}-py${{ matrix.python-version }}
           path: server-multi.log

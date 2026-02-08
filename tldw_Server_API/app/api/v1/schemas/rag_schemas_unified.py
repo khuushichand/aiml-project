@@ -947,6 +947,11 @@ class UnifiedRAGRequest(BaseModel):
         description="LLM model for answer generation",
         example="gpt-3.5-turbo"
     )
+    generation_provider: Optional[str] = Field(
+        default=None,
+        description="LLM provider for answer generation",
+        example="openai",
+    )
 
     generation_prompt: Optional[str] = Field(
         default=None,
@@ -1648,6 +1653,7 @@ class UnifiedBatchRequest(BaseModel):
     enable_generation: bool = Field(default=False)
     strict_extractive: bool = Field(default=False)
     generation_model: Optional[str] = Field(default=None)
+    generation_provider: Optional[str] = Field(default=None)
     generation_prompt: Optional[str] = Field(default=None)
     max_generation_tokens: int = Field(default=500, ge=50, le=2000)
     enable_abstention: bool = Field(default=False)

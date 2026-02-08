@@ -220,7 +220,7 @@ def _safe_log_format(record: dict) -> str:
         "<cyan>tp={extra[traceparent]}</cyan> "
         "<yellow>req={extra[request_id]}</yellow> <yellow>job={extra[job_id]}</yellow> "
         "<yellow>ps={extra[ps_component]}:{extra[ps_job_kind]}</yellow> | "
-        "<blue>{name}</blue>:<magenta>{function}</magenta>:<cyan>{line}</cyan> - {message}"
+        "<blue>{name}</blue>:<magenta>{function}</magenta>:<cyan>{line}</cyan> - {message}{exception}"
     )
 
 
@@ -3090,8 +3090,16 @@ async def lifespan(app: FastAPI):
                     audio_jobs_stop_event.set()
                     await _asyncio.wait_for(audio_jobs_task, timeout=5.0)
                     logger.info("Audio Jobs worker stopped via stop_event")
+                except _asyncio.CancelledError:
+                    raise
                 except _STARTUP_GUARD_EXCEPTIONS:
                     audio_jobs_task.cancel()
+                except Exception as e:
+                    logger.warning(
+                        f"Audio Jobs worker exited with exception before shutdown completion: {e}"
+                    )
+                    with suppress(_STARTUP_GUARD_EXCEPTIONS):
+                        audio_jobs_task.cancel()
             else:
                 audio_jobs_task.cancel()
         if "media_ingest_jobs_task" in locals() and media_ingest_jobs_task:
@@ -3950,6 +3958,29 @@ app = FastAPI(
     lifespan=lifespan,
 )
 _startup_trace("FastAPI app created")
+
+
+# ---------------------------------------------------------------------------
+# Global exception handler – surfaces tracebacks that BaseHTTPMiddleware
+# layers would otherwise swallow, producing only a bare
+# "Exception in ASGI application" in the uvicorn log.
+# ---------------------------------------------------------------------------
+from fastapi.responses import JSONResponse as _JSONResponse  # noqa: E402
+
+
+@app.exception_handler(Exception)
+async def _global_unhandled_exception_handler(request, exc):
+    logger.opt(exception=exc).error(
+        "Unhandled exception on {method} {url}: {exc}",
+        method=request.method,
+        url=request.url,
+        exc=exc,
+    )
+    return _JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
+
 
 # Initialize shared local LLM inference manager (ollama/hf/llamafile/llamacpp)
 llm_manager = None

@@ -10007,8 +10007,7 @@ class MediaDatabase:
                 titles = [row.get('title', 'Untitled') for row in results_list]
                 logging.info(f"Search results for '{search_query}' (page {page}): {titles}")
 
-            else:
-                return results_list, total_matches
+            return results_list, total_matches
 
         except sqlite3.Error as e:
             if "no such table: media_fts" in str(e).lower():

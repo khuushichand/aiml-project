@@ -1773,11 +1773,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const buildPinnedMessage = React.useCallback(
     (message: string, options?: { ignorePinnedResults?: boolean }) => {
       if (options?.ignorePinnedResults) return message
+      if (fileRetrievalEnabled) return message
       if (!ragPinnedResults || ragPinnedResults.length === 0) return message
       const pinnedText = formatPinnedResults(ragPinnedResults, "markdown")
       return message ? `${message}\n\n${pinnedText}` : pinnedText
     },
-    [ragPinnedResults]
+    [fileRetrievalEnabled, ragPinnedResults]
   )
 
   const submitForm = (options?: { ignorePinnedResults?: boolean }) => {

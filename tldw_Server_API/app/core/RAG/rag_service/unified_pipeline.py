@@ -903,6 +903,7 @@ async def unified_rag_pipeline(
     enable_generation: bool = True,
     strict_extractive: bool = False,
     generation_model: Optional[str] = None,
+    generation_provider: Optional[str] = None,
     generation_prompt: Optional[str] = None,
     max_generation_tokens: int = 500,
     # Abstention & multi-turn synthesis
@@ -3951,6 +3952,7 @@ async def unified_rag_pipeline(
                         _attrs = {
                             "rag.phase": "generation",
                             "rag.model": str(generation_model or ""),
+                            "rag.provider": str(generation_provider or ""),
                             "rag.multi_turn": bool(enable_multi_turn_synthesis),
                         }
                         _otel_cm_gen = _tr.start_as_current_span("rag.generation")
@@ -3992,7 +3994,10 @@ async def unified_rag_pipeline(
                         result.errors.append(f"Strict extractive assembly failed: {_se}")
                         result.generated_answer = None
                 elif AnswerGenerator:
-                    generator = AnswerGenerator(model=generation_model)
+                    generator = AnswerGenerator(
+                        model=generation_model,
+                        provider=generation_provider,
+                    )
 
                     # Prepare base context from top documents
                     context_docs = (result.documents[:5] if result.documents else [])
@@ -4657,7 +4662,10 @@ async def unified_rag_pipeline(
                                             # Attempt quick regeneration if generator is available
                                             if AnswerGenerator:
                                                 try:
-                                                    generator = AnswerGenerator(model=generation_model)
+                                                    generator = AnswerGenerator(
+                                                        model=generation_model,
+                                                        provider=generation_provider,
+                                                    )
                                                     context = "\n\n".join([getattr(d, 'content', str(d)) for d in (result.documents[:5] if result.documents else [])])
                                                     regen = await generator.generate(query=query, context=context, prompt_template=generation_prompt, max_tokens=max_generation_tokens)
                                                     if isinstance(regen, dict) and regen.get("answer"):
@@ -4719,6 +4727,7 @@ async def unified_rag_pipeline(
                     character_db_path=character_db_path,
                     user_id=user_id,
                     generation_model=generation_model,
+                    generation_provider=generation_provider,
                     existing_claims=claims_payload,
                     existing_summary=factuality_payload,
                     search_mode=search_mode,
@@ -4840,6 +4849,7 @@ async def unified_rag_pipeline(
                             enable_chunk_citations=enable_chunk_citations,
                             enable_generation=bool(adaptive_rerun_include_generation),
                             generation_model=generation_model,
+                            generation_provider=generation_provider,
                             generation_prompt=generation_prompt,
                             max_generation_tokens=max_generation_tokens,
                             # Disable post-verification in rerun to avoid loops
@@ -4878,6 +4888,7 @@ async def unified_rag_pipeline(
                                 character_db_path=character_db_path,
                                 user_id=user_id,
                                 generation_model=generation_model,
+                                generation_provider=generation_provider,
                                 search_mode=search_mode,
                                 hybrid_alpha=hybrid_alpha,
                                 top_k=top_k,
@@ -5220,7 +5231,7 @@ async def unified_rag_pipeline(
         asyncio.TimeoutError,
     ) as e:
         result.errors.append(f"Pipeline error: {str(e)}")
-        logger.error(f"Unified pipeline error: {e}")
+        logger.exception("Unified pipeline error: {}", e)
         if fallback_on_error:
             return {
                 "query": query,
@@ -5301,7 +5312,8 @@ async def unified_rag_pipeline(
 
                             _f_cfg = _load_cfg() or {}
                             _f_prov = (
-                                _f_cfg.get("RAG_DEFAULT_LLM_PROVIDER")
+                                generation_provider
+                                or _f_cfg.get("RAG_DEFAULT_LLM_PROVIDER")
                                 or _f_cfg.get("default_api")
                                 or "openai"
                             ).strip()

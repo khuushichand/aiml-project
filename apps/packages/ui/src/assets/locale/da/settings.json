@@ -580,7 +580,7 @@
         },
         "headers": {
           "label": "Tilpas Headers",
-          "Tilføj": "Tilføj Header",
+          "add": "Tilføj Header",
           "key": {
             "label": "Header Værdi",
             "placeholder": "Autorisation"

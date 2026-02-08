@@ -2,6 +2,7 @@ import React from "react"
 import { Select, Spin } from "antd"
 import { useTranslation } from "react-i18next"
 import {
+  extractMediaId,
   getResultChunkIndex,
   getResultDate,
   getResultId,
@@ -106,8 +107,15 @@ export const ResultsList: React.FC<ResultsListProps> = ({
   // Check if a result is already pinned
   const isPinned = React.useCallback(
     (result: RagResult) => {
+      const mediaId = extractMediaId(result)
+      if (mediaId !== null) {
+        return pinnedResults.some(
+          (p) => p.mediaId === mediaId || p.id === String(mediaId)
+        )
+      }
+
       const resultId = getResultId(result)
-      if (resultId !== undefined) {
+      if (resultId !== undefined && resultId !== null) {
         return pinnedResults.some((p) => p.id === String(resultId))
       }
 

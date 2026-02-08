@@ -1004,6 +1004,7 @@ async def unified_search_endpoint(
                     agentic=agentic_cfg,
                     enable_generation=request.enable_generation,
                     generation_model=request.generation_model,
+                    generation_provider=request.generation_provider,
                     generation_prompt=request.generation_prompt,
                     max_generation_tokens=request.max_generation_tokens,
                     enable_citations=request.enable_citations,
@@ -1024,7 +1025,7 @@ async def unified_search_endpoint(
                     low_confidence_behavior=str(getattr(request, 'low_confidence_behavior', 'continue')),
                 )
             except Exception as exc:  # noqa: BLE001 - agentic pipeline fallback must be resilient
-                logger.error("Agentic RAG pipeline failed: {}", exc, exc_info=True)
+                logger.exception("Agentic RAG pipeline failed: {}", exc)
                 fallback_doc = {
                     "id": f"agentic-error:{uuid4().hex[:8]}",
                     "content": "Agentic pipeline error fallback content.",
@@ -1075,12 +1076,14 @@ async def unified_search_endpoint(
             logger.warning(f"Errors during processing: {result.errors}")
 
     except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
-        logger.error(f"Unified search error: {e}", exc_info=True)
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
+        logger.exception("Unified search error: {}", e)
+        detail = "Search failed due to an internal error."
+        # Expose root cause only when explicitly requested by caller.
+        if bool(getattr(request, "debug_mode", False)):
+            detail = f"{type(e).__name__}: {e}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Search failed due to an internal error."
+            detail=detail,
         ) from e
     else:
         return response
@@ -1789,8 +1792,11 @@ async def unified_search_stream_endpoint(
                 cfg = {}
 
             import os as _os
+            request_provider = request.generation_provider if isinstance(request.generation_provider, str) else None
             env_provider = _os.getenv("RAG_DEFAULT_LLM_PROVIDER")
-            provider_value = env_provider if env_provider is not None else cfg.get("RAG_DEFAULT_LLM_PROVIDER")
+            provider_value = request_provider if request_provider is not None else (
+                env_provider if env_provider is not None else cfg.get("RAG_DEFAULT_LLM_PROVIDER")
+            )
             provider = (
                 provider_value.strip()
                 if isinstance(provider_value, str) and provider_value.strip()
@@ -1959,7 +1965,7 @@ async def list_features():
         },
         "generation": {
                 "description": "Generate answers from retrieved context",
-                "parameters": ["enable_generation", "generation_model", "generation_prompt"]
+                "parameters": ["enable_generation", "generation_provider", "generation_model", "generation_prompt"]
         },
         "reranking": {
                 "description": "Rerank documents for better relevance",

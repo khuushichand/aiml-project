@@ -156,6 +156,7 @@ class PostGenerationVerifier:
         character_db_path: str | None = None,
         user_id: str | None = None,
         generation_model: str | None = None,
+        generation_provider: str | None = None,
         existing_claims: list[dict[str, Any]] | None = None,
         existing_summary: dict[str, Any] | None = None,
         search_mode: str = "hybrid",
@@ -371,7 +372,10 @@ class PostGenerationVerifier:
             try:
                 if AnswerGenerator is not None:
                     gen_cls = AnswerGenerator
-                    gen = gen_cls(model=generation_model)
+                    gen = gen_cls(
+                        model=generation_model,
+                        provider=generation_provider,
+                    )
                     context = "\n\n".join([getattr(d, 'content', '') for d in new_docs[:5]])
                     maybe = await gen.generate(query=query, context=context, prompt_template=None, max_tokens=500)
                     new_answer = maybe.get("answer") if isinstance(maybe, dict) else str(maybe)

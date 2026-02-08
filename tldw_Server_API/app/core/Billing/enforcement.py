@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS = (
     TimeoutError,
     TypeError,
     ValueError,
+    sqlite3.Error,
 )
 
 
@@ -219,25 +221,45 @@ class BillingEnforcer:
 
             async with pool.acquire() as conn:
                 if hasattr(conn, "fetchval"):
-                    # PostgreSQL
-                    result = await conn.fetchval(
-                        """
-                        SELECT COALESCE(SUM(request_count), 0)
-                        FROM usage_daily
-                        WHERE org_id = $1 AND day = $2
-                        """,
-                        org_id, today,
-                    )
+                    # PostgreSQL: canonical column is `requests`; keep fallback for legacy schemas.
+                    try:
+                        result = await conn.fetchval(
+                            """
+                            SELECT COALESCE(SUM(requests), 0)
+                            FROM usage_daily
+                            WHERE org_id = $1 AND day = $2
+                            """,
+                            org_id, today,
+                        )
+                    except Exception:  # noqa: BLE001 - fallback for legacy/variant schemas
+                        result = await conn.fetchval(
+                            """
+                            SELECT COALESCE(SUM(request_count), 0)
+                            FROM usage_daily
+                            WHERE org_id = $1 AND day = $2
+                            """,
+                            org_id, today,
+                        )
                 else:
-                    # SQLite
-                    cur = await conn.execute(
-                        """
-                        SELECT COALESCE(SUM(request_count), 0)
-                        FROM usage_daily
-                        WHERE org_id = ? AND day = ?
-                        """,
-                        (org_id, today),
-                    )
+                    # SQLite: canonical column is `requests`; keep fallback for legacy schemas.
+                    try:
+                        cur = await conn.execute(
+                            """
+                            SELECT COALESCE(SUM(requests), 0)
+                            FROM usage_daily
+                            WHERE org_id = ? AND day = ?
+                            """,
+                            (org_id, today),
+                        )
+                    except Exception:  # noqa: BLE001 - fallback for legacy/variant schemas
+                        cur = await conn.execute(
+                            """
+                            SELECT COALESCE(SUM(request_count), 0)
+                            FROM usage_daily
+                            WHERE org_id = ? AND day = ?
+                            """,
+                            (org_id, today),
+                        )
                     row = await cur.fetchone()
                     result = row[0] if row else 0
 

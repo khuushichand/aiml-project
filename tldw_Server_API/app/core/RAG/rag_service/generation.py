@@ -17,9 +17,6 @@ from typing import TYPE_CHECKING, Any, Optional, Protocol, Union, cast
 
 from loguru import logger
 
-# Import LLM infrastructure
-from ...Chat.Chat_Deps import ChatConfigurationError
-from ...LLM_Calls.adapter_registry import get_registry
 from .types import Document
 
 if TYPE_CHECKING:
@@ -337,32 +334,29 @@ class LLMGenerator(BaseGenerator):
             raise
 
     async def _call_llm(self, prompt: str, **kwargs) -> Any:
-        """Call the appropriate LLM provider."""
+        """Call the appropriate LLM provider via the chat service."""
+        # Lazy import to avoid circular dependencies
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+
         provider = (self.config.provider or "").lower()
         streaming = bool(kwargs.get("streaming", self.config.streaming))
         model = kwargs.get("model", self.config.model)
         api_key = kwargs.get("api_key", self.config.api_key)
         temperature = kwargs.get("temperature", self.config.temperature)
         max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
-        timeout = kwargs.get("timeout", self.config.timeout)
 
-        request: dict[str, Any] = {
-            "messages": [{"role": "user", "content": prompt}],
+        call_kwargs: dict[str, Any] = {
+            "api_provider": provider,
             "model": model,
-            "api_key": api_key,
+            "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "stream": streaming,
         }
-        if streaming:
-            request["stream"] = True
+        if api_key:
+            call_kwargs["api_key"] = api_key
 
-        adapter = get_registry().get_adapter(provider)
-        if adapter is not None:
-            if streaming:
-                return adapter.astream(request, timeout=timeout)
-            return await adapter.achat(request, timeout=timeout)
-
-        raise ChatConfigurationError(provider=provider, message="No adapter available for provider.")
+        return await perform_chat_api_call_async(**call_kwargs)
 
 
 class StreamingGenerator(LLMGenerator):

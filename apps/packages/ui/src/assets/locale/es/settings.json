@@ -10,10 +10,10 @@
   "chatDictionariesNav": "Diccionarios de chat",
   "charactersNav": "Personajes",
   "mediaNav": "Multimedia",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian y monitoreo",
   "guardian": {
-    "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableTitle": "Configuración de Guardian no disponible",
+    "unavailableDescription": "Tu servidor actual no expone endpoints de Guardian ni de automonitoreo."
   },
   "chatAppearance": {
     "title": "Apariencia del chat",
@@ -405,9 +405,9 @@
     "notification": {
       "pullModel": "Trayendo Modelo",
       "pullModelDescription": "Trayendo modelo {{modelName}}. Para más detalles, verifique el ícono de la extensión.",
-      "success": "Exito",
+      "success": "Éxito",
       "error": "Fallo",
-      "successDescription": "Modelo traido exitosamente",
+      "successDescription": "Modelo traído exitosamente",
       "successDeleteDescription": "Modelo borrado exitosamente",
       "someError": "Hubo un error. Intente nuevamente más tarde",
       "cancellingDownload": "Cancelando descarga",
@@ -440,7 +440,7 @@
       "duplicate": "Duplicar prompt"
     },
     "confirm": {
-      "delete": "¿Esta seguro que desea borrar este prompt? Esta acción no tiene vuelta a atrás."
+      "delete": "¿Está seguro de que desea borrar este prompt? Esta acción no se puede deshacer."
     },
     "modal": {
       "addTitle": "Agregar Nuevo Prompt",
@@ -551,7 +551,7 @@
     "notification": {
       "pageShareSuccess": "URL compartida actualizada exitosamente",
       "someError": "Hubo un error. Intente nuevamente más tarde",
-      "webShareDeleteSuccess": "Web compartida borrada exitosamente com sucesso"
+      "webShareDeleteSuccess": "Web compartida borrada exitosamente"
     }
   },
   "ollamaSettings": {
@@ -603,7 +603,7 @@
     "heading": "Sobre",
     "chromeVersion": "Versión de tldw Assistant",
     "ollamaVersion": "Versión del servidor",
-    "support": "Podes apoyar el proyecto tldw Assistant haciendo donaciones o patrocinarnos a través de las seguientes plataformas:",
+    "support": "Puedes apoyar el proyecto tldw Assistant haciendo donaciones o patrocinarnos a través de las siguientes plataformas:",
     "koFi": "Apoyar en Ko-fi",
     "githubSponsor": "Patrocinarnos en GitHub",
     "githubRepo": "Repositorio de GitHub"

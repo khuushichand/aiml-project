@@ -87,3 +87,38 @@ async def test_multi_turn_synthesis_happy_path(monkeypatch):
     syn = md.get("synthesis") if isinstance(md, dict) else None
     assert isinstance(syn, dict) and syn.get("enabled") is True
     assert set((syn.get("durations") or {}).keys()) == {"draft", "critique", "refine"}
+
+
+@pytest.mark.asyncio
+async def test_generation_uses_explicit_provider_and_model(monkeypatch):
+    monkeypatch.setattr(up, "MultiDatabaseRetriever", FakeRetriever)
+
+    captured: dict[str, object] = {}
+
+    class CapturingAnswerGenerator:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+        async def generate(self, *, query: str, context: str, prompt_template=None, max_tokens=None, temperature=None):
+            return {"answer": "provider-model-ok"}
+
+    monkeypatch.setattr(up, "AnswerGenerator", CapturingAnswerGenerator)
+
+    res = await up.unified_rag_pipeline(
+        query="Use selected provider/model",
+        sources=["media_db"],
+        enable_cache=False,
+        enable_reranking=False,
+        enable_generation=True,
+        generation_provider="anthropic",
+        generation_model="claude-3-5-haiku-latest",
+        top_k=2,
+    )
+
+    init_kwargs = captured.get("kwargs")
+    assert isinstance(init_kwargs, dict)
+    assert init_kwargs.get("provider") == "anthropic"
+    assert init_kwargs.get("model") == "claude-3-5-haiku-latest"
+    ga = getattr(res, "generated_answer", None) or (res.get("generated_answer") if isinstance(res, dict) else None)
+    assert ga == "provider-model-ok"
