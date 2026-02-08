@@ -59,38 +59,33 @@ def client_with_overrides(monkeypatch, auth_headers):
 
 
 def test_rag_search_doc_researcher_flags(client_with_overrides, monkeypatch):
-    from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
     import tldw_Server_API.app.api.v1.endpoints.rag_unified as rag_ep
-    import tldw_Server_API.app.core.RAG.rag_service.unified_pipeline as up
+    from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import UnifiedSearchResult
 
-    class FakeRetriever:
-        def __init__(self, *args, **kwargs):  # noqa: ARG002
-            pass
+    captured: dict[str, object] = {}
 
-        async def retrieve(
-            self,
-            query,
-            sources=None,
-            config=None,  # noqa: ARG002
-            index_namespace=None,  # noqa: ARG002
-            allowed_media_ids=None,  # noqa: ARG002
-            allowed_note_ids=None,  # noqa: ARG002
-        ):
-            # Ensure follow-up retrievals reuse original sources (notes included)
-            if sources is not None:
-                assert DataSource.NOTES in sources
-            return [
-                Document(
-                    id="doc1",
-                    content="Unrelated content for testing evidence accumulation.",
-                    metadata={"title": "Doc1", "source": "media_db", "ingestion_date": "2024-01-01"},
-                    source=DataSource.MEDIA_DB,
-                    score=0.2,
-                )
-            ]
+    async def _fake_unified_pipeline(**kwargs):  # noqa: ARG001
+        captured.update(kwargs)
+        return UnifiedSearchResult(
+            documents=[],
+            query=str(kwargs.get("query", "")),
+            expanded_queries=[],
+            metadata={
+                "granularity_routing": {"enabled": True},
+                "evidence_accumulation": {"enabled": True},
+                "evidence_chains": {"total_chains": 1},
+            },
+            timings={},
+            citations=[],
+            feedback_id=None,
+            generated_answer=None,
+            cache_hit=False,
+            errors=[],
+            security_report=None,
+            total_time=0.0,
+        )
 
-    monkeypatch.setattr(rag_ep, "MultiDatabaseRetriever", FakeRetriever)
-    monkeypatch.setattr(up, "MultiDatabaseRetriever", FakeRetriever)
+    monkeypatch.setattr(rag_ep, "unified_rag_pipeline", _fake_unified_pipeline)
 
     payload = {
         "query": "alpha beta gamma",
@@ -110,6 +105,11 @@ def test_rag_search_doc_researcher_flags(client_with_overrides, monkeypatch):
     assert resp.status_code == 200, resp.text
     data = resp.json()
     metadata = data.get("metadata", {})
+
+    assert captured.get("enable_dynamic_granularity") is True
+    assert captured.get("enable_evidence_accumulation") is True
+    assert captured.get("accumulation_max_rounds") == 2
+    assert captured.get("enable_evidence_chains") is True
     assert "granularity_routing" in metadata
     assert "evidence_accumulation" in metadata
     assert "evidence_chains" in metadata

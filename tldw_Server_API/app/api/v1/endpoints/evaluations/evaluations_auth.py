@@ -9,7 +9,6 @@ This module centralizes:
 
 import contextlib
 import os
-import warnings
 from typing import Any, Optional
 
 from fastapi import Depends, Header, HTTPException, Request, Response, status
@@ -399,39 +398,11 @@ def enforce_heavy_evaluations_admin(principal: Optional[AuthPrincipal]) -> None:
         )
 
 
-def require_admin(user: User) -> None:
-    """
-    Legacy user-dict gate for heavy evaluations (compatibility shim).
-
-    New code and HTTP routes should prefer the claim-first
-    `enforce_heavy_evaluations_admin(AuthPrincipal)` helper together with
-    `require_roles` / `require_permissions`. This function is kept only
-    for tests and for any remaining legacy callsites that have not yet
-    been migrated.
-    """
-    warnings.warn(
-        "evaluations_auth.require_admin is deprecated; use enforce_heavy_evaluations_admin(principal) "
-        "with claim-first dependencies instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
-        return
-    is_admin_flag = bool(
-        getattr(user, "is_admin", False)
-        or getattr(user, "role", None) == "admin"
-        or ("admin" in (getattr(user, "roles", None) or []))
-    )
-    if not user or not is_admin_flag:
-        raise HTTPException(status_code=403, detail="Admin privileges required for heavy evaluations")
-
-
 __all__ = [
     "verify_api_key",
     "sanitize_error_message",
     "create_error_response",
     "check_evaluation_rate_limit",
     "_apply_rate_limit_headers",
-    "require_admin",
     "enforce_heavy_evaluations_admin",
 ]

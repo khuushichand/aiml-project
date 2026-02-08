@@ -381,6 +381,32 @@ def test_split_references_merges_author_prefix_with_markdown_year_line():
     assert any("Courtois H. M." in r and "2023, A&A, 670, L15" in r for r in refs)
 
 
+def test_parse_reference_basic_normalizes_markdown_link_text_but_keeps_identifiers():
+    raw = (
+        "[Abbott T. M. C., et al., 2022, Physical Review D, 105, 023520]"
+        "(http://dx.doi.org/10.1103/PhysRevD.105.023520)"
+    )
+    parsed = refs_mod._parse_reference_basic(raw)
+
+    assert "](" not in parsed.raw_text
+    assert parsed.raw_text.startswith("Abbott T. M. C., et al., 2022")
+    assert parsed.doi == "10.1103/PhysRevD.105.023520"
+    assert parsed.url == "https://doi.org/10.1103/PhysRevD.105.023520"
+    assert parsed.year == 2022
+
+
+def test_parse_reference_basic_normalizes_broken_markdown_fragment():
+    raw = (
+        "Learn-](https://openreview.net/forum?id=abc) Samarth Bhargav, Georgios "
+        "Sidiropoulos, and Evangelos Kanoulas. 2022. It's on the tip of my tongue."
+    )
+    parsed = refs_mod._parse_reference_basic(raw)
+
+    assert "](" not in parsed.raw_text
+    assert "Learn-" in parsed.raw_text
+    assert parsed.year == 2022
+
+
 @pytest.mark.asyncio
 async def test_references_endpoint_enriches_only_requested_reference_index(mock_user, mock_db):
     content = (

@@ -104,19 +104,19 @@ def _build_app_with_admin_cleanup(principal: AuthPrincipal) -> FastAPI:
 
 
 @pytest.mark.unit
-def test_require_admin_helper_respects_env_guard(monkeypatch):
+def test_enforce_heavy_evaluations_admin_respects_env_guard(monkeypatch):
     from fastapi import HTTPException
-    from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import require_admin
+    from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import enforce_heavy_evaluations_admin
 
-    user = SimpleNamespace(is_admin=False, role="user", roles=["user"])
+    principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
     with pytest.raises(HTTPException) as excinfo:
-        require_admin(user)
+        enforce_heavy_evaluations_admin(principal)
     assert excinfo.value.status_code == 403
 
     # When guard disabled, helper should no-op even for non-admins.
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "false")
-    require_admin(user)
+    enforce_heavy_evaluations_admin(principal)
 
 
 @pytest.mark.unit

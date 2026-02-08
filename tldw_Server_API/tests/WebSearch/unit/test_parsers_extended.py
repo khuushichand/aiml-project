@@ -154,6 +154,7 @@ def test_parse_4chan_results_maps_fields():
                 "thread_no": 123,
                 "replies": 20,
                 "images": 5,
+                "archived": True,
             }
         ]
     }
@@ -172,3 +173,59 @@ def test_parse_4chan_results_maps_fields():
     assert r["metadata"]["thread_no"] == 123
     assert r["metadata"]["replies"] == 20
     assert r["metadata"]["images"] == 5
+    assert r["metadata"]["archived"] is True
+
+
+def test_search_web_4chan_include_archived(monkeypatch):
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+    from tldw_Server_API.app.core.Security import egress as eg
+    from tldw_Server_API.app.core import http_client as hc
+
+    monkeypatch.setattr(ws, "get_loaded_config", lambda: {"search_engines": {}})
+    monkeypatch.setattr(
+        eg,
+        "evaluate_url_policy",
+        lambda url: type("Policy", (), {"allowed": True, "reason": None})(),
+    )
+
+    seen_urls: list[str] = []
+
+    def fake_fetch_json(*, method: str, url: str, headers=None, timeout=15.0, **kwargs):
+        seen_urls.append(url)
+        if url.endswith("/catalog.json"):
+            return [{"threads": [{"no": 111, "sub": "Other topic", "com": "No match", "time": 1700000000}]}]
+        if url.endswith("/archive.json"):
+            return [222]
+        if url.endswith("/thread/222.json"):
+            return {
+                "posts": [
+                    {
+                        "no": 222,
+                        "sub": "Rust memory safety",
+                        "com": "Discussing Rust ownership and memory safety.",
+                        "name": "Anonymous",
+                        "time": 1700000100,
+                    }
+                ]
+            }
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(hc, "fetch_json", fake_fetch_json)
+
+    result = ws.search_web_4chan(
+        "rust memory safety",
+        result_count=5,
+        search_params={
+            "boards": ["g"],
+            "max_threads_per_board": 5,
+            "include_archived": True,
+        },
+    )
+
+    assert result["include_archived"] is True
+    assert any(url.endswith("/archive.json") for url in seen_urls)
+    assert any(url.endswith("/thread/222.json") for url in seen_urls)
+    assert result["results"]
+    first = result["results"][0]
+    assert first["thread_no"] == 222
+    assert first["archived"] is True

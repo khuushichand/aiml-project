@@ -50,7 +50,7 @@ REFERENCE_ENRICH_EXCEPTIONS = (
 )
 
 # Reference section detection patterns
-REFERENCES_PARSER_VERSION = "6"
+REFERENCES_PARSER_VERSION = "7"
 
 REFERENCE_HEADING_CORE_PATTERN = re.compile(
     r"(?i)^(?:\d+|[ivxlc]+)?(?:\.\d+)?\s*"
@@ -532,6 +532,11 @@ def _split_references(refs_text: str) -> list[str]:
             and markdown_label
             and not re.search(YEAR_PATTERN, current_ref)
             and current_ref.count(",") >= 3
+            and (
+                current_ref.rstrip().endswith(",")
+                or re.search(r"[^\W\d_][^\W\d_'\-]*\s*$", current_ref.rstrip()) is not None
+            )
+            and not current_ref.rstrip().endswith(".")
             and _is_probable_authorish_start(current_ref)
             and _is_probable_authorish_start(markdown_label)
         ):
@@ -635,46 +640,75 @@ def _extract_year(text: str) -> int | None:
     return None
 
 
+def _normalize_reference_display_text(raw_text: str) -> str:
+    """Clean markdown/link artifacts for user-facing reference text."""
+    text = (raw_text or "").strip()
+    if not text:
+        return ""
+
+    # Standard markdown link form: "[label](url)" -> "label"
+    text = re.sub(
+        r"\[([^\]]+)\]\((?:https?|mailto):[^)]+\)",
+        lambda m: m.group(1).strip(),
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Broken markdown form occasionally produced by PDF extraction:
+    # "Learn-](https://...)" -> "Learn-"
+    text = re.sub(
+        r"\b([^\s\[\]]{2,120})\]\((?:https?|mailto):[^)]+\)",
+        r"\1",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Drop bare "(url)" tails left after extraction artifacts.
+    text = re.sub(r"\((?:https?|mailto):[^)]+\)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+([,.;:])", r"\1", text)
+    return text.strip("`")
+
+
 def _parse_reference_basic(raw_text: str) -> ReferenceEntry:
     """Parse a reference string into structured fields using heuristics."""
+    display_text = _normalize_reference_display_text(raw_text) or raw_text
     doi = _extract_doi(raw_text)
     arxiv_id = _extract_arxiv_id(raw_text)
     url = _extract_url(raw_text)
-    year = _extract_year(raw_text)
+    year = _extract_year(display_text)
 
     # Try to extract title (often in quotes or after authors)
     title = None
     # Look for quoted title
-    title_match = re.search(r'"([^"]{10,200})"', raw_text)
+    title_match = re.search(r'"([^"]{10,200})"', display_text)
     if title_match:
         title = title_match.group(1).strip()
     elif not title_match:
         # Look for title after authors (pattern: Authors, Year. Title. ...)
-        title_match = re.search(r"^\s*[^.]+\.\s*(\d{4})[.\s]+([^.]{10,150})\.", raw_text)
+        title_match = re.search(r"^\s*[^.]+\.\s*(\d{4})[.\s]+([^.]{10,150})\.", display_text)
         if title_match:
             title = title_match.group(2).strip()
 
     # Try to extract authors (usually at the start)
     authors = None
     # Pattern: LastName, F., LastName, F., ... (Year)
-    author_match = re.match(r"^((?:[A-Z][a-z]+(?:,\s*[A-Z]\.?)?(?:,?\s+(?:and\s+|&\s*)?)?)+)[\.,]", raw_text)
+    author_match = re.match(r"^((?:[A-Z][a-z]+(?:,\s*[A-Z]\.?)?(?:,?\s+(?:and\s+|&\s*)?)?)+)[\.,]", display_text)
     if author_match:
         authors = author_match.group(1).strip().rstrip(",")
     else:
         # Pattern: F. LastName, F. LastName, ...
-        author_match = re.match(r"^((?:[A-Z]\.?\s*[A-Z][a-z]+(?:,?\s+(?:and\s+|&\s*)?)?)+)[\.,]", raw_text)
+        author_match = re.match(r"^((?:[A-Z]\.?\s*[A-Z][a-z]+(?:,?\s+(?:and\s+|&\s*)?)?)+)[\.,]", display_text)
         if author_match:
             authors = author_match.group(1).strip().rstrip(",")
 
     # Try to extract venue (journal/conference)
     venue = None
     # Look for common venue patterns: "In Proceedings of", "Journal of", etc.
-    venue_match = re.search(r"(?:In\s+)?(?:Proceedings\s+of\s+)?(?:the\s+)?([A-Z][^,\.]{5,60}(?:Conference|Journal|Symposium|Workshop|Review|Letters|Transactions))", raw_text, re.IGNORECASE)
+    venue_match = re.search(r"(?:In\s+)?(?:Proceedings\s+of\s+)?(?:the\s+)?([A-Z][^,\.]{5,60}(?:Conference|Journal|Symposium|Workshop|Review|Letters|Transactions))", display_text, re.IGNORECASE)
     if venue_match:
         venue = venue_match.group(1).strip()
 
     return ReferenceEntry(
-        raw_text=raw_text[:1000],  # Limit raw text length
+        raw_text=display_text[:1000],  # Limit raw text length
         title=title,
         authors=authors,
         year=year,

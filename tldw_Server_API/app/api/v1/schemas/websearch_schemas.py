@@ -63,6 +63,16 @@ class WebSearchRequest(BaseModel):
         le=1000,
         description="Optional per-board scan cap for 4chan engine.",
     )
+    max_archived_threads_per_board: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=500,
+        description="Optional per-board scan cap for archived 4chan threads.",
+    )
+    include_archived: bool = Field(
+        default=False,
+        description="When true and engine=4chan, include archived thread search results.",
+    )
 
     subquery_generation: bool = False
     subquery_generation_llm: Optional[str] = None

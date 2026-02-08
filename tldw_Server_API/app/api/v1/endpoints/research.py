@@ -316,6 +316,8 @@ async def websearch_endpoint(
             "google_domain": payload.google_domain,
             "boards": payload.boards,
             "max_threads_per_board": payload.max_threads_per_board,
+            "max_archived_threads_per_board": payload.max_archived_threads_per_board,
+            "include_archived": payload.include_archived,
             "subquery_generation": payload.subquery_generation,
             "subquery_generation_llm": payload.subquery_generation_llm,
             "user_review": payload.user_review,

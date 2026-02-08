@@ -54,6 +54,7 @@ This active plan tracks unfinished work split from:
 - 2026-02-08: Removed residual backend detection-by-`hasattr(conn, "fetchval")` in `app/core/AuthNZ/repos/quotas_repo.py`; backend path now keys off `DatabasePool` backend state. Added unit coverage in `tests/AuthNZ/unit/test_authnz_quotas_repo_backend_selection.py` to lock SQLite/Postgres path selection behavior.
 - 2026-02-08: Removed remaining `hasattr(conn, "fetchval")` backend branching in `app/core/AuthNZ/repos/api_keys_repo.py` and `app/core/AuthNZ/repos/sessions_repo.py`; these paths now also key off `DatabasePool` backend state. Verified with focused AuthNZ repo tests under the venv (`10 passed, 5 skipped` across SQLite + unit repo suites).
 - 2026-02-08: Embeddings policy enforcement now resolves admin bypass claim-first from `request.state.auth` principal (role/is_admin) with compatibility fallback to `User.is_admin`. Updated `/api/v1/embeddings` and `/api/v1/embeddings/batch` policy checks and metrics config reporting to use request-aware evaluation. Added unit coverage in `tests/Embeddings/test_embeddings_policy_claim_first.py`.
+- 2026-02-08: Removed the legacy evaluations `require_admin` helper and migrated remaining tests to claim-first `enforce_heavy_evaluations_admin(principal)` checks. Verified with focused suites (`10 passed` for evaluations heavy-admin tests + permissions claims, and `3 skipped` for invariants suite).
 
 ## Stage 5: RG v1.1 Legacy Limiter Retirement
 **Goal**: Safely retire remaining legacy limiters/shims once RG parity is verified, leaving ResourceGovernor as the sole enforcer.
@@ -66,3 +67,6 @@ This active plan tracks unfinished work split from:
 - For each module (chat, embeddings, authnz, evals, character-chat, web-scraping, audio, workflows), keep/extend parity tests and remove legacy-path assertions only after cutover.
 - Regression suite ensures no route double-enforces after shim removal.
 **Status**: In Progress
+**Progress Notes**:
+- 2026-02-08: Extended `tests/Resource_Governance/test_e2e_evals_authnz_character_headers.py` to run deny-header parity coverage across both `RG_BACKEND=memory` and `RG_BACKEND=redis` (8 parametrized cases). Each case now uses backend-scoped policy IDs to reduce cross-test key collisions when Redis stub state is reused.
+- 2026-02-08: Extended `tests/Resource_Governance/test_e2e_domains_headers.py` to run deny-header parity coverage across both `RG_BACKEND=memory` and `RG_BACKEND=redis` (8 parametrized cases) for rag/media/research/prompt-studio routes, with backend-scoped policy IDs for Redis-stub isolation.

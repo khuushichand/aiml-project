@@ -153,6 +153,24 @@ def _truncate_text(value: str | None, max_len: int = 600) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 1].rstrip() + "..."
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return default
+        if normalized in {"1", "true", "yes", "on", "y"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "n"}:
+            return False
+    return default
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 
 
@@ -3059,6 +3077,58 @@ def _score_4chan_match(query_terms: list[str], haystack: str, full_query: str) -
     return score
 
 
+def _append_4chan_candidate(
+    *,
+    candidates: list[dict[str, Any]],
+    board: str,
+    thread: dict[str, Any],
+    query_terms: list[str],
+    query_text: str,
+    archived: bool,
+) -> None:
+    thread_no = thread.get("no")
+    if thread_no is None:
+        return
+
+    subject = _clean_4chan_text(thread.get("sub"))
+    comment = _clean_4chan_text(thread.get("com"))
+    semantic = _clean_4chan_text(thread.get("semantic_url"))
+    haystack = " ".join(part for part in [subject, semantic, comment] if part)
+    score = _score_4chan_match(query_terms, haystack, query_text)
+    if query_terms and score <= 0:
+        return
+
+    published_epoch = thread.get("time")
+    published_date = None
+    if isinstance(published_epoch, (int, float)):
+        try:
+            published_date = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(published_epoch)))
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+            published_date = None
+
+    thread_url = f"https://boards.4chan.org/{board}/thread/{thread_no}"
+    snippet = _truncate_text(comment or semantic or subject)
+    title = subject or f"/{board}/ Thread {thread_no}"
+
+    candidates.append(
+        {
+            "title": title,
+            "url": thread_url,
+            "content": snippet,
+            "publishedDate": published_date,
+            "author": _clean_4chan_text(thread.get("name")) or None,
+            "source": "4chan",
+            "board": board,
+            "thread_no": thread_no,
+            "replies": thread.get("replies"),
+            "images": thread.get("images"),
+            "archived": archived,
+            "score": round(score, 4),
+            "time_epoch": int(published_epoch) if isinstance(published_epoch, (int, float)) else 0,
+        }
+    )
+
+
 def search_web_4chan(
     search_query: str,
     result_count: int = 10,
@@ -3098,6 +3168,36 @@ def search_web_4chan(
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
         limit = 10
     limit = max(1, min(limit, 50))
+
+    include_archived_raw = (
+        (search_params or {}).get("include_archived")
+        if isinstance(search_params, dict)
+        else None
+    )
+    if include_archived_raw is None:
+        include_archived_raw = (
+            cfg.get("4chan_include_archived")
+            or cfg.get("fourchan_include_archived")
+            or os.getenv("FOURCHAN_INCLUDE_ARCHIVED")
+        )
+    include_archived = _coerce_bool(include_archived_raw, default=False)
+
+    max_archived_raw = (
+        (search_params or {}).get("max_archived_threads_per_board")
+        if isinstance(search_params, dict)
+        else None
+    )
+    if max_archived_raw is None:
+        max_archived_raw = (
+            cfg.get("4chan_max_archived_threads_per_board")
+            or cfg.get("fourchan_max_archived_threads_per_board")
+            or min(max_threads_per_board, 50)
+        )
+    try:
+        max_archived_threads_per_board = int(max_archived_raw)
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+        max_archived_threads_per_board = min(max_threads_per_board, 50)
+    max_archived_threads_per_board = max(1, min(max_archived_threads_per_board, 500))
 
     query_terms = [t for t in re.findall(r"[a-z0-9]{2,}", query_text) if t]
     if not query_terms and query_text:
@@ -3140,45 +3240,74 @@ def search_web_4chan(
                 if not isinstance(thread, dict):
                     continue
 
-                thread_no = thread.get("no")
-                if thread_no is None:
+                _append_4chan_candidate(
+                    candidates=candidates,
+                    board=board,
+                    thread=thread,
+                    query_terms=query_terms,
+                    query_text=query_text,
+                    archived=False,
+                )
+
+        if include_archived:
+            archive_url = f"https://a.4cdn.org/{board}/archive.json"
+            try:
+                from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+                pol = evaluate_url_policy(archive_url)
+                if not getattr(pol, "allowed", False):
+                    raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+            except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as exc:
+                raise ValueError(f"Egress policy evaluation failed: {exc}") from exc
+
+            archive_payload = fetch_json(method="GET", url=archive_url, headers=headers, timeout=15.0)
+            archive_ids = archive_payload if isinstance(archive_payload, list) else []
+            archived_thread_ids = list(reversed(archive_ids))[:max_archived_threads_per_board]
+
+            for archived_thread_id in archived_thread_ids:
+                thread_id = str(archived_thread_id).strip()
+                if not thread_id.isdigit():
                     continue
 
-                subject = _clean_4chan_text(thread.get("sub"))
-                comment = _clean_4chan_text(thread.get("com"))
-                semantic = _clean_4chan_text(thread.get("semantic_url"))
-                haystack = " ".join(part for part in [subject, semantic, comment] if part)
-                score = _score_4chan_match(query_terms, haystack, query_text)
-                if query_terms and score <= 0:
+                thread_api_url = f"https://a.4cdn.org/{board}/thread/{thread_id}.json"
+                try:
+                    from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+                    pol = evaluate_url_policy(thread_api_url)
+                    if not getattr(pol, "allowed", False):
+                        continue
+                except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
                     continue
 
-                published_epoch = thread.get("time")
-                published_date = None
-                if isinstance(published_epoch, (int, float)):
-                    try:
-                        published_date = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(published_epoch)))
-                    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
-                        published_date = None
+                try:
+                    thread_payload = fetch_json(method="GET", url=thread_api_url, headers=headers, timeout=15.0)
+                except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+                    continue
 
-                thread_url = f"https://boards.4chan.org/{board}/thread/{thread_no}"
-                snippet = _truncate_text(comment or semantic or subject)
-                title = subject or f"/{board}/ Thread {thread_no}"
+                posts = thread_payload.get("posts", []) if isinstance(thread_payload, dict) else []
+                if not isinstance(posts, list) or not posts:
+                    continue
 
-                candidates.append(
-                    {
-                        "title": title,
-                        "url": thread_url,
-                        "content": snippet,
-                        "publishedDate": published_date,
-                        "author": _clean_4chan_text(thread.get("name")) or None,
-                        "source": "4chan",
-                        "board": board,
-                        "thread_no": thread_no,
-                        "replies": thread.get("replies"),
-                        "images": thread.get("images"),
-                        "score": round(score, 4),
-                        "time_epoch": int(published_epoch) if isinstance(published_epoch, (int, float)) else 0,
-                    }
+                op = next((post for post in posts if isinstance(post, dict)), None)
+                if not op:
+                    continue
+                op_data = dict(op)
+                op_data.setdefault("no", int(thread_id))
+                op_data.setdefault(
+                    "replies",
+                    max(0, len([post for post in posts if isinstance(post, dict)]) - 1),
+                )
+                op_data.setdefault(
+                    "images",
+                    sum(1 for post in posts if isinstance(post, dict) and post.get("tim") is not None),
+                )
+                op_data.setdefault("archived", 1)
+
+                _append_4chan_candidate(
+                    candidates=candidates,
+                    board=board,
+                    thread=op_data,
+                    query_terms=query_terms,
+                    query_text=query_text,
+                    archived=True,
                 )
 
     candidates.sort(
@@ -3193,6 +3322,7 @@ def search_web_4chan(
         "results": candidates[:limit],
         "total_results_found": len(candidates),
         "boards": boards,
+        "include_archived": include_archived,
         "query": search_query,
     }
 
@@ -3227,6 +3357,7 @@ def parse_4chan_results(fourchan_search_results, web_search_results_dict):
                     "thread_no": item.get("thread_no"),
                     "replies": item.get("replies"),
                     "images": item.get("images"),
+                    "archived": bool(item.get("archived", False)),
                 },
             }
             web_search_results_dict["results"].append(processed)
