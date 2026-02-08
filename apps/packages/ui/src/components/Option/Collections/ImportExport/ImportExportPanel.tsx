@@ -614,6 +614,28 @@ const ExportSection: React.FC = () => {
 
   const hasDateFilter = Boolean(filterDateFrom || filterDateTo)
 
+  const exportFilenameHint = useMemo(() => {
+    if (selectedIds.length > 0) {
+      return "reading_export_selection.jsonl"
+    }
+    if (applyReadingFilters && hasDateFilter) {
+      return "reading_export_filtered.jsonl"
+    }
+    return exportFormat === "zip"
+      ? "reading_export_<timestamp>.zip"
+      : "reading_export_<timestamp>.jsonl"
+  }, [applyReadingFilters, exportFormat, hasDateFilter, selectedIds.length])
+
+  const exportFilenameHintContext = useMemo(() => {
+    if (selectedIds.length > 0) {
+      return t("collections:export.filenameHintContext.selection", "selected items")
+    }
+    if (applyReadingFilters) {
+      return t("collections:export.filenameHintContext.filtered", "filtered list")
+    }
+    return t("collections:export.filenameHintContext.all", "all items")
+  }, [applyReadingFilters, selectedIds.length, t])
+
   const activeFilterLabels = useMemo(() => {
     const labels: string[] = []
     if (itemsSearch.trim()) labels.push(t("collections:export.filter.search", "search"))
@@ -1035,6 +1057,18 @@ const ExportSection: React.FC = () => {
               {t("collections:export.includeNotes", "Include notes")}
             </Checkbox>
           </div>
+          <p
+            className="text-xs text-zinc-500"
+            data-testid="export-filename-hint"
+          >
+            {t("collections:export.filenameHint", "Filename hint: {{filename}}", {
+              filename: exportFilenameHint
+            })}
+            {" · "}
+            {t("collections:export.filenameHintContext", "Scope: {{scope}}", {
+              scope: exportFilenameHintContext
+            })}
+          </p>
         </div>
 
         <div>

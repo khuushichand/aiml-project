@@ -89,3 +89,33 @@ async def test_registry_config_callback_marks_explicitly_disabled_provider() -> 
 
     assert adapter is None
     assert registry._base.get_status(TTSProvider.MOCK.value).value == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_registry_list_capabilities_returns_standard_envelope() -> None:
+    registry = TTSAdapterRegistry(config={"mock_enabled": True}, include_defaults=False)
+    registry.register_adapter(TTSProvider.MOCK, _MockAdapterV1)
+
+    entries = await registry.list_capabilities()
+    assert len(entries) == 1
+
+    entry = entries[0]
+    assert entry["provider"] == "mock"
+    assert entry["availability"] == "enabled"
+    capabilities = entry["capabilities"]
+    assert isinstance(capabilities, TTSCapabilities)
+    assert capabilities.provider_name == "mock"
+
+
+@pytest.mark.asyncio
+async def test_registry_list_capabilities_excludes_disabled_when_requested() -> None:
+    registry = TTSAdapterRegistry(config={"mock_enabled": False}, include_defaults=False)
+    registry.register_adapter(TTSProvider.MOCK, _MockAdapterV1)
+
+    all_entries = await registry.list_capabilities(include_disabled=True)
+    assert all_entries[0]["provider"] == "mock"
+    assert all_entries[0]["availability"] == "disabled"
+    assert all_entries[0]["capabilities"] is None
+
+    enabled_entries = await registry.list_capabilities(include_disabled=False)
+    assert enabled_entries == []

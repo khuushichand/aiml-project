@@ -55,7 +55,7 @@ REFERENCE_ENRICH_EXCEPTIONS = (
 )
 
 # Reference section detection patterns
-REFERENCES_PARSER_VERSION = "10"
+REFERENCES_PARSER_VERSION = "11"
 
 REFERENCE_HEADING_CORE_PATTERN = re.compile(
     r"(?i)^(?:\d+|[ivxlc]+)?(?:\.\d+)?\s*"
@@ -454,8 +454,20 @@ def _split_references_with_meta(
         if re.fullmatch(r"\d{1,4}", line):
             cleaned_lines.append("")
             continue
+        # News/prose lines with inline links can appear near section boundaries;
+        # treat them as noise instead of candidate references.
+        if (
+            re.match(r"(?i)^(?:today|yesterday|tomorrow|according\s+to)\b", line)
+            and re.search(YEAR_PATTERN, line)
+            and re.search(URL_PATTERN, line, re.IGNORECASE)
+        ):
+            continue
         # Footnote/link markers like: 5 [http...](http...)
         if re.fullmatch(r"\d+\s+`?\[https?://[^\]]+\]\(https?://[^)]+\)`?", line):
+            continue
+        # Broken markdown-link fragments occasionally emitted by PDF extraction.
+        # Example: "Learn-](https://openreview.net/...)"
+        if re.fullmatch(r"[^\s\[\]]{2,120}\]\((?:https?|mailto):[^)]+\)", line, flags=re.IGNORECASE):
             continue
         cleaned_lines.append(raw_line)
     refs_text = "\n".join(cleaned_lines).strip()
@@ -508,12 +520,38 @@ def _split_references_with_meta(
             return match.group(1).strip()
         return None
 
+    def _is_markdown_url_fragment_line(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        # Canonical markdown link line.
+        if re.match(r"^\[[^\]]+\]\((?:https?|mailto):[^)]+\)\s*$", stripped, flags=re.IGNORECASE):
+            return True
+        # Broken markdown fragment form: "Label](https://...)"
+        if re.match(r"^[^\s\[\]]{2,120}\]\((?:https?|mailto):[^)]+\)\s*$", stripped, flags=re.IGNORECASE):
+            return True
+        return False
+
+    def _looks_like_prose_sentence_start(text: str) -> bool:
+        candidate = text.strip()
+        if not candidate:
+            return False
+        return bool(
+            re.match(
+                r"(?i)^(?:today|yesterday|tomorrow|this|that|these|those|here|there|"
+                r"we|our|their|its|it|he|she|they|according\s+to|during|while|meanwhile)\b",
+                candidate,
+            )
+        )
+
     def _is_probable_authorish_start(text: str) -> bool:
         candidate = text.strip()
         if not candidate:
             return False
         first_char = candidate[0]
         if not first_char.isalpha() or not first_char.isupper():
+            return False
+        if _looks_like_prose_sentence_start(candidate):
             return False
         if re.match(r"^\d{4}\b", candidate):
             return False
@@ -538,6 +576,8 @@ def _split_references_with_meta(
         return bool(re.match(rf"^{surname_token}(?:\s+et\s+al\.)\b", candidate))
 
     def _looks_like_new_reference(line: str) -> bool:
+        if _is_markdown_url_fragment_line(line) and _extract_markdown_link_text(line) is None:
+            return False
         if re.match(r"^\s*(?:\[+\d+\]|\d+[\.\)])\s+", line):
             return True
 
@@ -557,6 +597,8 @@ def _split_references_with_meta(
         return _is_probable_authorish_start(line)
 
     def _looks_like_fragment_line(line: str) -> bool:
+        if _is_markdown_url_fragment_line(line) and _extract_markdown_link_text(line) is None:
+            return True
         markdown_label = _extract_markdown_link_text(line)
         if not markdown_label:
             return False
@@ -601,6 +643,19 @@ def _split_references_with_meta(
         )
         has_year = bool(re.search(YEAR_PATTERN, text))
         has_url = bool(re.search(URL_PATTERN, text, re.IGNORECASE))
+        is_markdown_fragment = _is_markdown_url_fragment_line(text)
+
+        if (
+            is_markdown_fragment
+            and markdown_label is None
+            and not (has_doi or has_arxiv)
+        ):
+            return False
+        if (
+            not (is_numbered or is_labeled)
+            and _looks_like_prose_sentence_start(text)
+        ):
+            return False
 
         if not (has_doi or has_arxiv or has_year):
             return False
@@ -671,6 +726,9 @@ def _split_references_with_meta(
                 modeled_refs.append(current_ref.strip())
             current_ref = ""
             continue
+        if _is_markdown_url_fragment_line(line) and _extract_markdown_link_text(line) is None:
+            # Broken link-label fragments are always noise; don't create standalone refs.
+            continue
         markdown_label = _extract_markdown_link_text(line)
         # Treat markdown-like fragment lines as continuation when the current
         # line is likely an author prefix that has not reached a year yet.
@@ -735,7 +793,12 @@ def _split_references_with_meta(
 
     # Filter out lines that do not look like references, but keep a minimum set.
     filtered = [ref for ref in references if _looks_like_reference(ref)]
-    if len(filtered) >= 3:
+    removed = [ref for ref in references if ref not in filtered]
+    removed_all_obvious_noise = bool(removed) and all(
+        _looks_like_prose_sentence_start(ref) or _is_markdown_url_fragment_line(ref)
+        for ref in removed
+    )
+    if len(filtered) >= 3 or (filtered and removed_all_obvious_noise):
         references = filtered
 
     total_detected = len(references)
@@ -847,6 +910,13 @@ def _normalize_reference_display_text(raw_text: str) -> str:
     text = (raw_text or "").strip()
     if not text:
         return ""
+    had_broken_link_prefix = bool(
+        re.match(
+            r"^\s*[^\s\[\]]{2,120}\]\((?:https?|mailto):[^)]+\)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
 
     # Standard markdown link form: "[label](url)" -> "label"
     text = re.sub(
@@ -863,6 +933,13 @@ def _normalize_reference_display_text(raw_text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
+    # Drop synthetic leading label tokens left after stripping broken links.
+    if had_broken_link_prefix:
+        text = re.sub(
+            r"^[A-Za-z][A-Za-z0-9\-]{1,40}-\s+(?=[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3},)",
+            "",
+            text,
+        )
     # Drop bare "(url)" tails left after extraction artifacts.
     text = re.sub(r"\((?:https?|mailto):[^)]+\)", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip()

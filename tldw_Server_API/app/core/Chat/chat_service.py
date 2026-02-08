@@ -121,6 +121,55 @@ def _coerce_bool(value: str | None, default: bool) -> bool:
     return _shared_is_truthy(value)
 
 
+def _coerce_int_bounded(
+    value: str | None,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    parsed = _coerce_int(value, default)
+    return max(minimum, min(maximum, parsed))
+
+
+_TOOL_ALLOW_CATALOG_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:-]+(?:\*)?$")
+_TOOL_ALLOW_CATALOG_DEFAULT = "*"
+_CHAT_TOOL_CALLS_MIN = 1
+_CHAT_TOOL_CALLS_MAX = 20
+_CHAT_TOOL_TIMEOUT_MS_MIN = 1000
+_CHAT_TOOL_TIMEOUT_MS_MAX = 120_000
+
+
+def _parse_tool_allow_catalog(value: str | None) -> list[str] | None:
+    """Parse chat tool allow-catalog from comma-separated names/prefixes.
+
+    - `*` or blank means allow all (`None`).
+    - Entries support exact names (`notes.search`) and suffix wildcard prefixes
+      (`notes.*`).
+    - Invalid entries are ignored.
+    """
+    raw = (value or "").strip()
+    if not raw or raw == "*":
+        return None
+
+    items: list[str] = []
+    seen: set[str] = set()
+    for token in raw.split(","):
+        entry = token.strip()
+        if not entry:
+            continue
+        if entry == "*":
+            return None
+        if "*" in entry[:-1]:
+            continue
+        if not _TOOL_ALLOW_CATALOG_TOKEN_RE.match(entry):
+            continue
+        if entry not in seen:
+            seen.add(entry)
+            items.append(entry)
+    return items or None
+
+
 _MAX_HISTORY_MESSAGES = max(1, _coerce_int(_chat_config.get("max_history_messages"), 200))
 
 _default_history_limit = 20
@@ -157,6 +206,56 @@ if _env_force_normalize is not None:
     _force_normalize_strings = _coerce_bool(_env_force_normalize, _force_normalize_strings)
 FORCE_NORMALIZE_STRING_RESPONSES = _force_normalize_strings
 
+_chat_auto_execute_tools = _coerce_bool(_chat_config.get("chat_auto_execute_tools"), False)
+_env_chat_auto_execute_tools = os.getenv("CHAT_AUTO_EXECUTE_TOOLS")
+if _env_chat_auto_execute_tools is not None:
+    _chat_auto_execute_tools = _coerce_bool(_env_chat_auto_execute_tools, _chat_auto_execute_tools)
+CHAT_AUTO_EXECUTE_TOOLS = _chat_auto_execute_tools
+
+_chat_max_tool_calls = _coerce_int_bounded(
+    _chat_config.get("chat_max_tool_calls"),
+    3,
+    minimum=_CHAT_TOOL_CALLS_MIN,
+    maximum=_CHAT_TOOL_CALLS_MAX,
+)
+_env_chat_max_tool_calls = os.getenv("CHAT_MAX_TOOL_CALLS")
+if _env_chat_max_tool_calls is not None:
+    _chat_max_tool_calls = _coerce_int_bounded(
+        _env_chat_max_tool_calls,
+        _chat_max_tool_calls,
+        minimum=_CHAT_TOOL_CALLS_MIN,
+        maximum=_CHAT_TOOL_CALLS_MAX,
+    )
+CHAT_MAX_TOOL_CALLS = _chat_max_tool_calls
+
+_chat_tool_timeout_ms = _coerce_int_bounded(
+    _chat_config.get("chat_tool_timeout_ms"),
+    15_000,
+    minimum=_CHAT_TOOL_TIMEOUT_MS_MIN,
+    maximum=_CHAT_TOOL_TIMEOUT_MS_MAX,
+)
+_env_chat_tool_timeout_ms = os.getenv("CHAT_TOOL_TIMEOUT_MS")
+if _env_chat_tool_timeout_ms is not None:
+    _chat_tool_timeout_ms = _coerce_int_bounded(
+        _env_chat_tool_timeout_ms,
+        _chat_tool_timeout_ms,
+        minimum=_CHAT_TOOL_TIMEOUT_MS_MIN,
+        maximum=_CHAT_TOOL_TIMEOUT_MS_MAX,
+    )
+CHAT_TOOL_TIMEOUT_MS = _chat_tool_timeout_ms
+
+_chat_tool_allow_catalog_raw = _chat_config.get("chat_tool_allow_catalog", _TOOL_ALLOW_CATALOG_DEFAULT)
+_env_chat_tool_allow_catalog = os.getenv("CHAT_TOOL_ALLOW_CATALOG")
+if _env_chat_tool_allow_catalog is not None:
+    _chat_tool_allow_catalog_raw = _env_chat_tool_allow_catalog
+CHAT_TOOL_ALLOW_CATALOG = _parse_tool_allow_catalog(_chat_tool_allow_catalog_raw)
+
+_chat_tool_idempotency = _coerce_bool(_chat_config.get("chat_tool_idempotency"), True)
+_env_chat_tool_idempotency = os.getenv("CHAT_TOOL_IDEMPOTENCY")
+if _env_chat_tool_idempotency is not None:
+    _chat_tool_idempotency = _coerce_bool(_env_chat_tool_idempotency, _chat_tool_idempotency)
+CHAT_TOOL_IDEMPOTENCY = _chat_tool_idempotency
+
 
 def should_force_normalize_string_responses() -> bool:
     """Return True when raw-string LLM responses should be wrapped in OpenAI format."""
@@ -164,6 +263,56 @@ def should_force_normalize_string_responses() -> bool:
     if raw is not None:
         return _coerce_bool(raw, FORCE_NORMALIZE_STRING_RESPONSES)
     return FORCE_NORMALIZE_STRING_RESPONSES
+
+
+def should_auto_execute_tools() -> bool:
+    """Return whether chat should auto-execute assistant tool calls."""
+    raw = os.getenv("CHAT_AUTO_EXECUTE_TOOLS")
+    if raw is not None:
+        return _coerce_bool(raw, CHAT_AUTO_EXECUTE_TOOLS)
+    return CHAT_AUTO_EXECUTE_TOOLS
+
+
+def get_chat_max_tool_calls() -> int:
+    """Return configured per-response cap for auto-executed tool calls."""
+    raw = os.getenv("CHAT_MAX_TOOL_CALLS")
+    if raw is not None:
+        return _coerce_int_bounded(
+            raw,
+            CHAT_MAX_TOOL_CALLS,
+            minimum=_CHAT_TOOL_CALLS_MIN,
+            maximum=_CHAT_TOOL_CALLS_MAX,
+        )
+    return CHAT_MAX_TOOL_CALLS
+
+
+def get_chat_tool_timeout_ms() -> int:
+    """Return timeout budget in milliseconds for each auto-executed tool call."""
+    raw = os.getenv("CHAT_TOOL_TIMEOUT_MS")
+    if raw is not None:
+        return _coerce_int_bounded(
+            raw,
+            CHAT_TOOL_TIMEOUT_MS,
+            minimum=_CHAT_TOOL_TIMEOUT_MS_MIN,
+            maximum=_CHAT_TOOL_TIMEOUT_MS_MAX,
+        )
+    return CHAT_TOOL_TIMEOUT_MS
+
+
+def get_chat_tool_allow_catalog() -> list[str] | None:
+    """Return allow-catalog patterns (`None` means unrestricted)."""
+    raw = os.getenv("CHAT_TOOL_ALLOW_CATALOG")
+    if raw is not None:
+        return _parse_tool_allow_catalog(raw)
+    return CHAT_TOOL_ALLOW_CATALOG
+
+
+def should_attach_tool_idempotency() -> bool:
+    """Return whether auto-execution should attach idempotency keys for tools."""
+    raw = os.getenv("CHAT_TOOL_IDEMPOTENCY")
+    if raw is not None:
+        return _coerce_bool(raw, CHAT_TOOL_IDEMPOTENCY)
+    return CHAT_TOOL_IDEMPOTENCY
 
 
 # --- Cached helpers (module scope) -------------------------------------------

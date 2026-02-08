@@ -19,7 +19,18 @@ vi.mock("@/hooks/document-workspace", async () => {
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (_key: string, defaultValue?: string) => defaultValue || _key,
+    t: (
+      _key: string,
+      defaultValue?: string,
+      values?: Record<string, string | number | undefined>
+    ) => {
+      const template = defaultValue || _key
+      if (!values) return template
+      return template.replace(/\{\{(\w+)\}\}/g, (_match, token: string) => {
+        const value = values[token]
+        return value === undefined ? `{{${token}}}` : String(value)
+      })
+    },
   }),
 }))
 
@@ -79,6 +90,8 @@ describe("ReferencesTab", () => {
       total_available: 2,
       total_detected: 2,
       returned_count: 2,
+      has_more: true,
+      next_offset: 2,
     }
 
     render(
@@ -101,6 +114,14 @@ describe("ReferencesTab", () => {
         search: "With DOI",
       })
     })
+    expect(
+      screen.getByText(
+        "Search runs across all parsed references; this page shows 1-2 of 2 matches."
+      )
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("More matching references are available. Use Next to continue.")
+    ).toBeInTheDocument()
   })
 
   it("enriches a single reference using reference_index", async () => {

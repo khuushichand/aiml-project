@@ -102,8 +102,33 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-MAX_ENTRIES = _int_env("CHAT_DICT_MAX_ENTRIES", 10000)
-MAX_ENTRY_CHARS = _int_env("CHAT_DICT_MAX_ENTRY_CHARS", 20000)
+DEFAULT_DICTIONARY_MAX_ENTRIES = 10000
+DEFAULT_ENTRY_MAX_CHARS = 20000
+DEFAULT_VALIDATE_TIMEOUT_MS = 500
+DEFAULT_VALIDATE_MAX_ENTRIES = 1000
+
+# Fatal codes are used by strict CLI mode and server-side workflows that opt
+# into fatal-only rejection semantics.
+FATAL_ERROR_CODES = {
+    "schema_invalid",
+    "regex_invalid",
+    "regex_unsafe",
+    "regex_timeout",
+    "template_parse_error",
+    "template_forbidden_construct",
+    "template_output_too_large",
+    "dictionary_entry_too_large",
+    "dictionary_too_large",
+}
+
+# In strict mode, keep warnings visible but promote select codes into `errors`.
+# Not all strict errors are fatal.
+STRICT_WARNING_TO_ERROR_CODES = {
+    "dictionary_entry_too_large",
+    "dictionary_too_large",
+    "template_unknown_function",
+    "template_undefined_name",
+}
 
 
 # -----------------------------
@@ -217,6 +242,8 @@ class ValidationResult:
     warnings: list[dict[str, Any]]
     entry_stats: dict[str, int]
     suggested_fixes: list[str]
+    partial: bool = False
+    partial_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -226,10 +253,42 @@ class ValidationResult:
             "warnings": self.warnings,
             "entry_stats": self.entry_stats,
             "suggested_fixes": self.suggested_fixes,
+            "partial": self.partial,
+            "partial_reason": self.partial_reason,
         }
 
 
-def _validate_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int], list[str]]:
+def _promote_warnings_for_strict(
+    warnings: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    promoted: list[dict[str, Any]] = []
+    remaining: list[dict[str, Any]] = []
+    for issue in warnings:
+        code = str(issue.get("code", "unknown"))
+        if code in STRICT_WARNING_TO_ERROR_CODES:
+            promoted.append(issue)
+        else:
+            remaining.append(issue)
+    return promoted, remaining
+
+
+def has_fatal_errors(issues: list[dict[str, Any]]) -> bool:
+    """Return True if any issue code is classified as fatal."""
+    for issue in issues:
+        code = str(issue.get("code", "unknown"))
+        if code in FATAL_ERROR_CODES:
+            return True
+    return False
+
+
+def _validate_entries(
+    entries: list[dict[str, Any]],
+    *,
+    dictionary_max_entries: int,
+    max_entry_chars: int,
+    validate_max_entries: int,
+    deadline: float | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int], list[str], bool, str | None]:
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     fixes: list[str] = []
@@ -239,15 +298,28 @@ def _validate_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any
     n_lit = 0
 
     seen = set()
+    partial = False
+    partial_reason: str | None = None
 
-    if total > MAX_ENTRIES:
+    if total > dictionary_max_entries:
         warnings.append({
             "code": "dictionary_too_large",
             "field": "entries",
-            "message": f"Dictionary has {total} entries (max {MAX_ENTRIES})",
+            "message": f"Dictionary has {total} entries (max {dictionary_max_entries})",
         })
 
-    for idx, e in enumerate(entries):
+    entries_to_validate = entries
+    if validate_max_entries > 0 and total > validate_max_entries:
+        entries_to_validate = entries[:validate_max_entries]
+        partial = True
+        partial_reason = "max_entries"
+
+    for idx, e in enumerate(entries_to_validate):
+        if deadline is not None and time.perf_counter() >= deadline:
+            partial = True
+            partial_reason = partial_reason or "timeout"
+            break
+
         path = f"entries[{idx}]"
         if not isinstance(e, dict):
             errors.append({"code": "schema_invalid", "field": path, "message": "Entry must be an object"})
@@ -270,11 +342,11 @@ def _validate_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any
             errors.append({"code": "schema_invalid", "field": f"{path}.replacement", "message": "Replacement must be a string"})
             replacement = ""
 
-        if len(replacement) > MAX_ENTRY_CHARS:
+        if len(replacement) > max_entry_chars:
             warnings.append({
                 "code": "dictionary_entry_too_large",
                 "field": f"{path}.replacement",
-                "message": f"Replacement length {len(replacement)} exceeds {MAX_ENTRY_CHARS}",
+                "message": f"Replacement length {len(replacement)} exceeds {max_entry_chars}",
             })
 
         # Probability
@@ -336,7 +408,7 @@ def _validate_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any
         warnings.extend(t_warns)
 
     stats = {"total": total, "regex": n_regex, "literal": n_lit}
-    return errors, warnings, stats, fixes
+    return errors, warnings, stats, fixes, partial, partial_reason
 
 
 def validate_dictionary(data: dict[str, Any], schema_version: int = 1, strict: bool = False) -> ValidationResult:
@@ -350,18 +422,68 @@ def validate_dictionary(data: dict[str, Any], schema_version: int = 1, strict: b
     with contextlib.suppress(_VALIDATE_DICT_NONCRITICAL_EXCEPTIONS):
         increment_counter("chat_dictionary_validate_requests_total", labels={"strict": str(bool(strict)).lower()})
 
+    # Validation controls (read per-call so tests and runtime toggles are honored)
+    dictionary_max_entries = max(1, _int_env("CHAT_DICT_MAX_ENTRIES", DEFAULT_DICTIONARY_MAX_ENTRIES))
+    max_entry_chars = max(1, _int_env("CHAT_DICT_MAX_ENTRY_CHARS", DEFAULT_ENTRY_MAX_CHARS))
+    validate_timeout_ms = max(0, _int_env("CHAT_DICT_VALIDATE_TIMEOUT_MS", DEFAULT_VALIDATE_TIMEOUT_MS))
+    validate_max_entries = _int_env("CHAT_DICT_VALIDATE_MAX_ENTRIES", DEFAULT_VALIDATE_MAX_ENTRIES)
+    deadline = (time.perf_counter() + (validate_timeout_ms / 1000.0)) if validate_timeout_ms > 0 else None
+    partial = False
+    partial_reason: str | None = None
+
     if not isinstance(data, dict):
         errors.append({"code": "schema_invalid", "field": "root", "message": "Payload must be an object"})
-        return ValidationResult(False, schema_version, errors, warnings, {"total": 0, "regex": 0, "literal": 0}, [])
+        return ValidationResult(
+            False,
+            schema_version,
+            errors,
+            warnings,
+            {"total": 0, "regex": 0, "literal": 0},
+            [],
+            partial=False,
+            partial_reason=None,
+        )
+
+    try:
+        normalized_schema_version = int(schema_version)
+    except (TypeError, ValueError):
+        normalized_schema_version = -1
+
+    if normalized_schema_version != 1:
+        errors.append({
+            "code": "schema_invalid",
+            "field": "schema_version",
+            "message": f"Unsupported schema_version: {schema_version}. Supported: 1",
+        })
+        return ValidationResult(
+            False,
+            schema_version,
+            errors,
+            warnings,
+            {"total": 0, "regex": 0, "literal": 0},
+            [],
+            partial=False,
+            partial_reason=None,
+        )
 
     entries = _as_list(data.get("entries"))
     if not entries:
         # Some inputs may use markdown; we permit empty entries here
         warnings.append({"code": "schema_invalid", "field": "entries", "message": "No entries found"})
 
-    entry_errors, entry_warnings, stats, fixes = _validate_entries(entries)
+    entry_errors, entry_warnings, stats, fixes, partial, partial_reason = _validate_entries(
+        entries,
+        dictionary_max_entries=dictionary_max_entries,
+        max_entry_chars=max_entry_chars,
+        validate_max_entries=validate_max_entries,
+        deadline=deadline,
+    )
     errors.extend(entry_errors)
     warnings.extend(entry_warnings)
+
+    if strict:
+        promoted, warnings = _promote_warnings_for_strict(warnings)
+        errors.extend(promoted)
 
     # Emit per-code counters
     try:
@@ -384,7 +506,16 @@ def validate_dictionary(data: dict[str, Any], schema_version: int = 1, strict: b
             )
     except _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS:
         pass
-    return ValidationResult(ok, schema_version, errors, warnings, stats, fixes)
+    return ValidationResult(
+        ok,
+        schema_version,
+        errors,
+        warnings,
+        stats,
+        fixes,
+        partial=partial,
+        partial_reason=partial_reason,
+    )
 
 
 # -----------------------------
@@ -437,10 +568,25 @@ def main(argv: list[str] | None = None) -> int:
         }, ensure_ascii=False))
         return 2
 
-    result = validate_dictionary(payload, schema_version=args.schema_version, strict=args.strict)
-    print(json.dumps(result.to_dict(), ensure_ascii=False))
-    if args.strict and not result.ok:
+    try:
+        result = validate_dictionary(payload, schema_version=args.schema_version, strict=args.strict)
+    except _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Validation failed internally: {e}")
+        print(json.dumps({
+            "ok": False,
+            "schema_version": args.schema_version,
+            "errors": [{"code": "schema_invalid", "field": "root", "message": f"Internal validation error: {e}"}],
+            "warnings": [],
+            "entry_stats": {"total": 0, "regex": 0, "literal": 0},
+            "suggested_fixes": [],
+            "partial": False,
+            "partial_reason": None,
+        }, ensure_ascii=False))
         return 2
+
+    print(json.dumps(result.to_dict(), ensure_ascii=False))
+    if args.strict and has_fatal_errors(result.errors):
+        return 1
     return 0
 
 

@@ -1,5 +1,7 @@
 # audio_health.py
 # Description: Audio health endpoints.
+import asyncio
+from dataclasses import asdict, is_dataclass
 import os
 from typing import Any, Optional
 
@@ -12,6 +14,7 @@ from tldw_Server_API.app.core.Audio.error_payloads import _http_error_detail
 from tldw_Server_API.app.core.Audio.transcription_service import _map_openai_audio_model_to_whisper
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 router = APIRouter(
     tags=["Audio"],
@@ -21,6 +24,31 @@ router = APIRouter(
         429: {"description": "Rate limit exceeded"},
     },
 )
+
+
+def _serialize_tts_caps_for_health(tts_service: TTSServiceV2, caps: Any) -> Any:
+    if caps is None:
+        return None
+    serializer = getattr(tts_service, "_serialize_capabilities", None)
+    if callable(serializer):
+        try:
+            return serializer(caps)
+        except Exception as exc:
+            logger.debug(f"TTS health capabilities serialization failed via service helper: {exc}")
+    if isinstance(caps, dict):
+        return dict(caps)
+    try:
+        dumped = model_dump_compat(caps)
+        if isinstance(dumped, dict):
+            return dumped
+    except Exception:
+        pass
+    try:
+        if is_dataclass(caps):
+            return asdict(caps)
+    except Exception:
+        pass
+    return None
 
 
 @router.get("/health")
@@ -39,9 +67,66 @@ async def get_tts_health(request: Request, tts_service: TTSServiceV2 = Depends(g
             status_map = status_data
 
         capabilities = await tts_service.get_capabilities()
+        if not isinstance(capabilities, dict):
+            capabilities = {}
+        provider_details = status_map.get("providers", {})
+        if not isinstance(provider_details, dict):
+            provider_details = {}
+        capability_envelopes: list[dict[str, Any]] = []
 
         available_providers = status_map.get("available", 0)
         total_providers = status_map.get("total_providers", 0)
+
+        factory = None
+        try:
+            from tldw_Server_API.app.core.TTS.adapter_registry import get_tts_factory
+
+            factory = await get_tts_factory()
+            registry = getattr(factory, "registry", None)
+            list_caps = getattr(registry, "list_capabilities", None)
+            if callable(list_caps):
+                entries = list_caps(include_disabled=True)
+                if asyncio.iscoroutine(entries):
+                    entries = await entries
+                if isinstance(entries, list):
+                    for raw_entry in entries:
+                        if not isinstance(raw_entry, dict):
+                            continue
+                        provider_name = str(raw_entry.get("provider") or "").strip()
+                        if not provider_name:
+                            continue
+                        availability = str(raw_entry.get("availability") or "unknown").strip().lower() or "unknown"
+                        serialized_caps = _serialize_tts_caps_for_health(tts_service, raw_entry.get("capabilities"))
+                        capability_envelopes.append(
+                            {
+                                "provider": provider_name,
+                                "availability": availability,
+                                "capabilities": serialized_caps,
+                            }
+                        )
+                        if serialized_caps is not None and provider_name not in capabilities:
+                            capabilities[provider_name] = serialized_caps
+                        current_details = provider_details.get(provider_name)
+                        if isinstance(current_details, dict):
+                            current_details.setdefault("availability", availability)
+                            current_details.setdefault("status", availability)
+                        else:
+                            provider_details[provider_name] = {
+                                "status": availability,
+                                "availability": availability,
+                                "initialized": False,
+                                "failed": availability == "failed",
+                            }
+        except Exception as envelope_exc:
+            logger.debug(f"TTS health envelope enrichment failed: {envelope_exc}")
+
+        if capability_envelopes:
+            if not total_providers:
+                total_providers = len(capability_envelopes)
+            if not available_providers:
+                available_providers = sum(
+                    1 for entry in capability_envelopes if entry.get("availability") == "enabled"
+                )
 
         health_status = "healthy" if available_providers > 0 else "unhealthy"
 
@@ -50,17 +135,21 @@ async def get_tts_health(request: Request, tts_service: TTSServiceV2 = Depends(g
             "providers": {
                 "total": total_providers,
                 "available": available_providers,
-                "details": status_map.get("providers", {}),
+                "details": provider_details,
             },
             "circuit_breakers": status_map.get("circuit_breakers", {}),
             "capabilities": capabilities,
+            "capabilities_envelope": capability_envelopes,
             "timestamp": datetime.utcnow().isoformat(),
         }
 
         try:
-            from tldw_Server_API.app.core.TTS.adapter_registry import TTSProvider, get_tts_factory
+            from tldw_Server_API.app.core.TTS.adapter_registry import TTSProvider
 
-            factory = await get_tts_factory()
+            if factory is None:
+                from tldw_Server_API.app.core.TTS.adapter_registry import get_tts_factory
+
+                factory = await get_tts_factory()
             adapter = await factory.registry.get_adapter(TTSProvider.KOKORO)
             if adapter:
                 backend = "onnx" if getattr(adapter, "use_onnx", True) else "pytorch"

@@ -193,4 +193,125 @@ describe("TldwApiClient reading import/export stage 2 wiring", () => {
     ).rejects.toThrow("item_ids_required")
     expect(mocks.bgRequest).not.toHaveBeenCalled()
   })
+
+  it("calls shared items list endpoint and normalizes response shape", async () => {
+    mocks.bgRequest.mockResolvedValueOnce({
+      items: [
+        {
+          id: 101,
+          content_item_id: 55,
+          media_id: 101,
+          title: "Shared Item",
+          tags: ["research"],
+          type: "watchlist"
+        }
+      ],
+      total: 1,
+      page: 2,
+      size: 10
+    })
+
+    const client = new TldwApiClient()
+    const result = await client.getItems({
+      page: 2,
+      size: 10,
+      q: "shared",
+      status_filter: ["saved", "read"],
+      tags: ["research"],
+      favorite: true,
+      domain: "example.com",
+      date_from: "2026-01-01",
+      date_to: "2026-01-31",
+      origin: "watchlist",
+      job_id: 7,
+      run_id: 9
+    })
+
+    const requestArg = mocks.bgRequest.mock.calls[0][0] as { path: string; method: string }
+    expect(requestArg.method).toBe("GET")
+    expect(requestArg.path).toContain("/api/v1/items?")
+    expect(requestArg.path).toContain("page=2")
+    expect(requestArg.path).toContain("size=10")
+    expect(requestArg.path).toContain("q=shared")
+    expect(requestArg.path).toContain("status_filter=saved")
+    expect(requestArg.path).toContain("status_filter=read")
+    expect(requestArg.path).toContain("tags=research")
+    expect(requestArg.path).toContain("favorite=true")
+    expect(requestArg.path).toContain("domain=example.com")
+    expect(requestArg.path).toContain("date_from=2026-01-01")
+    expect(requestArg.path).toContain("date_to=2026-01-31")
+    expect(requestArg.path).toContain("origin=watchlist")
+    expect(requestArg.path).toContain("job_id=7")
+    expect(requestArg.path).toContain("run_id=9")
+
+    expect(result).toEqual({
+      items: [
+        {
+          id: "101",
+          content_item_id: "55",
+          media_id: "101",
+          title: "Shared Item",
+          tags: ["research"],
+          type: "watchlist"
+        }
+      ],
+      total: 1,
+      page: 2,
+      size: 10
+    })
+  })
+
+  it("calls shared items bulk endpoint and normalizes response shape", async () => {
+    mocks.bgRequest.mockResolvedValueOnce({
+      total: 2,
+      succeeded: 1,
+      failed: 1,
+      results: [
+        { item_id: 101, success: true },
+        { item_id: 999, success: false, error: "item_not_found" }
+      ]
+    })
+
+    const client = new TldwApiClient()
+    const result = await client.bulkUpdateItems({
+      item_ids: ["101", "999"],
+      action: "set_status",
+      status: "read"
+    })
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/items/bulk",
+        method: "POST",
+        body: {
+          item_ids: [101, 999],
+          action: "set_status",
+          status: "read",
+          favorite: undefined,
+          tags: undefined,
+          hard: undefined
+        }
+      })
+    )
+    expect(result).toEqual({
+      total: 2,
+      succeeded: 1,
+      failed: 1,
+      results: [
+        { item_id: "101", success: true, error: null },
+        { item_id: "999", success: false, error: "item_not_found" }
+      ]
+    })
+  })
+
+  it("rejects shared items bulk calls without numeric ids", async () => {
+    const client = new TldwApiClient()
+    await expect(
+      client.bulkUpdateItems({
+        item_ids: ["abc", "-1"],
+        action: "delete"
+      })
+    ).rejects.toThrow("item_ids_required")
+    expect(mocks.bgRequest).not.toHaveBeenCalled()
+  })
 })

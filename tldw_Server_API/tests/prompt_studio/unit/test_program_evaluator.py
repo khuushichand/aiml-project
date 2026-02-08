@@ -1,10 +1,9 @@
-import os
 import pytest
 
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.program_evaluator import ProgramEvaluator
 
 
-def test_forbidden_imports_detected():
+def test_forbidden_imports_detected(monkeypatch):
 
 
     pe = ProgramEvaluator()
@@ -15,13 +14,15 @@ def test_forbidden_imports_detected():
     ```
     """
     # Force enabled to test validator path
-    os.environ["PROMPT_STUDIO_ENABLE_CODE_EVAL"] = "true"
+    monkeypatch.setenv("PROMPT_STUDIO_ENABLE_CODE_EVAL", "true")
     res = pe.evaluate(project_id=None, db=None, llm_output=code, spec={})
     assert res.success is False
-    assert "Forbidden" in (res.error or "")
+    assert "Import not allowed" in (res.error or "")
+    assert res.return_code == 3
+    assert res.reward == -1.0
 
 
-def test_runner_python_path_enabled_vs_disabled(tmp_path):
+def test_runner_python_path_enabled_vs_disabled(tmp_path, monkeypatch):
 
 
     # When enabled, reward should reflect metric_var from globals; when disabled, use heuristic
@@ -34,13 +35,16 @@ def test_runner_python_path_enabled_vs_disabled(tmp_path):
     """
     spec = {"runner": "python", "objective": "maximize", "metric_var": "val"}
     # Enabled
-    os.environ["PROMPT_STUDIO_ENABLE_CODE_EVAL"] = "true"
+    monkeypatch.setenv("PROMPT_STUDIO_ENABLE_CODE_EVAL", "true")
     r_on = pe.evaluate(project_id=None, db=None, llm_output=code, spec=spec)
     # reward = 10*(1 - 1/(1+2.5)) ~= 7.142 => score 0.714 in TestRunner
     assert r_on.success is True
     assert r_on.reward > 5.0
+    assert r_on.return_code == 0
+    assert isinstance(r_on.stdout, str)
+    assert isinstance(r_on.stderr, str)
     # Disabled -> Heuristic fallback (no sandbox)
-    os.environ["PROMPT_STUDIO_ENABLE_CODE_EVAL"] = "false"
+    monkeypatch.setenv("PROMPT_STUDIO_ENABLE_CODE_EVAL", "false")
     r_off = pe.evaluate(project_id=None, db=None, llm_output=code, spec=spec)
     assert r_off.success is True
     assert r_off.reward <= r_on.reward
@@ -50,16 +54,43 @@ def test_program_evaluator_timeout(monkeypatch):
 
 
     pe = ProgramEvaluator()
-    os.environ["PROMPT_STUDIO_ENABLE_CODE_EVAL"] = "true"
-    # Shorten wall time for test
-    monkeypatch.setattr(ProgramEvaluator, "WALL_TIME_SEC", 0.1, raising=False)
+    monkeypatch.setenv("PROMPT_STUDIO_ENABLE_CODE_EVAL", "true")
+    monkeypatch.setenv("PROMPT_STUDIO_CODE_EVAL_TIMEOUT_MS", "100")
     code = """
     ```python
-    import time
-    time.sleep(2)
+    x = 0
+    while True:
+        x += 1
     ```
     """
     res = pe.evaluate(project_id=None, db=None, llm_output=code, spec={})
     assert res.success is False
-    # stderr may include 'timeout'
-    assert "stderr" in res.metrics
+    assert res.return_code == 124
+    assert res.reward == -1.0
+    assert isinstance(res.stderr, str)
+
+
+def test_program_evaluator_import_whitelist_env(monkeypatch):
+    pe = ProgramEvaluator()
+    monkeypatch.setenv("PROMPT_STUDIO_ENABLE_CODE_EVAL", "true")
+    monkeypatch.setenv("PROMPT_STUDIO_CODE_EVAL_IMPORT_WHITELIST", "math")
+
+    allowed_code = """
+    ```python
+    import math
+    val = math.sqrt(9)
+    ```
+    """
+    allowed_res = pe.evaluate(project_id=None, db=None, llm_output=allowed_code, spec={"metric_var": "val"})
+    assert allowed_res.success is True
+    assert allowed_res.return_code == 0
+
+    blocked_code = """
+    ```python
+    import statistics
+    val = statistics.mean([1,2,3])
+    ```
+    """
+    blocked_res = pe.evaluate(project_id=None, db=None, llm_output=blocked_code, spec={"metric_var": "val"})
+    assert blocked_res.success is False
+    assert blocked_res.return_code == 3

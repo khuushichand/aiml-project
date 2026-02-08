@@ -175,7 +175,15 @@ async def test_runner_python_scores_via_evaluator_toggle(monkeypatch, temp_ps_db
     tr = TestRunner(temp_ps_db)
 
     # Monkeypatch run_test_case to return code output
-    async def fake_run_test_case(self, prompt_id: int, test_case_id: int, model: str = "", temperature: float = 0.0, max_tokens: int = 0):
+    async def fake_run_test_case(
+        self,
+        prompt_id: int,
+        test_case_id: int,
+        model: str = "",
+        temperature: float = 0.0,
+        max_tokens: int = 0,
+        **kwargs,
+    ):
         return {
             "success": True,
             "test_case_id": test_case_id,

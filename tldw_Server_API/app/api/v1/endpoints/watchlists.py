@@ -3367,7 +3367,19 @@ async def create_output(
     output_template = None
     if template_name:
         name_is_safe = bool(_TEMPLATE_NAME_RE.fullmatch(template_name))
-        if name_is_safe:
+        try:
+            output_template = collections_db.get_output_template_by_name(template_name)
+        except KeyError:
+            output_template = None
+        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
+            logger.error(f"Watchlists template lookup failed: {exc}")
+            raise HTTPException(status_code=500, detail="template_lookup_failed") from exc
+        if output_template:
+            if template_version is not None:
+                raise HTTPException(status_code=400, detail="template_version_not_supported_for_outputs_template")
+            if output_template.format not in {"md", "html"}:
+                raise HTTPException(status_code=400, detail="template_format_not_supported")
+        elif name_is_safe:
             try:
                 template_record = template_store.load_template(template_name, version=template_version)
             except template_store.TemplateNotFoundError:
@@ -3376,18 +3388,6 @@ async def create_output(
                 raise HTTPException(status_code=404, detail="template_version_not_found") from None
             except TemplateValidationError as exc:
                 raise HTTPException(status_code=400, detail="invalid_template_name") from exc
-        try:
-            if template_record is None:
-                output_template = collections_db.get_output_template_by_name(template_name)
-        except KeyError:
-            output_template = None
-        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
-            logger.error(f"Watchlists template lookup failed: {exc}")
-            raise HTTPException(status_code=500, detail="template_lookup_failed") from exc
-        if output_template and template_version is not None:
-            raise HTTPException(status_code=400, detail="template_version_not_supported_for_outputs_template")
-        if output_template and output_template.format not in {"md", "html"}:
-            raise HTTPException(status_code=400, detail="template_format_not_supported")
         if template_record is None and output_template is None:
             if not name_is_safe:
                 raise HTTPException(status_code=400, detail="invalid_template_name")

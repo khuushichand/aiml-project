@@ -282,32 +282,16 @@ async def create_evaluation(
             # In test environments, run inline to ensure timely completion for polling tests
             import os as _os
             if _os.getenv("PYTEST_CURRENT_TEST") or is_test_mode():
-                # Finalize immediately for deterministic tests without background scheduling
-                test_ids = evaluation.test_case_ids or []
-                aggregate_metrics = {
-                    "average_score": 0.0,
-                    "total_tests": len(test_ids),
-                    "passed": 0,
-                    "failed": len(test_ids),
-                    "pass_rate": 0.0,
-                }
-                cursor.execute(
-                    """
-                    UPDATE prompt_studio_evaluations
-                    SET status = 'completed',
-                        completed_at = ?,
-                        aggregate_metrics = ?,
-                        test_run_ids = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        datetime.now().isoformat(),
-                        json.dumps(aggregate_metrics),
-                        json.dumps(test_ids),
-                        eval_id,
-                    ),
+                req_id = ensure_request_id(request) if request is not None else None
+                tp = ensure_traceparent(request) if request is not None else ""
+                await run_evaluation_async(
+                    eval_id,
+                    db,
+                    user_id=user_id_int,
+                    provider=provider_name,
+                    request_id=req_id,
+                    traceparent=tp,
                 )
-                conn.commit()
                 return EvaluationResponse(
                     id=eval_id,
                     uuid=eval_uuid,
@@ -344,7 +328,7 @@ async def create_evaluation(
                 )
         else:
             # Run synchronously and return results
-            result = eval_manager.run_evaluation(
+            result = await eval_manager.run_evaluation_async(
                 prompt_id=evaluation.prompt_id,
                 test_case_ids=evaluation.test_case_ids or [],
                 model=model_name,

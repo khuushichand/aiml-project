@@ -120,6 +120,58 @@ async def _add_daily_minutes(user_id: int, minutes: float):
     return await _audio_shim_attr("add_daily_minutes")(user_id, minutes)
 
 
+def _stt_provider_envelope(stt_registry: Any, provider_name: str) -> Optional[dict[str, Any]]:
+    """
+    Best-effort lookup for standardized STT provider capability envelope.
+    """
+    try:
+        entries = stt_registry.list_capabilities(include_disabled=True)
+    except TypeError:
+        try:
+            entries = stt_registry.list_capabilities()
+        except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+            return None
+    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+        return None
+
+    if not isinstance(entries, list):
+        return None
+    normalized_name = str(provider_name or "").strip().lower()
+    if not normalized_name:
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        candidate = str(entry.get("provider") or "").strip().lower()
+        if candidate == normalized_name:
+            return entry
+    return None
+
+
+def _stt_provider_availability(
+    stt_registry: Any,
+    provider_name: str,
+    envelope: Optional[dict[str, Any]] = None,
+) -> str:
+    """
+    Resolve provider availability from envelope first, then legacy status API.
+    """
+    if isinstance(envelope, dict):
+        availability = str(envelope.get("availability") or "").strip().lower()
+        if availability:
+            return availability
+
+    get_status = getattr(stt_registry, "get_status", None)
+    if callable(get_status):
+        try:
+            legacy_status = str(get_status(provider_name) or "").strip().lower()
+            if legacy_status:
+                return legacy_status
+        except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+            pass
+    return "unknown"
+
+
 @router.post(
     "/transcriptions",
     summary="Transcribes audio into text (OpenAI Compatible)",
@@ -418,6 +470,27 @@ async def create_transcription(
 
         stt_registry = get_stt_provider_registry()
         provider, provider_model_name, provider_variant = stt_registry.resolve_provider_for_model(model or "")
+        provider_envelope = _stt_provider_envelope(stt_registry, provider)
+        provider_availability = _stt_provider_availability(
+            stt_registry,
+            provider,
+            envelope=provider_envelope,
+        )
+        requested_model = (model or provider_model_name or "").strip()
+        if provider_availability in {"disabled", "failed"}:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "status": "provider_unavailable",
+                    "provider": provider,
+                    "availability": provider_availability,
+                    "model": requested_model,
+                    "message": (
+                        f"STT provider '{provider}' is currently {provider_availability}. "
+                        "Check provider configuration/health and retry."
+                    ),
+                },
+            )
 
         def _raise_on_transcription_error(text: Any) -> None:
             if _is_transcription_error_message(text):
@@ -496,6 +569,17 @@ async def create_transcription(
                         selected_lang_for_stt = language if language else None
 
                     adapter = stt_registry.get_adapter(provider)
+                    if adapter is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail={
+                                "status": "provider_unavailable",
+                                "provider": provider,
+                                "availability": provider_availability,
+                                "model": whisper_model_name,
+                                "message": f"STT provider '{provider}' is unavailable.",
+                            },
+                        )
                     artifact = adapter.transcribe_batch(
                         canonical_path,
                         model=whisper_model_name,
@@ -519,6 +603,33 @@ async def create_transcription(
                 model_for_provider = model or provider_model_name
                 try:
                     adapter = stt_registry.get_adapter(provider)
+                    if adapter is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail={
+                                "status": "provider_unavailable",
+                                "provider": provider,
+                                "availability": provider_availability,
+                                "model": model_for_provider,
+                                "message": f"STT provider '{provider}' is unavailable.",
+                            },
+                        )
+                    adapter_provider = str(getattr(getattr(adapter, "name", None), "value", "")).strip()
+                    if adapter_provider and adapter_provider != provider:
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail={
+                                "status": "provider_unavailable",
+                                "provider": provider,
+                                "availability": provider_availability,
+                                "resolved_provider": adapter_provider,
+                                "model": model_for_provider,
+                                "message": (
+                                    f"STT provider '{provider}' is unavailable; "
+                                    f"fallback to '{adapter_provider}' was prevented for endpoint parity."
+                                ),
+                            },
+                        )
                     artifact = adapter.transcribe_batch(
                         canonical_path,
                         model=model_for_provider,

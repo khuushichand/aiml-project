@@ -488,117 +488,100 @@ class JobProcessor:
 
             self._ensure_ps_prompt_exists(initial_prompt_id, project_id)
 
-            self.db.set_optimization_status(
-                optimization_id,
-                "running",
-                mark_started=True,
-            )
-
-            best_prompt_id = initial_prompt_id
-            best_metric = 0.5
-            iterations: list[dict[str, Any]] = []
-            total_tokens = 0
-            total_cost = 0.0
-            iteration_limit = max(1, min(max_iterations, 5))
-
-            for iteration_index in range(1, iteration_limit + 1):
-                iteration_result = await self._run_optimization_iteration(
-                    optimization_id,
-                    initial_prompt_id,
-                    iteration_index,
-                )
-                iterations.append(iteration_result)
-                total_tokens += iteration_result.get("tokens_used", 0)
-                total_cost += iteration_result.get("cost", 0.0)
-
+            # Keep optimization row in sync with queued payload fields so
+            # OptimizationEngine receives the runtime test set/config.
+            payload_test_case_ids = payload.get("test_case_ids")
+            payload_config = payload.get("optimization_config")
+            if isinstance(payload_config, str):
                 try:
-                    self.db.record_optimization_iteration(
-                        optimization_id,
-                        iteration_number=iteration_result.get("iteration", iteration_index),
-                        prompt_variant=None,
-                        metrics={"metric": iteration_result.get("metric")},
-                        tokens_used=iteration_result.get("tokens_used"),
-                        cost=iteration_result.get("cost"),
-                        note=None,
-                    )
-                except Exception as iteration_exc:  # noqa: BLE001
-                    logger.warning(
-                        "PS optimization.iteration_record_failed optimization_id={} iteration={} error={}",
-                        optimization_id,
-                        iteration_index,
-                        iteration_exc,
-                    )
+                    payload_config = json.loads(payload_config)
+                except Exception:
+                    payload_config = None
+            updates: dict[str, Any] = {}
+            if isinstance(payload_test_case_ids, list):
+                updates["test_case_ids"] = payload_test_case_ids
+            if isinstance(payload_config, dict) and payload_config:
+                updates["optimization_config"] = payload_config
+            if updates:
+                with log_context(
+                    ps_component="job_processor",
+                    ps_job_kind="optimization",
+                    request_id=req_id,
+                    optimization_id=optimization_id,
+                ):
+                    optimization = self.db.update_optimization(optimization_id, updates)
 
-                metric_value = iteration_result.get("metric", 0.0)
-                if metric_value > best_metric:
-                    best_metric = metric_value
-                    best_prompt_id = iteration_result.get("prompt_id", initial_prompt_id)
+            row_cfg = optimization.get("optimization_config")
+            if isinstance(row_cfg, str):
+                try:
+                    row_cfg = json.loads(row_cfg)
+                except Exception:
+                    row_cfg = {}
+            if not isinstance(row_cfg, dict):
+                row_cfg = {}
 
-                if best_metric > 0.95:
+            strategy = str(
+                payload.get("optimizer_type")
+                or row_cfg.get("optimizer_type")
+                or row_cfg.get("strategy")
+                or optimization.get("optimizer_type")
+                or "mipro"
+            ).strip().lower()
+
+            # Stage-1 production wiring: execute real optimization engine for
+            # supported strategies, including MCTS.
+            if strategy in {"mipro", "bootstrap", "mcts"}:
+                with log_context(
+                    ps_component="job_processor",
+                    ps_job_kind="optimization",
+                    request_id=req_id,
+                    optimization_id=optimization_id,
+                    optimizer_type=strategy,
+                    job_id=payload.get("job_id"),
+                ):
                     logger.info(
-                        "PS optimization.early_stop optimization_id={} iteration={} metric={}",
+                        "Routing optimization job {} to OptimizationEngine (strategy={})",
                         optimization_id,
-                        iteration_index,
-                        round(best_metric, 3),
+                        strategy,
                     )
-                    break
+                    from .optimization_engine import OptimizationEngine
 
-                try:
-                    if ws_connection_manager:
-                        broadcaster = EventBroadcaster(ws_connection_manager, self.db)
-                        await broadcaster.broadcast_optimization_iteration(
-                            optimization_id=optimization_id,
-                            iteration=iteration_index,
-                            max_iterations=max_iterations,
-                            current_metric=metric_value,
-                            best_metric=best_metric,
-                        )
-                except Exception as broadcast_exc:  # noqa: BLE001
-                    logger.warning(
-                        "PS optimization.broadcast_failed optimization_id={} iteration={} error={}",
-                        optimization_id,
-                        iteration_index,
-                        broadcast_exc,
-                    )
+                    engine = OptimizationEngine(self.db)
+                    engine_result = await engine.optimize(optimization_id)
 
-                await asyncio.sleep(0.5)
+                latest = self.db.get_optimization(optimization_id, include_deleted=True) or {}
+                result = dict(engine_result or {})
+                result.setdefault("optimization_id", optimization_id)
+                result.setdefault("status", str(latest.get("status") or "completed"))
+                result.setdefault(
+                    "iterations_completed",
+                    int(latest.get("iterations_completed") or result.get("iterations") or 0),
+                )
+                if result.get("best_prompt_id") is None and result.get("optimized_prompt_id") is not None:
+                    result["best_prompt_id"] = result.get("optimized_prompt_id")
+                if result.get("best_metric") is None and result.get("final_score") is not None:
+                    result["best_metric"] = result.get("final_score")
 
-            initial_metric = 0.5
-            improvement = ((best_metric - initial_metric) / initial_metric) * 100
-
-            if best_prompt_id:
-                self._ensure_ps_prompt_exists(best_prompt_id, project_id)
-
-            self.db.complete_optimization(
-                optimization_id,
-                optimized_prompt_id=best_prompt_id,
-                iterations_completed=len(iterations),
-                initial_metrics={"accuracy": initial_metric},
-                final_metrics={"accuracy": best_metric},
-                improvement_percentage=improvement,
-                total_tokens=total_tokens,
-                total_cost=total_cost,
-            )
-
-            result = {
-                "optimization_id": optimization_id,
-                "iterations_completed": len(iterations),
-                "best_prompt_id": best_prompt_id,
-                "best_metric": best_metric,
-                "improvement_percentage": improvement,
-                "status": "completed",
-            }
+                logger.info(
+                    "PS optimization.engine_done optimization_id={} strategy={} status={} iterations={}",
+                    optimization_id,
+                    strategy,
+                    result.get("status"),
+                    result.get("iterations_completed"),
+                )
+                return result
 
             logger.info(
-                "PS optimization.done optimization_id={} iterations={} best_metric={} improvement_pct={} tokens={} cost={}",
+                "PS optimization.legacy_fallback optimization_id={} strategy={}",
                 optimization_id,
-                len(iterations),
-                round(best_metric, 3),
-                round(improvement, 1),
-                total_tokens,
-                total_cost,
+                strategy,
             )
-            return result
+            return await self._process_optimization_job_legacy(
+                optimization_id=optimization_id,
+                initial_prompt_id=initial_prompt_id,
+                project_id=project_id,
+                max_iterations=max_iterations,
+            )
 
         except Exception as e:  # noqa: BLE001
             logger.error(
@@ -622,6 +605,127 @@ class JobProcessor:
                 )
 
             raise
+
+    async def _process_optimization_job_legacy(
+        self,
+        *,
+        optimization_id: int,
+        initial_prompt_id: Optional[int],
+        project_id: Optional[int],
+        max_iterations: int,
+    ) -> dict[str, Any]:
+        """Legacy optimization simulation path for unsupported strategies."""
+        self.db.set_optimization_status(
+            optimization_id,
+            "running",
+            mark_started=True,
+        )
+
+        best_prompt_id = initial_prompt_id
+        best_metric = 0.5
+        iterations: list[dict[str, Any]] = []
+        total_tokens = 0
+        total_cost = 0.0
+        iteration_limit = max(1, min(max_iterations, 5))
+
+        for iteration_index in range(1, iteration_limit + 1):
+            iteration_result = await self._run_optimization_iteration(
+                optimization_id,
+                initial_prompt_id,
+                iteration_index,
+            )
+            iterations.append(iteration_result)
+            total_tokens += iteration_result.get("tokens_used", 0)
+            total_cost += iteration_result.get("cost", 0.0)
+
+            try:
+                self.db.record_optimization_iteration(
+                    optimization_id,
+                    iteration_number=iteration_result.get("iteration", iteration_index),
+                    prompt_variant=None,
+                    metrics={"metric": iteration_result.get("metric")},
+                    tokens_used=iteration_result.get("tokens_used"),
+                    cost=iteration_result.get("cost"),
+                    note=None,
+                )
+            except Exception as iteration_exc:  # noqa: BLE001
+                logger.warning(
+                    "PS optimization.iteration_record_failed optimization_id={} iteration={} error={}",
+                    optimization_id,
+                    iteration_index,
+                    iteration_exc,
+                )
+
+            metric_value = iteration_result.get("metric", 0.0)
+            if metric_value > best_metric:
+                best_metric = metric_value
+                best_prompt_id = iteration_result.get("prompt_id", initial_prompt_id)
+
+            if best_metric > 0.95:
+                logger.info(
+                    "PS optimization.early_stop optimization_id={} iteration={} metric={}",
+                    optimization_id,
+                    iteration_index,
+                    round(best_metric, 3),
+                )
+                break
+
+            try:
+                if ws_connection_manager:
+                    broadcaster = EventBroadcaster(ws_connection_manager, self.db)
+                    await broadcaster.broadcast_optimization_iteration(
+                        optimization_id=optimization_id,
+                        iteration=iteration_index,
+                        max_iterations=max_iterations,
+                        current_metric=metric_value,
+                        best_metric=best_metric,
+                    )
+            except Exception as broadcast_exc:  # noqa: BLE001
+                logger.warning(
+                    "PS optimization.broadcast_failed optimization_id={} iteration={} error={}",
+                    optimization_id,
+                    iteration_index,
+                    broadcast_exc,
+                )
+
+            await asyncio.sleep(0.5)
+
+        initial_metric = 0.5
+        improvement = ((best_metric - initial_metric) / initial_metric) * 100
+
+        if best_prompt_id:
+            self._ensure_ps_prompt_exists(best_prompt_id, project_id)
+
+        self.db.complete_optimization(
+            optimization_id,
+            optimized_prompt_id=best_prompt_id,
+            iterations_completed=len(iterations),
+            initial_metrics={"accuracy": initial_metric},
+            final_metrics={"accuracy": best_metric},
+            improvement_percentage=improvement,
+            total_tokens=total_tokens,
+            total_cost=total_cost,
+        )
+
+        result = {
+            "optimization_id": optimization_id,
+            "iterations_completed": len(iterations),
+            "best_prompt_id": best_prompt_id,
+            "best_metric": best_metric,
+            "improvement_percentage": improvement,
+            "status": "completed",
+        }
+
+        logger.info(
+            "PS optimization.done optimization_id={} iterations={} best_metric={} improvement_pct={} tokens={} cost={}",
+            optimization_id,
+            len(iterations),
+            round(best_metric, 3),
+            round(improvement, 1),
+            total_tokens,
+            total_cost,
+        )
+        return result
 
     async def _run_optimization_iteration(self, optimization_id: int,
                                          prompt_id: int, iteration: int) -> dict[str, Any]:

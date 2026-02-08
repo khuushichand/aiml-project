@@ -821,13 +821,13 @@ class SttProviderRegistry:
         """
         return self._base.get_status(provider_name).value
 
-    def list_capabilities(self) -> list[dict[str, Any]]:
+    def list_capabilities(self, *, include_disabled: bool = True) -> list[dict[str, Any]]:
         """
         Return capability envelopes for all registered STT providers.
         """
         return self._base.list_capabilities(
             capability_getter=lambda adapter: adapter.get_capabilities(),
-            include_disabled=True,
+            include_disabled=include_disabled,
         )
 
     def resolve_provider_for_model(self, model_name: str | None) -> tuple[str, str, str | None]:

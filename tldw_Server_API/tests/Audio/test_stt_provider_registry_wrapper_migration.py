@@ -142,6 +142,47 @@ def test_registry_list_capabilities_uses_base_envelope() -> None:
     assert entries["faster-whisper"]["capabilities"] is not None
 
 
+def test_registry_list_capabilities_can_exclude_disabled_entries() -> None:
+    spa = _import_module()
+
+    class _DisabledAdapter(spa.SttProviderAdapter):
+        def __init__(self) -> None:
+            super().__init__(spa.SttProviderName.EXTERNAL)
+
+        def get_capabilities(self):
+            return spa.SttProviderCapabilities(
+                name=self.name,
+                supports_batch=True,
+                supports_streaming=False,
+                supports_diarization=False,
+            )
+
+        def transcribe_batch(
+            self,
+            audio_path: str,
+            *,
+            model: str | None = None,
+            language: str | None = None,
+            task: str = "transcribe",
+            word_timestamps: bool = False,
+            prompt: str | None = None,
+            hotwords: Sequence[str] | None = None,
+            base_dir: Path | None = None,
+            cancel_check: Callable[[], bool] | None = None,
+        ) -> dict[str, Any]:
+            return {}
+
+    registry = spa.SttProviderRegistry()
+    registry.register_adapter("disabled-custom", _DisabledAdapter, enabled=False)
+
+    all_entries = {entry["provider"]: entry for entry in registry.list_capabilities(include_disabled=True)}
+    assert all_entries["disabled-custom"]["availability"] == "disabled"
+    assert all_entries["disabled-custom"]["capabilities"] is None
+
+    enabled_entries = {entry["provider"] for entry in registry.list_capabilities(include_disabled=False)}
+    assert "disabled-custom" not in enabled_entries
+
+
 def test_registry_callback_wiring_supports_domain_overrides() -> None:
     spa = _import_module()
 

@@ -406,7 +406,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 21  # Schema v21 adds conversation settings
+    _CURRENT_SCHEMA_VERSION = 22  # Schema v22 adds character exemplars
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -416,6 +416,11 @@ class CharactersRAGDB:
             "character_cards_fts",
             "character_cards",
             ["name", "description", "personality", "scenario", "system_prompt"],
+        ),
+        (
+            "character_exemplars_fts",
+            "character_exemplars",
+            ["text", "emotion", "scenario"],
         ),
         (
             "conversations_fts",
@@ -2394,6 +2399,84 @@ UPDATE db_schema_version
    AND version < 21;
 """
 
+    _MIGRATION_SQL_V21_TO_V22 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 22 - Character exemplars (2026-02-08)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS character_exemplars(
+  id TEXT PRIMARY KEY,
+  character_id INTEGER NOT NULL REFERENCES character_cards(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  source_type TEXT NOT NULL DEFAULT 'other'
+    CHECK(source_type IN ('audio_transcript','video_transcript','article','other')),
+  source_url_or_id TEXT,
+  source_date TEXT,
+  novelty_hint TEXT NOT NULL DEFAULT 'unknown'
+    CHECK(novelty_hint IN ('post_cutoff','unknown','pre_cutoff')),
+  emotion TEXT NOT NULL DEFAULT 'other'
+    CHECK(emotion IN ('angry','neutral','happy','other')),
+  scenario TEXT NOT NULL DEFAULT 'other'
+    CHECK(scenario IN ('press_challenge','fan_banter','debate','boardroom','small_talk','other')),
+  rhetorical TEXT NOT NULL DEFAULT '[]',
+  register TEXT,
+  safety_allowed TEXT NOT NULL DEFAULT '[]',
+  safety_blocked TEXT NOT NULL DEFAULT '[]',
+  rights_public_figure BOOLEAN NOT NULL DEFAULT 1,
+  rights_notes TEXT,
+  length_tokens INTEGER NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  is_deleted BOOLEAN NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_character_exemplars_character ON character_exemplars(character_id);
+CREATE INDEX IF NOT EXISTS idx_character_exemplars_scenario_emotion ON character_exemplars(scenario, emotion);
+CREATE INDEX IF NOT EXISTS idx_character_exemplars_novelty ON character_exemplars(novelty_hint);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS character_exemplars_fts
+USING fts5(
+  text, emotion, scenario,
+  content='character_exemplars',
+  content_rowid='rowid'
+);
+
+DROP TRIGGER IF EXISTS character_exemplars_ai;
+DROP TRIGGER IF EXISTS character_exemplars_au;
+DROP TRIGGER IF EXISTS character_exemplars_ad;
+
+CREATE TRIGGER character_exemplars_ai
+AFTER INSERT ON character_exemplars BEGIN
+  INSERT INTO character_exemplars_fts(rowid, text, emotion, scenario)
+  SELECT new.rowid, new.text, new.emotion, new.scenario
+  WHERE new.is_deleted = 0;
+END;
+
+CREATE TRIGGER character_exemplars_au
+AFTER UPDATE ON character_exemplars BEGIN
+  INSERT INTO character_exemplars_fts(character_exemplars_fts, rowid, text, emotion, scenario)
+  VALUES('delete', old.rowid, old.text, old.emotion, old.scenario);
+
+  INSERT INTO character_exemplars_fts(rowid, text, emotion, scenario)
+  SELECT new.rowid, new.text, new.emotion, new.scenario
+  WHERE new.is_deleted = 0;
+END;
+
+CREATE TRIGGER character_exemplars_ad
+AFTER DELETE ON character_exemplars BEGIN
+  INSERT INTO character_exemplars_fts(character_exemplars_fts, rowid, text, emotion, scenario)
+  VALUES('delete', old.rowid, old.text, old.emotion, old.scenario);
+END;
+
+INSERT INTO character_exemplars_fts(character_exemplars_fts) VALUES('rebuild');
+
+UPDATE db_schema_version
+   SET version = 22
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 22;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -3599,6 +3682,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V20->V21: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V21 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v21_to_v22(self, conn: sqlite3.Connection):
+        """Migrates schema from V21 to V22 (Character exemplars)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V21 to V22 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V21_TO_V22)
+            final_version = self._get_db_version(conn)
+            if final_version != 22:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V21->V22 failed version check. Expected 22, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V22 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V21->V22 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V21->V22 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V21->V22: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V22 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -3729,6 +3832,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_status ON writing_wordclouds(status)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_last_modified ON writing_wordclouds(last_modified)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_character_exemplars_character ON character_exemplars(character_id)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_character_exemplars_scenario_emotion ON character_exemplars(scenario, emotion)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_character_exemplars_novelty ON character_exemplars(novelty_hint)")
                     except sqlite3.Error:
                         pass
                     # Verify core FTS tables exist to avoid silent search failures
@@ -3796,6 +3902,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 21 and current_db_version == 20:
                         self._migrate_from_v20_to_v21(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 22 and current_db_version == 21:
+                        self._migrate_from_v21_to_v22(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -3819,6 +3928,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_status ON writing_wordclouds(status)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_last_modified ON writing_wordclouds(last_modified)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_character_exemplars_character ON character_exemplars(character_id)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_character_exemplars_scenario_emotion ON character_exemplars(scenario, emotion)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_character_exemplars_novelty ON character_exemplars(novelty_hint)")
                 except sqlite3.Error:
                     pass
                 # Example for future migrations:
@@ -3967,6 +4079,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     elif current_initial_version == 20 and target_version >= 21:
                         self._migrate_from_v20_to_v21(conn)
                         current_db_version = self._get_db_version(conn)
+                        if target_version >= 22 and current_db_version == 21:
+                            self._migrate_from_v21_to_v22(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 21 and target_version >= 22:
+                        self._migrate_from_v21_to_v22(conn)
+                        current_db_version = self._get_db_version(conn)
                     else:
                         # Fallback: attempt linear migrations for known versions.
                         fallback_version = current_initial_version
@@ -4005,6 +4123,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v19_to_v20(conn)
                             elif fallback_version == 20:
                                 self._migrate_from_v20_to_v21(conn)
+                            elif fallback_version == 21:
+                                self._migrate_from_v21_to_v22(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -4043,6 +4163,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 21 and current_db_version == 20:
                     self._migrate_from_v20_to_v21(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 22 and current_db_version == 21:
+                    self._migrate_from_v21_to_v22(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -4213,6 +4336,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 21:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V20_TO_V21, conn, expected_version=21)
                 current_version = 21
+            if current_version < 22:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V21_TO_V22, conn, expected_version=22)
+                current_version = 22
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -4312,6 +4438,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
                     self.backend.execute(
                         "CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_last_modified ON writing_wordclouds(last_modified)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_character_exemplars_character ON character_exemplars(character_id)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_character_exemplars_scenario_emotion ON character_exemplars(scenario, emotion)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_character_exemplars_novelty ON character_exemplars(novelty_hint)",
                         connection=conn,
                     )
                 except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:

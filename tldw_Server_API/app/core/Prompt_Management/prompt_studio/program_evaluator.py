@@ -20,12 +20,16 @@ import textwrap
 from dataclasses import dataclass
 from typing import Any, Optional
 
-_FORBIDDEN_IMPORTS = {
-    "socket", "requests", "urllib", "http", "ftplib", "subprocess", "multiprocessing", "asyncio",
-    "ssl", "paramiko", "pandas_datareader", "psutil", "sqlite3", "pymongo", "boto3", "smtplib",
-}
+_DEFAULT_IMPORT_WHITELIST = ("math", "statistics")
+_WRAPPER_ALLOWED_IMPORTS = {"json", "sys", "builtins", "resource", "math"}
 _FORBIDDEN_PATTERNS = [
-    r"\bos\.system\(", r"\bsubprocess\.", r"\bopen\(", r"\burllib\.", r"\brequests\.", r"\bsocket\.",
+    r"\bos\.system\(",
+    r"\bsubprocess\.",
+    r"\bopen\(",
+    r"\burllib\.",
+    r"\brequests\.",
+    r"\bsocket\.",
+    r"\b__import__\(",
 ]
 
 
@@ -34,6 +38,9 @@ class EvalResult:
     success: bool
     reward: float
     metrics: dict[str, Any]
+    return_code: int
+    stdout: str = ""
+    stderr: str = ""
     error: Optional[str] = None
 
 
@@ -51,6 +58,7 @@ class ProgramEvaluator:
     CPU_TIME_SEC = 4
     WALL_TIME_SEC = 8
     MEMORY_MB = 256
+    MAX_OUTPUT_CHARS = 4000
 
     @staticmethod
     def is_enabled_globally() -> bool:
@@ -109,24 +117,68 @@ class ProgramEvaluator:
           - metric_var: variable name in code globals to inspect (float)
           - constraints: list of simple expressions using names from code globals
         """
+        timeout_sec = self._resolve_timeout_seconds()
+        memory_mb = self._resolve_memory_mb()
+        import_whitelist = self._resolve_import_whitelist()
+
         if not self.is_enabled_for_project(db, project_id):
             # Feature disabled → fallback heuristic
-            return EvalResult(True, self.evaluate_text_output(llm_output), metrics={"mode": "heuristic"})
+            return EvalResult(
+                success=True,
+                reward=self.evaluate_text_output(llm_output),
+                metrics={"mode": "heuristic"},
+                return_code=0,
+            )
 
         code = self._extract_code(llm_output)
         if not code:
-            return EvalResult(False, -1.0, metrics={}, error="No code detected in output")
+            return EvalResult(
+                success=False,
+                reward=-1.0,
+                metrics={},
+                return_code=2,
+                error="No code detected in output",
+            )
 
         # Quick static security scan
-        if self._has_forbidden_constructs(code):
-            return EvalResult(False, -1.0, metrics={}, error="Forbidden imports or calls detected")
+        violation = self._find_policy_violation(code, import_whitelist)
+        if violation:
+            return EvalResult(
+                success=False,
+                reward=-1.0,
+                metrics={"policy_violation": violation},
+                return_code=3,
+                error=violation,
+            )
 
-        success, exec_out, exec_err, globals_dump = self._execute_in_sandbox(code)
+        success, return_code, exec_out, exec_err, globals_dump = self._execute_in_sandbox(
+            code,
+            timeout_sec=timeout_sec,
+            memory_mb=memory_mb,
+            import_whitelist=import_whitelist,
+        )
+        out = self._truncate_text(exec_out)
+        err = self._truncate_text(exec_err)
         if not success:
-            return EvalResult(False, -1.0, metrics={"stderr": exec_err, "stdout": exec_out}, error="Execution failed")
+            return EvalResult(
+                success=False,
+                reward=-1.0,
+                metrics={},
+                return_code=return_code,
+                stdout=out,
+                stderr=err,
+                error="Execution failed",
+            )
 
         reward, metrics = self._score_from_outputs(exec_out, globals_dump, spec or {})
-        return EvalResult(True, reward, metrics)
+        return EvalResult(
+            success=True,
+            reward=reward,
+            metrics=metrics,
+            return_code=0,
+            stdout=out,
+            stderr=err,
+        )
 
     # --------------------------------------------------------------------------------------------
     # Internals
@@ -150,20 +202,82 @@ class ProgramEvaluator:
         code = "\n".join(buf).strip()
         return code or None
 
-    def _has_forbidden_constructs(self, code: str) -> bool:
-        for name in _FORBIDDEN_IMPORTS:
-            if re.search(rf"\bimport\s+{re.escape(name)}\b", code):
-                return True
-        return any(re.search(pat, code) for pat in _FORBIDDEN_PATTERNS)
+    def _resolve_timeout_seconds(self) -> float:
+        raw = os.getenv("PROMPT_STUDIO_CODE_EVAL_TIMEOUT_MS")
+        if raw is None:
+            return float(max(0.1, self.WALL_TIME_SEC))
+        try:
+            ms = int(raw)
+            if ms <= 0:
+                raise ValueError
+            return max(0.1, ms / 1000.0)
+        except Exception:
+            return float(max(0.1, self.WALL_TIME_SEC))
 
-    def _execute_in_sandbox(self, code: str) -> tuple[bool, str, str, dict[str, Any]]:
+    def _resolve_memory_mb(self) -> int:
+        raw = os.getenv("PROMPT_STUDIO_CODE_EVAL_MEM_MB")
+        if raw is None:
+            return int(max(16, self.MEMORY_MB))
+        try:
+            mb = int(raw)
+            if mb <= 0:
+                raise ValueError
+            return max(16, mb)
+        except Exception:
+            return int(max(16, self.MEMORY_MB))
+
+    def _resolve_import_whitelist(self) -> set[str]:
+        raw = os.getenv("PROMPT_STUDIO_CODE_EVAL_IMPORT_WHITELIST")
+        if raw is None:
+            return set(_DEFAULT_IMPORT_WHITELIST)
+        imports = {part.strip() for part in str(raw).split(",") if part.strip()}
+        return imports or set(_DEFAULT_IMPORT_WHITELIST)
+
+    def _extract_import_roots(self, code: str) -> set[str]:
+        roots: set[str] = set()
+        for match in re.finditer(r"^\s*import\s+([A-Za-z0-9_.,\s]+)", code, re.MULTILINE):
+            names = match.group(1).split(",")
+            for name in names:
+                base = name.strip().split(" as ")[0].split(".")[0].strip()
+                if base:
+                    roots.add(base)
+        for match in re.finditer(r"^\s*from\s+([A-Za-z0-9_.]+)\s+import\s+", code, re.MULTILINE):
+            base = match.group(1).split(".")[0].strip()
+            if base:
+                roots.add(base)
+        return roots
+
+    def _find_policy_violation(self, code: str, import_whitelist: set[str]) -> Optional[str]:
+        for pat in _FORBIDDEN_PATTERNS:
+            if re.search(pat, code):
+                return "Forbidden calls detected"
+        seen = self._extract_import_roots(code)
+        for mod in sorted(seen):
+            if mod not in import_whitelist:
+                return f"Import not allowed: {mod}"
+        return None
+
+    def _truncate_text(self, text: str) -> str:
+        if len(text) <= self.MAX_OUTPUT_CHARS:
+            return text
+        return text[: self.MAX_OUTPUT_CHARS] + "...(truncated)"
+
+    def _execute_in_sandbox(
+        self,
+        code: str,
+        *,
+        timeout_sec: float,
+        memory_mb: int,
+        import_whitelist: set[str],
+    ) -> tuple[bool, int, str, str, dict[str, Any]]:
         """Execute code in a restricted subprocess using isolated mode.
 
-        Returns (success, stdout, stderr, globals_dump)
+        Returns (success, return_code, stdout, stderr, globals_dump)
         """
-        cpu_lim = int(self.CPU_TIME_SEC)
-        mem_lim = int(self.MEMORY_MB) * 1024 * 1024
-        forbidden_json = json.dumps(sorted(_FORBIDDEN_IMPORTS))
+        cpu_lim = max(1, int(self.CPU_TIME_SEC))
+        mem_lim = int(memory_mb) * 1024 * 1024
+        allowed_imports = set(import_whitelist) | _WRAPPER_ALLOWED_IMPORTS
+        allowed_json = json.dumps(sorted(allowed_imports))
         code_json = json.dumps(code)
         wrapper_lines = [
             "import sys, json, builtins",
@@ -181,13 +295,13 @@ class ProgramEvaluator:
             "for name in (\"open\",):",
             "    setattr(builtins, name, _blocked)",
             "",
-            "# Guarded import to block dangerous modules",
-            f"_forbidden = {forbidden_json}",
+            "# Guarded import to allow only whitelisted modules",
+            f"_allowed = {allowed_json}",
             "_orig_import = builtins.__import__",
             "def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):",
             "    base = name.split('.')[0]",
-            "    if base in _forbidden:",
-            "        raise ImportError(f\"Forbidden import: {name}\")",
+            "    if base not in _allowed:",
+            "        raise ImportError(f\"Import not allowed: {name}\")",
             "    return _orig_import(name, globals, locals, fromlist, level)",
             "builtins.__import__ = _guarded_import",
             "",
@@ -245,13 +359,13 @@ class ProgramEvaluator:
                     env=env,
                     capture_output=True,
                     text=True,
-                    timeout=self.WALL_TIME_SEC,
+                    timeout=timeout_sec,
                 )
             except subprocess.TimeoutExpired as te:
-                return False, te.stdout or "", te.stderr or "timeout", {}
+                return False, 124, te.stdout or "", te.stderr or "timeout", {}
             out, err = proc.stdout or "", proc.stderr or ""
             if proc.returncode != 0:
-                return False, out, err, {}
+                return False, int(proc.returncode), out, err, {}
             # Extract globals JSON trailer
             gjson = {}
             if "__GLOBALS_JSON__" in out:
@@ -260,7 +374,7 @@ class ProgramEvaluator:
                     gjson = json.loads(tail.strip())
                 except Exception:
                     gjson = {}
-            return True, out, err, gjson
+            return True, 0, out, err, gjson
 
     def _score_from_outputs(self, stdout: str, globals_dump: dict[str, Any], spec: dict[str, Any]) -> tuple[float, dict[str, Any]]:
         """Map execution results to reward in [-1..10]."""

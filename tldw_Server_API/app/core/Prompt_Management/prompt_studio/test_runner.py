@@ -22,6 +22,8 @@ from .program_evaluator import ProgramEvaluator
 class TestRunner:
     """Runs test cases against prompts using LLM."""
 
+    MAX_PERSISTED_OUTPUT_CHARS = 4000
+
     def __init__(self, db_manager):
         """
         Initialize test runner.
@@ -41,6 +43,7 @@ class TestRunner:
         temperature: float,
         max_tokens: int,
         app_config: Optional[dict[str, Any]] = None,
+        api_key_override: Optional[str] = None,
     ) -> Any:
         provider_name = normalize_provider(provider)
         if not provider_name:
@@ -57,7 +60,7 @@ class TestRunner:
             "messages": cleaned_messages,
             "system_message": sys_msg,
             "model": resolved_model,
-            "api_key": resolve_provider_api_key_from_config(provider_name, cfg),
+            "api_key": api_key_override or resolve_provider_api_key_from_config(provider_name, cfg),
             "temperature": temperature,
             "max_tokens": max_tokens,
             "app_config": cfg,
@@ -70,7 +73,11 @@ class TestRunner:
         test_case_id: int,
         model: str = "gpt-3.5-turbo",
         temperature: float = 0.7,
-        max_tokens: int = 1000
+        max_tokens: int = 1000,
+        provider: str = "openai",
+        app_config: Optional[dict[str, Any]] = None,
+        api_key_override: Optional[str] = None,
+        persist_run: bool = True,
     ) -> dict[str, Any]:
         """
         Run a single test case against a prompt.
@@ -108,7 +115,7 @@ class TestRunner:
         try:
             response = await asyncio.to_thread(
                 self._call_adapter,
-                provider="openai",
+                provider=provider,
                 model=model,
                 messages_payload=[
                     {"role": "user", "content": user_prompt}
@@ -116,6 +123,8 @@ class TestRunner:
                 system_message=prompt.get("system_prompt"),
                 temperature=temperature,
                 max_tokens=max_tokens,
+                app_config=app_config,
+                api_key_override=api_key_override,
             )
 
             actual_output = {"response": self._extract_response_text(response)}
@@ -128,30 +137,50 @@ class TestRunner:
         execution_time_ms = int((time.time() - start_time) * 1000)
         tokens_used = None
 
-        stored_run = self.db.create_test_run(
-            project_id=prompt.get("project_id") or test_case.get("project_id"),
-            prompt_id=prompt_id,
-            test_case_id=test_case_id,
-            model_name=model,
-            model_params={"temperature": temperature, "max_tokens": max_tokens},
-            inputs=inputs,
-            outputs=actual_output,
-            expected_outputs=expected,
-            execution_time_ms=execution_time_ms,
-            tokens_used=tokens_used,
-            client_id=self.db.client_id,
-        )
-        _log.info("PS testrun.persisted id={} exec_ms={}", stored_run.get("id"), execution_time_ms)
+        stored_run: dict[str, Any] = {}
+        if persist_run:
+            stored_run = self.db.create_test_run(
+                project_id=prompt.get("project_id") or test_case.get("project_id"),
+                prompt_id=prompt_id,
+                test_case_id=test_case_id,
+                model_name=model,
+                model_params={
+                    "provider": provider,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                },
+                inputs=inputs,
+                outputs=actual_output,
+                expected_outputs=expected,
+                execution_time_ms=execution_time_ms,
+                tokens_used=tokens_used,
+                client_id=self.db.client_id,
+            )
+            _log.info("PS testrun.persisted id={} exec_ms={}", stored_run.get("id"), execution_time_ms)
 
         return {
             "id": stored_run.get("id"),
-            "test_case_id": stored_run.get("test_case_id", test_case_id),
-            "prompt_id": stored_run.get("prompt_id", prompt_id),
-            "inputs": stored_run.get("inputs", inputs),
-            "expected": stored_run.get("expected_outputs", expected),
-            "actual": stored_run.get("outputs", actual_output),
-            "model": stored_run.get("model_name", model),
+            "test_case_id": stored_run.get("test_case_id", test_case_id) if stored_run else test_case_id,
+            "prompt_id": stored_run.get("prompt_id", prompt_id) if stored_run else prompt_id,
+            "inputs": stored_run.get("inputs", inputs) if stored_run else inputs,
+            "expected": stored_run.get("expected_outputs", expected) if stored_run else expected,
+            "actual": stored_run.get("outputs", actual_output) if stored_run else actual_output,
+            "model": stored_run.get("model_name", model) if stored_run else model,
+            "execution_time_ms": execution_time_ms,
+            "tokens_used": tokens_used,
         }
+
+    @staticmethod
+    def _truncate_value(value: Any, max_chars: int) -> Any:
+        if isinstance(value, str):
+            if len(value) <= max_chars:
+                return value
+            return value[:max_chars] + "...(truncated)"
+        if isinstance(value, dict):
+            return {k: TestRunner._truncate_value(v, max_chars) for k, v in value.items()}
+        if isinstance(value, list):
+            return [TestRunner._truncate_value(v, max_chars) for v in value]
+        return value
 
     @staticmethod
     def _extract_response_text(response: Any) -> str:
@@ -204,11 +233,14 @@ class TestRunner:
         """
         params = (model_config or {}).get("parameters", {})
         model = (model_config or {}).get("model", "gpt-3.5-turbo")
+        provider = (model_config or {}).get("provider") or (model_config or {}).get("api_name") or "openai"
+        api_key_override = (model_config or {}).get("api_key")
+        app_config = (model_config or {}).get("app_config")
         temperature = float(params.get("temperature", 0.7)) if params is not None else 0.7
         max_tokens = int(params.get("max_tokens", 1000)) if params is not None else 1000
 
         _log = logger.bind(ps_component="test_runner", prompt_id=prompt_id, test_case_id=test_case_id, model=model)
-        _log.info("PS single_test.start temperature={} max_tokens={}", temperature, max_tokens)
+        _log.info("PS single_test.start provider={} temperature={} max_tokens={}", provider, temperature, max_tokens)
         t0 = time.perf_counter()
         result = await self.run_test_case(
             prompt_id=prompt_id,
@@ -216,6 +248,10 @@ class TestRunner:
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            provider=provider,
+            app_config=app_config,
+            api_key_override=api_key_override,
+            persist_run=False,
         )
         # Determine if this is a program test case and if evaluator is enabled
         try:
@@ -232,6 +268,9 @@ class TestRunner:
                 or (test_case.get("inputs") or {}).get("_runner")
             )
 
+        eval_res = None
+        reward = None
+        run_success = "error" not in (result.get("actual") or {})
         if str(runner_hint or "").lower() == "python":
             # Sandboxed program evaluator (feature-gated per project)
             pe = ProgramEvaluator()
@@ -247,6 +286,7 @@ class TestRunner:
             )
             reward = eval_res.reward
             score = max(0.0, min(1.0, reward / 10.0))
+            run_success = bool(eval_res.success)
             _log.info("PS single_test.code_eval reward={} score={}", round(reward, 3), round(score, 3))
         else:
             # Provide a basic aggregate score based on expected vs actual overlap
@@ -266,13 +306,69 @@ class TestRunner:
                 aw = set(act.split())
                 score = (len(ew & aw) / max(1, len(ew))) if ew else 0.0
 
+        outputs_for_storage = result.get("actual") or {}
+        if eval_res is not None:
+            outputs_for_storage = {
+                "program_eval": {
+                    "success": bool(eval_res.success),
+                    "return_code": eval_res.return_code,
+                    "reward": float(eval_res.reward),
+                    "error": eval_res.error,
+                    "stdout": eval_res.stdout,
+                    "stderr": eval_res.stderr,
+                    "metrics": eval_res.metrics,
+                },
+                "response_preview": (result.get("actual") or {}).get("response", ""),
+            }
+        outputs_for_storage = self._truncate_value(outputs_for_storage, self.MAX_PERSISTED_OUTPUT_CHARS)
+
+        scores_payload: dict[str, Any] = {"aggregate_score": float(score)}
+        if reward is not None:
+            scores_payload["reward"] = float(reward)
+        if eval_res is not None:
+            scores_payload["program_eval_success"] = bool(eval_res.success)
+
+        stored_run = self.db.create_test_run(
+            project_id=(self.db.get_prompt(prompt_id) or {}).get("project_id") or (test_case or {}).get("project_id"),
+            prompt_id=prompt_id,
+            test_case_id=test_case_id,
+            model_name=model,
+            model_params={
+                "provider": provider,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            inputs=result.get("inputs") or {},
+            outputs=outputs_for_storage,
+            expected_outputs=result.get("expected") or {},
+            scores=scores_payload,
+            execution_time_ms=result.get("execution_time_ms"),
+            tokens_used=result.get("tokens_used"),
+            client_id=self.db.client_id,
+        )
+
         result = dict(result)
-        result["success"] = True
+        result["id"] = stored_run.get("id")
+        result["success"] = bool(run_success)
         result["scores"] = {"aggregate_score": float(score)}
+        if reward is not None:
+            result["scores"]["reward"] = float(reward)
+        if eval_res is not None:
+            result["program_eval"] = {
+                "success": bool(eval_res.success),
+                "return_code": eval_res.return_code,
+                "stdout": eval_res.stdout,
+                "stderr": eval_res.stderr,
+                "metrics": eval_res.metrics,
+                "reward": float(eval_res.reward),
+                "error": eval_res.error,
+            }
         _log.info(
-            "PS single_test.done aggregate_score={} duration_ms={}",
+            "PS single_test.done aggregate_score={} success={} duration_ms={} test_run_id={}",
             round(float(score), 3),
+            bool(run_success),
             int((time.perf_counter() - t0) * 1000),
+            stored_run.get("id"),
         )
         return result
 

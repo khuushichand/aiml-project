@@ -749,6 +749,56 @@ class TTSAdapterRegistry:
 
         return capabilities
 
+    async def list_capabilities(self, *, include_disabled: bool = True) -> list[dict[str, Any]]:
+        """
+        Return standardized capability envelopes for registered TTS providers.
+
+        Envelope shape:
+            {"provider": str, "availability": str, "capabilities": Any}
+        """
+        output: list[dict[str, Any]] = []
+        provider_names = self._base.list_providers(include_disabled=include_disabled)
+
+        for provider_name in provider_names:
+            status = self._base.get_status(provider_name)
+            capabilities: Any = None
+
+            if status == RegistryProviderStatus.ENABLED:
+                try:
+                    provider_enum = self.resolve_provider(provider_name)
+                    adapter = await self.get_adapter(provider_enum or provider_name)
+                except _TTS_REGISTRY_ADAPTER_EXCEPTIONS as exc:
+                    logger.warning(
+                        "Capability discovery failed for provider '{}': {}",
+                        provider_name,
+                        exc,
+                    )
+                    adapter = None
+
+                status = self._base.get_status(provider_name)
+                if adapter is not None and status == RegistryProviderStatus.ENABLED:
+                    try:
+                        caps = adapter.capabilities
+                        if caps is None:
+                            caps = await adapter.get_capabilities()
+                        capabilities = caps
+                    except _TTS_REGISTRY_ADAPTER_EXCEPTIONS as exc:
+                        logger.warning(
+                            "Capability fetch failed for provider '{}': {}",
+                            provider_name,
+                            exc,
+                        )
+
+            output.append(
+                {
+                    "provider": provider_name,
+                    "availability": status.value,
+                    "capabilities": capabilities,
+                }
+            )
+
+        return output
+
     async def find_adapter_for_requirements(
         self,
         language: Optional[str] = None,

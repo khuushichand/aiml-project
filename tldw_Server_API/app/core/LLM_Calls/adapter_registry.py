@@ -179,10 +179,11 @@ class ChatProviderRegistry:
                 out[provider_name] = capabilities
         return out
 
-    def list_capabilities(self) -> list[dict[str, Any]]:
+    def list_capabilities(self, *, include_disabled: bool = True) -> list[dict[str, Any]]:
         """Return standardized capability envelopes for registered providers."""
         return self._base.list_capabilities(
-            capability_getter=lambda adapter: adapter.capabilities() or {}
+            capability_getter=lambda adapter: adapter.capabilities() or {},
+            include_disabled=include_disabled,
         )
 
     def list_providers(self) -> list[str]:

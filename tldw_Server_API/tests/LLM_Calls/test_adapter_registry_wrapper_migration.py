@@ -84,6 +84,7 @@ def test_registry_config_callback_disables_provider_from_nested_config() -> None
     entries = {entry["provider"]: entry for entry in registry.list_capabilities()}
     assert entries["good"]["availability"] == "disabled"
     assert entries["good"]["capabilities"] is None
+    assert registry.list_capabilities(include_disabled=False) == []
 
 
 def test_registry_config_callback_reads_top_level_provider_enabled_flag() -> None:

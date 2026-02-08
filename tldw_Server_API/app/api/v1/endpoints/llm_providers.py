@@ -1420,6 +1420,7 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
                 health_report = pm.get_health_report()
         except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
             health_report = {}
+        registry_capability_envelopes = _llm_registry_capability_envelopes()
 
         # Process each provider
         for provider_name, provider_info in provider_mappings.items():
@@ -1556,14 +1557,18 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
                 provider_data['requires_api_key'] = provider_requires_api_key(provider_name)
                 # Start with defaults from static map
                 capabilities = dict(PROVIDER_CAPABILITIES.get(provider_name, {}))
+                envelope = registry_capability_envelopes.get(provider_name)
                 # Merge adapter-reported capabilities if available
-                try:
-                    reg = llm_adapter_registry.get_registry()
-                    reg_caps = reg.get_all_capabilities()
-                    if provider_name in reg_caps:
-                        capabilities.update(reg_caps[provider_name])
-                except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
-                    pass
+                if envelope:
+                    env_caps = envelope.get("capabilities")
+                    if isinstance(env_caps, dict):
+                        capabilities.update(env_caps)
+                    provider_data["availability"] = envelope.get("availability", "unknown")
+                    provider_data["capability_envelope"] = {
+                        "provider": provider_name,
+                        "availability": envelope.get("availability", "unknown"),
+                        "capabilities": env_caps if isinstance(env_caps, dict) else None,
+                    }
                 # Merge config-indicated streaming support as an override if provided
                 if 'supports_streaming' not in capabilities and 'supports_streaming' in provider_data:
                     capabilities['supports_streaming'] = provider_data['supports_streaming']
@@ -1656,6 +1661,69 @@ def _normalize_modalities(value: Any) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         return [str(v).strip().lower() for v in value if v and str(v).strip()]
     return [str(value).strip().lower()]
+
+
+def _llm_registry_capability_envelopes() -> dict[str, dict[str, Any]]:
+    """
+    Return provider capability envelopes from the LLM adapter registry.
+
+    Preferred format is wrapper-level `list_capabilities()` entries:
+      {"provider": str, "availability": str, "capabilities": dict|None}
+
+    Falls back to legacy `get_all_capabilities()` (treated as enabled).
+    """
+    envelopes: dict[str, dict[str, Any]] = {}
+
+    try:
+        registry = llm_adapter_registry.get_registry()
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
+        return envelopes
+
+    try:
+        list_caps = getattr(registry, "list_capabilities", None)
+        if callable(list_caps):
+            try:
+                entries = list_caps(include_disabled=True)
+            except TypeError:
+                entries = list_caps()
+            if isinstance(entries, list):
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    provider_name = str(entry.get("provider") or "").strip()
+                    if not provider_name:
+                        continue
+                    availability = str(entry.get("availability") or "unknown").strip().lower() or "unknown"
+                    raw_caps = entry.get("capabilities")
+                    envelopes[provider_name] = {
+                        "provider": provider_name,
+                        "availability": availability,
+                        "capabilities": raw_caps if isinstance(raw_caps, dict) else None,
+                    }
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    if envelopes:
+        return envelopes
+
+    # Backward-compatible fallback for stubs exposing only get_all_capabilities().
+    try:
+        get_all = getattr(registry, "get_all_capabilities", None)
+        legacy_caps = get_all() if callable(get_all) else None
+        if isinstance(legacy_caps, dict):
+            for provider_name, caps in legacy_caps.items():
+                normalized_name = str(provider_name or "").strip()
+                if not normalized_name:
+                    continue
+                envelopes[normalized_name] = {
+                    "provider": normalized_name,
+                    "availability": "enabled",
+                    "capabilities": caps if isinstance(caps, dict) else None,
+                }
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    return envelopes
 
 
 def _model_matches_filters(

@@ -13,7 +13,7 @@ def _fake_config():
     return cfg
 
 
-def test_llm_providers_merges_adapter_capabilities(monkeypatch, client_user_only):
+def test_llm_providers_merges_adapter_capabilities_from_envelope(monkeypatch, client_user_only):
     # Force adapters available even though this is not strictly required for the endpoint
 
     # Stub configuration loader to return a controlled config
@@ -24,8 +24,15 @@ def test_llm_providers_merges_adapter_capabilities(monkeypatch, client_user_only
     import tldw_Server_API.app.core.LLM_Calls.adapter_registry as reg_mod
 
     class _DummyReg:
-        def get_all_capabilities(self):
-            return {"openai": {"json_mode": True, "supports_tools": True, "extra_cap": "adapter"}}
+        def list_capabilities(self, include_disabled=True):
+            assert include_disabled is True
+            return [
+                {
+                    "provider": "openai",
+                    "availability": "enabled",
+                    "capabilities": {"json_mode": True, "supports_tools": True, "extra_cap": "adapter"},
+                }
+            ]
 
     monkeypatch.setattr(reg_mod, "get_registry", lambda: _DummyReg())
 
@@ -40,3 +47,34 @@ def test_llm_providers_merges_adapter_capabilities(monkeypatch, client_user_only
     assert caps.get("json_mode") is True
     assert caps.get("supports_tools") is True
     assert caps.get("extra_cap") == "adapter"
+    assert providers["openai"].get("availability") == "enabled"
+    assert providers["openai"].get("capability_envelope") == {
+        "provider": "openai",
+        "availability": "enabled",
+        "capabilities": {"json_mode": True, "supports_tools": True, "extra_cap": "adapter"},
+    }
+
+
+def test_llm_providers_legacy_capabilities_fallback(monkeypatch, client_user_only):
+    import tldw_Server_API.app.core.config as core_config
+
+    monkeypatch.setattr(core_config, "load_comprehensive_config", _fake_config)
+
+    import tldw_Server_API.app.core.LLM_Calls.adapter_registry as reg_mod
+
+    class _DummyLegacyReg:
+        def get_all_capabilities(self):
+            return {"openai": {"json_mode": True, "supports_tools": True}}
+
+    monkeypatch.setattr(reg_mod, "get_registry", lambda: _DummyLegacyReg())
+
+    client = client_user_only
+    r = client.get("/api/v1/llm/providers")
+    assert r.status_code == 200
+    data = r.json()
+    providers = {p["name"]: p for p in data.get("providers", [])}
+    assert "openai" in providers
+    caps = providers["openai"].get("capabilities", {})
+    assert caps.get("json_mode") is True
+    assert caps.get("supports_tools") is True
+    assert providers["openai"].get("availability") == "enabled"

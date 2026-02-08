@@ -1,54 +1,65 @@
-# Persona Role-Play Stack (MVP) - PRD
+# Persona Role-Play Stack (MVP) - PRD (Character/Chat Integrated)
 
 ## 1) Summary
-Enable persona-consistent chat responses by curating persona-only exemplars, labeling them (emotion, scenario, rhetorical function), retrieving a dynamic, budget-aware subset per turn, and composing prompts with policy-first boundaries. Ship light telemetry (IOO/IOR) to measure demo utilization and detect retrieval drift or prompt injection.
+Enable persona-consistent chat responses by curating character-scoped exemplars, labeling them (emotion, scenario, rhetorical function), retrieving a dynamic budget-aware subset per turn, and composing prompts with policy-first boundaries.
+
+This PRD is intentionally integrated with the existing Character + Chat stack, not a parallel persona runtime.
 
 Primary goals:
-- Lift persona adherence with curated, labeled exemplars and dynamic selection.
+- Lift persona adherence for character chats with curated labeled exemplars and dynamic selection.
 - Keep refusals in-character while honoring platform safety and capabilities.
 - Add diagnostics (IOO/IOR/LCS) without incentivizing over-copying.
 
-Out of scope (MVP): fine-tuning/training; user-content harvesting; new safety frameworks.
+Out of scope (MVP):
+- Fine-tuning/training.
+- User-content harvesting beyond explicit curator actions.
+- Replacing the existing `/api/v1/persona` scaffold agent loop.
+- New standalone safety framework.
 
 
 ## 2) User Stories (MVP)
-- As a user, I can choose a persona and receive in-character responses that stay policy-compliant.
-- As a curator, I can import, label, and search persona exemplars.
+- As a user, I can choose a character and receive in-character responses that stay policy-compliant.
+- As a curator, I can import, label, and search role-play exemplars for a character.
 - As a developer, I can debug which demos were selected and why.
 - As an operator, I can monitor demo utilization and safety adherence.
 
 
 ## 3) Architecture Overview
 Components and repo paths:
-- Content Store: `tldw_Server_API/app/core/DB_Management/Persona_DB.py` (new)
-- Retrieval & Packer: `tldw_Server_API/app/core/RAG/persona_selector.py` (new)
-- Prompt Compiler: `tldw_Server_API/app/core/LLM_Calls/prompt_compiler.py` (extend or add)
-- API Endpoints: `tldw_Server_API/app/api/v1/endpoints/persona.py` (new)
-- Schemas: `tldw_Server_API/app/api/v1/schemas/persona.py` (new)
-- Telemetry/Evals: `tldw_Server_API/app/core/Evaluations/persona_eval.py` (new)
-- Embeddings: use existing Chroma integration under `app/core/Embeddings/`
+- Content Store (extend existing DB layer):
+  - `tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py`
+  - `tldw_Server_API/app/core/Character_Chat/modules/character_db.py` and migration helpers
+- Retrieval & Packer (new module in Character/Chat domain):
+  - `tldw_Server_API/app/core/Character_Chat/modules/persona_exemplar_selector.py` (new)
+- Prompt Compiler integration:
+  - `tldw_Server_API/app/core/Chat/chat_service.py`
+  - `tldw_Server_API/app/core/Chat/chat_helpers.py`
+- API Endpoints (extend character endpoints):
+  - `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py`
+- Schemas (extend existing schemas):
+  - `tldw_Server_API/app/api/v1/schemas/character_schemas.py`
+  - `tldw_Server_API/app/api/v1/schemas/chat_request_schemas.py`
+- Telemetry/Evals:
+  - `tldw_Server_API/app/core/Chat/chat_metrics.py`
+  - `tldw_Server_API/app/core/Evaluations/` (new persona-style eval helper, integrated into existing eval APIs)
+- Embeddings: existing Chroma integration under `app/core/Embeddings/`
 
-Flow per chat turn (persona path):
-1) Classify user turn (intent/topic, scenario, emotion heuristic).
-2) Hybrid retrieve candidates (BM25 + embeddings), filter by persona and safety.
-3) Score, diversify (MMR), greedy-pack to demo token budget with rhetorical coverage.
-4) Compile prompt: System (policy), Developer (persona + boundaries), Demos, User K turns.
-5) Compute telemetry (IOO/IOR/LCS), attach to logs/metrics and optional debug response field.
+Flow per chat turn (integrated path):
+1) `POST /api/v1/chat/completions` receives `character_id` and optional exemplar selection overrides.
+2) Build standard character + conversation context through existing chat context assembly.
+3) Classify user turn and retrieve character-scoped exemplar candidates (BM25 + embeddings), filtered by safety.
+4) Score, diversify (MMR), and greedy-pack to demo token budget with rhetorical coverage.
+5) Compose final prompt in existing chat pipeline: platform/system policy, character boundaries, demos, user/history.
+6) Compute telemetry (IOO/IOR/LCS), attach to logs/metrics, and return optional debug metadata.
 
 
 ## 4) Data Model (Minimal)
-SQLite DB: `Databases/persona_exemplars.db` (global, read-only at inference; CRUD via API).
+Primary storage: existing per-user ChaChaNotes DB (`Databases/user_databases/<user_id>/ChaChaNotes.db`), via `CharactersRAGDB`.
 
-Tables:
-- personas
-  - id TEXT PRIMARY KEY (slug)
-  - display_name TEXT NOT NULL
-  - description TEXT
-  - created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-
-- persona_exemplars (row store)
+Tables (add via migration):
+- character_exemplars
   - id TEXT PRIMARY KEY (UUID)
-  - persona_id TEXT NOT NULL REFERENCES personas(id)
+  - character_id INTEGER NOT NULL REFERENCES character_cards(id)
   - text TEXT NOT NULL
   - source_type TEXT CHECK(source_type IN ('audio_transcript','video_transcript','article','other'))
   - source_url_or_id TEXT
@@ -57,141 +68,175 @@ Tables:
   - emotion TEXT CHECK(emotion IN ('angry','neutral','happy','other'))
   - scenario TEXT CHECK(scenario IN ('press_challenge','fan_banter','debate','boardroom','small_talk','other'))
   - rhetorical JSON TEXT  -- JSON array: ["opener","emphasis","ender",...]
-  - register TEXT  -- optional (formal, informal)
-  - safety_allowed JSON TEXT  -- JSON array of allowed categories
-  - safety_blocked JSON TEXT  -- JSON array of blocked categories
-  - rights_public_figure INTEGER DEFAULT 1  -- 0/1
+  - register TEXT
+  - safety_allowed JSON TEXT
+  - safety_blocked JSON TEXT
+  - rights_public_figure INTEGER DEFAULT 1
   - rights_notes TEXT
   - length_tokens INTEGER NOT NULL
   - created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  - updated_at TIMESTAMP
+  - is_deleted INTEGER DEFAULT 0
 
-- persona_exemplars_fts (FTS5 virtual)
-  - text, persona_id, emotion, scenario
-  - contentless FTS5 with external content = persona_exemplars
+- character_exemplars_fts (FTS5 virtual)
+  - text, character_id, emotion, scenario
+  - external content = `character_exemplars`
 
 Indexes:
-- idx_exemplars_persona (persona_id)
-- idx_exemplars_scenario_emotion (scenario, emotion)
-- idx_exemplars_novelty (novelty_hint)
+- idx_character_exemplars_character (character_id)
+- idx_character_exemplars_scenario_emotion (scenario, emotion)
+- idx_character_exemplars_novelty (novelty_hint)
 
 Embeddings:
-- Chroma collection per persona: `persona_exemplars:{persona_id}`
+- Chroma collection per user+character:
+  - `character_exemplars:{user_id}:{character_id}`
   - doc_id = exemplar id
-  - metadata: {persona_id, emotion, scenario, rhetorical, novelty_hint, length_tokens}
+  - metadata: `{character_id, emotion, scenario, rhetorical, novelty_hint, length_tokens}`
 
 JSON constraints are validated in API layer; DB stores as TEXT.
 
+Future option (out of MVP): shared read-only global curated overlay with per-tenant merge rules.
+
 
 ## 5) API Surface (Minimal)
-Base path: `/api/v1/persona`
+Primary base path: `/api/v1/characters/{character_id}`
 
-Schemas (Pydantic) in `app/api/v1/schemas/persona.py`:
-- Persona: {id, display_name, description}
-- ExemplarIn: {persona_id, text, source: {type, url_or_id?, date?}, novelty_hint?, labels: {emotion, scenario, rhetorical[], register?}, safety: {allowed[], blocked[]}, rights: {public_figure?, notes?}}
-- Exemplar: ExemplarIn + {id, length_tokens, created_at}
-- SearchRequest: {persona_id, query?, filter: {emotion?, scenario?, rhetorical?[]}, limit?, offset?}
-- SearchResponse: {items: [Exemplar], total}
-- SelectionConfig: {budget_tokens (int, default 600), max_exemplar_tokens (int, default 120), mmr_lambda (float, default 0.7)}
-- SelectionDebug: {selected: [Exemplar], budget_tokens, coverage: {openers, emphasis, enders, catchphrases_used}, scores: [{id, score}]}
-- Telemetry: {ioo, ior, lcs, safety_flags: [str]}
+Schemas (Pydantic) in `app/api/v1/schemas/character_schemas.py`:
+- ExemplarIn: `{text, source: {type, url_or_id?, date?}, novelty_hint?, labels: {emotion, scenario, rhetorical[], register?}, safety: {allowed[], blocked[]}, rights: {public_figure?, notes?}}`
+- Exemplar: `ExemplarIn + {id, character_id, length_tokens, created_at, updated_at}`
+- SearchRequest: `{query?, filter: {emotion?, scenario?, rhetorical?[]}, limit?, offset?}`
+- SearchResponse: `{items: [Exemplar], total}`
+- SelectionConfig: `{budget_tokens (int, default 600), max_exemplar_tokens (int, default 120), mmr_lambda (float, default 0.7)}`
+- SelectionDebug: `{selected: [Exemplar], budget_tokens, coverage: {openers, emphasis, enders, catchphrases_used}, scores: [{id, score}]}`
+- Telemetry: `{ioo, ior, lcs, safety_flags: [str]}`
 
-Endpoints in `app/api/v1/endpoints/persona.py`:
-- POST `/exemplars` → create one or many (ndjson or list)
+Endpoints in `app/api/v1/endpoints/characters_endpoint.py`:
+- POST `/exemplars` → create one or many (list)
 - GET `/exemplars/{id}` → fetch
 - PUT `/exemplars/{id}` → update (text/labels/metadata)
-- DELETE `/exemplars/{id}` → delete (soft delete optional later)
-- POST `/exemplars/search` → hybrid search; returns SearchResponse
-- POST `/select/debug` → returns SelectionDebug for given `{persona_id, user_turn, selection_config?}`
+- DELETE `/exemplars/{id}` → delete (soft delete)
+- POST `/exemplars/search` → hybrid search; returns `SearchResponse`
+- POST `/exemplars/select/debug` → returns `SelectionDebug` for `{user_turn, selection_config?}`
 
 Chat Integration (extend existing Chat API):
 - `POST /api/v1/chat/completions`
-  - New optional fields in request: `{persona_id?: str, demo_budget_tokens?: int, demo_strategy?: str}`
-  - Response: include `meta.persona.telemetry?: Telemetry` and `meta.persona.debug_id?` (for server logs correlation)
+  - Existing field remains primary: `character_id`
+  - New optional fields:
+    - `persona_exemplar_budget_tokens?: int`
+    - `persona_exemplar_strategy?: str`
+    - `persona_debug?: bool`
+  - Response (when debug enabled): `meta.persona.telemetry?: Telemetry` and `meta.persona.debug_id?`
 
-AuthNZ & Rate Limits: reuse existing dependencies in `API_Deps`; scope write ops to admin roles when multi-user.
+Compatibility:
+- `persona_id` (if sent by older clients) may be accepted as an alias only when it can be resolved deterministically to `character_id`.
+
+AuthNZ & Rate Limits:
+- Reuse existing character/chat dependencies in `API_Deps`.
+- Exemplar write ops follow same permission model as character writes in multi-user mode.
 
 
 ## 6) Selection Algorithm (Default)
-Inputs: user_turn, persona_id, SelectionConfig.
+Inputs: `user_turn`, `character_id`, `SelectionConfig`.
 
 Steps:
-1) Classify user_turn → {intent/topic, scenario heuristic, emotion heuristic}. Heuristic classifier first (embedding neighbors + regex for tone); ML classifier optional later.
-2) Candidate set → top-N by hybrid retrieval (BM25 via FTS5 + Chroma cosine). Filters: persona_id match; exclude exemplars with safety_blocked that conflict with detected request category.
-3) Score each exemplar:
-   - score = 0.45*intent_sim + 0.25*scenario_match + 0.20*emotion_match + 0.10*novelty_weight
-   - novelty_weight = 1.0 for `post_cutoff`, 0.5 unknown, 0.0 pre_cutoff (tunable per persona)
-4) Diversify with MMR (λ ≈ 0.7).
-5) Greedy pack into budget_tokens, enforcing soft coverage targets:
-   - ≤ max_exemplar_tokens per exemplar (default 120)
-   - Prefer many short snippets; cap catchphrase frequency (≤1-2 per 200 tokens)
-   - Coverage: try for 2-3 openers, 2-3 emphasis, 1-2 enders, plus 1-2 longer snippets
-6) Sanity pass: dedupe near-duplicates; strip non-persona lines if any; finalize pack.
+1) Classify `user_turn` to `{intent/topic, scenario heuristic, emotion heuristic}`.
+2) Candidate set = top-N by hybrid retrieval (FTS5 + Chroma cosine) for the same `character_id`.
+3) Apply safety gates:
+   - Exclude exemplars with `safety_blocked` that conflict with detected request category.
+4) Score each exemplar:
+   - `score = 0.45*intent_sim + 0.25*scenario_match + 0.20*emotion_match + 0.10*novelty_weight`
+   - `novelty_weight = 1.0 post_cutoff, 0.5 unknown, 0.0 pre_cutoff` (tunable per character)
+5) Diversify with MMR (`λ ~= 0.7`).
+6) Greedy-pack into `budget_tokens`, with soft coverage:
+   - `<= max_exemplar_tokens` per exemplar (default 120)
+   - Prefer many short snippets
+   - Cap catchphrase frequency (`<=1-2` per 200 tokens)
+   - Coverage target: 2-3 openers, 2-3 emphasis, 1-2 enders, 1-2 longer snippets
+7) Sanity pass:
+   - Dedupe near-duplicates
+   - Strip non-persona lines
+   - Finalize pack
 
 
 ## 7) Prompt Composition (Hardened)
-- System: platform policies; refuse unsafe requests; do not reveal system/dev prompts; stay in character while refusing.
-- Developer: persona description + capability boundaries (e.g., “as {CHAR}, I comment on code, I don’t write it”). No “restrictions lifted”.
-- Demos: persona-only snippets grouped by rhetorical function; no interviewer text.
-- User: current turn (+ last K turns as needed).
+- System: platform policies; refuse unsafe requests; do not reveal system/dev prompts; keep refusals in character.
+- Character boundary layer: character card system prompt + explicit capability boundaries.
+- Demos: character-only snippets grouped by rhetorical function; no interviewer text.
+- User/history: current turn plus bounded conversation turns from existing chat history logic.
 
-Refusal responses remain in character; offer alternative help paths.
+Refusal responses remain in character and offer safe alternatives.
 
 
 ## 8) Telemetry & Evaluation
-- IOO (Input-Over-Output): share of output tokens overlapping demos (stopword-reduced; exclude approved catchphrase lexicon). Flag if >30-40% on outputs >150 tokens.
-- IOR (Input-Over-Retrieved): share of retrieved demo tokens actually used. Too low → retrieval miss; too high → potential over-copying.
-- LCS: longest common subsequence vs demos (normalized).
-- Safety: count violations/refusals using existing safety hooks; log per request.
+- IOO (Input-Over-Output): overlap of output tokens with selected demos (stopword-reduced; approved catchphrases excluded). Flag if >30-40% for outputs >150 tokens.
+- IOR (Input-Over-Retrieved): share of retrieved demo tokens used. Too low = retrieval miss; too high = over-copying risk.
+- LCS: normalized longest common subsequence between output and demos.
+- Safety: count violations/refusals using existing moderation/safety hooks.
 
 Surfacing:
-- Attach to logs (PII-safe); expose aggregates via `app/core/Evaluations/persona_eval.py` and existing evaluations endpoints.
-- Optional: include telemetry snippet in chat response `meta.persona.telemetry` when `debug=true`.
+- Attach to logs (PII-safe) with `debug_id` correlation.
+- Track aggregates through existing metrics/evals surfaces.
+- Optional response field under `meta.persona.telemetry` when `persona_debug=true`.
 
 
 ## 9) Security, Safety, Legal
 - No fabricated quotes attributed to real people.
-- Keep boundaries in system/dev prompts; never attribute policy to persona.
-- Respect `safety_blocked` categories during selection.
-- Rights: default to `public_figure: true` for public events; store notes; expand workflow later.
+- Keep policy boundaries in platform/system layers, not attributed to persona.
+- Enforce `safety_blocked` during exemplar selection.
+- Rights metadata is required for curated public-figure content (`rights_public_figure`, `rights_notes`).
 
 
 ## 10) Rollout Plan (4 Sprints)
-- Sprint 1: Data + CRUD
-  - Persona DB + FTS5 schema; exemplar import; endpoints + schemas; unit tests.
+- Sprint 1: Data + CRUD on character stack
+  - Add exemplar tables/migrations to ChaChaNotes DB.
+  - Add exemplar CRUD/search endpoints under `characters`.
+  - Unit tests for DB + endpoints.
+
 - Sprint 2: Retrieval + Packer
-  - Hybrid search, MMR, budget packer; heuristic classifier; integration tests with mock data.
-- Sprint 3: Prompt Compiler + Chat Integration
-  - Compiler assembly; chat request params; refusal templates; E2E tests with mock LLM provider.
+  - Hybrid search, MMR, budget packer, heuristic classifier.
+  - Integration tests with mock data and embeddings.
+
+- Sprint 3: Chat Integration
+  - Integrate selector/packer into chat context assembly for `character_id` path.
+  - Add request flags (`persona_exemplar_*`) and debug response metadata.
+  - E2E tests with mock LLM provider.
+
 - Sprint 4: Telemetry + Evals
-  - IOO/IOR/LCS; metrics surfacing; red-team prompts; alerts when IOO collapses under hostile prompts.
+  - IOO/IOR/LCS metrics and alerting hooks.
+  - Red-team prompt tests for over-copying and injection pressure.
 
 
 ## 11) Acceptance Criteria (MVP)
-Functional
-- CRUD: Can create, update, delete, and search exemplars for a persona via API.
-- Selection: Given `persona_id` and `user_turn`, system returns a packed demo set within `≤800` tokens that includes coverage across opener/emphasis/ender and caps per-exemplar length at `≤120` tokens.
-- Chat: `POST /api/v1/chat/completions` with `persona_id` yields in-character outputs and policy-compliant refusals.
-- Telemetry: IOO/IOR/LCS computed and logged per response; optional debug field in response when requested.
+Functional:
+- CRUD: create/update/delete/search exemplars for a character via API.
+- Selection: given `character_id` and `user_turn`, return packed demos within `<=800` tokens, covering opener/emphasis/ender, with `<=120` tokens per exemplar.
+- Chat: `POST /api/v1/chat/completions` with `character_id` yields in-character outputs and policy-compliant refusals with exemplar augmentation enabled.
+- Telemetry: IOO/IOR/LCS computed and logged per response, optional debug field when requested.
 
-Quality / Metrics
-- Persona adherence (heuristic): ≥80% of sampled responses judged in-character by internal rubric; no fabricated quotes.
-- Safety: No increase in violation rate vs baseline; refusals sound in-character.
-- IOO: ≤30% for outputs >150 tokens (excluding approved catchphrases); alert on sustained exceedance.
-- IOR: 10-60% typical range, monitored to detect retrieval miss (too low) or over-copying (too high).
+Quality / Metrics:
+- Persona adherence (heuristic): >=80% sampled responses judged in-character; no fabricated quotes.
+- Safety: no increase in violation rate vs baseline; refusals stay in-character.
+- IOO: <=30% for outputs >150 tokens (excluding approved catchphrases), with sustained exceedance alerting.
+- IOR: typical 10-60%, monitored for misses/over-copying.
 
-Operational
-- Works in both AuthNZ modes; write endpoints gated to admin in multi-user.
-- Performance: Selection+compile adds ≤120ms p95 on local persona with ≤10k exemplars; scales with indexing.
+Operational:
+- Works in single-user and multi-user AuthNZ modes.
+- Exemplar write endpoints follow existing character write permission model.
+- Performance target: selector + prompt assembly adds <=120ms p95 for local character with <=10k exemplars.
 
 
 ## 12) Open Questions
-- Do we need per-tenant persona overlays, or is a shared global store sufficient in v0?
-- Should we expose persona boundary presets via API, or keep inline in developer prompt for now?
-- What threshold and actions for IOO alerts (log only vs. degrade demo budget dynamically)?
+- Do we need a shared global curated overlay in v0, or is per-user/per-character storage sufficient?
+- Should `persona_id` alias support be temporary with deprecation messaging, or immediate strict `character_id` only?
+- What IOO alert policy should auto-adjust demo budget versus log-only?
 
 
 ## 13) Implementation Notes
-- Follow `MediaDatabase` patterns in `app/core/DB_Management/` (context managers, migrations, FTS5 sync).
-- Use Chroma batching for embedding upserts; key by exemplar id.
-- Config: default demo budget 600 tokens; configurable per persona via server config.
-- Testing: mirror patterns in `tldw_Server_API/tests/`; mock LLM provider and Chroma; include adversarial prompt set.
+- Follow `CharactersRAGDB` + migration patterns in `app/core/DB_Management/ChaChaNotes_DB.py`.
+- Keep DB access in the Character/Chat abstractions; no raw SQL in endpoints.
+- Use Chroma batching for embedding upserts keyed by exemplar id.
+- Keep default demo budget 600 tokens, configurable in server config.
+- Testing should mirror existing suites under:
+  - `tldw_Server_API/tests/Character_Chat_NEW/`
+  - `tldw_Server_API/tests/Chat_NEW/`
+  - `tldw_Server_API/tests/Persona/` (only for scaffold compatibility, not primary role-play serving path)

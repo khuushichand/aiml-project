@@ -379,3 +379,8 @@ class ValidateDictionaryResponse(BaseModel):
     warnings: list[ValidationIssue] = Field(default_factory=list, description="List of validation warnings")
     entry_stats: dict[str, int] = Field(default_factory=dict, description="Basic statistics about entries")
     suggested_fixes: list[str] = Field(default_factory=list, description="Optional suggestions to fix issues")
+    partial: bool = Field(False, description="True when validation short-circuited and report is best-effort")
+    partial_reason: Optional[str] = Field(
+        None,
+        description="Reason for partial validation, e.g. 'max_entries' or 'timeout'",
+    )

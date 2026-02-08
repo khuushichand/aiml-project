@@ -488,6 +488,34 @@ def test_split_references_ignores_markdown_link_fragments_without_authors():
     assert all("[2009, ApJS, 182, 543]" not in r.strip() for r in refs)
 
 
+def test_split_references_skips_broken_markdown_fragment_lines():
+    refs_text = (
+        "Learn-](https://openreview.net/forum?id=abc)\n"
+        "Arian Askari, Roxana Petcu, Chuan Meng, and Suzan Verberne. 2025. "
+        "Self-seeding and multi-intent self-instructing llms. arXiv:2402.11633.\n\n"
+        "Jinze Bai, Shuai Bai, Yunfei Chu, and others. 2023. "
+        "Qwen technical report. arXiv:2309.16609.\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) >= 2
+    assert all("Learn-](https://openreview.net/forum?id=abc)" not in r for r in refs)
+    assert any("Self-seeding and multi-intent self-instructing llms" in r for r in refs)
+    assert any("Qwen technical report" in r for r in refs)
+
+
+def test_split_references_rejects_prose_lines_with_year_and_url_noise():
+    refs_text = (
+        "Today, President Joe Biden announced a new policy in 2026. "
+        "https://example.com/policy-update\n\n"
+        "Akari Asai, Kazuma Hashimoto, Hannaneh Hajishirzi, Richard Socher, and "
+        "Caiming Xiong. 2020. Learning to retrieve reasoning paths. "
+        "In ICLR 2020.\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert any("Learning to retrieve reasoning paths" in r for r in refs)
+    assert all("President Joe Biden" not in r for r in refs)
+
+
 def test_split_references_merges_continuation_lines_in_numbered_mode():
     refs_text = (
         "[5] L. Kofman, A. D. Linde, and A. A. Starobinsky, Phys.\n"
@@ -614,7 +642,9 @@ def test_parse_reference_basic_normalizes_broken_markdown_fragment():
     parsed = refs_mod._parse_reference_basic(raw)
 
     assert "](" not in parsed.raw_text
-    assert "Learn-" in parsed.raw_text
+    assert "Learn-](https://" not in parsed.raw_text
+    assert not parsed.raw_text.startswith("Learn- ")
+    assert "Samarth Bhargav" in parsed.raw_text
     assert parsed.year == 2022
 
 

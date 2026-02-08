@@ -85,16 +85,44 @@ interface UnifiedSearchRequest {
   keyword_filter?: string[];                  // Optional
   enable_generation?: boolean;                // Include model-generated answer
   enable_citations?: boolean;                 // Include citations
-  enable_query_classification?: boolean;      // Search-Agent router toggle
-  enable_research_loop?: boolean;             // Iterative research mode
-  search_depth_mode?: 'speed' | 'balanced' | 'quality';
-  enable_suggestions?: boolean;               // Follow-up suggestion generation
-  num_suggestions?: number;                   // 1-10, Default: 5
+  enable_query_classification?: boolean;      // Default: false. LLM-based query router
+  enable_research_loop?: boolean;             // Default: false. Iterative research (requires enable_query_classification=true)
+  search_depth_mode?: 'speed' | 'balanced' | 'quality'; // Default: null (no preset). Sets parameter presets
+  enable_suggestions?: boolean;               // Default: false. Follow-up suggestion generation
+  num_suggestions?: number;                   // Default: 5, range 1–10. Only used when enable_suggestions=true
   enable_structured_response?: boolean;       // XML context + citation-oriented writer
   enable_image_search?: boolean;              // Media search action (images)
   enable_video_search?: boolean;              // Media search action (videos)
 }
 ```
+
+#### Request Flag Defaults & Constraints
+
+| Flag | Type | Default | Allowed Values | Constraints |
+|------|------|---------|----------------|-------------|
+| `search_depth_mode` | string \| null | `null` | `"speed"`, `"balanced"`, `"quality"` | When set, applies parameter presets (see table below). Explicit per-field values override mode presets. |
+| `enable_query_classification` | bool | `false` | `true`, `false` | **Required** when `enable_research_loop=true`. Enables LLM-based query routing and reformulation. |
+| `enable_research_loop` | bool | `false` | `true`, `false` | Requires `enable_query_classification=true`; server returns **422** if violated. |
+| `enable_suggestions` | bool | `false` | `true`, `false` | When `true`, generates follow-up question suggestions. `num_suggestions` controls the count. |
+| `num_suggestions` | int | `5` | `1`–`10` | Only meaningful when `enable_suggestions=true`. Ignored otherwise. Values outside 1–10 return **422**. |
+
+**Inter-flag dependencies:**
+
+- **`enable_research_loop` → `enable_query_classification`** — Setting `enable_research_loop=true` without `enable_query_classification=true` produces a `422 Validation Error`. The research loop needs the query classifier to route and reformulate iterative queries.
+- **`num_suggestions` → `enable_suggestions`** — `num_suggestions` is only consumed when `enable_suggestions=true`. When suggestions are disabled the value is silently ignored (no error, no suggestions returned).
+- **`search_depth_mode` → latency** — `"speed"` minimises processing (fewer results, no reranking/expansion), `"balanced"` enables reranking and query expansion, `"quality"` enables all features including HyDE and web fallback. Expect increasing latency in that order.
+
+**`search_depth_mode` presets** — when a mode is selected these defaults are applied; any parameter you set explicitly overrides the preset:
+
+| Parameter | `speed` | `balanced` | `quality` |
+|-----------|---------|------------|-----------|
+| `top_k` | 3 | 10 | 25 |
+| `enable_reranking` | false | true | true |
+| `reranking_strategy` | — | `"flashrank"` | `"two_tier"` |
+| `expand_query` | false | true | true |
+| `enable_hyde` | false | — | true |
+| `enable_web_fallback` | false | — | true |
+| `enable_multi_vector_passages` | false | — | true |
 
 Response (UnifiedRAGResponse excerpt):
 ```typescript

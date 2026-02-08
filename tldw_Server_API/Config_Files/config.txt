@@ -169,6 +169,24 @@ history_messages_limit = 20
 # Ordering for loaded history: asc (oldest first) or desc (newest first). Default: desc.
 history_messages_order = desc
 
+# Server-side tool auto-execution (Phase 2; default remains off)
+# Env: CHAT_AUTO_EXECUTE_TOOLS=true|false
+chat_auto_execute_tools = false
+# Per-response ceiling for model-requested tool calls. Clamped to [1, 20].
+# Env: CHAT_MAX_TOOL_CALLS
+chat_max_tool_calls = 3
+# Per-tool-call execution timeout budget in milliseconds. Clamped to [1000, 120000].
+# Env: CHAT_TOOL_TIMEOUT_MS
+chat_tool_timeout_ms = 15000
+# Allow-list for tool names/prefixes used by auto-exec.
+# Use '*' for unrestricted, or comma-separated entries like:
+#   notes.search,media.*,prompts.get
+# Env: CHAT_TOOL_ALLOW_CATALOG
+chat_tool_allow_catalog = *
+# Attach idempotency keys when auto-executing tools (recommended for write-capable tools).
+# Env: CHAT_TOOL_IDEMPOTENCY=true|false
+chat_tool_idempotency = true
+
 [Chat-Commands]
 # Enable slash commands (env: CHAT_COMMANDS_ENABLED)
 commands_enabled = false

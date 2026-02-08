@@ -697,6 +697,11 @@ async def create_optimization(
             status="pending",
             client_id=db.client_id,
         )
+        if optimization_data.test_case_ids is not None:
+            optimization_record = db.update_optimization(
+                optimization_record["id"],
+                {"test_case_ids": optimization_data.test_case_ids},
+            )
 
         # Record idempotency mapping
         if idempotency_key and optimization_record.get("id"):
@@ -1422,6 +1427,10 @@ async def compare_strategies(
                 max_iterations=10,
                 status="pending",
                 client_id=db.client_id,
+            )
+            optimization_record = db.update_optimization(
+                optimization_record["id"],
+                {"test_case_ids": request.test_case_ids or []},
             )
             optimization_ids.append(optimization_record["id"])
 

@@ -95,3 +95,11 @@ def test_neutts_endpoint_missing_reference_text(client: TestClient):
     # Expect 400 on validation error mapping
     assert r.status_code == 400, r.text
     assert "reference_text" in (r.text or "").lower()
+
+
+def test_audio_health_includes_capabilities_envelope(client: TestClient):
+    r = client.get("/api/v1/audio/health")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "capabilities_envelope" in data
+    assert isinstance(data["capabilities_envelope"], list)

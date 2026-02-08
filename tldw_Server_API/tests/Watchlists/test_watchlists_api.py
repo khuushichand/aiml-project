@@ -470,6 +470,29 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     assert templated["metadata"].get("template_source") == "watchlists_templates"
     assert templated["content"].startswith("Daily Digest-Output-5") or "Daily Digest" in templated["content"]
 
+    # When both stores have the same template name, DB-backed outputs template wins.
+    collision_payload = {
+        "name": "daily_md",
+        "type": "briefing_markdown",
+        "format": "md",
+        "body": "DB OVERRIDE {{ title }}",
+        "description": "DB-backed collision template",
+    }
+    r = c.post("/api/v1/outputs/templates", json=collision_payload)
+    assert r.status_code == 200, r.text
+    colliding_db_template = r.json()
+
+    r = c.post("/api/v1/watchlists/outputs", json={"run_id": run_id, "template_name": "daily_md", "temporary": True})
+    assert r.status_code == 200, r.text
+    collision_output = r.json()
+    assert collision_output["version"] == 6
+    assert collision_output["metadata"].get("template_source") == "outputs_templates"
+    assert collision_output["metadata"].get("template_id") == colliding_db_template["id"]
+    assert "DB OVERRIDE" in (collision_output.get("content") or "")
+
+    r = c.delete(f"/api/v1/outputs/templates/{colliding_db_template['id']}")
+    assert r.status_code == 200, r.text
+
     # Delete template and confirm removal
     r = c.delete("/api/v1/watchlists/templates/daily_md")
     assert r.status_code == 200

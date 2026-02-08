@@ -3712,6 +3712,7 @@ def rebuild_all_media(
     rebuild_service: Any = None,
 ) -> dict[str, Any]:
     override_db: MediaDatabase | None = None
+    svc = rebuild_service or get_claims_rebuild_service()
     try:
         if user_id is not None and getattr(current_user, "is_admin", False):
             db_path = get_user_media_db_path(int(user_id))
@@ -3723,8 +3724,6 @@ def rebuild_all_media(
         else:
             db_path = db.db_path_str
             query_db = db
-
-            svc = rebuild_service or get_claims_rebuild_service()
 
         policy = str(policy or "missing").lower()
         if policy == "all":

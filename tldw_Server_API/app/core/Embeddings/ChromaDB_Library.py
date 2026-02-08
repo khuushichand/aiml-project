@@ -779,8 +779,9 @@ class ChromaDBManager:
                             if bool(_settings.get("CLAIMS_EMBED", False)) and claims:
                                 claim_texts = [c.get("claim_text", "") for c in claims if c.get("claim_text")]
                                 if claim_texts:
-                                    # Embed with same model unless overridden
-                                    claim_model_id = embedding_model_id_override or self.default_embedding_model_id
+                                    # Prefer claims-specific model, then request override, then default.
+                                    configured_claim_model = str(_settings.get("CLAIMS_EMBED_MODEL_ID", "") or "").strip()
+                                    claim_model_id = configured_claim_model or embedding_model_id_override or self.default_embedding_model_id
                                     emb_vectors = create_embeddings_batch(
                                         texts=claim_texts,
                                         user_app_config=self.user_embedding_config,

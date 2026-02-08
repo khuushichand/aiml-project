@@ -3885,6 +3885,117 @@ export class TldwApiClient {
   // Collections / Reading List API
   // ─────────────────────────────────────────────────────────────────────────────
 
+  async getItems(params?: {
+    page?: number
+    size?: number
+    q?: string
+    status_filter?: string | string[]
+    tags?: string[]
+    favorite?: boolean
+    domain?: string
+    date_from?: string
+    date_to?: string
+    origin?: string
+    job_id?: number
+    run_id?: number
+  }): Promise<any> {
+    const query = new URLSearchParams()
+    if (params?.page) query.set("page", String(params.page))
+    if (params?.size) query.set("size", String(params.size))
+    if (params?.q) query.set("q", params.q)
+    if (params?.status_filter) {
+      const statuses = Array.isArray(params.status_filter)
+        ? params.status_filter
+        : [params.status_filter]
+      statuses.filter(Boolean).forEach((status) => query.append("status_filter", status))
+    }
+    if (params?.tags?.length) params.tags.forEach((tag) => query.append("tags", tag))
+    if (params?.favorite !== undefined) query.set("favorite", String(params.favorite))
+    if (params?.domain) query.set("domain", params.domain)
+    if (params?.date_from) query.set("date_from", params.date_from)
+    if (params?.date_to) query.set("date_to", params.date_to)
+    if (params?.origin) query.set("origin", params.origin)
+    if (params?.job_id !== undefined) query.set("job_id", String(params.job_id))
+    if (params?.run_id !== undefined) query.set("run_id", String(params.run_id))
+    const qs = query.toString()
+    const path = `/api/v1/items${qs ? `?${qs}` : ""}` as const
+    const data = await bgRequest<any>({ path, method: "GET" })
+    const items = Array.isArray(data?.items)
+      ? data.items.map((item: any) => ({
+          ...item,
+          id: String(item?.id),
+          content_item_id:
+            item?.content_item_id === null || typeof item?.content_item_id === "undefined"
+              ? undefined
+              : String(item.content_item_id),
+          media_id:
+            item?.media_id === null || typeof item?.media_id === "undefined"
+              ? undefined
+              : String(item.media_id),
+          title: item?.title || item?.url || "Untitled",
+          tags: Array.isArray(item?.tags) ? item.tags : []
+        }))
+      : []
+    return {
+      ...data,
+      items,
+      total: data?.total ?? items.length,
+      page: data?.page ?? params?.page ?? 1,
+      size: data?.size ?? params?.size ?? items.length
+    }
+  }
+
+  async bulkUpdateItems(data: {
+    item_ids: string[]
+    action: "set_status" | "set_favorite" | "add_tags" | "remove_tags" | "replace_tags" | "delete"
+    status?: string
+    favorite?: boolean
+    tags?: string[]
+    hard?: boolean
+  }): Promise<{
+    total: number
+    succeeded: number
+    failed: number
+    results: Array<{ item_id: string; success: boolean; error?: string | null }>
+  }> {
+    const itemIds = (data.item_ids || [])
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+      .map((id) => Math.floor(id))
+    if (itemIds.length === 0) {
+      throw new Error("item_ids_required")
+    }
+
+    const response = await bgRequest<any>({
+      path: "/api/v1/items/bulk",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        item_ids: itemIds,
+        action: data.action,
+        status: data.status,
+        favorite: data.favorite,
+        tags: data.tags,
+        hard: data.hard
+      }
+    })
+
+    const results = Array.isArray(response?.results)
+      ? response.results.map((entry: any) => ({
+          item_id: String(entry?.item_id),
+          success: Boolean(entry?.success),
+          error: entry?.error ?? null
+        }))
+      : []
+
+    return {
+      total: response?.total ?? itemIds.length,
+      succeeded: response?.succeeded ?? results.filter((entry) => entry.success).length,
+      failed: response?.failed ?? results.filter((entry) => !entry.success).length,
+      results
+    }
+  }
+
   async getReadingList(params?: {
     page?: number
     size?: number

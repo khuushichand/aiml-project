@@ -735,6 +735,8 @@ async def validate_chat_dictionary(
         warnings=[ValidationIssue(**w) for w in result.warnings],
         entry_stats=result.entry_stats,
         suggested_fixes=result.suggested_fixes,
+        partial=result.partial,
+        partial_reason=result.partial_reason,
     )
 
 # --- Helper Functions ---

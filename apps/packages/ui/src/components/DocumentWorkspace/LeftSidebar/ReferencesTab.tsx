@@ -507,6 +507,7 @@ export const ReferencesTab: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil(Math.max(1, totalAvailable) / pageSize))
   const hasPrevPage = offset > 0
   const hasNextPage = Boolean(data.has_more)
+  const isSearchActive = normalizedSearchQuery.length > 0
   const pageStart = totalCount > 0 ? offset + 1 : 0
   const pageEnd = offset + totalCount
 
@@ -717,6 +718,23 @@ export const ReferencesTab: React.FC = () => {
             </span>
           )}
         </div>
+        {isSearchActive && (
+          <div className="mb-2 text-xs text-text-muted">
+            {t(
+              "option:documentWorkspace.referencesSearchScope",
+              "Search runs across all parsed references; this page shows {{start}}-{{end}} of {{total}} matches.",
+              { start: pageStart, end: pageEnd, total: totalAvailable }
+            )}
+          </div>
+        )}
+        {isSearchActive && hasNextPage && (
+          <div className="mb-2 text-xs text-text-muted">
+            {t(
+              "option:documentWorkspace.referencesSearchMoreMatches",
+              "More matching references are available. Use Next to continue."
+            )}
+          </div>
+        )}
         <div className="mb-3 flex items-center justify-between gap-2">
           <div className="text-xs text-text-muted">
             {t(

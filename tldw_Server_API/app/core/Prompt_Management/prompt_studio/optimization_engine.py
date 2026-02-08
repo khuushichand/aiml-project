@@ -652,11 +652,21 @@ class OptimizationEngine:
         )
         strategy = str(strategy).lower()
 
-        test_case_ids = self._coerce_json_value(optimization.get("test_case_ids"), [])
+        test_case_ids = self._coerce_json_value(
+            optimization.get("test_case_ids")
+            if optimization.get("test_case_ids") is not None
+            else config.get("test_case_ids"),
+            [],
+        )
         if not isinstance(test_case_ids, list):
             test_case_ids = []
 
-        model_config = self._coerce_json_value(optimization.get("model_config"), {})
+        model_config = self._coerce_json_value(
+            optimization.get("model_config")
+            or config.get("model_config")
+            or config.get("model_configuration"),
+            {},
+        )
         if isinstance(model_config, list):
             model_config = model_config[0] if model_config else {}
         if not isinstance(model_config, dict):
