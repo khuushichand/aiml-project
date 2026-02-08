@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  extractContentFromMediaDetail,
   extractMediaId,
   normalizeMediaSearchResults,
   toPinnedResult,
@@ -45,5 +46,33 @@ describe("useKnowledgeSearch helpers", () => {
     expect(pinned.mediaId).toBe(17)
     expect(pinned.title).toBe("Research Note")
     expect(pinned.type).toBe("note")
+  })
+
+  it("extracts full text from nested media detail content objects", () => {
+    const detail = {
+      content: {
+        text: "Full media transcript"
+      }
+    }
+
+    expect(extractContentFromMediaDetail(detail)).toBe("Full media transcript")
+  })
+
+  it("falls back to latest_version and data content fields", () => {
+    const latestVersionDetail = {
+      latest_version: {
+        content: "Latest version text"
+      }
+    }
+    const dataDetail = {
+      data: {
+        raw_text: "Data-level text"
+      }
+    }
+
+    expect(extractContentFromMediaDetail(latestVersionDetail)).toBe(
+      "Latest version text"
+    )
+    expect(extractContentFromMediaDetail(dataDetail)).toBe("Data-level text")
   })
 })

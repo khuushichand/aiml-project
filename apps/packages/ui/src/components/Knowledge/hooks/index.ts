@@ -9,6 +9,7 @@ export type {
   SortMode
 } from "./useKnowledgeSearch"
 export {
+  extractContentFromMediaDetail,
   extractMediaId,
   getResultChunkIndex,
   getResultId,
@@ -20,5 +21,6 @@ export {
   getResultDate,
   getResultScore,
   normalizeMediaSearchResults,
-  toPinnedResult
+  toPinnedResult,
+  withFullMediaTextIfAvailable
 } from "./useKnowledgeSearch"

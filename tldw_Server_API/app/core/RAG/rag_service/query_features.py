@@ -799,19 +799,21 @@ class QueryRewriter:
         if analysis.question_type or query.strip().endswith('?'):
             return None
 
-        # Map intents to question forms
+        # Map intent values to question forms (keyed by value string to
+        # remain robust if the module is reloaded and enum identity changes).
         intent_to_question = {
-            QueryIntent.FACTUAL: f"What are the key facts about {query}?",
-            QueryIntent.DEFINITIONAL: f"What is the definition and meaning of {query}?",
-            QueryIntent.CAUSAL: f"What causes {query} and why does it happen?",
-            QueryIntent.PROCEDURAL: f"What are the steps to {query}?",
-            QueryIntent.ANALYTICAL: f"What is the analysis and evaluation of {query}?",
-            QueryIntent.COMPARATIVE: f"How does {query} compare to alternatives?",
-            QueryIntent.TEMPORAL: f"What is the timeline and history of {query}?",
-            QueryIntent.EXPLORATORY: f"What are the main aspects of {query}?",
+            "factual": f"What are the key facts about {query}?",
+            "definitional": f"What is the definition and meaning of {query}?",
+            "causal": f"What causes {query} and why does it happen?",
+            "procedural": f"What are the steps to {query}?",
+            "analytical": f"What is the analysis and evaluation of {query}?",
+            "comparative": f"How does {query} compare to alternatives?",
+            "temporal": f"What is the timeline and history of {query}?",
+            "exploratory": f"What are the main aspects of {query}?",
         }
 
-        return intent_to_question.get(analysis.intent)
+        intent_val = analysis.intent.value if isinstance(analysis.intent, Enum) else analysis.intent
+        return intent_to_question.get(intent_val)
 
     def _expand_with_related_concepts(
         self,

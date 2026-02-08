@@ -305,8 +305,6 @@ class GuardianDB:
                         ON supervised_policies(category);
                     CREATE INDEX IF NOT EXISTS idx_sp_enabled
                         ON supervised_policies(enabled);
-                    CREATE INDEX IF NOT EXISTS idx_sp_governance
-                        ON supervised_policies(governance_policy_id);
 
                     CREATE TABLE IF NOT EXISTS supervision_audit_log (
                         id TEXT PRIMARY KEY,
@@ -390,8 +388,6 @@ class GuardianDB:
 
                     CREATE INDEX IF NOT EXISTS idx_smr_user
                         ON self_monitoring_rules(user_id);
-                    CREATE INDEX IF NOT EXISTS idx_smr_policy
-                        ON self_monitoring_rules(governance_policy_id);
                     CREATE INDEX IF NOT EXISTS idx_smr_enabled
                         ON self_monitoring_rules(enabled);
 
@@ -449,6 +445,7 @@ class GuardianDB:
         """Add columns introduced after the initial schema, if missing."""
         migrations = [
             ("supervised_policies", "governance_policy_id", "TEXT"),
+            ("self_monitoring_rules", "governance_policy_id", "TEXT"),
             ("self_monitoring_rules", "deactivation_confirmation_token", "TEXT"),
             ("self_monitoring_rules", "deactivation_requested_at", "TEXT"),
         ]
@@ -456,17 +453,37 @@ class GuardianDB:
             conn = self._connect()
             try:
                 for table, column, col_type in migrations:
-                    existing = {
-                        row["name"]
-                        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-                    }
-                    if column not in existing:
-                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
-                        logger.debug(f"Migrated: added {table}.{column} ({col_type})")
-            except _GUARDIAN_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"Guardian DB migration error (non-critical): {e}")
+                    try:
+                        existing = {
+                            row["name"]
+                            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                        }
+                        if column not in existing:
+                            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                            logger.debug(f"Migrated: added {table}.{column} ({col_type})")
+                    except _GUARDIAN_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(
+                            f"Guardian DB migration error for {table}.{column} (non-critical): {e}"
+                        )
+                self._ensure_optional_indexes(conn)
             finally:
                 conn.close()
+
+    @staticmethod
+    def _table_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(_safe_get(row, "name") == column for row in rows)
+
+    def _ensure_optional_indexes(self, conn: sqlite3.Connection) -> None:
+        optional_indexes = [
+            ("idx_sp_governance", "supervised_policies", "governance_policy_id"),
+            ("idx_smr_policy", "self_monitoring_rules", "governance_policy_id"),
+        ]
+        for idx_name, table, column in optional_indexes:
+            if self._table_has_column(conn, table, column):
+                conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({column})"
+                )
 
     # ── Guardian Relationships ─────────────────────────────────
 

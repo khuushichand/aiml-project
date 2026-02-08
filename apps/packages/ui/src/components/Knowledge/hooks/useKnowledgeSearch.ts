@@ -70,6 +70,15 @@ const getMetadataPrimitive = (
   return undefined
 }
 
+const getFirstNonEmptyString = (...values: unknown[]): string => {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value
+    }
+  }
+  return ""
+}
+
 // Helper functions for result extraction
 export const getResultText = (item: RagResult) =>
   item.content || item.text || item.chunk || ""
@@ -252,6 +261,96 @@ export const toPinnedResult = (item: RagResult): RagPinnedResult => {
     snippet,
     type: getResultType(item) || undefined,
     mediaId: extractMediaId(item) ?? undefined
+  }
+}
+
+export const extractContentFromMediaDetail = (detail: unknown): string => {
+  if (typeof detail === "string") return detail
+  if (!isRecord(detail)) return ""
+
+  const contentValue = detail.content
+  if (isRecord(contentValue)) {
+    const nestedContent = getFirstNonEmptyString(
+      contentValue.text,
+      contentValue.content,
+      contentValue.raw_text,
+      contentValue.rawText,
+      contentValue.transcript,
+      contentValue.summary
+    )
+    if (nestedContent) return nestedContent
+  } else if (typeof contentValue === "string" && contentValue.trim().length > 0) {
+    return contentValue
+  }
+
+  const fromRoot = getFirstNonEmptyString(
+    detail.text,
+    detail.transcript,
+    detail.raw_text,
+    detail.rawText,
+    detail.raw_content,
+    detail.rawContent,
+    detail.summary
+  )
+  if (fromRoot) return fromRoot
+
+  const latestVersion = isRecord(detail.latest_version)
+    ? detail.latest_version
+    : isRecord(detail.latestVersion)
+      ? detail.latestVersion
+      : null
+  if (latestVersion) {
+    const fromLatest = getFirstNonEmptyString(
+      latestVersion.content,
+      latestVersion.text,
+      latestVersion.transcript,
+      latestVersion.raw_text,
+      latestVersion.rawText,
+      latestVersion.summary
+    )
+    if (fromLatest) return fromLatest
+  }
+
+  const data = isRecord(detail.data) ? detail.data : null
+  if (data) {
+    const fromData = getFirstNonEmptyString(
+      data.content,
+      data.text,
+      data.transcript,
+      data.raw_text,
+      data.rawText,
+      data.summary
+    )
+    if (fromData) return fromData
+  }
+
+  return ""
+}
+
+const fetchFullMediaTextById = async (mediaId: number): Promise<string | null> => {
+  try {
+    await tldwClient.initialize()
+    const detail = await tldwClient.getMediaDetails(mediaId, {
+      include_content: true,
+      include_versions: false,
+      include_version_content: false
+    })
+    const fullText = extractContentFromMediaDetail(detail)
+    return fullText || null
+  } catch {
+    return null
+  }
+}
+
+export const withFullMediaTextIfAvailable = async (
+  pinned: RagPinnedResult
+): Promise<RagPinnedResult> => {
+  if (!pinned.mediaId) return pinned
+  const fullText = await fetchFullMediaTextById(pinned.mediaId)
+  if (!fullText) return pinned
+  return {
+    ...pinned,
+    snippet: fullText
   }
 }
 
@@ -461,8 +560,11 @@ export function useKnowledgeSearch({
 
   const handleInsert = React.useCallback(
     (item: RagResult) => {
-      const pinned = toPinnedResult(item)
-      onInsert(formatRagResult(pinned, "markdown"))
+      void (async () => {
+        const pinned = toPinnedResult(item)
+        const resolvedPinned = await withFullMediaTextIfAvailable(pinned)
+        onInsert(formatRagResult(resolvedPinned, "markdown"))
+      })()
     },
     [onInsert]
   )

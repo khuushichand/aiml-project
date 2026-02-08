@@ -34,6 +34,7 @@ import {
   type RagCopyFormat,
   type RagPinnedResult
 } from "@/utils/rag-format"
+import { withFullMediaTextIfAvailable } from "@/components/Knowledge/hooks"
 import { formatFileSize } from "@/utils/format"
 import { useStoreMessageOption } from "@/store/option"
 
@@ -576,8 +577,11 @@ export const RagSearchBar: React.FC<Props> = ({
   }
 
   const handleInsert = (item: RagResult) => {
-    const pinned = toPinnedResult(item)
-    onInsert(formatRagResult(pinned, "markdown"))
+    void (async () => {
+      const pinned = toPinnedResult(item)
+      const resolvedPinned = await withFullMediaTextIfAvailable(pinned)
+      onInsert(formatRagResult(resolvedPinned, "markdown"))
+    })()
   }
 
   const handleOpen = (item: RagResult) => {
@@ -4144,7 +4148,14 @@ export const RagSearchBar: React.FC<Props> = ({
             <div className="flex items-center gap-2">
               <Button
                 size="small"
-                onClick={() => onInsert(formatRagResult(previewItem, "markdown"))}
+                onClick={() => {
+                  void (async () => {
+                    const resolvedPinned = await withFullMediaTextIfAvailable(
+                      previewItem
+                    )
+                    onInsert(formatRagResult(resolvedPinned, "markdown"))
+                  })()
+                }}
               >
                 {t("sidepanel:rag.actions.insert", "Insert")}
               </Button>

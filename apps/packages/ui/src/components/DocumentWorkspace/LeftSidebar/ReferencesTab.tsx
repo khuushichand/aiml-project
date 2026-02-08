@@ -443,6 +443,29 @@ export const ReferencesTab: React.FC = () => {
     enrich
   )
 
+  const references = data?.references ?? []
+  const query = searchQuery.trim().toLowerCase()
+  const filteredReferences = React.useMemo(() => {
+    return references
+      .map((ref, index) => ({ ref, index }))
+      .filter(({ ref }) => {
+        if (!query) return true
+        const haystack = [
+          ref.title,
+          ref.authors,
+          ref.venue,
+          ref.doi,
+          ref.arxiv_id,
+          ref.semantic_scholar_id,
+          ref.raw_text,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+        return haystack.includes(query)
+      })
+  }, [query, references])
+
   // No document selected
   if (!activeDocumentId) {
     return <NoDocumentState />
@@ -468,31 +491,9 @@ export const ReferencesTab: React.FC = () => {
     return <NoReferencesState />
   }
 
-  const totalCount = data.references.length
-  const arxivCount = data.references.filter((ref) => ref.arxiv_id).length
-  const s2Count = data.references.filter((ref) => ref.semantic_scholar_id).length
-
-  const query = searchQuery.trim().toLowerCase()
-  const filteredReferences = React.useMemo(() => {
-    return data.references
-      .map((ref, index) => ({ ref, index }))
-      .filter(({ ref }) => {
-        if (!query) return true
-        const haystack = [
-          ref.title,
-          ref.authors,
-          ref.venue,
-          ref.doi,
-          ref.arxiv_id,
-          ref.semantic_scholar_id,
-          ref.raw_text,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase()
-        return haystack.includes(query)
-      })
-  }, [data.references, query])
+  const totalCount = references.length
+  const arxivCount = references.filter((ref) => ref.arxiv_id).length
+  const s2Count = references.filter((ref) => ref.semantic_scholar_id).length
 
   const handleEnrichReference = async (index: number, key: string) => {
     if (!activeDocumentId) return

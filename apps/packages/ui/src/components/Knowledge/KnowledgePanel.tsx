@@ -14,6 +14,7 @@ import {
   useKnowledgeSettings,
   useKnowledgeSearch,
   toPinnedResult,
+  withFullMediaTextIfAvailable,
   type RagResult
 } from "./hooks"
 
@@ -385,8 +386,13 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
               <div className="flex gap-2 pt-2 border-t border-border">
                 <button
                   onClick={() => {
-                    onInsert(formatRagResult(previewItem, "markdown"))
-                    setPreviewItem(null)
+                    void (async () => {
+                      const resolved = await withFullMediaTextIfAvailable(
+                        previewItem
+                      )
+                      onInsert(formatRagResult(resolved, "markdown"))
+                      setPreviewItem(null)
+                    })()
                   }}
                   className="px-3 py-1.5 text-sm bg-accent text-white rounded hover:bg-accent/90"
                 >
