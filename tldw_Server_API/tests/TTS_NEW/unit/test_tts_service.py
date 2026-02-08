@@ -625,6 +625,23 @@ async def test_convert_request_language_override(tts_service):
 
 
 @pytest.mark.unit
+async def test_convert_request_target_sample_rate(tts_service):
+    req = OpenAISpeechRequest(
+        model="kokoro",
+        input="hello",
+        voice="af_heart",
+        response_format="pcm",
+        stream=False,
+        target_sample_rate=22050,
+        extra_params={"sample_rate": 16000},
+    )
+    tts_request = tts_service._convert_request(req)
+    assert tts_request.target_sample_rate == 22050
+    assert tts_request.extra_params.get("target_sample_rate") == 22050
+    assert tts_request.extra_params.get("sample_rate") == 22050
+
+
+@pytest.mark.unit
 async def test_custom_voice_loads_qwen3_prompt_metadata(tts_service, monkeypatch):
     class _FakeVoiceManager:
         async def load_voice_reference_audio(self, user_id, voice_id):

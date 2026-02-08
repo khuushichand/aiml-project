@@ -1642,7 +1642,7 @@ async def websocket_audio_chat_stream(
                             f"audio.chat.stream tts_done frame send failed: error={send_exc}"
                         )
 
-        async def _finalize_turn(commit_at: float, *, auto: bool = False) -> None:
+        async def _finalize_turn(commit_at: Optional[float], *, auto: bool = False) -> None:
             nonlocal processing_turn
             if processing_turn:
                 return
@@ -1650,11 +1650,19 @@ async def websocket_audio_chat_stream(
             try:
                 transcript_text = transcriber.get_full_transcript()
                 final_emit_at = time.time()
+                eos_detected_at = final_emit_at
+                try:
+                    commit_ts = float(commit_at) if commit_at is not None else None
+                    if commit_ts and commit_ts > 0:
+                        eos_detected_at = commit_ts
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                    eos_detected_at = final_emit_at
                 payload = {
                     "type": "full_transcript",
                     "text": transcript_text,
                     "timestamp": final_emit_at,
-                    "voice_to_voice_start": final_emit_at,
+                    # EOS/turn-end anchor used for downstream voice-to-voice metric timing.
+                    "voice_to_voice_start": eos_detected_at,
                 }
                 if auto:
                     payload["auto_commit"] = True
@@ -1665,7 +1673,7 @@ async def websocket_audio_chat_stream(
                 try:
                     reg.observe(
                         "stt_final_latency_seconds",
-                        max(0.0, final_emit_at - float(commit_at or final_emit_at)),
+                        max(0.0, final_emit_at - eos_detected_at),
                         labels={
                             "model": getattr(config, "model", "parakeet"),
                             "variant": getattr(config, "model_variant", "standard"),
@@ -1698,7 +1706,7 @@ async def websocket_audio_chat_stream(
                     if _outer_stream:
                         await _outer_stream.send_json({"type": "action_result", **action_result})
                 await _persist_turn(transcript_text, assistant_text, action_result)
-                await _stream_tts(assistant_text, final_emit_at)
+                await _stream_tts(assistant_text, eos_detected_at)
             finally:
                 try:
                     transcriber.reset()

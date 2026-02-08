@@ -134,12 +134,55 @@ interface UnifiedSearchResponse {
   timings: Record<string, number>;
   generated_answer?: string;
   citations?: object[];
-  research_summary?: object;                  // Mirrors metadata.research when enabled
-  suggestions?: string[];                     // Mirrors metadata.suggestions when enabled
-  images?: object[];                          // Mirrors metadata.images when enabled
-  videos?: object[];                          // Mirrors metadata.videos when enabled
+  research_summary?: ResearchSummary;         // Present when enable_research_loop=true. Mirrors metadata.research
+  suggestions?: string[];                     // Present when enable_suggestions=true. Mirrors metadata.suggestions
+  images?: ImageResult[];                     // Present when enable_image_search=true. Mirrors metadata.images
+  videos?: VideoResult[];                     // Present when enable_video_search=true. Mirrors metadata.videos
+}
+
+// Research loop output (research_summary)
+interface ResearchSummary {
+  total_iterations: number;                   // Total iterations executed
+  total_results: number;                      // Total results collected
+  completed: boolean;                         // Whether the loop completed normally
+  final_reasoning: string;                    // LLM's final reasoning text
+  max_iterations_requested: number;           // Iterations requested
+  url_scraping_enabled: boolean;
+  discussion_platforms: string[];             // Platforms searched (e.g. ["reddit"])
+  url_dedup: Record<string, any>;            // URL deduplication metadata
+  steps: ResearchStep[];                      // Per-iteration breakdown
+}
+
+interface ResearchStep {
+  iteration: number;                          // 1-based iteration index
+  action: string;                             // e.g. "web_search", "url_scrape"
+  reasoning: string;                          // LLM's reasoning for this step
+  result_count: number;                       // Results returned by this step
+  duration_sec: number;                       // Step wall-clock time
+}
+
+// Image search result element (images[])
+interface ImageResult {
+  title: string;                              // Image title / caption
+  url: string;                                // Full image URL
+  thumbnail_url: string;                      // Thumbnail URL
+  source: string;                             // Source URL or domain
+  description: string;                        // Image description / snippet
+  width?: number;                             // Image width (when available)
+  height?: number;                            // Image height (when available)
+}
+
+// Video search result element (videos[])
+interface VideoResult {
+  title: string;                              // Video title
+  url: string;                                // Video URL (e.g. YouTube link)
+  thumbnail_url: string;                      // Thumbnail image URL
+  source: string;                             // Source identifier (e.g. "youtube")
+  description: string;                        // Video description / snippet
 }
 ```
+
+> **Note:** The `research_summary`, `suggestions`, `images`, and `videos` top-level response fields mirror the identically-named keys inside the `metadata` object (`metadata.research`, `metadata.suggestions`, `metadata.images`, `metadata.videos`). Both locations carry the same data; the top-level fields are provided for convenience so clients don't need to dig into the metadata bag.
 
 #### Example
 ```javascript

@@ -296,6 +296,50 @@ class TestPromptStudioEvaluationEndToEnd:
 
             logger.info(f"Multi-test evaluation passed with {result['metrics']['passed']}/{result['metrics']['total_tests']} tests")
 
+    def test_evaluation_records_real_test_run_ids(self, test_db, mock_chat_api_call):
+        """Evaluation metadata should store test run IDs, not test case IDs."""
+        project_id = create_test_project(test_db, "Run ID Project")
+        prompt_id = create_test_prompt(
+            test_db,
+            project_id,
+            "Run ID Prompt",
+            "You are concise.",
+            "Answer: {question}"
+        )
+        tc1_id = create_test_case(
+            test_db,
+            project_id,
+            "Case 1",
+            {"question": "What is Python?"},
+            {"response": "Python is a high-level programming language."},
+        )
+        tc2_id = create_test_case(
+            test_db,
+            project_id,
+            "Case 2",
+            {"question": "What is ML?"},
+            {"response": "Machine learning is a subset of artificial intelligence."},
+        )
+        assert tc2_id > tc1_id
+
+        with patch(
+            'tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager.EvaluationManager._call_adapter_text',
+            mock_chat_api_call,
+        ):
+            eval_manager = EvaluationManager(test_db)
+            result = eval_manager.run_evaluation(
+                prompt_id=prompt_id,
+                test_case_ids=[tc2_id],
+                model="gpt-3.5-turbo",
+            )
+
+        stored_eval = test_db.get_evaluation(result["id"])
+        assert stored_eval is not None
+        run_ids = stored_eval.get("test_run_ids") or []
+        assert len(run_ids) == 1
+        # In a fresh DB this run id should differ from the second test case id.
+        assert run_ids[0] != tc2_id
+
     def test_evaluation_metrics_calculation(self, test_db):
 
         """Test various evaluation metrics calculations."""

@@ -10,6 +10,7 @@ import json
 import base64
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi import status
@@ -200,6 +201,36 @@ class TestTTSGenerateEndpoint:
             assert decoded == alignment_payload
             assert response.headers.get("X-TTS-Alignment-Format") == "json+base64"
 
+    async def test_generate_pcm_sets_sample_rate_header(self, test_client, auth_headers):
+        """PCM responses should expose the resolved sample rate header and content-type rate."""
+        seen: dict[str, Any] = {}
+
+        async def mock_stream(request_obj, *args, **kwargs):  # noqa: ARG001
+            seen["target_sample_rate"] = request_obj.target_sample_rate
+            request_obj._tts_metadata = {"sample_rate": 22050}
+            yield b"pcm_audio_data"
+
+        with patch("tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech") as mock_generate_speech:
+            mock_generate_speech.side_effect = mock_stream
+
+            response = test_client.post(
+                "/api/v1/audio/speech",
+                json={
+                    "input": "Hello PCM",
+                    "voice": "af_heart",
+                    "model": "kokoro",
+                    "response_format": "pcm",
+                    "stream": False,
+                    "target_sample_rate": 22050,
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            assert seen.get("target_sample_rate") == 22050
+            assert response.headers.get("X-Audio-Sample-Rate") == "22050"
+            assert "audio/L16; rate=22050; channels=1" in response.headers.get("content-type", "")
+
     async def test_generate_alignment_metadata_endpoint(self, test_client, auth_headers):
         """Test /api/v1/audio/speech/metadata returns alignment JSON."""
         alignment_payload = {
@@ -292,6 +323,35 @@ class TestTTSStreamingEndpoint:
             for chunk in response.iter_bytes():
                 chunks.append(chunk)
 
+            assert len(chunks) > 0
+
+    @pytest.mark.streaming
+    async def test_streaming_pcm_sets_sample_rate_header(self, test_client, auth_headers):
+        """Streaming PCM responses should expose sample-rate headers."""
+
+        async def mock_stream(request_obj, *args, **kwargs):  # noqa: ARG001
+            request_obj._tts_metadata = {"sample_rate": 16000}
+            yield b"chunk1"
+            yield b"chunk2"
+
+        with patch("tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech") as mock_stream_gen:
+            mock_stream_gen.side_effect = mock_stream
+
+            response = test_client.post(
+                "/api/v1/audio/speech",
+                json={
+                    "input": "Stream PCM",
+                    "voice": "echo",
+                    "response_format": "pcm",
+                    "stream": True,
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            assert response.headers.get("X-Audio-Sample-Rate") == "16000"
+            assert "audio/L16; rate=16000; channels=1" in response.headers.get("content-type", "")
+            chunks = list(response.iter_bytes())
             assert len(chunks) > 0
 
     @pytest.mark.streaming

@@ -328,8 +328,16 @@ class TestRunner:
         if eval_res is not None:
             scores_payload["program_eval_success"] = bool(eval_res.success)
 
+        try:
+            prompt_row = self.db.get_prompt(prompt_id) or {}
+        except Exception:
+            prompt_row = {}
+        project_id = prompt_row.get("project_id") or (test_case or {}).get("project_id")
+        if project_id is None:
+            raise ValueError(f"Prompt/test case project_id unavailable for test_case_id={test_case_id}")
+
         stored_run = self.db.create_test_run(
-            project_id=(self.db.get_prompt(prompt_id) or {}).get("project_id") or (test_case or {}).get("project_id"),
+            project_id=project_id,
             prompt_id=prompt_id,
             test_case_id=test_case_id,
             model_name=model,

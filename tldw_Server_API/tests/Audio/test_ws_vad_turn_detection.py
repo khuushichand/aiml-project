@@ -69,7 +69,7 @@ async def test_vad_auto_commit_triggers_full_transcript(monkeypatch):
         def observe(self, _audio_bytes: bytes) -> bool:
             self._count += 1
             if self._count >= 2:
-                self._last_trigger_at = time.time()
+                self._last_trigger_at = 1234.5
                 return True
             return False
 
@@ -89,6 +89,7 @@ async def test_vad_auto_commit_triggers_full_transcript(monkeypatch):
     assert full_transcripts, f"Expected a full_transcript frame, saw {ws.sent}"
     assert full_transcripts[0].get("auto_commit") is True
     assert full_transcripts[0].get("text") == "hello world"
+    assert full_transcripts[0].get("voice_to_voice_start") == pytest.approx(1234.5)
 
 
 @pytest.mark.asyncio

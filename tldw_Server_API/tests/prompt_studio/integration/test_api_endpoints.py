@@ -472,6 +472,94 @@ class TestEvaluationEndpoints:
             assert "evaluations" in data
             assert isinstance(data["evaluations"], list)
 
+    def test_create_evaluation_uses_test_runner_path(self, client, auth_headers, mock_user):
+
+        """Evaluation creation should execute through TestRunner.run_single_test."""
+        with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
+            project_resp = client.post(
+                "/api/v1/prompt-studio/projects/",
+                json={"name": "Eval Runner Project", "status": "active"},
+                headers=auth_headers,
+            )
+            assert project_resp.status_code in [200, 201], project_resp.text
+            project_payload = project_resp.json()
+            project_id = project_payload.get("data", {}).get("id") or project_payload.get("id")
+
+            prompt_body = {
+                "project_id": project_id,
+                "name": "Eval Runner Prompt",
+                "system_prompt": "You are helpful.",
+                "user_prompt": "Answer {q}",
+                "version_number": 1,
+            }
+            prompt_resp = client.post(
+                "/api/v1/prompt-studio/prompts",
+                json=prompt_body,
+                headers=auth_headers,
+            )
+            if prompt_resp.status_code == 404:
+                prompt_resp = client.post(
+                    "/api/v1/prompt-studio/prompts/create",
+                    json=prompt_body,
+                    headers=auth_headers,
+                )
+            assert prompt_resp.status_code in [200, 201], prompt_resp.text
+            prompt_payload = prompt_resp.json()
+            prompt_id = prompt_payload.get("id") or prompt_payload.get("data", {}).get("id")
+
+            tc_resp = client.post(
+                "/api/v1/prompt-studio/test-cases/create",
+                json={
+                    "project_id": project_id,
+                    "name": "Eval Runner Case",
+                    "inputs": {"q": "ping"},
+                    "expected_outputs": {"response": "pong"},
+                    "tags": [],
+                    "is_golden": False,
+                },
+                headers=auth_headers,
+            )
+            assert tc_resp.status_code in [200, 201], tc_resp.text
+            tc_id = tc_resp.json()["data"]["id"]
+
+            calls = {"n": 0}
+
+            async def fake_run_single_test(self, *, prompt_id: int, test_case_id: int, model_config, metrics=None):
+                calls["n"] += 1
+                return {
+                    "id": 999,
+                    "prompt_id": prompt_id,
+                    "test_case_id": test_case_id,
+                    "inputs": {"q": "ping"},
+                    "expected": {"response": "pong"},
+                    "actual": {"response": "pong"},
+                    "success": True,
+                    "scores": {"aggregate_score": 0.88},
+                }
+
+            with patch(
+                "tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_runner.TestRunner.run_single_test",
+                new=fake_run_single_test,
+            ):
+                eval_resp = client.post(
+                    "/api/v1/prompt-studio/evaluations",
+                    json={
+                        "project_id": project_id,
+                        "prompt_id": prompt_id,
+                        "name": "Eval Runner",
+                        "test_case_ids": [tc_id],
+                        "config": {"model_name": "gpt-4o-mini", "temperature": 0.1, "max_tokens": 32},
+                        "run_async": False,
+                    },
+                    headers=auth_headers,
+                )
+
+            assert eval_resp.status_code in [200, 201], eval_resp.text
+            payload = eval_resp.json()
+            assert calls["n"] == 1
+            assert "metrics" in payload
+            assert payload["metrics"]["average_score"] == pytest.approx(0.88, rel=1e-6)
+
 ########################################################################################################################
 # Optimization Endpoints Tests
 

@@ -2610,15 +2610,21 @@ async def handle_unified_websocket(
             """
             if transcriber is None:
                 return
-            _commit_received_at = float(commit_received_at or time.time())
             full_transcript = transcriber.get_full_transcript()
             _final_emit_at = time.time()
+            _eos_detected_at = _final_emit_at
+            try:
+                _commit_ts = float(commit_received_at) if commit_received_at is not None else None
+                if _commit_ts and _commit_ts > 0:
+                    _eos_detected_at = _commit_ts
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                _eos_detected_at = _final_emit_at
             payload = {
                 "type": "full_transcript",
                 "text": full_transcript,
                 "timestamp": _final_emit_at,
-                # Provide a voice-to-voice start timestamp clients can thread into downstream TTS
-                "voice_to_voice_start": _final_emit_at,
+                # EOS/turn-end anchor clients can thread into downstream TTS.
+                "voice_to_voice_start": _eos_detected_at,
             }
             if auto_commit:
                 payload["auto_commit"] = True
@@ -2632,7 +2638,7 @@ async def handle_unified_websocket(
                 _variant = getattr(config, "model_variant", None) or "standard"
                 reg.observe(
                     "stt_final_latency_seconds",
-                    max(0.0, _final_emit_at - _commit_received_at),
+                    max(0.0, _final_emit_at - _eos_detected_at),
                     labels={"model": str(_model), "variant": str(_variant), "endpoint": "audio_unified_ws"},
                 )
             except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:

@@ -13,12 +13,27 @@ def _fake_config():
     return cfg
 
 
-def test_llm_providers_merges_adapter_capabilities_from_envelope(monkeypatch, client_user_only):
+@pytest.fixture
+def llm_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_router
+
+    app = FastAPI()
+    app.include_router(llm_router, prefix="/api/v1")
+    with TestClient(app) as client:
+        yield client
+
+
+def test_llm_providers_merges_adapter_capabilities_from_envelope(monkeypatch, llm_client):
     # Force adapters available even though this is not strictly required for the endpoint
 
     # Stub configuration loader to return a controlled config
     import tldw_Server_API.app.core.config as core_config
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
+
     monkeypatch.setattr(core_config, "load_comprehensive_config", _fake_config)
+    monkeypatch.setattr(llm_endpoints, "load_comprehensive_config", _fake_config)
 
     # Stub registry capability discovery
     import tldw_Server_API.app.core.LLM_Calls.adapter_registry as reg_mod
@@ -36,8 +51,7 @@ def test_llm_providers_merges_adapter_capabilities_from_envelope(monkeypatch, cl
 
     monkeypatch.setattr(reg_mod, "get_registry", lambda: _DummyReg())
 
-    client = client_user_only
-    r = client.get("/api/v1/llm/providers")
+    r = llm_client.get("/api/v1/llm/providers")
     assert r.status_code == 200
     data = r.json()
     providers = {p["name"]: p for p in data.get("providers", [])}
@@ -55,10 +69,12 @@ def test_llm_providers_merges_adapter_capabilities_from_envelope(monkeypatch, cl
     }
 
 
-def test_llm_providers_legacy_capabilities_fallback(monkeypatch, client_user_only):
+def test_llm_providers_legacy_capabilities_fallback(monkeypatch, llm_client):
     import tldw_Server_API.app.core.config as core_config
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
 
     monkeypatch.setattr(core_config, "load_comprehensive_config", _fake_config)
+    monkeypatch.setattr(llm_endpoints, "load_comprehensive_config", _fake_config)
 
     import tldw_Server_API.app.core.LLM_Calls.adapter_registry as reg_mod
 
@@ -68,8 +84,7 @@ def test_llm_providers_legacy_capabilities_fallback(monkeypatch, client_user_onl
 
     monkeypatch.setattr(reg_mod, "get_registry", lambda: _DummyLegacyReg())
 
-    client = client_user_only
-    r = client.get("/api/v1/llm/providers")
+    r = llm_client.get("/api/v1/llm/providers")
     assert r.status_code == 200
     data = r.json()
     providers = {p["name"]: p for p in data.get("providers", [])}

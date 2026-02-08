@@ -130,6 +130,56 @@ def _extract_tts_metadata(request_data: OpenAISpeechRequest) -> dict[str, Any]:
     return metadata if isinstance(metadata, dict) else {}
 
 
+_AUDIO_CONTENT_TYPE_MAP = {
+    "mp3": "audio/mpeg",
+    "opus": "audio/opus",
+    "aac": "audio/aac",
+    "flac": "audio/flac",
+    "wav": "audio/wav",
+    "pcm": "audio/L16; rate=24000; channels=1",
+}
+
+
+def _coerce_positive_int(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _resolve_pcm_sample_rate(request_data: OpenAISpeechRequest) -> int:
+    metadata = _extract_tts_metadata(request_data)
+    candidates: list[Any] = [
+        metadata.get("sample_rate"),
+        getattr(request_data, "target_sample_rate", None),
+    ]
+    extra_params = getattr(request_data, "extra_params", None)
+    if isinstance(extra_params, dict):
+        candidates.append(extra_params.get("target_sample_rate"))
+        candidates.append(extra_params.get("sample_rate"))
+
+    for candidate in candidates:
+        parsed = _coerce_positive_int(candidate)
+        if parsed is not None:
+            return parsed
+    return 24000
+
+
+def _resolve_response_content_type(request_data: OpenAISpeechRequest) -> str:
+    base_type = _AUDIO_CONTENT_TYPE_MAP.get(request_data.response_format, "audio/mpeg")
+    if request_data.response_format != "pcm":
+        return base_type
+    sample_rate = _resolve_pcm_sample_rate(request_data)
+    return f"audio/L16; rate={sample_rate}; channels=1"
+
+
+def _append_pcm_response_headers(request_data: OpenAISpeechRequest, headers: dict[str, str]) -> None:
+    if request_data.response_format != "pcm":
+        return
+    headers["X-Audio-Sample-Rate"] = str(_resolve_pcm_sample_rate(request_data))
+
+
 def _tts_history_error_message(exc: Exception) -> str:
     if isinstance(exc, HTTPException):
         detail = exc.detail
@@ -241,6 +291,10 @@ async def get_tts_service() -> TTSServiceV2:
     responses={
         200: {
             "headers": {
+                "X-Audio-Sample-Rate": {
+                    "description": "Resolved PCM sample rate in Hz (present when response_format=pcm).",
+                    "schema": {"type": "string"},
+                },
                 "X-TTS-Alignment": {
                     "description": "Base64url-encoded JSON alignment payload when available (non-streaming).",
                     "schema": {"type": "string"},
@@ -326,22 +380,14 @@ async def create_speech(
         logger.debug(f"usage_log audio.tts failed: error={e}")
 
     # Determine Content-Type
-    content_type_map = {
-        "mp3": "audio/mpeg",
-        "opus": "audio/opus",
-        "aac": "audio/aac",
-        "flac": "audio/flac",
-        "wav": "audio/wav",
-        "pcm": "audio/L16; rate=24000; channels=1",
-    }
-    content_type = content_type_map.get(request_data.response_format)
+    content_type = _AUDIO_CONTENT_TYPE_MAP.get(request_data.response_format)
     if not content_type:
         logger.warning(f"Unsupported response format: {request_data.response_format}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 "Unsupported response_format: "
-                f"{request_data.response_format}. Supported formats are: {', '.join(content_type_map.keys())}"
+                f"{request_data.response_format}. Supported formats are: {', '.join(_AUDIO_CONTENT_TYPE_MAP.keys())}"
             ),
         )
     if request_data.stream and request_data.return_download_link:
@@ -388,6 +434,8 @@ async def create_speech(
                 duration_ms = int(float(duration_seconds) * 1000)
 
         params_json: dict[str, Any] = {"speed": request_data.speed}
+        if request_data.target_sample_rate is not None:
+            params_json["target_sample_rate"] = request_data.target_sample_rate
         if request_data.extra_params:
             try:
                 extra_params = dict(request_data.extra_params)
@@ -551,15 +599,18 @@ async def create_speech(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Audio generation failed to produce data.",
             )
+        response_content_type = _resolve_response_content_type(request_data)
+        stream_headers = {
+            "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache",
+            "X-Request-Id": request_id,
+        }
+        _append_pcm_response_headers(request_data, stream_headers)
         return StreamingResponse(
             _stream_chunks(first_chunk),
-            media_type=content_type,
-            headers={
-                "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
-                "X-Accel-Buffering": "no",
-                "Cache-Control": "no-cache",
-                "X-Request-Id": request_id,
-            },
+            media_type=response_content_type,
+            headers=stream_headers,
         )
     # Non-streaming mode: accumulate chunks and return a single response
     try:
@@ -604,6 +655,7 @@ async def create_speech(
         "Cache-Control": "no-cache",
         "X-Request-Id": request_id,
     }
+    _append_pcm_response_headers(request_data, headers)
     try:
         metadata = getattr(request_data, "_tts_metadata", None)
         alignment_payload = metadata.get("alignment") if isinstance(metadata, dict) else None
@@ -656,7 +708,7 @@ async def create_speech(
 
     return Response(
         content=all_audio_bytes,
-        media_type=content_type,
+        media_type=_resolve_response_content_type(request_data),
         headers=headers,
     )
 

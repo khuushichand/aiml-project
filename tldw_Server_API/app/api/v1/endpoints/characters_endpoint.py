@@ -119,6 +119,15 @@ def _validate_file_type(data: bytes, filename: Optional[str]) -> tuple[bool, str
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.character_schemas import (
     CharacterCreate,
+    CharacterExemplarDeletionResponse,
+    CharacterExemplarIn,
+    CharacterExemplarResponse,
+    CharacterExemplarSearchRequest,
+    CharacterExemplarSearchResponse,
+    CharacterExemplarSelectionConfig,
+    CharacterExemplarSelectionDebug,
+    CharacterExemplarSelectionDebugRequest,
+    CharacterExemplarUpdate,
     CharacterImportResponse,
     CharacterResponse,
     CharacterUpdate,
@@ -244,6 +253,120 @@ def _build_conflict_import_response(
         ),
         character=_convert_db_char_to_response_model(existing_char_db),
     )
+
+
+def _coerce_string_list(value: Any) -> list[str]:
+    """Normalize API/DB mixed list payloads to a list[str]."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed if str(item).strip()]
+        except _CHARACTERS_NONCRITICAL_EXCEPTIONS:
+            pass
+        return [value] if value.strip() else []
+    return [str(value)] if str(value).strip() else []
+
+
+def _flatten_character_exemplar_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Flatten exemplar API payload structure into DB fields."""
+    flat: dict[str, Any] = {}
+
+    if 'text' in payload:
+        flat['text'] = payload.get('text')
+    if 'novelty_hint' in payload:
+        flat['novelty_hint'] = payload.get('novelty_hint')
+    if 'length_tokens' in payload:
+        flat['length_tokens'] = payload.get('length_tokens')
+
+    source = payload.get('source')
+    if isinstance(source, dict):
+        if 'type' in source:
+            flat['source_type'] = source.get('type')
+        if 'url_or_id' in source:
+            flat['source_url_or_id'] = source.get('url_or_id')
+        if 'date' in source:
+            flat['source_date'] = source.get('date')
+
+    labels = payload.get('labels')
+    if isinstance(labels, dict):
+        if 'emotion' in labels:
+            flat['emotion'] = labels.get('emotion')
+        if 'scenario' in labels:
+            flat['scenario'] = labels.get('scenario')
+        if 'rhetorical' in labels:
+            flat['rhetorical'] = labels.get('rhetorical')
+        if 'register' in labels:
+            flat['register'] = labels.get('register')
+
+    safety = payload.get('safety')
+    if isinstance(safety, dict):
+        if 'allowed' in safety:
+            flat['safety_allowed'] = safety.get('allowed')
+        if 'blocked' in safety:
+            flat['safety_blocked'] = safety.get('blocked')
+
+    rights = payload.get('rights')
+    if isinstance(rights, dict):
+        if 'public_figure' in rights:
+            flat['rights_public_figure'] = rights.get('public_figure')
+        if 'notes' in rights:
+            flat['rights_notes'] = rights.get('notes')
+
+    return flat
+
+
+def _convert_db_exemplar_to_response_model(exemplar_dict_from_db: dict[str, Any]) -> CharacterExemplarResponse:
+    """Convert DB exemplar row shape to API response shape."""
+    source_type = exemplar_dict_from_db.get('source_type') or 'other'
+    novelty_hint = exemplar_dict_from_db.get('novelty_hint') or 'unknown'
+    emotion = exemplar_dict_from_db.get('emotion') or 'other'
+    scenario = exemplar_dict_from_db.get('scenario') or 'other'
+
+    response_data = {
+        'id': exemplar_dict_from_db.get('id'),
+        'character_id': exemplar_dict_from_db.get('character_id'),
+        'text': exemplar_dict_from_db.get('text'),
+        'source': {
+            'type': source_type,
+            'url_or_id': exemplar_dict_from_db.get('source_url_or_id'),
+            'date': exemplar_dict_from_db.get('source_date'),
+        },
+        'novelty_hint': novelty_hint,
+        'labels': {
+            'emotion': emotion,
+            'scenario': scenario,
+            'rhetorical': _coerce_string_list(exemplar_dict_from_db.get('rhetorical')),
+            'register': exemplar_dict_from_db.get('register'),
+        },
+        'safety': {
+            'allowed': _coerce_string_list(exemplar_dict_from_db.get('safety_allowed')),
+            'blocked': _coerce_string_list(exemplar_dict_from_db.get('safety_blocked')),
+        },
+        'rights': {
+            'public_figure': bool(exemplar_dict_from_db.get('rights_public_figure', True)),
+            'notes': exemplar_dict_from_db.get('rights_notes'),
+        },
+        'length_tokens': exemplar_dict_from_db.get('length_tokens'),
+        'created_at': exemplar_dict_from_db.get('created_at'),
+        'updated_at': exemplar_dict_from_db.get('updated_at'),
+    }
+
+    return CharacterExemplarResponse.model_validate(response_data)
+
+
+def _score_exemplar_overlap(user_turn: str, exemplar_text: str) -> float:
+    """Simple lexical overlap score for debug output."""
+    user_terms = {token.strip(".,!?;:()[]{}\"'").lower() for token in user_turn.split() if token.strip()}
+    exemplar_terms = {token.strip(".,!?;:()[]{}\"'").lower() for token in exemplar_text.split() if token.strip()}
+    if not user_terms or not exemplar_terms:
+        return 0.0
+    overlap = user_terms.intersection(exemplar_terms)
+    return round(len(overlap) / len(user_terms), 4)
 
 
 # --- API Endpoints ---
@@ -543,6 +666,335 @@ async def filter_characters_by_tags(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while filtering characters"
+        ) from e
+
+
+@router.post(
+    "/{character_id}/exemplars",
+    response_model=CharacterExemplarResponse | list[CharacterExemplarResponse],
+    status_code=status.HTTP_201_CREATED,
+    summary="Create character exemplar(s)",
+    tags=["characters"],
+)
+async def create_character_exemplars_endpoint(
+    character_id: int = FastAPIPath(..., description="Character ID", gt=0),
+    exemplar_payload: CharacterExemplarIn | list[CharacterExemplarIn] = ...,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Create one or multiple exemplars for a character."""
+    try:
+        if not db.get_character_card_by_id(character_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+
+        if isinstance(exemplar_payload, list):
+            if not exemplar_payload:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Exemplar payload list cannot be empty.",
+                )
+            created_items: list[CharacterExemplarResponse] = []
+            for exemplar in exemplar_payload:
+                flattened = _flatten_character_exemplar_payload(exemplar.model_dump(exclude_none=False))
+                created = db.add_character_exemplar(character_id, flattened)
+                created_items.append(_convert_db_exemplar_to_response_model(created))
+            return created_items
+
+        flattened = _flatten_character_exemplar_payload(exemplar_payload.model_dump(exclude_none=False))
+        created = db.add_character_exemplar(character_id, flattened)
+        return _convert_db_exemplar_to_response_model(created)
+    except (InputError, ConflictError) as e:
+        status_code = status.HTTP_400_BAD_REQUEST if isinstance(e, InputError) else status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error creating exemplar(s) for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Unexpected error creating exemplar(s) for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while creating exemplars.",
+        ) from e
+
+
+@router.get(
+    "/{character_id}/exemplars/{exemplar_id}",
+    response_model=CharacterExemplarResponse,
+    summary="Get character exemplar by ID",
+    tags=["characters"],
+)
+async def get_character_exemplar_endpoint(
+    character_id: int = FastAPIPath(..., description="Character ID", gt=0),
+    exemplar_id: str = FastAPIPath(..., description="Exemplar ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Fetch a single exemplar for a character."""
+    try:
+        exemplar = db.get_character_exemplar_by_id(character_id, exemplar_id)
+        if not exemplar:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Exemplar '{exemplar_id}' not found for character {character_id}.",
+            )
+        return _convert_db_exemplar_to_response_model(exemplar)
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error fetching exemplar {exemplar_id} for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(
+            f"Unexpected error fetching exemplar {exemplar_id} for character {character_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while fetching exemplar.",
+        ) from e
+
+
+@router.put(
+    "/{character_id}/exemplars/{exemplar_id}",
+    response_model=CharacterExemplarResponse,
+    summary="Update character exemplar",
+    tags=["characters"],
+)
+async def update_character_exemplar_endpoint(
+    update_data: CharacterExemplarUpdate,
+    character_id: int = FastAPIPath(..., description="Character ID", gt=0),
+    exemplar_id: str = FastAPIPath(..., description="Exemplar ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Update a character exemplar."""
+    try:
+        if not db.get_character_card_by_id(character_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+        flattened = _flatten_character_exemplar_payload(update_data.model_dump(exclude_unset=True))
+        updated = db.update_character_exemplar(character_id, exemplar_id, flattened)
+        if not updated:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Exemplar '{exemplar_id}' not found for character {character_id}.",
+            )
+        return _convert_db_exemplar_to_response_model(updated)
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error updating exemplar {exemplar_id} for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(
+            f"Unexpected error updating exemplar {exemplar_id} for character {character_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while updating exemplar.",
+        ) from e
+
+
+@router.delete(
+    "/{character_id}/exemplars/{exemplar_id}",
+    response_model=CharacterExemplarDeletionResponse,
+    summary="Delete character exemplar",
+    tags=["characters"],
+)
+async def delete_character_exemplar_endpoint(
+    character_id: int = FastAPIPath(..., description="Character ID", gt=0),
+    exemplar_id: str = FastAPIPath(..., description="Exemplar ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Soft-delete a character exemplar."""
+    try:
+        existing = db.get_character_exemplar_by_id(character_id, exemplar_id, include_deleted=True)
+        if not existing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Exemplar '{exemplar_id}' not found for character {character_id}.",
+            )
+
+        deleted = db.soft_delete_character_exemplar(character_id, exemplar_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to delete exemplar '{exemplar_id}'.",
+            )
+
+        return CharacterExemplarDeletionResponse(
+            message=f"Exemplar '{exemplar_id}' soft-deleted for character {character_id}.",
+            character_id=character_id,
+            exemplar_id=exemplar_id,
+        )
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error deleting exemplar {exemplar_id} for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(
+            f"Unexpected error deleting exemplar {exemplar_id} for character {character_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while deleting exemplar.",
+        ) from e
+
+
+@router.post(
+    "/{character_id}/exemplars/search",
+    response_model=CharacterExemplarSearchResponse,
+    summary="Search character exemplars",
+    tags=["characters"],
+)
+async def search_character_exemplars_endpoint(
+    search_request: CharacterExemplarSearchRequest,
+    character_id: int = FastAPIPath(..., description="Character ID", gt=0),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Search exemplars for a character using query + labels filters."""
+    try:
+        if not db.get_character_card_by_id(character_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+
+        results, total = db.search_character_exemplars(
+            character_id,
+            query=search_request.query,
+            emotion=search_request.filter.emotion,
+            scenario=search_request.filter.scenario,
+            rhetorical=search_request.filter.rhetorical,
+            limit=search_request.limit,
+            offset=search_request.offset,
+        )
+        return CharacterExemplarSearchResponse(
+            items=[_convert_db_exemplar_to_response_model(item) for item in results],
+            total=total,
+        )
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error searching exemplars for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Unexpected error searching exemplars for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while searching exemplars.",
+        ) from e
+
+
+@router.post(
+    "/{character_id}/exemplars/select/debug",
+    response_model=CharacterExemplarSelectionDebug,
+    summary="Debug exemplar selection",
+    tags=["characters"],
+)
+async def select_character_exemplars_debug_endpoint(
+    request: CharacterExemplarSelectionDebugRequest,
+    character_id: int = FastAPIPath(..., description="Character ID", gt=0),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Return selected exemplars and scoring metadata for debug workflows."""
+    try:
+        if not db.get_character_card_by_id(character_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+
+        selection_config: CharacterExemplarSelectionConfig = request.selection_config
+        candidates, _ = db.search_character_exemplars(
+            character_id,
+            query=request.user_turn,
+            limit=200,
+            offset=0,
+        )
+        if not candidates:
+            candidates = db.list_character_exemplars(character_id, limit=200, offset=0)
+
+        selected: list[dict[str, Any]] = []
+        scores: list[dict[str, Any]] = []
+        seen_text: set[str] = set()
+        used_budget = 0
+        coverage = {"openers": 0, "emphasis": 0, "enders": 0, "catchphrases_used": 0}
+
+        for candidate in candidates:
+            text = str(candidate.get('text') or '').strip()
+            if not text:
+                continue
+            dedupe_key = text.lower()
+            if dedupe_key in seen_text:
+                continue
+
+            try:
+                length_tokens = int(candidate.get('length_tokens') or max(1, len(text.split())))
+            except (TypeError, ValueError):
+                length_tokens = max(1, len(text.split()))
+
+            if length_tokens > selection_config.max_exemplar_tokens:
+                continue
+            if used_budget + length_tokens > selection_config.budget_tokens:
+                continue
+
+            selected.append(candidate)
+            seen_text.add(dedupe_key)
+            used_budget += length_tokens
+
+            rhetorical = {item.lower() for item in _coerce_string_list(candidate.get('rhetorical'))}
+            if 'opener' in rhetorical:
+                coverage['openers'] += 1
+            if 'emphasis' in rhetorical:
+                coverage['emphasis'] += 1
+            if 'ender' in rhetorical:
+                coverage['enders'] += 1
+            if 'catchphrase' in rhetorical:
+                coverage['catchphrases_used'] += 1
+
+            scores.append(
+                {
+                    "id": str(candidate.get('id')),
+                    "score": _score_exemplar_overlap(request.user_turn, text),
+                }
+            )
+
+            if used_budget >= selection_config.budget_tokens:
+                break
+
+        return CharacterExemplarSelectionDebug(
+            selected=[_convert_db_exemplar_to_response_model(item) for item in selected],
+            budget_tokens=used_budget,
+            coverage=coverage,
+            scores=scores,
+        )
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error running exemplar debug selection for character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(
+            f"Unexpected error running exemplar debug selection for character {character_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while selecting exemplars.",
         ) from e
 
 

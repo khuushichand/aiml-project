@@ -104,6 +104,7 @@ class TTSRequest:
     voice: Optional[str] = None
     language: Optional[str] = "en"
     format: AudioFormat = AudioFormat.MP3
+    target_sample_rate: Optional[int] = None
     speed: float = 1.0
     pitch: float = 1.0
     volume: float = 1.0

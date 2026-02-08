@@ -488,6 +488,35 @@ class JobProcessor:
 
             self._ensure_ps_prompt_exists(initial_prompt_id, project_id)
 
+            optimization_status = str(optimization.get("status") or "").lower()
+            if optimization_status == "cancelled":
+                final_metrics = optimization.get("final_metrics")
+                if isinstance(final_metrics, str):
+                    try:
+                        final_metrics = json.loads(final_metrics)
+                    except Exception:
+                        final_metrics = {}
+                if not isinstance(final_metrics, dict):
+                    final_metrics = {}
+
+                best_metric = (
+                    final_metrics.get("score")
+                    or final_metrics.get("accuracy")
+                    or final_metrics.get("best_metric")
+                )
+                logger.info(
+                    "PS optimization.skip_cancelled optimization_id={} strategy={} status=cancelled",
+                    optimization_id,
+                    optimizer_type,
+                )
+                return {
+                    "optimization_id": optimization_id,
+                    "iterations_completed": int(optimization.get("iterations_completed") or 0),
+                    "best_prompt_id": optimization.get("optimized_prompt_id") or initial_prompt_id,
+                    "best_metric": best_metric,
+                    "status": "cancelled",
+                }
+
             # Keep optimization row in sync with queued payload fields so
             # OptimizationEngine receives the runtime test set/config.
             payload_test_case_ids = payload.get("test_case_ids")
@@ -615,6 +644,21 @@ class JobProcessor:
         max_iterations: int,
     ) -> dict[str, Any]:
         """Legacy optimization simulation path for unsupported strategies."""
+        initial_row = self.db.get_optimization(optimization_id, include_deleted=True) or {}
+        if str(initial_row.get("status") or "").lower() == "cancelled":
+            logger.info(
+                "PS optimization.legacy_skip_cancelled optimization_id={}",
+                optimization_id,
+            )
+            return {
+                "optimization_id": optimization_id,
+                "iterations_completed": int(initial_row.get("iterations_completed") or 0),
+                "best_prompt_id": initial_row.get("optimized_prompt_id") or initial_prompt_id,
+                "best_metric": None,
+                "improvement_percentage": 0.0,
+                "status": "cancelled",
+            }
+
         self.db.set_optimization_status(
             optimization_id,
             "running",
@@ -627,8 +671,19 @@ class JobProcessor:
         total_tokens = 0
         total_cost = 0.0
         iteration_limit = max(1, min(max_iterations, 5))
+        was_cancelled = False
 
         for iteration_index in range(1, iteration_limit + 1):
+            current = self.db.get_optimization(optimization_id, include_deleted=True) or {}
+            if str(current.get("status") or "").lower() == "cancelled":
+                logger.info(
+                    "PS optimization.legacy_cancelled optimization_id={} iteration={}",
+                    optimization_id,
+                    iteration_index,
+                )
+                was_cancelled = True
+                break
+
             iteration_result = await self._run_optimization_iteration(
                 optimization_id,
                 initial_prompt_id,
@@ -696,16 +751,31 @@ class JobProcessor:
         if best_prompt_id:
             self._ensure_ps_prompt_exists(best_prompt_id, project_id)
 
-        self.db.complete_optimization(
-            optimization_id,
-            optimized_prompt_id=best_prompt_id,
-            iterations_completed=len(iterations),
-            initial_metrics={"accuracy": initial_metric},
-            final_metrics={"accuracy": best_metric},
-            improvement_percentage=improvement,
-            total_tokens=total_tokens,
-            total_cost=total_cost,
-        )
+        if was_cancelled:
+            self.db.update_optimization(
+                optimization_id,
+                {
+                    "optimized_prompt_id": best_prompt_id,
+                    "iterations_completed": len(iterations),
+                    "initial_metrics": {"accuracy": initial_metric},
+                    "final_metrics": {"accuracy": best_metric},
+                    "improvement_percentage": improvement,
+                    "total_tokens": total_tokens,
+                    "total_cost": total_cost,
+                },
+                set_completed_at=True,
+            )
+        else:
+            self.db.complete_optimization(
+                optimization_id,
+                optimized_prompt_id=best_prompt_id,
+                iterations_completed=len(iterations),
+                initial_metrics={"accuracy": initial_metric},
+                final_metrics={"accuracy": best_metric},
+                improvement_percentage=improvement,
+                total_tokens=total_tokens,
+                total_cost=total_cost,
+            )
 
         result = {
             "optimization_id": optimization_id,
@@ -713,7 +783,7 @@ class JobProcessor:
             "best_prompt_id": best_prompt_id,
             "best_metric": best_metric,
             "improvement_percentage": improvement,
-            "status": "completed",
+            "status": "cancelled" if was_cancelled else "completed",
         }
 
         logger.info(
@@ -728,7 +798,7 @@ class JobProcessor:
         return result
 
     async def _run_optimization_iteration(self, optimization_id: int,
-                                         prompt_id: int, iteration: int) -> dict[str, Any]:
+                                         prompt_id: Optional[int], iteration: int) -> dict[str, Any]:
         """
         Run a single optimization iteration (simulation).
 

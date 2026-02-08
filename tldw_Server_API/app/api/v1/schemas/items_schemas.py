@@ -14,6 +14,8 @@ class Item(BaseModel):
     domain: str | None = None
     summary: str | None = None
     published_at: str | None = None
+    status: str | None = "saved"
+    favorite: bool = False
     tags: list[str] = []
     type: str | None = None
 

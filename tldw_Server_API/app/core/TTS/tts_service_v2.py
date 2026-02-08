@@ -1377,7 +1377,7 @@ class TTSServiceV2:
             MetricDefinition(
                 name="voice_to_voice_seconds",
                 type=MetricType.HISTOGRAM,
-                description="Voice-to-voice latency from microphone start to first synthesized audio",
+                description="Voice-to-voice latency from end-of-speech to first synthesized audio",
                 unit="s",
                 labels=["provider", "route"],
                 buckets=[0.1, 0.25, 0.5, 1, 2, 5, 10, 20],
@@ -1989,7 +1989,30 @@ class TTSServiceV2:
                 ) from exc
         # Provider-specific extras passthrough
         extras = getattr(request, 'extra_params', None) or {}
+        target_sample_rate: Optional[int] = None
+        try:
+            requested_rate = getattr(request, "target_sample_rate", None)
+            if requested_rate is not None:
+                parsed_rate = int(requested_rate)
+                if parsed_rate > 0:
+                    target_sample_rate = parsed_rate
+        except _TTS_NONCRITICAL_EXCEPTIONS:
+            target_sample_rate = None
+
         if isinstance(extras, dict):
+            if target_sample_rate is None:
+                for rate_key in ("target_sample_rate", "sample_rate"):
+                    try:
+                        maybe_rate = extras.get(rate_key)
+                        if maybe_rate is None:
+                            continue
+                        parsed_rate = int(maybe_rate)
+                        if parsed_rate > 0:
+                            target_sample_rate = parsed_rate
+                            break
+                    except _TTS_NONCRITICAL_EXCEPTIONS:
+                        continue
+
             extra_language = extras.get("language")
             if isinstance(extra_language, str):
                 normalized_extra_language = self._normalize_language_code(extra_language)
@@ -2008,11 +2031,16 @@ class TTSServiceV2:
                         extras["language"] = normalized_extra_language
             if getattr(request, "reference_duration_min", None) is not None:
                 extras["reference_duration_min"] = request.reference_duration_min
+            if target_sample_rate is not None:
+                extras["target_sample_rate"] = target_sample_rate
+                # Alias for providers that currently look up `sample_rate` in extra params.
+                extras["sample_rate"] = target_sample_rate
 
         tts_request = TTSRequest(
             text=request.input,
             voice=request.voice,
             format=audio_format,
+            target_sample_rate=target_sample_rate,
             speed=request.speed,
             stream=request.stream if hasattr(request, 'stream') else True,
             language=language,

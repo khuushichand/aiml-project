@@ -215,6 +215,50 @@ async def test_audio_chat_ws_streams_llm_and_tts(monkeypatch: pytest.MonkeyPatch
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_audio_chat_ws_auto_commit_uses_eos_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    audio_payload = base64.b64encode(b"abc").decode("ascii")
+    messages = [
+        {
+            "type": "config",
+            "stt": {"model": "parakeet"},
+            "llm": {"provider": "stub", "model": "stub-model"},
+            "tts": {"voice": "af_heart", "format": "pcm"},
+        },
+        {"type": "audio", "data": audio_payload},
+        {"type": "audio", "data": audio_payload},
+        {"type": "stop"},
+    ]
+    ws = DummyWebSocket(messages)
+
+    class _TriggeringVAD(_DummyVAD):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+            super().__init__(*args, **kwargs)
+            self._count = 0
+            self.last_trigger_at = None
+
+        def observe(self, audio_bytes: bytes) -> bool:  # noqa: ARG002
+            self._count += 1
+            if self._count >= 2:
+                self.last_trigger_at = 4321.25
+                return True
+            return False
+
+    async def _get_tts_service():
+        return _DummyTTSService([b"tts"])
+
+    monkeypatch.setattr(audio, "SileroTurnDetector", _TriggeringVAD)
+    monkeypatch.setattr(audio, "get_tts_service", _get_tts_service)
+
+    await audio.websocket_audio_chat_stream(ws, token=None)
+
+    full_transcripts = [msg for msg in ws.sent_json if msg.get("type") == "full_transcript"]
+    assert full_transcripts
+    assert full_transcripts[0].get("auto_commit") is True
+    assert full_transcripts[0].get("voice_to_voice_start") == pytest.approx(4321.25)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_audio_chat_ws_persists_turn_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     audio_payload = base64.b64encode(b"abc").decode("ascii")
     ws = DummyWebSocket(

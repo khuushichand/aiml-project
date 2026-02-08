@@ -68,6 +68,7 @@ from tldw_Server_API.app.core.Chat.streaming_utils import (
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
 )
+from tldw_Server_API.app.core.Chat.tool_auto_exec import execute_assistant_tool_calls
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
@@ -3390,6 +3391,7 @@ async def execute_non_stream_call(
         logger.warning(f"Moderation output processing error: {e}")
 
     assistant_message_id: str | None = None
+    tool_execution_payload: list[dict[str, Any]] | None = None
     should_save_response = (
         should_persist
         and final_conversation_id
@@ -3412,6 +3414,38 @@ async def execute_non_stream_call(
             message_payload,
             use_transaction=True,
         )
+
+    if should_auto_execute_tools() and isinstance(tool_calls_to_save, list) and tool_calls_to_save:
+        try:
+            req_user_id = None
+            try:
+                if request is not None and hasattr(request, "state"):
+                    req_user_id = getattr(request.state, "user_id", None)
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
+                req_user_id = None
+
+            autoexec_result = await execute_assistant_tool_calls(
+                tool_calls=tool_calls_to_save,
+                user_id=str(req_user_id) if req_user_id is not None else None,
+                client_id=client_id,
+                max_tool_calls=get_chat_max_tool_calls(),
+                timeout_ms=get_chat_tool_timeout_ms(),
+                allow_catalog=get_chat_tool_allow_catalog(),
+                attach_idempotency=should_attach_tool_idempotency(),
+                idempotency_seed=str(final_conversation_id) if final_conversation_id else None,
+            )
+            tool_execution_payload = autoexec_result.event_payload().get("tool_results", [])
+
+            if should_persist and final_conversation_id:
+                for tool_message in autoexec_result.tool_messages():
+                    await save_message_fn(
+                        chat_db,
+                        final_conversation_id,
+                        tool_message,
+                        use_transaction=True,
+                    )
+        except _CHAT_NONCRITICAL_EXCEPTIONS as autoexec_err:
+            logger.warning("Chat tool auto-execution skipped due to error: {}", autoexec_err)
 
     if INJECT_ASSISTANT_NAME and isinstance(llm_response, dict):
         try:
@@ -3453,6 +3487,8 @@ async def execute_non_stream_call(
             encoded_payload["tldw_message_id"] = assistant_message_id
         if system_message_id:
             encoded_payload["tldw_system_message_id"] = system_message_id
+        if tool_execution_payload is not None:
+            encoded_payload["tldw_tool_results"] = tool_execution_payload
 
     # Audit success
     if audit_service and audit_context:
