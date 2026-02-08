@@ -60,6 +60,21 @@ AUDIO_BRIEFING_WORKFLOW_DEF: dict[str, Any] = {
             },
             "timeout_seconds": 600,
             "retry": 1,
+            "on_success": "_end",
+            "on_failure": "tts_single_voice_fallback",
+        },
+        {
+            "id": "tts_single_voice_fallback",
+            "type": "tts",
+            "config": {
+                "input": "{{ compose_script.text }}",
+                "model": "{{ inputs.tts_model }}",
+                "voice": "{{ inputs.tts_voice }}",
+                "response_format": "mp3",
+                "speed": "{{ inputs.tts_speed }}",
+            },
+            "timeout_seconds": 600,
+            "retry": 1,
         },
     ],
 }

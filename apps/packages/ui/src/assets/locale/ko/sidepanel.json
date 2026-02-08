@@ -1,0 +1,204 @@
+{
+  "tooltip": {
+    "embed": "페이지를 임베드하는 데 몇 분이 걸릴 수 있습니다. 잠시만 기다려 주세요...",
+    "openwebui": "웹 UI 열기",
+    "clear": "채팅 기록 지우기",
+    "history": "채팅 기록"
+  },
+  "toolbar": {
+    "ragSearch": "RAG 검색"
+  },
+  "errors": {
+    "privateModeTitle": "tldw Assistant에서 데이터를 저장할 수 없습니다",
+    "privateModeDescription": "Firefox 사생활 모드에서는 채팅 기록을 저장할 수 없습니다. 기본적으로 임시 채팅이 활성화되어 있습니다. 곧 개선될 예정입니다."
+  },
+  "connectionBanner": {
+    "connecting": "tldw 서버에 연결하는 중...",
+    "authErrorTitle": "API 키에 주의가 필요합니다",
+    "authErrorBody": "서버에는 접속되지만 API 키가 잘못되었거나 누락되었습니다.",
+    "unreachableTitle": "tldw 서버에 연결할 수 없습니다",
+    "unreachableBody": "서버가 실행 중이고 접근 가능한지 확인하세요.",
+    "noUrlBody": "시작하려면 설정에서 서버 URL을 추가하세요.",
+    "disconnectedTitle": "tldw 서버에 연결되지 않음",
+    "disconnectedBody": "설정을 열어 서버 연결을 구성하세요.",
+    "setupTitle": "설정을 완료하고 채팅 시작",
+    "setupBody": "설정에서 설정 마법사를 완료하여 연결하세요.",
+    "openSettings": "설정 열기"
+  },
+  "temporaryBadge": {
+    "title": "임시 채팅",
+    "label": "임시",
+    "description": "이 채팅은 저장되지 않습니다. 닫거나 새 채팅을 시작하면 메시지가 삭제됩니다.",
+    "clickHint": "클릭하여 비활성화",
+    "ariaLabel": "임시 채팅 모드가 활성화되었습니다. 클릭하여 전환합니다.",
+    "indicatorTooltip": "이 채팅의 메시지는 저장되지 않습니다",
+    "indicatorAria": "임시 채팅"
+  },
+  "header": {
+    "ingest": "인제스트",
+    "saveCurrent": "현재 페이지를 서버에 저장",
+    "processLocal": "현재 페이지를 로컬에서 처리",
+    "viewProcessed": "처리된 항목 보기",
+    "timeoutLabel": "시간 제한 (초)",
+    "toggleSidebar": "사이드바 / 전체 화면 전환",
+    "shortcuts": "단축키",
+    "showDebug": "스트림 디버그 표시",
+    "hideDebug": "스트림 디버그 숨기기",
+    "moreOptionsAria": "더 많은 옵션",
+    "moreOptionsTitle": "인제스트 및 기타",
+    "openWebuiAria": "웹 UI 열기",
+    "newChatAria": "새 채팅",
+    "tempChatAria": "임시 채팅 전환",
+    "clearHistoryAria": "기록 지우기",
+    "openHistoryAria": "기록 열기",
+    "openModelSettingsAria": "모델 설정 열기",
+    "openSettingsAria": "설정 열기",
+    "tempPill": "임시",
+    "modesLabel": "Web UI에서 모드 열기",
+    "modePlayground": "채팅",
+    "modeReview": "검토",
+    "modeMedia": "미디어",
+    "modeKnowledge": "지식 Q&A",
+    "modeNotes": "노트",
+    "modePrompts": "프롬프트",
+    "modeFlashcards": "플래시카드"
+  },
+  "controlRow": {
+    "saveMode": "저장 모드",
+    "ephemeral": "임시 채팅",
+    "searchSection": "검색 및 비전",
+    "webSearch": "웹 검색",
+    "vision": "비전",
+    "uploadImage": "이미지 업로드",
+    "quickIngest": "페이지 빠른 처리",
+    "openInFullUI": "전체 UI에서 열기",
+    "modeChat": "채팅",
+    "modeMedia": "미디어",
+    "modeNotes": "노트",
+    "modeFlashcards": "플래시카드",
+    "ragSearch": "RAG 검색",
+    "moreTools": "추가 도구"
+  },
+  "composer": {
+    "connectHint": "메시지를 보내려면 설정에서 tldw 서버에 연결하세요.",
+    "connectingPlaceholder": "연결 중...",
+    "disconnectedPlaceholder": "메시지를 보내고 미디어를 보려면 설정에서 tldw 서버에 연결하세요."
+  },
+  "notification": {
+    "ingestSent": "tldw 서버로 전송됨",
+    "ingestSentDesc": "현재 페이지가 인제스트용으로 제출되었습니다.",
+    "processedLocal": "로컬에서 처리됨",
+    "processedLocalDesc": "처리된 콘텐츠는 설정 > 처리됨에 로컬로 저장됩니다.",
+    "transcriptionTitle": "전사",
+    "transcriptionSummaryTitle": "전사 + 요약",
+    "transcriptionFallback": "전사가 완료되었습니다. Web UI에서 미디어를 열어 확인하세요.",
+    "sourceLabel": "출처",
+    "transcriptLabel": "전사본",
+    "summaryLabel": "요약"
+  },
+  "saveStatus": {
+    "ephemeral": "임시: 저장되지 않으며 닫으면 삭제됩니다",
+    "local": "이 브라우저에 로컬로 저장됨",
+    "server": "서버에 저장됨",
+    "saveFailed": "서버에 채팅을 저장하지 못했습니다",
+    "saveFailedDescription": "이제 채팅이 로컬에만 저장됩니다. 연결을 확인하고 다시 시도하세요."
+  },
+  "rag": {
+    "attachedContext": "첨부된 컨텍스트",
+    "searchPlaceholder": "지식 베이스 검색...",
+    "search": "검색",
+    "show": "RAG 검색 표시",
+    "hide": "RAG 검색 숨기기",
+    "addTagPlaceholder": "태그 추가 (Enter)",
+    "add": "추가",
+    "noResults": "결과 없음",
+    "initialState": "결과 없음",
+    "timeout": {
+      "message": "요청 시간이 초과되었습니다.",
+      "increase": "시간 제한 늘리기",
+      "checkHealth": "서버 상태 확인"
+    },
+    "actions": {
+      "insert": "삽입",
+      "ask": "질문",
+      "open": "열기",
+      "copy": "복사"
+    },
+    "hint": {
+      "message": "지식 베이스를 검색하고 결과를 메시지에 삽입하세요.",
+      "dismiss": "닫기"
+    }
+  },
+  "tabs": {
+    "newChat": "새 채팅",
+    "newTabAria": "새 채팅 탭",
+    "closeTabAria": "채팅 탭 닫기"
+  },
+  "characterSelect": {
+    "label": "캐릭터",
+    "tooltip": "캐릭터 선택",
+    "search": "캐릭터 검색...",
+    "noMatches": "일치하는 캐릭터 없음",
+    "noCharacters": "사용 가능한 캐릭터 없음",
+    "none": "캐릭터 없음",
+    "createNewCharacter": "새 캐릭터 만들기+",
+    "importCharacter": "캐릭터 가져오기",
+    "favorites": "Favorites",
+    "favoriteAdd": "Add to favorites",
+    "favoriteRemove": "Remove from favorites",
+    "sort": {
+      "favorites": "Favorites",
+      "az": "A-Z"
+    }
+  },
+  "knowledge": {
+    "tabs": {
+      "qaSearch": "QA Search",
+      "fileSearch": "File Search",
+      "label": "Knowledge panel sections",
+      "contextBadge": "{{count}} items attached"
+    }
+  },
+  "qaSearch": {
+    "searching": "Searching knowledge base...",
+    "generatedAnswer": "Generated Answer",
+    "cached": "Cached",
+    "copyAnswer": "Copy answer",
+    "copied": "Copied",
+    "copy": "Copy",
+    "insertAnswer": "Insert answer",
+    "copyChunk": "Copy chunk",
+    "insertChunk": "Insert chunk",
+    "sourceChunks": "Source Chunks ({{count}})",
+    "sourceChunksList": "Source chunks",
+    "strategy": {
+      "standard": "Standard",
+      "agentic": "Agentic"
+    },
+    "sort": {
+      "label": "Sort source chunks",
+      "relevance": "Relevance",
+      "source": "Source"
+    }
+  },
+  "fileSearch": {
+    "filterByType": "Filter by type",
+    "resultsList": "File search results",
+    "attached": "Attached",
+    "alreadyAttached": "Already attached",
+    "attach": "Attach",
+    "openExternal": "Open",
+    "open": "Open",
+    "mediaType": {
+      "video": "Video",
+      "audio": "Audio",
+      "pdf": "PDF",
+      "article": "Article",
+      "note": "Note",
+      "document": "Document",
+      "epub": "EPUB",
+      "html": "HTML",
+      "xml": "XML"
+    }
+  }
+}

@@ -1,0 +1,204 @@
+{
+  "tooltip": {
+    "embed": "L'inserimento della pagina potrebbe richiedere alcuni minuti. Attendere prego...",
+    "clear": "Cancella la cronologia della chat",
+    "history": "Cronologia della chat",
+    "openwebui": "Apri WebUI"
+  },
+  "toolbar": {
+    "ragSearch": "Ricerca RAG"
+  },
+  "errors": {
+    "privateModeTitle": "tldw Assistant non può salvare i dati",
+    "privateModeDescription": "La modalità privata di Firefox non consente di salvare la cronologia della chat. La chat temporanea è attiva per impostazione predefinita. Altri miglioramenti arriveranno presto."
+  },
+  "connectionBanner": {
+    "connecting": "Connessione al server tldw...",
+    "authErrorTitle": "La chiave API richiede attenzione",
+    "authErrorBody": "Il server è raggiungibile, ma la chiave API è errata o mancante.",
+    "unreachableTitle": "Impossibile raggiungere il server tldw",
+    "unreachableBody": "Verifica che il server sia in esecuzione e accessibile.",
+    "noUrlBody": "Aggiungi l'URL del server nelle Impostazioni per iniziare.",
+    "disconnectedTitle": "Non connesso al server tldw",
+    "disconnectedBody": "Apri le Impostazioni per configurare la connessione al server.",
+    "setupTitle": "Completa la configurazione per iniziare a chattare",
+    "setupBody": "Completa la procedura guidata nelle Impostazioni per connetterti.",
+    "openSettings": "Apri Impostazioni"
+  },
+  "temporaryBadge": {
+    "title": "Chat temporanea",
+    "label": "Temp",
+    "description": "Questa chat non verrà salvata. I messaggi verranno cancellati quando chiudi o inizi una nuova chat.",
+    "clickHint": "Clicca per disattivare",
+    "ariaLabel": "La modalità chat temporanea è attiva. Clicca per attivare/disattivare.",
+    "indicatorTooltip": "I messaggi in questa chat non verranno salvati",
+    "indicatorAria": "Chat temporanea"
+  },
+  "header": {
+    "ingest": "Ingesta",
+    "saveCurrent": "Salva la pagina corrente sul server",
+    "processLocal": "Elabora la pagina corrente localmente",
+    "viewProcessed": "Vedi elaborati",
+    "timeoutLabel": "Timeout (s)",
+    "toggleSidebar": "Attiva/disattiva barra laterale / schermo intero",
+    "shortcuts": "Scorciatoie",
+    "showDebug": "Mostra debug dello stream",
+    "hideDebug": "Nascondi debug dello stream",
+    "moreOptionsAria": "Altre opzioni",
+    "moreOptionsTitle": "Ingesta e altro",
+    "openWebuiAria": "Apri Web UI",
+    "newChatAria": "Nuova chat",
+    "tempChatAria": "Attiva/disattiva chat temporanea",
+    "clearHistoryAria": "Cancella cronologia",
+    "openHistoryAria": "Apri cronologia",
+    "openModelSettingsAria": "Apri impostazioni del modello",
+    "openSettingsAria": "Apri impostazioni",
+    "tempPill": "Temp",
+    "modesLabel": "Apri le modalità nella Web UI",
+    "modePlayground": "Chat",
+    "modeReview": "Revisione multi-elemento",
+    "modeMedia": "Contenuti multimediali",
+    "modeKnowledge": "Q&A conoscenza",
+    "modeNotes": "Note",
+    "modePrompts": "Prompt",
+    "modeFlashcards": "Flashcard"
+  },
+  "controlRow": {
+    "saveMode": "Modalità di salvataggio",
+    "ephemeral": "Effimero",
+    "searchSection": "Ricerca e Visione",
+    "webSearch": "Ricerca sul Web",
+    "vision": "Visione",
+    "uploadImage": "Carica immagine",
+    "quickIngest": "Inserimento rapido",
+    "openInFullUI": "Apri nell'interfaccia completa",
+    "modeChat": "Chat",
+    "modeMedia": "Media",
+    "modeNotes": "Note",
+    "modeFlashcards": "Flashcard",
+    "ragSearch": "Ricerca RAG",
+    "moreTools": "Altri strumenti"
+  },
+  "composer": {
+    "connectHint": "Connettiti al tuo server tldw nelle Impostazioni per inviare messaggi.",
+    "connectingPlaceholder": "Connessione...",
+    "disconnectedPlaceholder": "Connettiti al tuo server tldw nelle Impostazioni per inviare messaggi e vedere i contenuti multimediali."
+  },
+  "notification": {
+    "ingestSent": "Inviato al server tldw",
+    "ingestSentDesc": "La pagina corrente è stata inviata per l’ingestione.",
+    "processedLocal": "Elaborato localmente",
+    "processedLocalDesc": "I contenuti elaborati sono salvati localmente in Impostazioni > Elaborati.",
+    "transcriptionTitle": "Trascrizione",
+    "transcriptionSummaryTitle": "Trascrizione + riepilogo",
+    "transcriptionFallback": "Trascrizione completata. Apri Contenuti multimediali nella Web UI per visualizzarla.",
+    "sourceLabel": "Fonte",
+    "transcriptLabel": "Trascrizione",
+    "summaryLabel": "Riepilogo"
+  },
+  "saveStatus": {
+    "ephemeral": "Temporaneo: non salvato, cancellato alla chiusura",
+    "local": "Salvato localmente in questo browser",
+    "server": "Salvato sul server",
+    "saveFailed": "Impossibile salvare la chat sul server",
+    "saveFailedDescription": "La chat ora viene salvata solo localmente. Controlla la connessione e riprova."
+  },
+  "rag": {
+    "attachedContext": "Contesto allegato",
+    "searchPlaceholder": "Cerca nella tua base di conoscenza...",
+    "search": "Cerca",
+    "show": "Mostra ricerca RAG",
+    "hide": "Nascondi ricerca RAG",
+    "addTagPlaceholder": "Aggiungi tag (Invio)",
+    "add": "Aggiungi",
+    "noResults": "Nessun risultato",
+    "initialState": "Nessun risultato",
+    "timeout": {
+      "message": "Richiesta scaduta.",
+      "increase": "Aumenta timeout",
+      "checkHealth": "Verifica stato del server"
+    },
+    "actions": {
+      "insert": "Inserisci",
+      "ask": "Chiedi",
+      "open": "Apri",
+      "copy": "Copia"
+    },
+    "hint": {
+      "message": "Cerca nella tua base di conoscenza e inserisci i risultati nel messaggio.",
+      "dismiss": "Chiudi"
+    }
+  },
+  "tabs": {
+    "newChat": "Nuova chat",
+    "newTabAria": "Nuova scheda chat",
+    "closeTabAria": "Chiudi scheda chat"
+  },
+  "characterSelect": {
+    "label": "Personaggio",
+    "tooltip": "Seleziona un personaggio",
+    "search": "Cerca personaggi...",
+    "noMatches": "Nessun personaggio corrispondente",
+    "noCharacters": "Nessun personaggio disponibile",
+    "none": "Nessun personaggio",
+    "createNewCharacter": "Crea un nuovo personaggio+",
+    "importCharacter": "Importa personaggio",
+    "favorites": "Favorites",
+    "favoriteAdd": "Add to favorites",
+    "favoriteRemove": "Remove from favorites",
+    "sort": {
+      "favorites": "Favorites",
+      "az": "A-Z"
+    }
+  },
+  "knowledge": {
+    "tabs": {
+      "qaSearch": "QA Search",
+      "fileSearch": "File Search",
+      "label": "Knowledge panel sections",
+      "contextBadge": "{{count}} items attached"
+    }
+  },
+  "qaSearch": {
+    "searching": "Searching knowledge base...",
+    "generatedAnswer": "Generated Answer",
+    "cached": "Cached",
+    "copyAnswer": "Copy answer",
+    "copied": "Copied",
+    "copy": "Copy",
+    "insertAnswer": "Insert answer",
+    "copyChunk": "Copy chunk",
+    "insertChunk": "Insert chunk",
+    "sourceChunks": "Source Chunks ({{count}})",
+    "sourceChunksList": "Source chunks",
+    "strategy": {
+      "standard": "Standard",
+      "agentic": "Agentic"
+    },
+    "sort": {
+      "label": "Sort source chunks",
+      "relevance": "Relevance",
+      "source": "Source"
+    }
+  },
+  "fileSearch": {
+    "filterByType": "Filter by type",
+    "resultsList": "File search results",
+    "attached": "Attached",
+    "alreadyAttached": "Already attached",
+    "attach": "Attach",
+    "openExternal": "Open",
+    "open": "Open",
+    "mediaType": {
+      "video": "Video",
+      "audio": "Audio",
+      "pdf": "PDF",
+      "article": "Article",
+      "note": "Note",
+      "document": "Document",
+      "epub": "EPUB",
+      "html": "HTML",
+      "xml": "XML"
+    }
+  }
+}

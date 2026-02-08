@@ -342,21 +342,9 @@ async def run_text_clean_adapter(config: dict[str, Any], context: dict[str, Any]
         with contextlib.suppress(Exception):
             text = text.encode('utf-8', errors='ignore').decode('utf-8')
 
-    if "normalize_whitespace" in operations:
-        text = re.sub(r'\s+', ' ', text)
-
-    if "strip" in operations or "normalize_whitespace" in operations:
-        text = text.strip()
-
-    if "lowercase" in operations:
-        text = text.lower()
-
-    if "remove_urls" in operations:
-        text = re.sub(r'https?://\S+', '', text)
-
-    if "remove_emails" in operations:
-        text = re.sub(r'\S+@\S+\.\S+', '', text)
-
+    # strip_markdown MUST run before normalize_whitespace so that
+    # re.MULTILINE patterns (^-anchored headers, list markers, blockquotes)
+    # can match at actual line boundaries.
     if "strip_markdown" in operations:
         # Headers
         text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
@@ -376,6 +364,21 @@ async def run_text_clean_adapter(config: dict[str, Any], context: dict[str, Any]
         # Blockquotes and horizontal rules
         text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)
         text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)
+
+    if "normalize_whitespace" in operations:
+        text = re.sub(r'\s+', ' ', text)
+
+    if "strip" in operations or "normalize_whitespace" in operations:
+        text = text.strip()
+
+    if "lowercase" in operations:
+        text = text.lower()
+
+    if "remove_urls" in operations:
+        text = re.sub(r'https?://\S+', '', text)
+
+    if "remove_emails" in operations:
+        text = re.sub(r'\S+@\S+\.\S+', '', text)
 
     if "normalize_unicode" in operations:
         import unicodedata

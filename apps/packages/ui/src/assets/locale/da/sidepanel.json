@@ -1,0 +1,204 @@
+{
+  "tooltip": {
+    "embed": "Det kan tage et par minutter at indlejre siden. Vent venligst...",
+    "clear": "Slet chat historiken",
+    "history": "Chat historik",
+    "openwebui": "Åbn WebUI"
+  },
+  "toolbar": {
+    "ragSearch": "RAG-søgning"
+  },
+  "errors": {
+    "privateModeTitle": "tldw Assistant kan ikke gemme data",
+    "privateModeDescription": "Firefox privat tilstand understøtter ikke at gemme chat-historik. Midlertidig chat er slået til som standard. Flere forbedringer kommer snart."
+  },
+  "connectionBanner": {
+    "connecting": "Opretter forbindelse til din tldw-server...",
+    "authErrorTitle": "API-nøglen kræver opmærksomhed",
+    "authErrorBody": "Serveren er tilgængelig, men API-nøglen er forkert eller mangler.",
+    "unreachableTitle": "Kan ikke nå din tldw-server",
+    "unreachableBody": "Tjek at serveren kører og er tilgængelig.",
+    "noUrlBody": "Tilføj serverens URL i Indstillinger for at komme i gang.",
+    "disconnectedTitle": "Ikke forbundet til tldw-serveren",
+    "disconnectedBody": "Åbn Indstillinger for at konfigurere serverforbindelsen.",
+    "setupTitle": "Fuldfør opsætningen for at begynde at chatte",
+    "setupBody": "Fuldfør opsætningsguiden i Indstillinger for at oprette forbindelse.",
+    "openSettings": "Åbn Indstillinger"
+  },
+  "temporaryBadge": {
+    "title": "Midlertidig chat",
+    "label": "Midl.",
+    "description": "Denne chat gemmes ikke. Beskeder ryddes, når du lukker eller starter en ny chat.",
+    "clickHint": "Klik for at deaktivere",
+    "ariaLabel": "Midlertidig chattilstand er aktiv. Klik for at skifte.",
+    "indicatorTooltip": "Beskeder i denne chat bliver ikke gemt",
+    "indicatorAria": "Midlertidig chat"
+  },
+  "header": {
+    "ingest": "Indlæsning",
+    "saveCurrent": "Gem den aktuelle side på serveren",
+    "processLocal": "Behandl den aktuelle side lokalt",
+    "viewProcessed": "Vis behandlede",
+    "timeoutLabel": "Tidsudløb (s)",
+    "toggleSidebar": "Skift sidepanel / fuld skærm",
+    "shortcuts": "Genveje",
+    "showDebug": "Vis stream-debug",
+    "hideDebug": "Skjul stream-debug",
+    "moreOptionsAria": "Flere muligheder",
+    "moreOptionsTitle": "Indlæsning og mere",
+    "openWebuiAria": "Åbn Web UI",
+    "newChatAria": "Ny chat",
+    "tempChatAria": "Skift midlertidig chat",
+    "clearHistoryAria": "Ryd historik",
+    "openHistoryAria": "Åbn historik",
+    "openModelSettingsAria": "Åbn modelindstillinger",
+    "openSettingsAria": "Åbn indstillinger",
+    "tempPill": "Midl.",
+    "modesLabel": "Åbn tilstande i Web UI",
+    "modePlayground": "Samtale",
+    "modeReview": "Gennemgang",
+    "modeMedia": "Medier",
+    "modeKnowledge": "Viden-QA-område",
+    "modeNotes": "Noter",
+    "modePrompts": "Prompt-oversigt",
+    "modeFlashcards": "Huskekort"
+  },
+  "controlRow": {
+    "saveMode": "Gem tilstand",
+    "ephemeral": "Midlertidig",
+    "searchSection": "Søgning og visuel analyse",
+    "webSearch": "Websøgning",
+    "vision": "Visuel analyse",
+    "uploadImage": "Upload billede",
+    "quickIngest": "Hurtig overførsel",
+    "openInFullUI": "Åbn i fuld UI",
+    "modeChat": "Samtale",
+    "modeMedia": "Medier",
+    "modeNotes": "Noter",
+    "modeFlashcards": "Huskekort",
+    "ragSearch": "RAG-søgning",
+    "moreTools": "Flere værktøjer"
+  },
+  "composer": {
+    "connectHint": "Forbind til din tldw-server i Indstillinger for at sende beskeder.",
+    "connectingPlaceholder": "Opretter forbindelse...",
+    "disconnectedPlaceholder": "Forbind til din tldw-server i Indstillinger for at sende beskeder og se medier."
+  },
+  "notification": {
+    "ingestSent": "Sendt til tldw-serveren",
+    "ingestSentDesc": "Den aktuelle side er sendt til ingestion.",
+    "processedLocal": "Behandlet lokalt",
+    "processedLocalDesc": "Behandlet indhold gemmes lokalt under Indstillinger > Behandlet.",
+    "transcriptionTitle": "Transskription",
+    "transcriptionSummaryTitle": "Transskription + resumé",
+    "transcriptionFallback": "Transskription fuldført. Åbn Medier i Web UI for at se den.",
+    "sourceLabel": "Kilde",
+    "transcriptLabel": "Transskription",
+    "summaryLabel": "Resumé"
+  },
+  "saveStatus": {
+    "ephemeral": "Midlertidig: ikke gemt, ryddes ved lukning",
+    "local": "Gemt lokalt i denne browser",
+    "server": "Gemt på serveren",
+    "saveFailed": "Kunne ikke gemme chatten på serveren",
+    "saveFailedDescription": "Chatten gemmes nu kun lokalt. Tjek din forbindelse og prøv igen."
+  },
+  "rag": {
+    "attachedContext": "Vedhæftet kontekst",
+    "searchPlaceholder": "Søg i din vidensbase…",
+    "search": "Søg",
+    "show": "Vis RAG-søgning",
+    "hide": "Skjul RAG-søgning",
+    "addTagPlaceholder": "Tilføj tag (Enter)",
+    "add": "Tilføj",
+    "noResults": "Ingen resultater",
+    "initialState": "Ingen resultater",
+    "timeout": {
+      "message": "Forespørgslen fik timeout.",
+      "increase": "Forøg tidsudløb",
+      "checkHealth": "Tjek serverstatus"
+    },
+    "actions": {
+      "insert": "Indsæt",
+      "ask": "Spørg",
+      "open": "Åbn",
+      "copy": "Kopiér"
+    },
+    "hint": {
+      "message": "Søg i din vidensbase og indsæt resultater i din besked.",
+      "dismiss": "Luk"
+    }
+  },
+  "tabs": {
+    "newChat": "Ny samtale",
+    "newTabAria": "Ny samtale-fane",
+    "closeTabAria": "Luk samtale-fanen"
+  },
+  "characterSelect": {
+    "label": "Karakter",
+    "tooltip": "Vælg en karakter",
+    "search": "Søg efter karakterer...",
+    "noMatches": "Ingen matchende karakterer",
+    "noCharacters": "Ingen karakterer tilgængelige",
+    "none": "Ingen karakter",
+    "createNewCharacter": "Opret ny karakter+",
+    "importCharacter": "Importer karakter",
+    "favorites": "Favorites",
+    "favoriteAdd": "Add to favorites",
+    "favoriteRemove": "Remove from favorites",
+    "sort": {
+      "favorites": "Favorites",
+      "az": "A-Z"
+    }
+  },
+  "knowledge": {
+    "tabs": {
+      "qaSearch": "QA Search",
+      "fileSearch": "File Search",
+      "label": "Knowledge panel sections",
+      "contextBadge": "{{count}} items attached"
+    }
+  },
+  "qaSearch": {
+    "searching": "Searching knowledge base...",
+    "generatedAnswer": "Generated Answer",
+    "cached": "Cached",
+    "copyAnswer": "Copy answer",
+    "copied": "Copied",
+    "copy": "Copy",
+    "insertAnswer": "Insert answer",
+    "copyChunk": "Copy chunk",
+    "insertChunk": "Insert chunk",
+    "sourceChunks": "Source Chunks ({{count}})",
+    "sourceChunksList": "Source chunks",
+    "strategy": {
+      "standard": "Standard",
+      "agentic": "Agentic"
+    },
+    "sort": {
+      "label": "Sort source chunks",
+      "relevance": "Relevance",
+      "source": "Source"
+    }
+  },
+  "fileSearch": {
+    "filterByType": "Filter by type",
+    "resultsList": "File search results",
+    "attached": "Attached",
+    "alreadyAttached": "Already attached",
+    "attach": "Attach",
+    "openExternal": "Open",
+    "open": "Open",
+    "mediaType": {
+      "video": "Video",
+      "audio": "Audio",
+      "pdf": "PDF",
+      "article": "Article",
+      "note": "Note",
+      "document": "Document",
+      "epub": "EPUB",
+      "html": "HTML",
+      "xml": "XML"
+    }
+  }
+}

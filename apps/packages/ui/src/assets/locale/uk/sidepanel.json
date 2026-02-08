@@ -1,0 +1,204 @@
+{
+  "tooltip": {
+    "embed": "Може знадобитися кілька хвилин для вкладення сторінки у базу. Будь ласка, зачекайте...",
+    "clear": "Стерти історію чату",
+    "history": "Історія чату",
+    "openwebui": "Відкрити веб-інтерфейс"
+  },
+  "toolbar": {
+    "ragSearch": "RAG-пошук"
+  },
+  "errors": {
+    "privateModeTitle": "tldw Assistant не може зберегти дані",
+    "privateModeDescription": "Приватний режим Firefox не підтримує збереження історії чату. Тимчасовий чат увімкнено за замовчуванням. Скоро будуть покращення."
+  },
+  "connectionBanner": {
+    "connecting": "Підключення до вашого сервера tldw...",
+    "authErrorTitle": "Потрібна увага до API-ключа",
+    "authErrorBody": "Сервер доступний, але API-ключ неправильний або відсутній.",
+    "unreachableTitle": "Не вдається підключитися до сервера tldw",
+    "unreachableBody": "Перевірте, що сервер запущено та доступний.",
+    "noUrlBody": "Додайте URL сервера в Налаштуваннях, щоб почати.",
+    "disconnectedTitle": "Немає підключення до сервера tldw",
+    "disconnectedBody": "Відкрийте Налаштування, щоб налаштувати підключення.",
+    "setupTitle": "Завершіть налаштування, щоб почати чат",
+    "setupBody": "Завершіть майстер налаштування в Налаштуваннях, щоб підключитися.",
+    "openSettings": "Відкрити Налаштування"
+  },
+  "temporaryBadge": {
+    "title": "Тимчасовий чат",
+    "label": "Тимч.",
+    "description": "Цей чат не буде збережено. Повідомлення буде очищено під час закриття або початку нового чату.",
+    "clickHint": "Натисніть, щоб вимкнути",
+    "ariaLabel": "Режим тимчасового чату активний. Натисніть, щоб перемкнути.",
+    "indicatorTooltip": "Повідомлення в цьому чаті не буде збережено",
+    "indicatorAria": "Тимчасовий чат"
+  },
+  "header": {
+    "ingest": "Імпортувати",
+    "saveCurrent": "Зберегти поточну сторінку на сервері",
+    "processLocal": "Обробити поточну сторінку локально",
+    "viewProcessed": "Переглянути оброблене",
+    "timeoutLabel": "Тайм‑аут (с)",
+    "toggleSidebar": "Перемкнути бічну панель / повний екран",
+    "shortcuts": "Гарячі клавіші",
+    "showDebug": "Показати налагодження потоку",
+    "hideDebug": "Сховати налагодження потоку",
+    "moreOptionsAria": "Більше опцій",
+    "moreOptionsTitle": "Ingest та інше",
+    "openWebuiAria": "Відкрити Web UI",
+    "newChatAria": "Новий чат",
+    "tempChatAria": "Перемкнути тимчасовий чат",
+    "clearHistoryAria": "Очистити історію",
+    "openHistoryAria": "Відкрити історію",
+    "openModelSettingsAria": "Відкрити налаштування моделі",
+    "openSettingsAria": "Відкрити налаштування",
+    "tempPill": "Тимч.",
+    "modesLabel": "Відкрити режими у Web UI",
+    "modePlayground": "Чат",
+    "modeReview": "Огляд",
+    "modeMedia": "Медіа",
+    "modeKnowledge": "Знання",
+    "modeNotes": "Нотатки",
+    "modePrompts": "Запити",
+    "modeFlashcards": "Флеш-картки"
+  },
+  "controlRow": {
+    "saveMode": "Режим збереження",
+    "ephemeral": "Тимчасовий",
+    "searchSection": "Пошук і візуальний аналіз",
+    "webSearch": "Пошук в інтернеті",
+    "vision": "Візуальний аналіз",
+    "uploadImage": "Завантажити зображення",
+    "quickIngest": "Швидко імпортувати сторінку",
+    "openInFullUI": "Відкрити у повному інтерфейсі",
+    "modeChat": "Чат",
+    "modeMedia": "Медіа",
+    "modeNotes": "Нотатки",
+    "modeFlashcards": "Флеш-картки",
+    "ragSearch": "RAG-пошук",
+    "moreTools": "Більше інструментів"
+  },
+  "composer": {
+    "connectHint": "Підключіться до свого сервера tldw у налаштуваннях, щоб надсилати повідомлення.",
+    "connectingPlaceholder": "Підключення...",
+    "disconnectedPlaceholder": "Підключіться до свого сервера tldw у налаштуваннях, щоб надсилати повідомлення й переглядати медіа."
+  },
+  "notification": {
+    "ingestSent": "Надіслано на сервер tldw",
+    "ingestSentDesc": "Поточну сторінку надіслано для обробки.",
+    "processedLocal": "Оброблено локально",
+    "processedLocalDesc": "Оброблений контент збережено локально в Налаштування > Оброблене.",
+    "transcriptionTitle": "Транскрипція",
+    "transcriptionSummaryTitle": "Транскрипція + резюме",
+    "transcriptionFallback": "Транскрипцію завершено. Відкрийте Медіа у Web UI, щоб переглянути.",
+    "sourceLabel": "Джерело",
+    "transcriptLabel": "Транскрипт",
+    "summaryLabel": "Резюме"
+  },
+  "saveStatus": {
+    "ephemeral": "Тимчасовий: не зберігається, очищується при закритті",
+    "local": "Збережено локально в цьому браузері",
+    "server": "Збережено на сервері",
+    "saveFailed": "Не вдалося зберегти чат на сервері",
+    "saveFailedDescription": "Тепер чат зберігається лише локально. Перевірте з'єднання та спробуйте ще раз."
+  },
+  "rag": {
+    "attachedContext": "Прикріплений контекст",
+    "searchPlaceholder": "Пошук у базі знань…",
+    "search": "Пошук",
+    "show": "Показати RAG-пошук",
+    "hide": "Сховати RAG-пошук",
+    "addTagPlaceholder": "Додати тег (Enter)",
+    "add": "Додати",
+    "noResults": "Немає результатів",
+    "initialState": "Немає результатів",
+    "timeout": {
+      "message": "Час очікування запиту минув.",
+      "increase": "Збільшити тайм‑аут",
+      "checkHealth": "Перевірити стан сервера"
+    },
+    "actions": {
+      "insert": "Вставити",
+      "ask": "Запитати",
+      "open": "Відкрити",
+      "copy": "Копіювати"
+    },
+    "hint": {
+      "message": "Шукайте у своїй базі знань і вставляйте результати у повідомлення.",
+      "dismiss": "Закрити"
+    }
+  },
+  "tabs": {
+    "newChat": "Новий чат",
+    "newTabAria": "Нова вкладка чату",
+    "closeTabAria": "Закрити вкладку чату"
+  },
+  "characterSelect": {
+    "label": "Персонаж",
+    "tooltip": "Вибрати персонажа",
+    "search": "Шукати персонажів...",
+    "noMatches": "Немає збігів",
+    "noCharacters": "Персонажів немає",
+    "none": "Без персонажа",
+    "createNewCharacter": "Створити нового персонажа+",
+    "importCharacter": "Імпортувати персонажа",
+    "favorites": "Favorites",
+    "favoriteAdd": "Add to favorites",
+    "favoriteRemove": "Remove from favorites",
+    "sort": {
+      "favorites": "Favorites",
+      "az": "A-Z"
+    }
+  },
+  "knowledge": {
+    "tabs": {
+      "qaSearch": "QA Search",
+      "fileSearch": "File Search",
+      "label": "Knowledge panel sections",
+      "contextBadge": "{{count}} items attached"
+    }
+  },
+  "qaSearch": {
+    "searching": "Searching knowledge base...",
+    "generatedAnswer": "Generated Answer",
+    "cached": "Cached",
+    "copyAnswer": "Copy answer",
+    "copied": "Copied",
+    "copy": "Copy",
+    "insertAnswer": "Insert answer",
+    "copyChunk": "Copy chunk",
+    "insertChunk": "Insert chunk",
+    "sourceChunks": "Source Chunks ({{count}})",
+    "sourceChunksList": "Source chunks",
+    "strategy": {
+      "standard": "Standard",
+      "agentic": "Agentic"
+    },
+    "sort": {
+      "label": "Sort source chunks",
+      "relevance": "Relevance",
+      "source": "Source"
+    }
+  },
+  "fileSearch": {
+    "filterByType": "Filter by type",
+    "resultsList": "File search results",
+    "attached": "Attached",
+    "alreadyAttached": "Already attached",
+    "attach": "Attach",
+    "openExternal": "Open",
+    "open": "Open",
+    "mediaType": {
+      "video": "Video",
+      "audio": "Audio",
+      "pdf": "PDF",
+      "article": "Article",
+      "note": "Note",
+      "document": "Document",
+      "epub": "EPUB",
+      "html": "HTML",
+      "xml": "XML"
+    }
+  }
+}

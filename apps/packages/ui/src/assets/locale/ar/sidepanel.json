@@ -1,0 +1,204 @@
+{
+  "tooltip": {
+    "embed": "قد يستغرق تضمين الصفحة بضع دقائق. يرجى الانتظار...",
+    "clear": "مسح سجل المحادثة",
+    "history": "سجل المحادثة",
+    "openwebui": "فتح واجهة الويب"
+  },
+  "toolbar": {
+    "ragSearch": "بحث RAG"
+  },
+  "errors": {
+    "privateModeTitle": "يتعذر على tldw Assistant حفظ البيانات",
+    "privateModeDescription": "لا يدعم وضع التصفح الخاص في فايرفوكس حفظ سجل الدردشة. يتم تفعيل الدردشة المؤقتة افتراضيًا. تحسينات قادمة قريبًا."
+  },
+  "connectionBanner": {
+    "connecting": "جارٍ الاتصال بخادم tldw الخاص بك...",
+    "authErrorTitle": "مفتاح API يحتاج إلى انتباه",
+    "authErrorBody": "الخادم قابل للوصول، لكن مفتاح API غير صحيح أو مفقود.",
+    "unreachableTitle": "تعذر الوصول إلى خادم tldw",
+    "unreachableBody": "تحقق من أن الخادم يعمل ويمكن الوصول إليه.",
+    "noUrlBody": "أضف عنوان URL للخادم في الإعدادات للبدء.",
+    "disconnectedTitle": "غير متصل بخادم tldw",
+    "disconnectedBody": "افتح الإعدادات لتهيئة اتصال الخادم.",
+    "setupTitle": "أكمل الإعداد لبدء الدردشة",
+    "setupBody": "أكمل معالج الإعداد في الإعدادات للاتصال.",
+    "openSettings": "افتح الإعدادات"
+  },
+  "temporaryBadge": {
+    "title": "دردشة مؤقتة",
+    "label": "مؤقت",
+    "description": "لن يتم حفظ هذه الدردشة. ستُمسح الرسائل عند الإغلاق أو بدء دردشة جديدة.",
+    "clickHint": "انقر للتعطيل",
+    "ariaLabel": "وضع الدردشة المؤقتة نشط. انقر للتبديل.",
+    "indicatorTooltip": "رسائل هذه الدردشة لن تُحفظ",
+    "indicatorAria": "دردشة مؤقتة"
+  },
+  "header": {
+    "ingest": "إدخال",
+    "saveCurrent": "حفظ الصفحة الحالية على الخادم",
+    "processLocal": "معالجة الصفحة الحالية محليًا",
+    "viewProcessed": "عرض المعالجة",
+    "timeoutLabel": "المهلة (ث)",
+    "toggleSidebar": "تبديل الشريط الجانبي / ملء الشاشة",
+    "shortcuts": "الاختصارات",
+    "showDebug": "إظهار تصحيح البث",
+    "hideDebug": "إخفاء تصحيح البث",
+    "moreOptionsAria": "مزيد من الخيارات",
+    "moreOptionsTitle": "الإدخال والمزيد",
+    "openWebuiAria": "فتح واجهة الويب",
+    "newChatAria": "دردشة جديدة",
+    "tempChatAria": "تبديل الدردشة المؤقتة",
+    "clearHistoryAria": "مسح السجل",
+    "openHistoryAria": "فتح السجل",
+    "openModelSettingsAria": "فتح إعدادات النموذج",
+    "openSettingsAria": "فتح الإعدادات",
+    "tempPill": "مؤقت",
+    "modesLabel": "فتح الأوضاع في واجهة الويب",
+    "modePlayground": "الدردشة",
+    "modeReview": "مراجعة متعددة العناصر",
+    "modeMedia": "الوسائط",
+    "modeKnowledge": "المعرفة",
+    "modeNotes": "الملاحظات",
+    "modePrompts": "الموجهات",
+    "modeFlashcards": "البطاقات التعليمية"
+  },
+  "controlRow": {
+    "saveMode": "وضع الحفظ",
+    "ephemeral": "مؤقت",
+    "searchSection": "البحث والرؤية",
+    "webSearch": "بحث الويب",
+    "vision": "الرؤية",
+    "uploadImage": "تحميل صورة",
+    "quickIngest": "إدخال سريع للصفحة",
+    "openInFullUI": "فتح في الواجهة الكاملة",
+    "modeChat": "الدردشة",
+    "modeMedia": "الوسائط",
+    "modeNotes": "الملاحظات",
+    "modeFlashcards": "البطاقات التعليمية",
+    "ragSearch": "بحث RAG",
+    "moreTools": "المزيد من الأدوات"
+  },
+  "composer": {
+    "connectHint": "اتصل بخادم tldw في الإعدادات لإرسال الرسائل.",
+    "connectingPlaceholder": "جارٍ الاتصال...",
+    "disconnectedPlaceholder": "اتصل بخادم tldw في الإعدادات لإرسال الرسائل وعرض الوسائط."
+  },
+  "notification": {
+    "ingestSent": "تم الإرسال إلى خادم tldw",
+    "ingestSentDesc": "تم إرسال الصفحة الحالية للإدخال.",
+    "processedLocal": "تمت المعالجة محليًا",
+    "processedLocalDesc": "يتم تخزين المحتوى المعالج محليًا ضمن الإعدادات > المعالجة.",
+    "transcriptionTitle": "التفريغ",
+    "transcriptionSummaryTitle": "تفريغ + ملخص",
+    "transcriptionFallback": "اكتمل التفريغ. افتح الوسائط في واجهة الويب لعرضه.",
+    "sourceLabel": "المصدر",
+    "transcriptLabel": "التفريغ",
+    "summaryLabel": "الملخص"
+  },
+  "saveStatus": {
+    "ephemeral": "مؤقت: غير محفوظ، يمسح عند الإغلاق",
+    "local": "محفوظ محليًا في هذا المتصفح",
+    "server": "محفوظ على الخادم",
+    "saveFailed": "تعذر حفظ الدردشة على الخادم",
+    "saveFailedDescription": "يتم الآن حفظ الدردشة محليًا فقط. تحقق من الاتصال وحاول مرة أخرى."
+  },
+  "rag": {
+    "attachedContext": "السياق المرفق",
+    "searchPlaceholder": "ابحث في قاعدة معرفتك…",
+    "search": "بحث",
+    "show": "إظهار بحث RAG",
+    "hide": "إخفاء بحث RAG",
+    "addTagPlaceholder": "أضف وسمًا (Enter)",
+    "add": "إضافة",
+    "noResults": "لا توجد نتائج",
+    "initialState": "لا توجد نتائج",
+    "timeout": {
+      "message": "انتهت مهلة الطلب.",
+      "increase": "زيادة المهلة",
+      "checkHealth": "تحقق من حالة الخادم"
+    },
+    "actions": {
+      "insert": "إدراج",
+      "ask": "اسأل",
+      "open": "فتح",
+      "copy": "نسخ"
+    },
+    "hint": {
+      "message": "ابحث في قاعدة معرفتك وأدرِج النتائج في رسالتك.",
+      "dismiss": "إغلاق"
+    }
+  },
+  "tabs": {
+    "newChat": "دردشة جديدة",
+    "newTabAria": "علامة تبويب دردشة جديدة",
+    "closeTabAria": "إغلاق علامة تبويب الدردشة"
+  },
+  "characterSelect": {
+    "label": "الشخصية",
+    "tooltip": "اختر شخصية",
+    "search": "ابحث عن الشخصيات...",
+    "noMatches": "لا توجد شخصيات مطابقة",
+    "noCharacters": "لا توجد شخصيات متاحة",
+    "none": "بدون شخصية",
+    "createNewCharacter": "إنشاء شخصية جديدة+",
+    "importCharacter": "استيراد شخصية",
+    "favorites": "Favorites",
+    "favoriteAdd": "Add to favorites",
+    "favoriteRemove": "Remove from favorites",
+    "sort": {
+      "favorites": "Favorites",
+      "az": "A-Z"
+    }
+  },
+  "knowledge": {
+    "tabs": {
+      "qaSearch": "QA Search",
+      "fileSearch": "File Search",
+      "label": "Knowledge panel sections",
+      "contextBadge": "{{count}} items attached"
+    }
+  },
+  "qaSearch": {
+    "searching": "Searching knowledge base...",
+    "generatedAnswer": "Generated Answer",
+    "cached": "Cached",
+    "copyAnswer": "Copy answer",
+    "copied": "Copied",
+    "copy": "Copy",
+    "insertAnswer": "Insert answer",
+    "copyChunk": "Copy chunk",
+    "insertChunk": "Insert chunk",
+    "sourceChunks": "Source Chunks ({{count}})",
+    "sourceChunksList": "Source chunks",
+    "strategy": {
+      "standard": "Standard",
+      "agentic": "Agentic"
+    },
+    "sort": {
+      "label": "Sort source chunks",
+      "relevance": "Relevance",
+      "source": "Source"
+    }
+  },
+  "fileSearch": {
+    "filterByType": "Filter by type",
+    "resultsList": "File search results",
+    "attached": "Attached",
+    "alreadyAttached": "Already attached",
+    "attach": "Attach",
+    "openExternal": "Open",
+    "open": "Open",
+    "mediaType": {
+      "video": "Video",
+      "audio": "Audio",
+      "pdf": "PDF",
+      "article": "Article",
+      "note": "Note",
+      "document": "Document",
+      "epub": "EPUB",
+      "html": "HTML",
+      "xml": "XML"
+    }
+  }
+}
