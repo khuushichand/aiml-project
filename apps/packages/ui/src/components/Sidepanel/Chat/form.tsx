@@ -1693,6 +1693,33 @@ export const SidepanelForm = ({
     }
   }, [defaultInternetSearchOn])
 
+  React.useEffect(() => {
+    const handler = (
+      event: CustomEvent<{ message?: string; append?: boolean; ifEmptyOnly?: boolean }>
+    ) => {
+      const incoming = String(event.detail?.message || "").trim()
+      if (!incoming) return
+      const current = String(form.values.message || "")
+      if (event.detail?.ifEmptyOnly && current.trim().length > 0) return
+      const nextMessage =
+        event.detail?.append && current.trim().length > 0
+          ? `${current}\n\n${incoming}`
+          : incoming
+      form.setFieldValue("message", nextMessage)
+      requestAnimationFrame(() => textareaRef.current?.focus())
+    }
+    window.addEventListener(
+      "tldw:set-composer-message",
+      handler as EventListener
+    )
+    return () => {
+      window.removeEventListener(
+        "tldw:set-composer-message",
+        handler as EventListener
+      )
+    }
+  }, [form, form.values.message, textareaRef])
+
   // Clear error messages when user starts typing (they're taking action)
   // Errors persist until user interaction rather than auto-dismissing
   React.useEffect(() => {

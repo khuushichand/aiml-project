@@ -106,5 +106,53 @@ describe("TldwApiClient media ingest contract", () => {
       })
     )
   })
-})
 
+  it("submits media ingest jobs via multipart fields", async () => {
+    mocks.bgUpload.mockResolvedValue({ batch_id: "batch-1", jobs: [] })
+
+    const client = new TldwApiClient()
+    await client.submitMediaIngestJobs({
+      media_type: "video",
+      urls: ["https://example.com/video.mp4"],
+      perform_analysis: true,
+      timeoutMs: 120000
+    })
+
+    expect(mocks.bgUpload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/media/ingest/jobs",
+        method: "POST",
+        timeoutMs: 120000,
+        fields: expect.objectContaining({
+          media_type: "video",
+          urls: ["https://example.com/video.mp4"],
+          perform_analysis: true
+        })
+      })
+    )
+  })
+
+  it("fetches ingest job detail and batch list endpoints", async () => {
+    mocks.bgRequest.mockResolvedValueOnce({ id: 12, status: "queued" })
+    mocks.bgRequest.mockResolvedValueOnce({ batch_id: "b1", jobs: [] })
+
+    const client = new TldwApiClient()
+    await client.getMediaIngestJob(12)
+    await client.listMediaIngestJobs({ batch_id: "b1", limit: 25 })
+
+    expect(mocks.bgRequest).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        path: "/api/v1/media/ingest/jobs/12",
+        method: "GET"
+      })
+    )
+    expect(mocks.bgRequest).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        path: "/api/v1/media/ingest/jobs?batch_id=b1&limit=25",
+        method: "GET"
+      })
+    )
+  })
+})

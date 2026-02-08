@@ -107,3 +107,30 @@ def test_parse_firecrawl_results_maps_fields():
     assert r["metadata"]["author"] == "Author"
     assert r["metadata"]["language"] == "en"
     assert r["metadata"]["relevance_score"] == 0.7
+
+
+def test_parse_serper_results_maps_fields():
+    from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import parse_serper_results
+
+    out = {}
+    raw = {
+        "organic": [
+            {
+                "title": "Serper Title",
+                "link": "https://serper.example/article",
+                "snippet": "Serper snippet",
+                "date": "2024-07-07",
+                "position": 1,
+            }
+        ]
+    }
+    parse_serper_results(raw, out)
+    assert out.get("processing_error") is None
+    assert len(out["results"]) == 1
+    r = out["results"][0]
+    assert r["title"] == "Serper Title"
+    assert r["url"] == "https://serper.example/article"
+    assert r["content"] == "Serper snippet"
+    assert r["metadata"]["date_published"] == "2024-07-07"
+    assert r["metadata"]["source"] == "serper.example"
+    assert r["metadata"]["relevance_score"] == 1

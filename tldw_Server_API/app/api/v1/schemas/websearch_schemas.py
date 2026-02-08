@@ -33,7 +33,7 @@ class WebSearchRequest(BaseModel):
     query: str = Field(..., description="User query to search the web for")
     engine: str = Field(
         "google",
-        description="Search engine to use. Supported: google, duckduckgo, brave, kagi, tavily, searx, exa, firecrawl",
+        description="Search engine to use. Supported: google, duckduckgo, brave, kagi, tavily, searx, serper, exa, firecrawl",
     )
     result_count: int = Field(10, ge=1, le=50)
     content_country: str = Field("US")

@@ -306,6 +306,7 @@ VibeVoice:
     - Brave: `search_engine_api_key_brave_regular`, `search_engine_api_key_brave_ai`
     - Searx: `search_engine_searx_api`
     - Tavily: `search_engine_api_key_tavily`
+    - Serper: `search_engine_api_key_serper`, `search_engine_api_url_serper`
     - Exa: `search_engine_api_key_exa`, `search_engine_api_url_exa`
     - Firecrawl: `search_engine_api_key_firecrawl`, `search_engine_api_url_firecrawl`
 

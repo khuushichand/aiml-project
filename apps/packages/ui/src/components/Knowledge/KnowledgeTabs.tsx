@@ -9,13 +9,21 @@ type KnowledgeTabsProps = {
   className?: string
 }
 
+/** Canonical ordered tab IDs (excludes the "search" backward-compat alias). */
+const TAB_IDS: KnowledgeTab[] = [
+  "qa-search",
+  "file-search",
+  "settings",
+  "context"
+]
+
 /**
  * Tab navigation for the Knowledge panel
  *
  * Features:
- * - 3 tabs: Search, Settings, Context
+ * - 4 tabs: QA Search, File Search, Settings, Context
  * - Badge on Context tab showing attached item count
- * - Keyboard navigation (1/2/3 when focused, disabled in text inputs)
+ * - Keyboard navigation (1/2/3/4 when focused, disabled in text inputs)
  * - ARIA roles for accessibility
  */
 export const KnowledgeTabs: React.FC<KnowledgeTabsProps> = ({
@@ -28,8 +36,12 @@ export const KnowledgeTabs: React.FC<KnowledgeTabsProps> = ({
 
   const tabs: { id: KnowledgeTab; label: string; badge?: number }[] = [
     {
-      id: "search",
-      label: t("sidepanel:knowledge.tabs.search", "Search")
+      id: "qa-search",
+      label: t("sidepanel:knowledge.tabs.qaSearch", "QA Search")
+    },
+    {
+      id: "file-search",
+      label: t("sidepanel:knowledge.tabs.fileSearch", "File Search")
     },
     {
       id: "settings",
@@ -42,14 +54,12 @@ export const KnowledgeTabs: React.FC<KnowledgeTabsProps> = ({
     }
   ]
 
-  const tabIds: KnowledgeTab[] = ["search", "settings", "context"]
-
   const focusTab = (tabId: KnowledgeTab) => {
     const element = document.getElementById(`knowledge-tab-${tabId}`)
     element?.focus()
   }
 
-  // Handle keyboard navigation (arrow keys and 1/2/3 to switch tabs)
+  // Handle keyboard navigation (arrow keys and 1/2/3/4 to switch tabs)
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Only handle when focus is on tablist, not inside text inputs
     const target = e.target as HTMLElement
@@ -61,12 +71,12 @@ export const KnowledgeTabs: React.FC<KnowledgeTabsProps> = ({
       return
     }
 
-    const currentIndex = Math.max(tabIds.indexOf(activeTab), 0)
+    const currentIndex = Math.max(TAB_IDS.indexOf(activeTab), 0)
 
     if (e.key === "ArrowRight" || e.key === "ArrowDown") {
       e.preventDefault()
-      const nextIndex = (currentIndex + 1) % tabIds.length
-      const nextTab = tabIds[nextIndex]
+      const nextIndex = (currentIndex + 1) % TAB_IDS.length
+      const nextTab = TAB_IDS[nextIndex]
       onTabChange(nextTab)
       focusTab(nextTab)
       return
@@ -74,29 +84,33 @@ export const KnowledgeTabs: React.FC<KnowledgeTabsProps> = ({
 
     if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
       e.preventDefault()
-      const prevIndex = (currentIndex - 1 + tabIds.length) % tabIds.length
-      const prevTab = tabIds[prevIndex]
+      const prevIndex = (currentIndex - 1 + TAB_IDS.length) % TAB_IDS.length
+      const prevTab = TAB_IDS[prevIndex]
       onTabChange(prevTab)
       focusTab(prevTab)
       return
     }
 
-    if (e.key === "1") {
-      onTabChange("search")
-      focusTab("search")
-    } else if (e.key === "2") {
-      onTabChange("settings")
-      focusTab("settings")
-    } else if (e.key === "3") {
-      onTabChange("context")
-      focusTab("context")
+    const keyMap: Record<string, KnowledgeTab> = {
+      "1": "qa-search",
+      "2": "file-search",
+      "3": "settings",
+      "4": "context"
+    }
+    const mapped = keyMap[e.key]
+    if (mapped) {
+      onTabChange(mapped)
+      focusTab(mapped)
     }
   }
 
   return (
     <div
       role="tablist"
-      aria-label={t("sidepanel:knowledge.tabs.label", "Knowledge panel sections")}
+      aria-label={t(
+        "sidepanel:knowledge.tabs.label",
+        "Knowledge panel sections"
+      )}
       className={`flex border-b border-border ${className}`}
       onKeyDown={handleKeyDown}
     >
@@ -110,7 +124,7 @@ export const KnowledgeTabs: React.FC<KnowledgeTabsProps> = ({
           tabIndex={activeTab === tab.id ? 0 : -1}
           onClick={() => onTabChange(tab.id)}
           className={`
-            relative flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors
+            relative flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors
             focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2
             ${
               activeTab === tab.id

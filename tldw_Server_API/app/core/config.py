@@ -3481,6 +3481,9 @@ def load_and_log_configs():
         search_engine_searx_api = config_parser_object.get('Search-Engines', 'search_engine_searx_api', fallback='')
         # Tavily Search Settings
         tavily_search_api_key = config_parser_object.get('Search-Engines', 'search_engine_api_key_tavily', fallback='')
+        # Serper Search Settings
+        serper_search_api_key = config_parser_object.get('Search-Engines', 'search_engine_api_key_serper', fallback='')
+        serper_search_api_url = config_parser_object.get('Search-Engines', 'search_engine_api_url_serper', fallback='https://google.serper.dev/search')
         # Exa Search Settings
         exa_search_api_key = config_parser_object.get('Search-Engines', 'search_engine_api_key_exa', fallback='')
         exa_search_api_url = config_parser_object.get('Search-Engines', 'search_engine_api_url_exa', fallback='https://api.exa.ai/search')
@@ -4150,6 +4153,8 @@ def load_and_log_configs():
                 'kagi_search_api_key': kagi_search_api_key,
                 'searx_search_api_url': search_engine_searx_api,
                 'tavily_search_api_key': tavily_search_api_key,
+                'serper_search_api_key': serper_search_api_key,
+                'serper_search_api_url': serper_search_api_url,
                 'exa_search_api_key': exa_search_api_key,
                 'exa_search_api_url': exa_search_api_url,
                 'firecrawl_api_key': firecrawl_api_key,

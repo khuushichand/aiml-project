@@ -208,9 +208,24 @@ Example Requests
     - `{ "event": "claims_overlay", "data": { "citations": [{"url":"...","span":[12,34]}] } }`
     - `{ "event": "done" }`
 - Media add (persist)
-  - `POST /api/v1/media/add` with JSON `{ "url": "https://example.com/article" }`
+  - `POST /api/v1/media/add` as multipart form.
+  - Minimum fields for URL ingest:
+    - `media_type=document|video|audio|pdf|ebook`
+    - `urls=https://example.com/article` (repeat `urls` for multiple items)
+  - Example:
+    - `curl -X POST "$SERVER/api/v1/media/add" -H "X-API-KEY: $KEY" -F "media_type=document" -F "urls=https://example.com/article"`
   - Expected response (shape):
     - `{ "results": [ { "status": "Success", "input_ref": "https://...", "media_type": "site", "db_id": 456, "message": "Media added to database.", "summary": "..." } ] }`
+- Media ingest jobs (async; preferred for browser URL ingest)
+  - Submit: `POST /api/v1/media/ingest/jobs` (multipart form, same `media_type` + `urls` fields as `/media/add`)
+  - Poll: `GET /api/v1/media/ingest/jobs/{job_id}`
+  - Batch list: `GET /api/v1/media/ingest/jobs?batch_id=<uuid>`
+  - Example submit:
+    - `curl -X POST "$SERVER/api/v1/media/ingest/jobs" -H "X-API-KEY: $KEY" -F "media_type=video" -F "urls=https://www.youtube.com/watch?v=..."`
+  - Expected response (shape):
+    - `{ "batch_id": "...", "jobs": [ { "id": 123, "status": "queued", "source": "https://..." } ], "errors": [] }`
+  - Expected status payload (shape):
+    - `{ "id": 123, "status": "completed", "result": { "status": "Success", "media_id": 456 } }`
 - Media process (no DB)
   - JSON URL: `POST /api/v1/media/process-pdfs` with `{ "urls": ["https://host/file.pdf"] }`
   - File upload: multipart to `/api/v1/media/process-pdfs` with `files=@/path/file.pdf`.

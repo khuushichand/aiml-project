@@ -203,6 +203,7 @@ global_search_engines = [
     "google",
     "kagi",
     "searx",
+    "serper",
     "tavily",
     "yandex",
     "sogou",

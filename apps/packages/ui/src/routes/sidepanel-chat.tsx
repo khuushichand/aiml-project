@@ -50,6 +50,7 @@ import type {
 } from "@/store/sidepanel-chat-tabs"
 import type { HistoryInfo } from "@/db/dexie/types"
 import { useStoreChatModelSettings } from "@/store/model"
+import { useStoreMessageOption } from "@/store/option"
 import { useUiModeStore } from "@/store/ui-mode"
 import { useArtifactsStore } from "@/store/artifacts"
 import { ArtifactsPanel } from "@/components/Sidepanel/Chat/ArtifactsPanel"
@@ -76,6 +77,66 @@ import type { ChatHistory, Message as ChatMessage } from "~/store/option"
 
 type ServerChatMessageInput = Omit<ApiServerChatMessage, "id"> & {
   id: string | number
+}
+
+type IngestCardStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "auth_required"
+
+type IngestCardState = {
+  funnelId: string
+  status: IngestCardStatus
+  url?: string
+  progressPercent?: number
+  progressMessage?: string
+  error?: string
+  mediaId?: number
+  jobIds: number[]
+  canCancel: boolean
+  canRetry: boolean
+  starterQuestions: string[]
+  timestampSeconds?: number
+}
+
+const formatSecondsAsClock = (seconds: number): string => {
+  const safe = Math.max(0, Math.trunc(seconds))
+  const hrs = Math.floor(safe / 3600)
+  const mins = Math.floor((safe % 3600) / 60)
+  const secs = safe % 60
+  if (hrs > 0) {
+    return `${hrs}:${String(mins).padStart(2, "0")}:${String(secs).padStart(
+      2,
+      "0"
+    )}`
+  }
+  return `${mins}:${String(secs).padStart(2, "0")}`
+}
+
+const buildStarterQuestions = (payload: {
+  url?: string
+  timestampSeconds?: number
+}): string[] => {
+  const ts =
+    typeof payload.timestampSeconds === "number" && payload.timestampSeconds >= 0
+      ? Math.trunc(payload.timestampSeconds)
+      : null
+  const around = ts != null ? formatSecondsAsClock(ts) : null
+  if (around) {
+    return [
+      `What happens around ${around} in this video, and why is it important?`,
+      `What leads up to ${around}, and what happens immediately after?`,
+      "Give me the top 5 takeaways from this video with supporting evidence."
+    ]
+  }
+  return [
+    "Give me a concise summary of this media.",
+    "What are the main claims or takeaways?",
+    "What should I verify or fact-check from this content?"
+  ]
 }
 
 const normalizeServerChatMessageId = (
@@ -395,6 +456,7 @@ const SidepanelChat = () => {
   } = useMessage()
   const [selectedCharacter, setSelectedCharacter] =
     useSelectedCharacter<Character | null>(null)
+  const setRagMediaIds = useStoreMessageOption((state) => state.setRagMediaIds)
   const tabs = useSidepanelChatTabsStore((state) => state.tabs)
   const activeTabId = useSidepanelChatTabsStore((state) => state.activeTabId)
   const modelSettingsSnapshot = useStoreChatModelSettings((state) =>
@@ -415,6 +477,13 @@ const SidepanelChat = () => {
   const [noteSourceUrl, setNoteSourceUrl] = React.useState<string | undefined>()
   const [noteSaving, setNoteSaving] = React.useState(false)
   const [noteError, setNoteError] = React.useState<string | null>(null)
+  const [ingestCard, setIngestCard] = React.useState<IngestCardState | null>(null)
+  const ingestFunnelRef = React.useRef<{
+    funnelId: string
+    baselineUserMessages: number
+    tracked: boolean
+    mediaId?: number
+  } | null>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
   const [stickyChatInput] = useStorage(
     "stickyChatInput",
@@ -434,6 +503,10 @@ const SidepanelChat = () => {
   const composerPadding = composerHeight
     ? `${composerHeight + 16}px`
     : `${DEFAULT_COMPOSER_HEIGHT}px`
+  const userMessageCount = React.useMemo(
+    () => messages.reduce((count, item) => count + (item?.isBot ? 0 : 1), 0),
+    [messages]
+  )
   const scrollToLatestBottom = React.useMemo(() => {
     if (!stickyChatInput) return "8rem"
     const baseOffset = composerHeight
@@ -1565,6 +1638,92 @@ const SidepanelChat = () => {
     }
   }, [defaultChatWithWebsite, sidepanelTemporaryChat])
 
+  const seedComposerMessage = React.useCallback(
+    (messageText: string, options?: { ifEmptyOnly?: boolean }) => {
+      const message = String(messageText || "").trim()
+      if (!message) return
+      try {
+        window.dispatchEvent(
+          new CustomEvent("tldw:set-composer-message", {
+            detail: {
+              message,
+              ifEmptyOnly: Boolean(options?.ifEmptyOnly)
+            }
+          })
+        )
+      } catch {
+        // ignore
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("tldw:focus-composer"))
+      } catch {
+        // ignore
+      }
+    },
+    []
+  )
+
+  const handleRetryIngest = React.useCallback(async () => {
+    if (!ingestCard?.funnelId) return
+    try {
+      await browser.runtime.sendMessage({
+        type: "tldw:media-ingest/retry",
+        payload: { funnelId: ingestCard.funnelId }
+      })
+    } catch (error) {
+      console.error("[sidepanel] retry ingest failed", error)
+    }
+  }, [ingestCard?.funnelId])
+
+  const handleCancelIngest = React.useCallback(async () => {
+    if (!ingestCard?.funnelId) return
+    try {
+      await browser.runtime.sendMessage({
+        type: "tldw:media-ingest/cancel",
+        payload: { funnelId: ingestCard.funnelId, reason: "user_cancelled" }
+      })
+    } catch (error) {
+      console.error("[sidepanel] cancel ingest failed", error)
+    }
+  }, [ingestCard?.funnelId])
+
+  const handleOpenAuthSettings = React.useCallback(async () => {
+    try {
+      await browser.runtime.sendMessage({
+        type: "tldw:media-ingest/open-auth-settings"
+      })
+    } catch (error) {
+      console.error("[sidepanel] open auth settings failed", error)
+      window.open("/options.html#/settings/tldw", "_blank")
+    }
+  }, [])
+
+  React.useEffect(() => {
+    const funnel = ingestFunnelRef.current
+    if (!funnel || funnel.tracked) return
+    if (userMessageCount <= funnel.baselineUserMessages) return
+    funnel.tracked = true
+    void browser.runtime
+      .sendMessage({
+        type: "tldw:media-ingest/funnel-event",
+        payload: {
+          event: "first_chat_message",
+          funnelId: funnel.funnelId,
+          metadata: {
+            mediaId: funnel.mediaId
+          }
+        }
+      })
+      .catch((error) => {
+        console.error("[sidepanel] funnel metric failed", error)
+      })
+    setIngestCard((prev) => {
+      if (!prev || prev.funnelId !== funnel.funnelId) return prev
+      if (prev.starterQuestions.length === 0) return prev
+      return { ...prev, starterQuestions: [] }
+    })
+  }, [userMessageCount])
+
   React.useEffect(() => {
     if (!bgMsg) return
     if (lastBgMsgRef.current === bgMsg) return
@@ -1607,6 +1766,131 @@ const SidepanelChat = () => {
         cancelNarration()
       }
       void speak({ utterance: selected })
+      return
+    }
+
+    if (bgMsg.type === "media-ingest-status") {
+      lastBgMsgRef.current = bgMsg
+      const payload = (bgMsg.payload || {}) as Record<string, unknown>
+      const funnelId = String(payload.funnelId || "").trim()
+      const rawStatus = String(payload.status || "").trim().toLowerCase()
+      if (!funnelId) return
+      if (
+        rawStatus !== "queued" &&
+        rawStatus !== "running" &&
+        rawStatus !== "completed" &&
+        rawStatus !== "failed" &&
+        rawStatus !== "cancelled" &&
+        rawStatus !== "auth_required"
+      ) {
+        return
+      }
+      const nextStatus = rawStatus as IngestCardStatus
+      const mediaId = Number(payload.mediaId)
+      const progressPercent = Number(payload.progressPercent)
+      const timestampSeconds = Number(payload.timestampSeconds)
+      const progressMessage = String(payload.progressMessage || "").trim()
+      const error = String(payload.error || "").trim()
+      const url = String(payload.url || "").trim()
+      const jobIds = Array.isArray(payload.jobIds)
+        ? payload.jobIds
+            .map((value) => Number(value))
+            .filter((value) => Number.isFinite(value) && value > 0)
+            .map((value) => Math.trunc(value))
+        : []
+      const canCancel = Boolean(payload.canCancel)
+      const canRetry = Boolean(payload.canRetry)
+      setIngestCard((prev) => ({
+        funnelId,
+        status: nextStatus,
+        url: url || prev?.url,
+        progressPercent: Number.isFinite(progressPercent)
+          ? Math.max(0, Math.min(100, progressPercent))
+          : prev?.progressPercent,
+        progressMessage: progressMessage || undefined,
+        error: error || undefined,
+        mediaId:
+          Number.isFinite(mediaId) && mediaId > 0 ? Math.trunc(mediaId) : prev?.mediaId,
+        jobIds: jobIds.length > 0 ? jobIds : prev?.jobIds || [],
+        canCancel,
+        canRetry,
+        starterQuestions:
+          nextStatus === "completed" ? prev?.starterQuestions || [] : [],
+        timestampSeconds:
+          Number.isFinite(timestampSeconds) && timestampSeconds >= 0
+            ? Math.trunc(timestampSeconds)
+            : prev?.timestampSeconds
+      }))
+      return
+    }
+
+    if (bgMsg.type === "media-ingest-ready") {
+      lastBgMsgRef.current = bgMsg
+      const payload = (bgMsg.payload || {}) as Record<string, unknown>
+      const mediaId = Number(bgMsg.payload?.mediaId)
+      const funnelId = String(payload.funnelId || "").trim()
+      const sourceUrl = (payload.url as string | undefined) || ""
+      const timestampSeconds = Number(payload.timestampSeconds)
+      const hasTimestamp =
+        Number.isFinite(timestampSeconds) && timestampSeconds >= 0
+          ? Math.trunc(timestampSeconds)
+          : undefined
+      const starterQuestions = buildStarterQuestions({
+        url: sourceUrl,
+        timestampSeconds: hasTimestamp
+      })
+      if (Number.isFinite(mediaId) && mediaId > 0) {
+        setChatMode("rag")
+        setRagMediaIds([Math.trunc(mediaId)])
+        if (funnelId) {
+          ingestFunnelRef.current = {
+            funnelId,
+            baselineUserMessages: userMessageCount,
+            tracked: false,
+            mediaId: Math.trunc(mediaId)
+          }
+        }
+      }
+      setIngestCard({
+        funnelId: funnelId || `media-${Date.now()}`,
+        status: "completed",
+        url: sourceUrl || undefined,
+        progressPercent: 100,
+        progressMessage: "Media is ready. Pick a starter question or ask your own.",
+        error: undefined,
+        mediaId:
+          Number.isFinite(mediaId) && mediaId > 0 ? Math.trunc(mediaId) : undefined,
+        jobIds: [],
+        canCancel: false,
+        canRetry: false,
+        starterQuestions,
+        timestampSeconds: hasTimestamp
+      })
+      if (starterQuestions[0]) {
+        seedComposerMessage(starterQuestions[0], { ifEmptyOnly: true })
+      } else {
+        try {
+          window.dispatchEvent(new CustomEvent("tldw:focus-composer"))
+        } catch {
+          // ignore
+        }
+      }
+      notification.success({
+        message: t(
+          "sidepanel:notification.mediaIngestReadyTitle",
+          "Media ready for chat"
+        ),
+        description: sourceUrl
+          ? t(
+              "sidepanel:notification.mediaIngestReadyWithUrl",
+              "Ready to chat about: {{url}}",
+              { url: sourceUrl }
+            )
+          : t(
+              "sidepanel:notification.mediaIngestReadyDescription",
+              "Your media finished processing. Ask questions in chat."
+            )
+      })
       return
     }
 
@@ -1675,6 +1959,11 @@ const SidepanelChat = () => {
     setNoteSaving,
     setNoteError,
     setNoteModalOpen,
+    setChatMode,
+    setRagMediaIds,
+    setIngestCard,
+    seedComposerMessage,
+    userMessageCount,
     cancelNarration,
     isNarrating,
     speak
@@ -1700,6 +1989,33 @@ const SidepanelChat = () => {
         })),
     [tabs, t]
   )
+  const ingestStatusLabel = React.useMemo(() => {
+    const status = ingestCard?.status
+    switch (status) {
+      case "queued":
+        return t("sidepanel:ingest.queued", "Queued")
+      case "running":
+        return t("sidepanel:ingest.running", "Processing")
+      case "completed":
+        return t("sidepanel:ingest.completed", "Ready")
+      case "failed":
+        return t("sidepanel:ingest.failed", "Failed")
+      case "cancelled":
+        return t("sidepanel:ingest.cancelled", "Cancelled")
+      case "auth_required":
+        return t("sidepanel:ingest.authRequired", "Auth required")
+      default:
+        return t("sidepanel:ingest.queued", "Queued")
+    }
+  }, [ingestCard?.status, t])
+  const ingestStatusToneClass = React.useMemo(() => {
+    const status = ingestCard?.status
+    if (status === "completed") return "border-emerald-300 bg-emerald-50 text-emerald-800"
+    if (status === "failed" || status === "cancelled" || status === "auth_required") {
+      return "border-rose-300 bg-rose-50 text-rose-800"
+    }
+    return "border-blue-300 bg-blue-50 text-blue-800"
+  }, [ingestCard?.status])
 
   const isDockedSidebar = uiMode === "pro" && !isNarrow
   const isSidebarVisible = isDockedSidebar || sidebarOpen
@@ -1812,6 +2128,120 @@ const SidepanelChat = () => {
               } as React.CSSProperties
             }
           >
+            {ingestCard && (
+              <div className="w-full max-w-3xl pt-4">
+                <div className="rounded-xl border border-border bg-surface p-3 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-text-subtle">
+                        {t("sidepanel:ingest.title", "Media ingest")}
+                      </div>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${ingestStatusToneClass}`}
+                        >
+                          {ingestStatusLabel}
+                        </span>
+                        {typeof ingestCard.progressPercent === "number" && (
+                          <span className="text-xs text-text-subtle">
+                            {Math.max(0, Math.min(100, Math.trunc(ingestCard.progressPercent)))}%
+                          </span>
+                        )}
+                      </div>
+                      {ingestCard.url && (
+                        <div className="mt-1 truncate text-xs text-text-muted">
+                          {ingestCard.url}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIngestCard(null)}
+                      className="rounded-md border border-border px-2 py-1 text-xs text-text-muted transition hover:bg-surface2"
+                    >
+                      {t("common:dismiss", "Dismiss")}
+                    </button>
+                  </div>
+
+                  {typeof ingestCard.progressPercent === "number" && (
+                    <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-surface2">
+                      <div
+                        className="h-full bg-primary transition-all"
+                        style={{
+                          width: `${Math.max(
+                            2,
+                            Math.min(100, ingestCard.progressPercent)
+                          )}%`
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  {ingestCard.progressMessage && (
+                    <div className="mt-2 text-xs text-text-muted">
+                      {ingestCard.progressMessage}
+                    </div>
+                  )}
+                  {ingestCard.error && (
+                    <div className="mt-2 text-xs text-danger">{ingestCard.error}</div>
+                  )}
+
+                  {ingestCard.starterQuestions.length > 0 &&
+                    ingestCard.status === "completed" && (
+                      <div className="mt-3 space-y-2">
+                        <div className="text-xs font-medium text-text-subtle">
+                          {t(
+                            "sidepanel:ingest.starterQuestions",
+                            "Starter questions"
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {ingestCard.starterQuestions.slice(0, 3).map((question) => (
+                            <button
+                              key={question}
+                              type="button"
+                              onClick={() => seedComposerMessage(question)}
+                              className="rounded-full border border-border bg-surface2 px-3 py-1 text-xs text-text transition hover:bg-surface"
+                            >
+                              {question}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {ingestCard.status === "auth_required" && (
+                      <button
+                        type="button"
+                        onClick={handleOpenAuthSettings}
+                        className="rounded-md border border-border px-3 py-1 text-xs text-text transition hover:bg-surface2"
+                      >
+                        {t("sidepanel:ingest.openAuthSettings", "Open auth settings")}
+                      </button>
+                    )}
+                    {ingestCard.canCancel && (
+                      <button
+                        type="button"
+                        onClick={handleCancelIngest}
+                        className="rounded-md border border-border px-3 py-1 text-xs text-text transition hover:bg-surface2"
+                      >
+                        {t("common:cancel", "Cancel")}
+                      </button>
+                    )}
+                    {ingestCard.canRetry && (
+                      <button
+                        type="button"
+                        onClick={handleRetryIngest}
+                        className="rounded-md border border-border px-3 py-1 text-xs text-text transition hover:bg-surface2"
+                      >
+                        {t("common:retry", "Retry")}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
             {isRestoringChat ? (
               <div
                 className="relative flex w-full flex-col items-center pt-16 pb-4"

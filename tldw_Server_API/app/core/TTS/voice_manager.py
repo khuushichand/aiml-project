@@ -429,11 +429,20 @@ class VoiceManager:
             created_at = datetime.fromisoformat(str(created_at_raw))
         except (ValueError, TypeError):
             created_at = datetime.utcnow()
+        # Defense-in-depth: reject file_path values that contain path-traversal
+        # segments or are absolute paths.  Downstream consumers already have
+        # resolve()+relative_to() guards, but we reject bad data at the
+        # deserialization boundary as well.
+        raw_file_path = str(record.get("file_path") or "")
+        if os.path.isabs(raw_file_path) or ".." in raw_file_path.replace("\\", "/").split("/"):
+            logger.warning("Ignoring persisted voice with unsafe file_path: {}", raw_file_path)
+            raw_file_path = ""
+
         return VoiceInfo(
             voice_id=str(record.get("voice_id") or ""),
             name=str(record.get("name") or ""),
             description=record.get("description"),
-            file_path=str(record.get("file_path") or ""),
+            file_path=raw_file_path,
             format=str(record.get("format") or "wav"),
             duration=float(record.get("duration") or 0.0),
             sample_rate=record.get("sample_rate"),
@@ -1302,6 +1311,12 @@ class VoiceManager:
                         elif stem == DEFAULT_NEUTTS_VOICE_ID:
                             provider_name = "neutts"
 
+                        # Defense-in-depth: reject voice_id values derived from
+                        # filenames that contain path separators or traversal sequences.
+                        if not voice_id or "/" in voice_id or "\\" in voice_id or ".." in voice_id:
+                            logger.warning("Skipping voice file with unsafe stem: {}", voice_file.name)
+                            continue
+
                         # Get file info
                         stat = voice_file.stat()
                         duration = await self._get_audio_duration(voice_file)
@@ -1395,12 +1410,23 @@ class VoiceManager:
             if base_path.exists():
                 for user_dir in base_path.iterdir():
                     if user_dir.is_dir():
+                        # Defense-in-depth: ensure user_dir resolves inside
+                        # base_path (guards against symlinks escaping).
+                        try:
+                            user_dir.resolve().relative_to(base_path.resolve())
+                        except ValueError:
+                            continue
                         temp_dir = user_dir / "voices" / "temp"
                         if temp_dir.exists():
                             # Remove files older than 1 hour
                             cutoff_time = datetime.utcnow().timestamp() - 3600
+                            resolved_temp_dir = temp_dir.resolve()
                             for temp_file in temp_dir.iterdir():
                                 if temp_file.is_file() and temp_file.stat().st_mtime < cutoff_time:
+                                    try:
+                                        temp_file.resolve().relative_to(resolved_temp_dir)
+                                    except (ValueError, RuntimeError):
+                                        continue
                                     temp_file.unlink()
                                     logger.debug(f"Cleaned up temp file: {temp_file}")
 

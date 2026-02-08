@@ -236,6 +236,105 @@ def test_perform_websearch_tavily_forwards_site_whitelist(monkeypatch: pytest.Mo
     assert result.get("search_engine") == "tavily"
 
 
+def test_perform_websearch_serper_forwards_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_search_web_serper(**kwargs: Any) -> Dict[str, Any]:
+        captured.update(kwargs)
+        return {"organic": []}
+
+    monkeypatch.setattr(web_search, "search_web_serper", fake_search_web_serper)
+
+    result = web_search.perform_websearch(
+        search_engine="serper",
+        search_query="test query",
+        content_country="US",
+        search_lang="en",
+        output_lang="en",
+        result_count=5,
+        date_range="w",
+        safesearch="active",
+        site_whitelist=["allowed.example"],
+        site_blacklist=["blocked.example"],
+        exactTerms="exact phrase",
+        excludeTerms="omit this",
+    )
+
+    assert captured.get("search_query") == "test query"
+    assert captured.get("result_count") == 5
+    assert captured.get("content_country") == "US"
+    assert captured.get("search_lang") == "en"
+    assert captured.get("output_lang") == "en"
+    assert captured.get("date_range") == "w"
+    assert captured.get("safesearch") == "active"
+    assert captured.get("site_whitelist") == ["allowed.example"]
+    assert captured.get("site_blacklist") == ["blocked.example"]
+    assert captured.get("exactTerms") == "exact phrase"
+    assert captured.get("excludeTerms") == "omit this"
+    assert result.get("search_engine") == "serper"
+
+
+def test_search_web_serper_builds_expected_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_fetch_json(*, method: str, url: str, headers: Dict[str, str], json: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+        captured["method"] = method
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return {"organic": []}
+
+    from tldw_Server_API.app.core import http_client
+    from tldw_Server_API.app.core.Security import egress as egress_module
+
+    monkeypatch.setattr(http_client, "fetch_json", fake_fetch_json)
+    monkeypatch.setattr(egress_module, "evaluate_url_policy", lambda _url: SimpleNamespace(allowed=True))
+    monkeypatch.setattr(
+        web_search,
+        "get_loaded_config",
+        lambda: {
+            "search_engines": {
+                "serper_search_api_key": "serper-key",
+                "serper_search_api_url": "https://google.serper.dev/search",
+            }
+        },
+    )
+
+    result = web_search.search_web_serper(
+        search_query="capital of france",
+        result_count=7,
+        content_country="FR",
+        search_lang="fr",
+        output_lang="fr",
+        date_range="w",
+        safesearch="active",
+        site_whitelist=["allowed.example"],
+        site_blacklist=["blocked.example"],
+        exactTerms="exact phrase",
+        excludeTerms="omit this",
+    )
+
+    assert result == {"organic": []}
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://google.serper.dev/search"
+    assert captured["headers"]["X-API-KEY"] == "serper-key"
+    assert captured["headers"]["Content-Type"] == "application/json"
+    assert captured["timeout"] == 20.0
+
+    payload = captured["json"]
+    assert payload["num"] == 7
+    assert payload["gl"] == "fr"
+    assert payload["hl"] == "fr"
+    assert payload["safe"] == "active"
+    assert payload["tbs"] == "qdr:w"
+    assert "site:allowed.example" in payload["q"]
+    assert "-site:blocked.example" in payload["q"]
+    assert "\"exact phrase\"" in payload["q"]
+    assert " -omit " in payload["q"]
+    assert " -this" in payload["q"]
+
+
 def test_generate_and_search_propagates_include_domains_alias(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: Dict[str, Any] = {}
 

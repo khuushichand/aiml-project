@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest"
 import {
   buildContextMenuAddPayload,
   buildContextMenuProcessPayload,
+  extractYouTubeTimestampSeconds,
+  normalizeUrlForDedupe,
   resolveContextMenuTargetUrl
 } from "@/entries/shared/ingest-payloads"
 
@@ -58,5 +60,33 @@ describe("ingest payload helpers", () => {
       body: { url: "https://example.com/article" }
     })
   })
-})
 
+  it("extracts youtube timestamps from query and hash", () => {
+    expect(
+      extractYouTubeTimestampSeconds(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1m32s"
+      )
+    ).toBe(92)
+    expect(
+      extractYouTubeTimestampSeconds(
+        "https://youtu.be/dQw4w9WgXcQ#t=75"
+      )
+    ).toBe(75)
+    expect(
+      extractYouTubeTimestampSeconds("https://example.com/article?t=90")
+    ).toBeNull()
+  })
+
+  it("normalizes urls for dedupe including youtube canonicalization", () => {
+    expect(
+      normalizeUrlForDedupe(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=44&utm_source=test"
+      )
+    ).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+    expect(
+      normalizeUrlForDedupe(
+        "https://example.com/path/?utm_source=x&fbclid=y"
+      )
+    ).toBe("https://example.com/path")
+  })
+})

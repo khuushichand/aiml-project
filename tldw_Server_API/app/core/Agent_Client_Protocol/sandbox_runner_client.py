@@ -221,6 +221,7 @@ class ACPSandboxRunnerManager:
         client.set_request_handler(self._handle_request)
 
         reader_task = asyncio.create_task(self._reader_loop(status.id, q, client))
+        session_registered = False
 
         try:
             await client.start()
@@ -271,6 +272,7 @@ class ACPSandboxRunnerManager:
             async with self._sessions_lock:
                 self._sessions[session_id] = handle
 
+            session_registered = True
             return session_id
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
@@ -281,9 +283,11 @@ class ACPSandboxRunnerManager:
                 sandbox_service.cancel_run(status.id)
             with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 sandbox_service.destroy_session(sandbox_session.id)
-            if ssh_port is not None:
-                await self._release_ssh_port(ssh_port)
             raise
+        finally:
+            if ssh_port is not None and not session_registered:
+                with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                    await self._release_ssh_port(ssh_port)
 
     async def prompt(self, session_id: str, prompt: list[dict[str, Any]]) -> dict[str, Any]:
         sess = await self._get_session(session_id)

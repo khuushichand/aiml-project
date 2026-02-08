@@ -2,7 +2,9 @@
 
 This guide is for parents or guardians who want to run tldw_server at home with separate accounts for each family member and practical guardrails (limits, filters, alerts).
 
-## What You’ll Set Up
+> **Looking for the full walkthrough?** If you're starting from scratch, begin with [Household_Multi_User_Walkthrough.md](Household_Multi_User_Walkthrough.md) which covers installation, account creation, and verification end-to-end. This guide focuses on **guardrails and parental controls** to apply after setup.
+
+## What You'll Set Up
 
 - Multi-user accounts (one per person)
 - Admin account for a parent/guardian
@@ -103,6 +105,40 @@ curl -X POST http://127.0.0.1:8000/api/v1/admin/users \
     "password":"ChangeMe123!",
     "is_active": true
   }'
+```
+
+## Step 3b: Verify Account Setup
+
+Before proceeding to guardrails, confirm each account works.
+
+**Each user can log in and see their profile**:
+
+```bash
+# Log in as a family member
+curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alex","password":"ChangeMe123!"}' | python3 -m json.tool
+
+# Use the returned token to check profile
+curl -s http://127.0.0.1:8000/api/v1/auth/me \
+  -H "Authorization: Bearer <USER_JWT>" | python3 -m json.tool
+```
+
+Expected: each user sees their own `username` and `"role": "user"`.
+
+**Regular users cannot access admin endpoints**:
+
+```bash
+curl -s http://127.0.0.1:8000/api/v1/admin/users \
+  -H "Authorization: Bearer <USER_JWT>"
+```
+
+Expected: `403 Forbidden`.
+
+**Per-user data directories** (created lazily on first data access):
+
+```bash
+ls -la Databases/user_databases/
 ```
 
 ## Step 4: Set Guardrails (Practical Defaults)
@@ -215,13 +251,65 @@ If you aren’t sure which permission names map to features, use the OpenAPI doc
 ## Tips for Families
 
 - Use a unique account per person (avoid shared accounts).
-- Keep the admin account private and don’t share the admin JWT.
+- Keep the admin account private and don't share the admin JWT.
 - Start with conservative limits and loosen them over time.
 - Review `Databases/security_alerts.log` occasionally.
+- **Bookmark the WebUI** on each person's device so they don't need to remember the URL.
+- **Password management**: Use a family password manager (1Password, Bitwarden) to store each person's credentials. Avoid writing passwords on sticky notes.
+- **Token expiry**: JWTs expire after 24 hours by default. The WebUI handles refresh automatically. For API users, call `/api/v1/auth/refresh` before the token expires.
+- **Periodic review**: Once a month, check the admin dashboard for unusual activity or budget overruns on virtual keys.
+
+## Troubleshooting
+
+### Reset a user's password
+
+As admin, you can reset any user's password:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/admin/users/<USER_ID>/reset-password \
+  -H "Authorization: Bearer <ADMIN_JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"new_password":"NewSecurePass123!"}'
+```
+
+### Deactivate / lock an account
+
+If a family member should no longer have access:
+
+```bash
+curl -s -X PATCH http://127.0.0.1:8000/api/v1/admin/users/<USER_ID> \
+  -H "Authorization: Bearer <ADMIN_JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"is_active": false}'
+```
+
+The user will be unable to log in or use existing tokens.
+
+### Revoke active sessions
+
+To force a user to re-authenticate (e.g., if their token may be compromised):
+
+```bash
+curl -s -X DELETE http://127.0.0.1:8000/api/v1/admin/users/<USER_ID>/sessions \
+  -H "Authorization: Bearer <ADMIN_JWT>"
+```
+
+### Server won't start / "JWT_SECRET_KEY not set"
+
+Ensure `.env` contains all required secrets. See the [Household_Multi_User_Walkthrough.md](Household_Multi_User_Walkthrough.md) section 4b for the complete list.
+
+### "Database is locked"
+
+Set `TLDW_SQLITE_WAL_MODE=true` in `.env`. For persistent issues, consider switching to Postgres (see [Multi-User_Postgres_Setup.md](Multi-User_Postgres_Setup.md)).
 
 ## Related Docs
 
-- Multi-user SQLite setup: `Docs/User_Guides/Multi-User_SQLite_Setup.md`
-- Authentication setup: `Docs/User_Guides/Authentication_Setup.md`
-- Multi-user production: `Docs/User_Guides/Multi-User_Deployment_Guide.md`
+- **Full setup walkthrough**: [Household_Multi_User_Walkthrough.md](Household_Multi_User_Walkthrough.md) - Start-to-finish guide for a household of 3 users
+- Multi-user SQLite setup: [Multi-User_SQLite_Setup.md](Multi-User_SQLite_Setup.md)
+- Multi-user Postgres setup: [Multi-User_Postgres_Setup.md](Multi-User_Postgres_Setup.md)
+- Authentication setup: [Authentication_Setup.md](Authentication_Setup.md)
+- Multi-user production: [Multi-User_Deployment_Guide.md](Multi-User_Deployment_Guide.md)
+- Production hardening: [Production_Hardening_Checklist.md](Production_Hardening_Checklist.md)
+- BYOK configuration: [BYOK_User_Guide.md](BYOK_User_Guide.md)
+- Backups with Litestream: [Backups_Using_Litestream.md](Backups_Using_Litestream.md)
 - Environment variables: `Docs/Operations/Env_Vars.md`

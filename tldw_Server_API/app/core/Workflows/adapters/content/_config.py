@@ -194,6 +194,20 @@ class NewsletterGenerateConfig(BaseAdapterConfig):
     model: str | None = Field(None, description="Model for generation")
 
 
+class AudioBriefingComposeConfig(BaseAdapterConfig):
+    """Config for audio briefing script composition adapter."""
+
+    items: list[dict[str, Any]] | None = Field(None, description="Article summaries [{title, summary, url}]")
+    target_audio_minutes: int = Field(10, ge=1, le=60, description="Target audio duration in minutes")
+    provider: str | None = Field(None, description="LLM provider")
+    model: str | None = Field(None, description="LLM model")
+    temperature: float = Field(0.5, ge=0.0, le=2.0, description="LLM temperature")
+    max_tokens: int | None = Field(None, ge=100, description="Max LLM output tokens")
+    system_prompt_override: str | None = Field(None, description="Override default system prompt")
+    voice_map: dict[str, str] | None = Field(None, description="Voice marker -> Kokoro voice ID mapping")
+    multi_voice: bool = Field(True, description="Enable multi-voice markers in script")
+
+
 class DiagramGenerateConfig(BaseAdapterConfig):
     """Config for diagram generation adapter."""
 

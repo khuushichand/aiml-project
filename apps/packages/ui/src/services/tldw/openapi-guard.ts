@@ -38,7 +38,10 @@ export type ClientPath =
   | "/api/v1/rag/feedback/implicit"
   | "/api/v1/media"
   | "/api/v1/media/search"
+  | "/api/v1/media/metadata-search"
   | "/api/v1/media/add"
+  | "/api/v1/media/ingest/jobs"
+  | "/api/v1/media/ingest/jobs/{job_id}"
   | "/api/v1/media/{media_id}/keywords"
   | "/api/v1/media/process-audios"
   | "/api/v1/media/process-documents"
@@ -215,7 +218,8 @@ export type ClientPathRuntimeWithQuery = ClientPathRuntime | `${ClientPathRuntim
 // checked against ClientPath so that any drift from the OpenAPI spec is
 // caught at compile time.
 export const API_PATHS = {
-  MEDIA_ADD: "/api/v1/media/add" as const
+  MEDIA_ADD: "/api/v1/media/add" as const,
+  MEDIA_INGEST_JOBS: "/api/v1/media/ingest/jobs" as const
 } as const satisfies Record<string, ClientPath>
 
 // Allowed relative API path: anything beginning with a slash. We keep

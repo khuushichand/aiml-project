@@ -24,3 +24,15 @@ export {
   toPinnedResult,
   withFullMediaTextIfAvailable
 } from "./useKnowledgeSearch"
+
+export { useFileSearch } from "./useFileSearch"
+export type { UseFileSearchReturn, FileSearchMediaType } from "./useFileSearch"
+export { FILE_SEARCH_MEDIA_TYPES } from "./useFileSearch"
+
+export { useQASearch } from "./useQASearch"
+export type {
+  UseQASearchReturn,
+  QASearchResponse,
+  QADocument,
+  QACitation
+} from "./useQASearch"

@@ -1310,4 +1310,23 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"auto-output generation failed for run {run.id}: {exc}")
 
+    # Trigger audio briefing workflow if configured
+    try:
+        if isinstance(job_output_prefs, dict) and job_output_prefs.get("generate_audio"):
+            from tldw_Server_API.app.core.Watchlists.audio_briefing_workflow import (
+                trigger_audio_briefing,
+            )
+
+            audio_task_id = await trigger_audio_briefing(
+                user_id=user_id,
+                job_id=job_id,
+                run_id=run.id,
+                output_prefs=job_output_prefs,
+                db=db,
+            )
+            if audio_task_id:
+                stats["audio_briefing_task_id"] = audio_task_id
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Audio briefing trigger failed for job {job_id}: {exc}")
+
     return {"run_id": run.id, **stats}

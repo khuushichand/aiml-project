@@ -1187,7 +1187,19 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             web_search_results = search_web_kagi(query=search_query, limit=result_count)
 
         elif search_engine.lower() == "serper":
-            web_search_results = search_web_serper()
+            web_search_results = search_web_serper(
+                search_query=search_query,
+                result_count=result_count,
+                content_country=content_country,
+                search_lang=search_lang,
+                output_lang=output_lang,
+                date_range=date_range,
+                safesearch=safesearch,
+                site_whitelist=site_whitelist,
+                site_blacklist=site_blacklist,
+                exactTerms=exactTerms,
+                excludeTerms=excludeTerms,
+            )
 
         elif search_engine.lower() == "tavily":
             web_search_results = search_web_tavily(
@@ -2429,23 +2441,178 @@ def test_parse_searx_results():
 ######################### Serper.dev Search #########################
 #
 # https://github.com/YassKhazzan/openperplex_backend_os/blob/main/sources_searcher.py
-def search_web_serper():
-    """Serper.dev provider stub with egress policy check."""
+def _map_serper_date_range(date_range: str | None) -> str | None:
+    if not date_range:
+        return None
+    value = str(date_range).strip().lower()
+    if not value:
+        return None
+    if value.startswith("qdr:"):
+        return value
+    mapping = {
+        "h": "qdr:h",
+        "d": "qdr:d",
+        "day": "qdr:d",
+        "w": "qdr:w",
+        "week": "qdr:w",
+        "m": "qdr:m",
+        "month": "qdr:m",
+        "y": "qdr:y",
+        "year": "qdr:y",
+    }
+    return mapping.get(value)
+
+
+def _as_list_or_empty(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    return []
+
+
+def _build_serper_query(
+    *,
+    search_query: str,
+    site_whitelist: list[str] | str | None,
+    site_blacklist: list[str] | str | None,
+    exact_terms: str | None,
+    exclude_terms: str | None,
+) -> str:
+    query_parts = [str(search_query or "").strip()]
+
+    if exact_terms and str(exact_terms).strip():
+        query_parts.append(f"\"{str(exact_terms).strip()}\"")
+
+    for domain in _as_list_or_empty(site_whitelist):
+        query_parts.append(f"site:{domain}")
+    for domain in _as_list_or_empty(site_blacklist):
+        query_parts.append(f"-site:{domain}")
+
+    if exclude_terms and str(exclude_terms).strip():
+        # Apply explicit negative terms as expected by web search syntax.
+        for term in str(exclude_terms).split():
+            cleaned = term.strip()
+            if cleaned:
+                query_parts.append(f"-{cleaned}")
+
+    return " ".join(part for part in query_parts if part).strip()
+
+
+def search_web_serper(
+    search_query: str,
+    result_count: int = 10,
+    content_country: str | None = None,
+    search_lang: str | None = None,
+    output_lang: str | None = None,
+    date_range: str | None = None,
+    safesearch: str | None = None,
+    site_whitelist: list[str] | str | None = None,
+    site_blacklist: list[str] | str | None = None,
+    exactTerms: str | None = None,
+    excludeTerms: str | None = None,
+    serper_api_key: str | None = None,
+    serper_api_url: str | None = None,
+):
+    """Query Serper.dev and return raw JSON results."""
+    cfg = get_loaded_config().get("search_engines", {})
+    if not serper_api_url:
+        serper_api_url = cfg.get("serper_search_api_url") or "https://google.serper.dev/search"
+    if not serper_api_key:
+        serper_api_key = cfg.get("serper_search_api_key")
+    if not serper_api_key:
+        raise ValueError("Please provide a valid Serper API key")
+
+    query = _build_serper_query(
+        search_query=search_query,
+        site_whitelist=site_whitelist,
+        site_blacklist=site_blacklist,
+        exact_terms=exactTerms,
+        exclude_terms=excludeTerms,
+    )
+    if not query:
+        raise ValueError("search_query is required")
+
+    payload: dict[str, Any] = {
+        "q": query,
+        "num": int(result_count),
+        "gl": (content_country or "us").lower(),
+        "hl": (output_lang or search_lang or "en").lower(),
+        "safe": (safesearch or "off").lower(),
+    }
+    tbs = _map_serper_date_range(date_range)
+    if tbs:
+        payload["tbs"] = tbs
+
     try:
         from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-        pol = evaluate_url_policy("https://google.serper.dev/search")
+        pol = evaluate_url_policy(serper_api_url)
         if not getattr(pol, 'allowed', False):
             raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
         raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
-    return {"error": "Serper provider not implemented"}
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-KEY": serper_api_key,
+    }
+
+    from tldw_Server_API.app.core.http_client import fetch_json
+    return fetch_json(method="POST", url=serper_api_url, headers=headers, json=payload, timeout=20.0)
 
 
 def test_search_serper():
     pass
 
 def parse_serper_results(serper_search_results, web_search_results_dict):
-    pass
+    try:
+        if "results" not in web_search_results_dict:
+            web_search_results_dict["results"] = []
+
+        if not isinstance(serper_search_results, dict):
+            web_search_results_dict["processing_error"] = "Error processing Serper results: invalid payload"
+            return
+
+        def _append_item(item: dict[str, Any]) -> None:
+            title = item.get("title", "")
+            url = item.get("link") or item.get("url") or ""
+            snippet = item.get("snippet") or item.get("description") or ""
+            published = item.get("date") or item.get("publishedDate") or item.get("published") or None
+            processed = {
+                "title": title,
+                "url": url,
+                "content": snippet,
+                "metadata": {
+                    "date_published": published,
+                    "author": item.get("author"),
+                    "source": extract_domain(url) if url else item.get("source"),
+                    "language": item.get("language"),
+                    "relevance_score": item.get("position") or item.get("rank") or item.get("score"),
+                    "snippet": snippet,
+                },
+            }
+            web_search_results_dict["results"].append(processed)
+
+        for item in serper_search_results.get("organic", []):
+            if isinstance(item, dict):
+                _append_item(item)
+
+        for item in serper_search_results.get("news", []):
+            if isinstance(item, dict):
+                _append_item(item)
+
+        answer_box = serper_search_results.get("answerBox")
+        if isinstance(answer_box, dict):
+            _append_item(answer_box)
+
+        knowledge_graph = serper_search_results.get("knowledgeGraph")
+        if isinstance(knowledge_graph, dict):
+            _append_item(knowledge_graph)
+
+        web_search_results_dict["total_results_found"] = len(web_search_results_dict["results"])
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as e:
+        web_search_results_dict["processing_error"] = f"Error processing Serper results: {e}"
 
 
 

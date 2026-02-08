@@ -353,6 +353,17 @@ class WatchlistOutputCreateRequest(BaseModel):
     mece_template_name: str | None = Field(default=None, description="Override template name for MECE output")
     generate_tts: bool = Field(default=False, description="Generate a TTS audio variant output")
     tts_template_name: str | None = Field(default=None, description="Override template name for TTS output")
+    generate_audio: bool = Field(default=False, description="Generate a multi-voice audio briefing via workflow")
+    target_audio_minutes: int = Field(default=10, ge=1, le=60, description="Target audio briefing duration in minutes")
+    audio_model: str | None = Field(default=None, description="TTS model for audio briefing, e.g., 'kokoro'")
+    audio_voice: str | None = Field(default=None, description="Default voice for audio briefing, e.g., 'af_heart'")
+    audio_speed: float | None = Field(default=None, ge=0.25, le=4.0, description="Audio briefing speed override")
+    llm_provider: str | None = Field(default=None, description="LLM provider for summarization and script composition")
+    llm_model: str | None = Field(default=None, description="LLM model for summarization and script composition")
+    voice_map: dict[str, str] | None = Field(
+        default=None,
+        description="Voice marker to Kokoro voice ID mapping, e.g., {'HOST': 'af_bella', 'REPORTER': 'am_adam'}",
+    )
     ingest_to_media_db: bool = Field(default=False, description="Ingest outputs into Media DB")
     tts_model: str | None = Field(default=None, description="TTS model id, e.g., 'kokoro', 'tts-1'")
     tts_voice: str | None = Field(default=None, description="TTS voice id, e.g., 'af_heart'")

@@ -16,8 +16,12 @@ This module includes adapters for content operations:
 - report_generate: Generate reports
 - newsletter_generate: Generate newsletters
 - diagram_generate: Generate diagrams
+- audio_briefing_compose: Compose multi-voice audio briefing scripts
 """
 
+from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+    run_audio_briefing_compose_adapter,
+)
 from tldw_Server_API.app.core.Workflows.adapters.content.citations import (
     run_bibliography_generate_adapter,
     run_citations_adapter,
@@ -45,6 +49,7 @@ from tldw_Server_API.app.core.Workflows.adapters.content.summarize import (
 )
 
 __all__ = [
+    "run_audio_briefing_compose_adapter",
     "run_summarize_adapter",
     "run_citations_adapter",
     "run_bibliography_generate_adapter",

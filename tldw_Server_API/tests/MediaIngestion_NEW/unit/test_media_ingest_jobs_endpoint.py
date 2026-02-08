@@ -102,3 +102,53 @@ def test_submit_media_ingest_jobs_creates_one_job_per_item(
     assert Path(file_payload["source"]).exists()
 
     shutil.rmtree(file_payload["temp_dir"], ignore_errors=True)
+
+
+def test_get_media_ingest_job_includes_result_media_id(
+    media_ingest_jobs_client,
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("JOBS_DB_PATH", str(tmp_path / "jobs.db"))
+
+    from tldw_Server_API.app.core.Jobs import manager as jobs_manager
+
+    def fake_get_job(self, job_id):
+        return {
+            "id": int(job_id),
+            "domain": "media_ingest",
+            "job_type": "media_ingest_item",
+            "owner_user_id": "1",
+            "status": "completed",
+            "created_at": "2026-01-01T00:00:00Z",
+            "started_at": "2026-01-01T00:00:01Z",
+            "completed_at": "2026-01-01T00:00:05Z",
+            "cancelled_at": None,
+            "cancellation_reason": None,
+            "progress_percent": 100.0,
+            "progress_message": "completed",
+            "payload": {
+                "media_type": "video",
+                "source": "https://example.com/video",
+                "source_kind": "url",
+                "batch_id": "batch-1",
+            },
+            "result": {
+                "status": "Success",
+                "media_id": 321,
+            },
+            "error_message": None,
+        }
+
+    monkeypatch.setattr(jobs_manager.JobManager, "get_job", fake_get_job, raising=True)
+
+    resp = media_ingest_jobs_client.get(
+        "/api/v1/media/ingest/jobs/99",
+        headers={"X-API-KEY": "test-api-key-12345"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "completed"
+    assert body["media_type"] == "video"
+    assert body["source_kind"] == "url"
+    assert body["result"]["media_id"] == 321

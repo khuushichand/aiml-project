@@ -2822,9 +2822,124 @@ async def stream_run(
 
 
 # --------------------
-# CSV Exports (Admin convenience)
+# Audio Briefing
 # --------------------
 
+
+@router.get(
+    "/runs/{run_id}/audio",
+    summary="Get audio briefing artifact for a run",
+    response_model=None,
+)
+async def get_run_audio(
+    run_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_request_user),
+    db=Depends(get_watchlists_db_for_user),
+):
+    """Return audio briefing artifact metadata for a watchlist run.
+
+    Looks up the workflow run that was triggered by this watchlist run
+    (via metadata) and returns the audio artifact info including download URL.
+    """
+    _enforce_runs_admin_if_configured(current_user)
+    try:
+        r = db.get_run(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="run_not_found") from None
+
+    # Check the run stats for audio_briefing_task_id
+    stats: dict[str, Any] = {}
+    try:
+        stats = json.loads(r.stats_json or "{}") if r.stats_json else {}
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        stats = {}
+
+    task_id = stats.get("audio_briefing_task_id")
+    if not task_id:
+        raise HTTPException(status_code=404, detail="no_audio_briefing_for_run")
+
+    # Try to find the workflow run and its artifacts
+    try:
+        from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+
+        user_id = resolve_user_id_for_request(current_user)
+        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        wf_db_path = os.path.join(str(user_dir), "workflows", "workflows.db")
+        if not os.path.exists(wf_db_path):
+            raise HTTPException(status_code=404, detail="no_workflow_db")
+
+        wf_db = WorkflowsDatabase(db_path=wf_db_path)
+        # List runs and find one whose metadata matches
+        runs = wf_db.list_runs(limit=50)
+        matching_run = None
+        for wf_run in runs:
+            try:
+                meta = json.loads(wf_run.metadata_json or "{}") if hasattr(wf_run, "metadata_json") else {}
+            except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+                meta = {}
+            if meta.get("watchlist_run_id") == run_id:
+                matching_run = wf_run
+                break
+
+        if not matching_run:
+            return {
+                "run_id": run_id,
+                "task_id": task_id,
+                "status": "pending",
+                "audio_uri": None,
+                "download_url": None,
+            }
+
+        # Check for artifacts
+        artifacts = wf_db.list_artifacts(run_id=matching_run.id)
+        audio_artifact = None
+        for art in artifacts:
+            art_meta = {}
+            try:
+                art_meta = json.loads(art.metadata_json or "{}") if hasattr(art, "metadata_json") else {}
+            except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+                art_meta = {}
+            if art.type == "tts_audio" or art_meta.get("multi_voice"):
+                audio_artifact = art
+                break
+
+        if audio_artifact:
+            return {
+                "run_id": run_id,
+                "task_id": task_id,
+                "status": matching_run.status,
+                "audio_uri": audio_artifact.uri,
+                "artifact_id": audio_artifact.id,
+                "download_url": f"/api/v1/workflows/artifacts/{audio_artifact.id}/download",
+                "size_bytes": audio_artifact.size_bytes,
+                "mime_type": getattr(audio_artifact, "mime_type", "audio/mpeg"),
+            }
+
+        return {
+            "run_id": run_id,
+            "task_id": task_id,
+            "status": matching_run.status,
+            "audio_uri": None,
+            "download_url": None,
+        }
+
+    except HTTPException:
+        raise
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to look up audio artifact for run {run_id}: {exc}")
+        return {
+            "run_id": run_id,
+            "task_id": task_id,
+            "status": "unknown",
+            "audio_uri": None,
+            "download_url": None,
+            "error": str(exc),
+        }
+
+
+# --------------------
+# CSV Exports (Admin convenience)
+# --------------------
 
 
 @router.get("/runs/{run_id}/tallies.csv", response_class=PlainTextResponse, summary="Export filter tallies for a run as CSV")

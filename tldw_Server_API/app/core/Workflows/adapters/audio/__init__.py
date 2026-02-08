@@ -2,6 +2,7 @@
 
 This module includes adapters for audio operations:
 - tts: Text-to-speech synthesis
+- multi_voice_tts: Multi-voice TTS with concatenation and normalization
 - stt_transcribe: Speech-to-text transcription
 - audio_normalize: Audio normalization
 - audio_concat: Audio concatenation
@@ -14,6 +15,9 @@ This module includes adapters for audio operations:
 
 from tldw_Server_API.app.core.Workflows.adapters.audio.diarize import (
     run_audio_diarize_adapter,
+)
+from tldw_Server_API.app.core.Workflows.adapters.audio.multi_voice_tts import (
+    run_multi_voice_tts_adapter,
 )
 from tldw_Server_API.app.core.Workflows.adapters.audio.processing import (
     run_audio_concat_adapter,
@@ -32,6 +36,7 @@ from tldw_Server_API.app.core.Workflows.adapters.audio.tts import (
 
 __all__ = [
     "run_tts_adapter",
+    "run_multi_voice_tts_adapter",
     "run_stt_transcribe_adapter",
     "run_audio_normalize_adapter",
     "run_audio_concat_adapter",

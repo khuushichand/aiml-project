@@ -357,4 +357,32 @@ async def run_text_clean_adapter(config: dict[str, Any], context: dict[str, Any]
     if "remove_emails" in operations:
         text = re.sub(r'\S+@\S+\.\S+', '', text)
 
+    if "strip_markdown" in operations:
+        # Headers
+        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+        # Bold/italic
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+        text = re.sub(r'[*_](.+?)[*_]', r'\1', text)
+        # Links -> text only
+        text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+        # Images
+        text = re.sub(r'!\[[^\]]*\]\([^)]+\)', '', text)
+        # Code blocks and inline code
+        text = re.sub(r'```[\s\S]*?```', '', text)
+        text = re.sub(r'`([^`]+)`', r'\1', text)
+        # List markers
+        text = re.sub(r'^[-*+]\s+', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^\d+\.\s+', '', text, flags=re.MULTILINE)
+        # Blockquotes and horizontal rules
+        text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)
+
+    if "normalize_unicode" in operations:
+        import unicodedata
+        text = unicodedata.normalize('NFKC', text)
+        text = text.replace('\u2018', "'").replace('\u2019', "'")
+        text = text.replace('\u201c', '"').replace('\u201d', '"')
+        text = text.replace('\u2013', '-').replace('\u2014', '-')
+        text = text.replace('\u2026', '...')
+
     return {"text": text, "original_length": original_len, "cleaned_length": len(text), "operations": operations}

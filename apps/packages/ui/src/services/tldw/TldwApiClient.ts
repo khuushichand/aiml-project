@@ -1221,6 +1221,47 @@ export class TldwApiClient {
     })
   }
 
+  async submitMediaIngestJobs(fields?: Record<string, any>): Promise<any> {
+    const { timeoutMs, ...rest } = fields || {}
+    const normalized: Record<string, any> = {}
+    for (const [k, v] of Object.entries(rest || {})) {
+      if (typeof v === "undefined" || v === null) continue
+      normalized[k] = v
+    }
+    return await bgUpload<any>({
+      path: "/api/v1/media/ingest/jobs",
+      method: "POST",
+      fields: normalized,
+      timeoutMs
+    })
+  }
+
+  async getMediaIngestJob(
+    jobId: number | string,
+    options?: { timeoutMs?: number }
+  ): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/media/ingest/jobs/${encodeURIComponent(String(jobId))}`,
+      method: "GET",
+      timeoutMs: options?.timeoutMs
+    })
+  }
+
+  async listMediaIngestJobs(
+    params: {
+      batch_id: string
+      limit?: number
+    },
+    options?: { timeoutMs?: number }
+  ): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({
+      path: `/api/v1/media/ingest/jobs${query}`,
+      method: "GET",
+      timeoutMs: options?.timeoutMs
+    })
+  }
+
   async addMediaForm(fields: Record<string, any>): Promise<any> {
     // Multipart form for rich ingest parameters
     // Accepts a flat fields map; callers may pass booleans/strings and they will be converted

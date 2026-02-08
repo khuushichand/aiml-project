@@ -4,16 +4,15 @@ set -euo pipefail
 USER_NAME="${ACP_SSH_USER:-acp}"
 
 if ! id -u "${USER_NAME}" >/dev/null 2>&1; then
-  useradd -m -s /bin/bash "${USER_NAME}"
+  echo "ACP SSH user '${USER_NAME}' does not exist in this image." >&2
+  echo "Build the image with the user pre-created (default: acp)." >&2
+  exit 1
 fi
 
-mkdir -p "/home/${USER_NAME}/.ssh"
-if [ -n "${ACP_SSH_AUTHORIZED_KEY:-}" ]; then
-  printf '%s\n' "${ACP_SSH_AUTHORIZED_KEY}" > "/home/${USER_NAME}/.ssh/authorized_keys"
+USER_HOME="$(getent passwd "${USER_NAME}" | cut -d: -f6)"
+if [ -z "${USER_HOME}" ]; then
+  USER_HOME="/home/${USER_NAME}"
 fi
-chmod 700 "/home/${USER_NAME}/.ssh"
-chmod 600 "/home/${USER_NAME}/.ssh/authorized_keys" || true
-chown -R "${USER_NAME}:${USER_NAME}" "/home/${USER_NAME}/.ssh"
 
 mkdir -p /run/sshd
 ssh-keygen -A
@@ -25,15 +24,28 @@ PermitRootLogin no
 PasswordAuthentication no
 PubkeyAuthentication yes
 AuthorizedKeysFile .ssh/authorized_keys
+# Avoid pre-auth chroot in heavily capability-dropped containers.
+UsePrivilegeSeparation no
 PermitUserEnvironment yes
 AllowUsers ${USER_NAME}
 Subsystem sftp /usr/lib/openssh/sftp-server
 SSHD
 
+# Under --cap-drop ALL, root cannot bypass DAC into user-owned homes.
+# The image grants root group-write access to USER_HOME during build.
+mkdir -p "${USER_HOME}/.ssh"
+if [ -n "${ACP_SSH_AUTHORIZED_KEY:-}" ]; then
+  printf '%s\n' "${ACP_SSH_AUTHORIZED_KEY}" > "${USER_HOME}/.ssh/authorized_keys"
+fi
+chmod 700 "${USER_HOME}/.ssh"
+if [ -f "${USER_HOME}/.ssh/authorized_keys" ]; then
+  chmod 600 "${USER_HOME}/.ssh/authorized_keys"
+fi
+
 /usr/sbin/sshd -D -e &
 
-mkdir -p "/home/${USER_NAME}/.tldw-agent"
-python3 - <<'PY' > "/home/${USER_NAME}/.tldw-agent/config.yaml"
+tmp_cfg="$(mktemp)"
+python3 - <<'PY' > "${tmp_cfg}"
 import json
 import os
 import sys
@@ -62,20 +74,22 @@ if not isinstance(env, dict):
 
 command = os.environ.get("ACP_AGENT_COMMAND", "")
 workspace_root = os.environ.get("ACP_WORKSPACE_ROOT", "/workspace")
+env_list = [f"{k}={v}" for k, v in env.items()]
 
 print("agent:")
 print(f"  command: {json.dumps(command)}")
 print(f"  args: {json.dumps(args)}")
-print(f"  env: {json.dumps(env)}")
+print(f"  env: {json.dumps(env_list)}")
 print("workspace:")
-print("  allowed_roots:")
-print(f"    - {json.dumps(workspace_root)}")
-print("terminal:")
+print(f"  default_root: {json.dumps(workspace_root)}")
+print("execution:")
 print("  enabled: true")
 PY
 
-chmod 600 "/home/${USER_NAME}/.tldw-agent/config.yaml"
-chown -R "${USER_NAME}:${USER_NAME}" "/home/${USER_NAME}/.tldw-agent"
+mkdir -p "${USER_HOME}/.tldw-agent"
+cat "${tmp_cfg}" > "${USER_HOME}/.tldw-agent/config.yaml"
+rm -f "${tmp_cfg}"
+chmod 600 "${USER_HOME}/.tldw-agent/config.yaml"
 
-export HOME="/home/${USER_NAME}"
-exec su -s /bin/bash "${USER_NAME}" -c "/usr/local/bin/tldw-agent-acp"
+export HOME="${USER_HOME}"
+exec /usr/local/bin/tldw-agent-acp
