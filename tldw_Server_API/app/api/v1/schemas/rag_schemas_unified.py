@@ -1841,6 +1841,12 @@ class UnifiedBatchRequest(BaseModel):
     generation_provider: Optional[str] = Field(default=None)
     generation_prompt: Optional[str] = Field(default=None)
     max_generation_tokens: int = Field(default=500, ge=50, le=2000)
+    # Search Agent / Round 2 enhancements
+    enable_suggestions: bool = Field(default=False)
+    num_suggestions: int = Field(default=5, ge=1, le=10)
+    enable_structured_response: bool = Field(default=False)
+    enable_image_search: bool = Field(default=False)
+    enable_video_search: bool = Field(default=False)
     enable_abstention: bool = Field(default=False)
     abstention_behavior: Literal["continue", "ask", "decline"] = Field(default="continue")
     enable_multi_turn_synthesis: bool = Field(default=False)

@@ -229,3 +229,134 @@ def test_search_web_4chan_include_archived(monkeypatch):
     first = result["results"][0]
     assert first["thread_no"] == 222
     assert first["archived"] is True
+
+
+def test_search_web_4chan_dedupes_catalog_and_archive_thread(monkeypatch):
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+    from tldw_Server_API.app.core.Security import egress as eg
+    from tldw_Server_API.app.core import http_client as hc
+
+    monkeypatch.setattr(ws, "get_loaded_config", lambda: {"search_engines": {}})
+    monkeypatch.setattr(
+        eg,
+        "evaluate_url_policy",
+        lambda url: type("Policy", (), {"allowed": True, "reason": None})(),
+    )
+
+    def fake_fetch_json(*, method: str, url: str, headers=None, timeout=15.0, **kwargs):
+        if url.endswith("/catalog.json"):
+            return [
+                {
+                    "threads": [
+                        {
+                            "no": 111,
+                            "sub": "Rust memory safety thread",
+                            "com": "Catalog OP content",
+                            "time": 1700000000,
+                            "replies": 3,
+                            "images": 1,
+                        }
+                    ]
+                }
+            ]
+        if url.endswith("/archive.json"):
+            return [111]
+        if url.endswith("/thread/111.json"):
+            return {
+                "posts": [
+                    {
+                        "no": 111,
+                        "sub": "Rust memory safety thread (archived)",
+                        "com": "Archived OP content",
+                        "time": 1700000100,
+                    }
+                ]
+            }
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(hc, "fetch_json", fake_fetch_json)
+
+    result = ws.search_web_4chan(
+        "rust memory safety",
+        result_count=10,
+        search_params={
+            "boards": ["g"],
+            "max_threads_per_board": 20,
+            "max_archived_threads_per_board": 20,
+            "include_archived": True,
+        },
+    )
+
+    assert result["total_results_found"] == 1
+    assert len(result["results"]) == 1
+    first = result["results"][0]
+    assert first["thread_no"] == 111
+    assert first["board"] == "g"
+    assert first["archived"] is False
+
+
+def test_search_web_4chan_dedupe_merges_best_metadata(monkeypatch):
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+    from tldw_Server_API.app.core.Security import egress as eg
+    from tldw_Server_API.app.core import http_client as hc
+
+    monkeypatch.setattr(ws, "get_loaded_config", lambda: {"search_engines": {}})
+    monkeypatch.setattr(
+        eg,
+        "evaluate_url_policy",
+        lambda url: type("Policy", (), {"allowed": True, "reason": None})(),
+    )
+
+    def fake_fetch_json(*, method: str, url: str, headers=None, timeout=15.0, **kwargs):
+        if url.endswith("/catalog.json"):
+            return [
+                {
+                    "threads": [
+                        {
+                            "no": 444,
+                            "com": "Rust memory safety",
+                            "time": 1700000000,
+                            "replies": 1,
+                            "images": 0,
+                        }
+                    ]
+                }
+            ]
+        if url.endswith("/archive.json"):
+            return [444]
+        if url.endswith("/thread/444.json"):
+            return {
+                "posts": [
+                    {
+                        "no": 444,
+                        "sub": "Rust memory safety archived deep dive",
+                        "com": "Archived content has significantly more detail about ownership and borrowing.",
+                        "time": 1700000300,
+                    },
+                    {"no": 445, "tim": 123},
+                    {"no": 446, "tim": 124},
+                ]
+            }
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(hc, "fetch_json", fake_fetch_json)
+
+    result = ws.search_web_4chan(
+        "rust memory safety",
+        result_count=10,
+        search_params={
+            "boards": ["g"],
+            "max_threads_per_board": 20,
+            "max_archived_threads_per_board": 20,
+            "include_archived": True,
+        },
+    )
+
+    assert result["total_results_found"] == 1
+    first = result["results"][0]
+    assert first["archived"] is False
+    assert first["title"] == "Rust memory safety archived deep dive"
+    assert "ownership and borrowing" in first["content"]
+    assert first["time_epoch"] == 1700000300
+    assert first["images"] == 2
+    assert first["score"] >= 6.0

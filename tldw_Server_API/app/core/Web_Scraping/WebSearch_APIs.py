@@ -3129,6 +3129,163 @@ def _append_4chan_candidate(
     )
 
 
+def _normalize_4chan_thread_no(value: Any) -> str:
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)):
+        try:
+            return str(int(value))
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+            return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.isdigit():
+        try:
+            return str(int(text))
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+            return ""
+    return ""
+
+
+def _4chan_candidate_key(candidate: dict[str, Any]) -> tuple[str, str] | None:
+    board = str(candidate.get("board") or "").strip().lower()
+    if not board:
+        return None
+    thread_no = _normalize_4chan_thread_no(candidate.get("thread_no"))
+    if not thread_no:
+        return None
+    return board, thread_no
+
+
+def _is_4chan_placeholder_title(title: str) -> bool:
+    return bool(re.match(r"^/[a-z0-9]{1,12}/\s+thread\s+\d+$", title.strip().lower()))
+
+
+def _select_4chan_text(preferred: Any, secondary: Any) -> str:
+    preferred_text = str(preferred or "").strip()
+    secondary_text = str(secondary or "").strip()
+    if not preferred_text:
+        return secondary_text
+    if not secondary_text:
+        return preferred_text
+    if len(secondary_text) > len(preferred_text):
+        return secondary_text
+    return preferred_text
+
+
+def _select_4chan_title(preferred: Any, secondary: Any) -> str:
+    preferred_title = str(preferred or "").strip()
+    secondary_title = str(secondary or "").strip()
+    if not preferred_title:
+        return secondary_title
+    if not secondary_title:
+        return preferred_title
+    if _is_4chan_placeholder_title(preferred_title) and not _is_4chan_placeholder_title(secondary_title):
+        return secondary_title
+    if len(secondary_title) > len(preferred_title):
+        return secondary_title
+    return preferred_title
+
+
+def _to_int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+        return None
+
+
+def _merge_4chan_numeric(preferred: Any, secondary: Any) -> Any:
+    preferred_num = _to_int_or_none(preferred)
+    secondary_num = _to_int_or_none(secondary)
+    if preferred_num is None:
+        return secondary
+    if secondary_num is None:
+        return preferred
+    return max(preferred_num, secondary_num)
+
+
+def _merge_4chan_candidates(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    existing_archived = _coerce_bool(existing.get("archived"), default=False)
+    incoming_archived = _coerce_bool(incoming.get("archived"), default=False)
+
+    if existing_archived and not incoming_archived:
+        preferred = incoming
+        secondary = existing
+    else:
+        preferred = existing
+        secondary = incoming
+
+    merged = dict(preferred)
+    merged["title"] = _select_4chan_title(preferred.get("title"), secondary.get("title"))
+    merged["content"] = _select_4chan_text(preferred.get("content"), secondary.get("content"))
+
+    preferred_score = float(preferred.get("score") or 0.0)
+    secondary_score = float(secondary.get("score") or 0.0)
+    merged["score"] = round(max(preferred_score, secondary_score), 4)
+
+    preferred_time = int(preferred.get("time_epoch") or 0)
+    secondary_time = int(secondary.get("time_epoch") or 0)
+    if secondary_time > preferred_time:
+        merged["time_epoch"] = secondary_time
+        merged["publishedDate"] = secondary.get("publishedDate") or preferred.get("publishedDate")
+    else:
+        merged["time_epoch"] = preferred_time
+        merged["publishedDate"] = preferred.get("publishedDate") or secondary.get("publishedDate")
+
+    merged["author"] = preferred.get("author") or secondary.get("author")
+    merged["replies"] = _merge_4chan_numeric(preferred.get("replies"), secondary.get("replies"))
+    merged["images"] = _merge_4chan_numeric(preferred.get("images"), secondary.get("images"))
+
+    board = str(preferred.get("board") or secondary.get("board") or "").strip().lower()
+    if board:
+        merged["board"] = board
+
+    thread_no = _normalize_4chan_thread_no(preferred.get("thread_no") or secondary.get("thread_no"))
+    if thread_no:
+        try:
+            merged["thread_no"] = int(thread_no)
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+            merged["thread_no"] = thread_no
+
+    if board and thread_no:
+        merged["url"] = f"https://boards.4chan.org/{board}/thread/{thread_no}"
+
+    merged["archived"] = existing_archived and incoming_archived
+    return merged
+
+
+def _dedupe_4chan_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    key_to_index: dict[tuple[str, str], int] = {}
+
+    for candidate in candidates:
+        key = _4chan_candidate_key(candidate)
+        if key is None:
+            deduped.append(candidate)
+            continue
+
+        existing_index = key_to_index.get(key)
+        if existing_index is None:
+            key_to_index[key] = len(deduped)
+            deduped.append(candidate)
+            continue
+
+        deduped[existing_index] = _merge_4chan_candidates(deduped[existing_index], candidate)
+
+    return deduped
+
+
 def search_web_4chan(
     search_query: str,
     result_count: int = 10,
@@ -3310,6 +3467,7 @@ def search_web_4chan(
                     archived=True,
                 )
 
+    candidates = _dedupe_4chan_candidates(candidates)
     candidates.sort(
         key=lambda item: (
             float(item.get("score") or 0.0),

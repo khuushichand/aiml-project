@@ -352,6 +352,13 @@ def _split_references(refs_text: str) -> list[str]:
         match = re.match(r"^\s*\[([^\]]+)\]\((?:https?|mailto):[^)]+\)", line)
         if match:
             return match.group(1).strip()
+        # Some PDFs produce nested markdown-like forms: [[astro-ph.CO].](url)
+        match = re.match(r"^\s*\[\[([^\]]+)\]\.\]\((?:https?|mailto):[^)]+\)", line)
+        if match:
+            return match.group(1).strip()
+        match = re.match(r"^\s*\[\[([^\]]+)\]\]\((?:https?|mailto):[^)]+\)", line)
+        if match:
+            return match.group(1).strip()
         return None
 
     def _is_probable_authorish_start(text: str) -> bool:
@@ -420,6 +427,8 @@ def _split_references(refs_text: str) -> list[str]:
     def _looks_like_reference(text: str) -> bool:
         if not text or len(text) < 30:
             return False
+        if _is_arxiv_category_fragment(text):
+            return False
         lowered = text.lower().strip()
         is_numbered = bool(re.match(r"^\s*(?:\[+\d+\]|\d+[\.\)])\s+", text))
         is_labeled = _strip_leading_bracket_label(text) is not None
@@ -465,6 +474,8 @@ def _split_references(refs_text: str) -> list[str]:
         candidate = text.strip()
         if not candidate:
             return False
+        if _is_arxiv_category_fragment(candidate):
+            return True
         markdown_label = _extract_markdown_link_text(candidate)
         has_year = bool(re.search(YEAR_PATTERN, candidate))
         has_doi = bool(re.search(DOI_PATTERN, candidate, re.IGNORECASE))
@@ -640,6 +651,39 @@ def _extract_year(text: str) -> int | None:
     return None
 
 
+def _extract_year_from_arxiv_id(arxiv_id: str | None) -> int | None:
+    """Infer a year from modern arXiv IDs in YYMM.xxxxx form."""
+    if not arxiv_id:
+        return None
+    match = re.match(r"^(\d{2})(\d{2})\.\d{4,5}$", arxiv_id)
+    if not match:
+        return None
+    year = 2000 + int(match.group(1))
+    if 2000 <= year <= 2035:
+        return year
+    return None
+
+
+def _is_arxiv_category_fragment(text: str) -> bool:
+    """Detect category-only fragments like '[[astro-ph.CO].]'."""
+    candidate = (text or "").strip()
+    if not candidate or len(candidate) > 100:
+        return False
+    candidate = re.sub(
+        r"\((?:https?|mailto):[^)]+\)\s*$",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    ).strip()
+    candidate = candidate.strip("[](){} .")
+    if not candidate:
+        return False
+    return bool(
+        re.fullmatch(r"[a-z]+(?:-[a-z]+)+(?:\.[A-Z]{2})?", candidate)
+        or re.fullmatch(r"[a-z]+(?:-[a-z]+)*\.[A-Z]{2}", candidate)
+    )
+
+
 def _normalize_reference_display_text(raw_text: str) -> str:
     """Clean markdown/link artifacts for user-facing reference text."""
     text = (raw_text or "").strip()
@@ -675,6 +719,8 @@ def _parse_reference_basic(raw_text: str) -> ReferenceEntry:
     arxiv_id = _extract_arxiv_id(raw_text)
     url = _extract_url(raw_text)
     year = _extract_year(display_text)
+    if year is None:
+        year = _extract_year_from_arxiv_id(arxiv_id)
 
     # Try to extract title (often in quotes or after authors)
     title = None

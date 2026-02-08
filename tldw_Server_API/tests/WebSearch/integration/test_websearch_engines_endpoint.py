@@ -252,6 +252,7 @@ def test_websearch_4chan_engine(monkeypatch):
                 "result_count": 2,
                 "boards": ["g", "tv"],
                 "max_threads_per_board": 120,
+                "max_archived_threads_per_board": 40,
                 "include_archived": True,
                 "aggregate": False,
             },
@@ -265,4 +266,5 @@ def test_websearch_4chan_engine(monkeypatch):
     assert isinstance(search_params, dict)
     assert search_params.get("boards") == ["g", "tv"]
     assert search_params.get("max_threads_per_board") == 120
+    assert search_params.get("max_archived_threads_per_board") == 40
     assert search_params.get("include_archived") is True

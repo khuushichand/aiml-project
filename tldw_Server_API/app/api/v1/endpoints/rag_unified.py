@@ -75,6 +75,10 @@ _SEARCH_AGENT_BOOL_DEFAULTS: tuple[tuple[str, str, str], ...] = (
     ("enable_discussion_search", "SEARCH_DISCUSSIONS_ENABLED", "search_discussions_enabled"),
     ("enable_research_progress", "SEARCH_PROGRESS_STREAMING", "search_progress_streaming"),
     ("search_url_scraping", "SEARCH_URL_SCRAPING", "search_url_scraping"),
+    ("enable_suggestions", "SEARCH_SUGGESTIONS", "search_suggestions"),
+    ("enable_structured_response", "SEARCH_STRUCTURED_RESPONSE", "search_structured_response"),
+    ("enable_image_search", "SEARCH_IMAGE_SEARCH", "search_image_search"),
+    ("enable_video_search", "SEARCH_VIDEO_SEARCH", "search_video_search"),
 )
 _SEARCH_AGENT_INT_DEFAULTS: tuple[tuple[str, str, str], ...] = (
     ("research_max_iterations", "SEARCH_MAX_ITERATIONS", "search_max_iterations"),
@@ -83,9 +87,15 @@ _SEARCH_AGENT_INT_DEFAULTS: tuple[tuple[str, str, str], ...] = (
     ("research_max_iterations_quality", "SEARCH_MAX_ITERATIONS_QUALITY", "search_max_iterations_quality"),
 )
 _SEARCH_AGENT_MODE_VALUES = {"speed", "balanced", "quality"}
+_BATCH_ROUND2_DEFAULT_FIELDS = {
+    "enable_suggestions",
+    "enable_structured_response",
+    "enable_image_search",
+    "enable_video_search",
+}
 
 
-def _request_fields_set(request: UnifiedRAGRequest) -> set[str]:
+def _request_fields_set(request: Any) -> set[str]:
     """Return fields explicitly provided by the caller."""
     raw_fields = getattr(request, "model_fields_set", None)
     if raw_fields is None:
@@ -140,11 +150,18 @@ def _parse_int_or_none(raw: Any) -> Optional[int]:
         return None
 
 
-def _apply_search_agent_defaults(request: UnifiedRAGRequest, payload: dict[str, Any]) -> None:
+def _apply_search_agent_defaults(
+    request: Any,
+    payload: dict[str, Any],
+    *,
+    allowed_fields: Optional[set[str]] = None,
+) -> None:
     """Apply Search-Agent defaults for fields omitted by the caller."""
     explicit_fields = _request_fields_set(request)
 
     for field_name, env_key, cfg_key in _SEARCH_AGENT_BOOL_DEFAULTS:
+        if allowed_fields is not None and field_name not in allowed_fields:
+            continue
         if field_name in explicit_fields:
             continue
         raw_value = _search_agent_setting(env_key, cfg_key)
@@ -152,30 +169,32 @@ def _apply_search_agent_defaults(request: UnifiedRAGRequest, payload: dict[str, 
             continue
         payload[field_name] = _is_truthy_value(raw_value)
 
-    if "search_depth_mode" not in explicit_fields:
+    if (allowed_fields is None or "search_depth_mode" in allowed_fields) and "search_depth_mode" not in explicit_fields:
         raw_mode = _search_agent_setting("SEARCH_DEFAULT_MODE", "search_default_mode")
         if raw_mode is not None:
             mode = str(raw_mode).strip().lower()
             if mode in _SEARCH_AGENT_MODE_VALUES:
                 payload["search_depth_mode"] = mode
 
-    if "discussion_platforms" not in explicit_fields:
+    if (allowed_fields is None or "discussion_platforms" in allowed_fields) and "discussion_platforms" not in explicit_fields:
         raw_platforms = _search_agent_setting("SEARCH_DISCUSSION_PLATFORMS", "search_discussion_platforms")
         parsed_platforms = _parse_csv_or_json_list(raw_platforms)
         if parsed_platforms is not None:
             payload["discussion_platforms"] = parsed_platforms
 
-    if "classifier_provider" not in explicit_fields:
+    if (allowed_fields is None or "classifier_provider" in allowed_fields) and "classifier_provider" not in explicit_fields:
         raw_provider = _search_agent_setting("SEARCH_CLASSIFIER_PROVIDER", "search_classifier_provider")
         if raw_provider is not None and str(raw_provider).strip():
             payload["classifier_provider"] = str(raw_provider).strip()
 
-    if "classifier_model" not in explicit_fields:
+    if (allowed_fields is None or "classifier_model" in allowed_fields) and "classifier_model" not in explicit_fields:
         raw_model = _search_agent_setting("SEARCH_CLASSIFIER_MODEL", "search_classifier_model")
         if raw_model is not None and str(raw_model).strip():
             payload["classifier_model"] = str(raw_model).strip()
 
     for field_name, env_key, cfg_key in _SEARCH_AGENT_INT_DEFAULTS:
+        if allowed_fields is not None and field_name not in allowed_fields:
+            continue
         if field_name in explicit_fields:
             continue
         raw_value = _search_agent_setting(env_key, cfg_key)
@@ -1331,6 +1350,11 @@ async def unified_batch_endpoint(
         kwargs = model_dump_compat(
             request,
             exclude={"queries", "max_concurrent", "enable_checkpoint"},
+        )
+        _apply_search_agent_defaults(
+            request,
+            kwargs,
+            allowed_fields=_BATCH_ROUND2_DEFAULT_FIELDS,
         )
         checkpoint_id: Optional[str] = None
         checkpoint_manager = None

@@ -1,7 +1,7 @@
 import pytest
 
 import tldw_Server_API.app.api.v1.endpoints.rag_unified as rag_ep
-from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGRequest
+from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedBatchRequest, UnifiedRAGRequest
 
 
 pytestmark = pytest.mark.unit
@@ -34,6 +34,10 @@ def test_search_agent_defaults_apply_when_request_fields_omitted(monkeypatch):
         "SEARCH_DISCUSSION_PLATFORMS",
         "SEARCH_PROGRESS_STREAMING",
         "SEARCH_URL_SCRAPING",
+        "SEARCH_SUGGESTIONS",
+        "SEARCH_STRUCTURED_RESPONSE",
+        "SEARCH_IMAGE_SEARCH",
+        "SEARCH_VIDEO_SEARCH",
         "SEARCH_CLASSIFIER_PROVIDER",
         "SEARCH_CLASSIFIER_MODEL",
         "SEARCH_MAX_ITERATIONS_SPEED",
@@ -55,6 +59,10 @@ def test_search_agent_defaults_apply_when_request_fields_omitted(monkeypatch):
                 "search_discussion_platforms": "reddit,stackoverflow",
                 "search_progress_streaming": "true",
                 "search_url_scraping": "false",
+                "search_suggestions": "true",
+                "search_structured_response": "true",
+                "search_image_search": "true",
+                "search_video_search": "true",
                 "search_classifier_provider": "openai",
                 "search_classifier_model": "gpt-4o-mini",
                 "search_max_iterations_speed": "3",
@@ -81,6 +89,10 @@ def test_search_agent_defaults_apply_when_request_fields_omitted(monkeypatch):
     assert kwargs["discussion_platforms"] == ["reddit", "stackoverflow"]
     assert kwargs["enable_research_progress"] is True
     assert kwargs["search_url_scraping"] is False
+    assert kwargs["enable_suggestions"] is True
+    assert kwargs["enable_structured_response"] is True
+    assert kwargs["enable_image_search"] is True
+    assert kwargs["enable_video_search"] is True
     assert kwargs["classifier_provider"] == "openai"
     assert kwargs["classifier_model"] == "gpt-4o-mini"
     assert kwargs["research_max_iterations_speed"] == 3
@@ -101,6 +113,10 @@ def test_search_agent_defaults_do_not_override_explicit_request_values(monkeypat
                 "search_discussions_enabled": "true",
                 "search_discussion_platforms": "reddit,stackoverflow",
                 "search_url_scraping": "true",
+                "search_suggestions": "true",
+                "search_structured_response": "true",
+                "search_image_search": "true",
+                "search_video_search": "true",
                 "search_classifier_provider": "openai",
                 "search_classifier_model": "gpt-4.1",
                 "search_max_iterations_speed": "9",
@@ -119,6 +135,10 @@ def test_search_agent_defaults_do_not_override_explicit_request_values(monkeypat
         enable_discussion_search=False,
         discussion_platforms=["quora"],
         search_url_scraping=False,
+        enable_suggestions=False,
+        enable_structured_response=False,
+        enable_image_search=False,
+        enable_video_search=False,
         classifier_provider="anthropic",
         classifier_model="claude-3-5-sonnet",
         research_max_iterations_speed=1,
@@ -140,6 +160,10 @@ def test_search_agent_defaults_do_not_override_explicit_request_values(monkeypat
     assert kwargs["enable_discussion_search"] is False
     assert kwargs["discussion_platforms"] == ["quora"]
     assert kwargs["search_url_scraping"] is False
+    assert kwargs["enable_suggestions"] is False
+    assert kwargs["enable_structured_response"] is False
+    assert kwargs["enable_image_search"] is False
+    assert kwargs["enable_video_search"] is False
     assert kwargs["classifier_provider"] == "anthropic"
     assert kwargs["classifier_model"] == "claude-3-5-sonnet"
     assert kwargs["research_max_iterations_speed"] == 1
@@ -156,6 +180,7 @@ def test_search_agent_env_overrides_config_defaults(monkeypatch):
                 "search_query_classification": "false",
                 "search_default_mode": "speed",
                 "search_discussion_platforms": "reddit",
+                "search_suggestions": "false",
             }
         ),
     )
@@ -163,6 +188,7 @@ def test_search_agent_env_overrides_config_defaults(monkeypatch):
     monkeypatch.setenv("SEARCH_QUERY_CLASSIFICATION", "true")
     monkeypatch.setenv("SEARCH_DEFAULT_MODE", "balanced")
     monkeypatch.setenv("SEARCH_DISCUSSION_PLATFORMS", "stackoverflow,hackernews")
+    monkeypatch.setenv("SEARCH_SUGGESTIONS", "true")
 
     request = UnifiedRAGRequest(query="env should override config")
     kwargs = rag_ep._build_unified_pipeline_kwargs(
@@ -176,3 +202,40 @@ def test_search_agent_env_overrides_config_defaults(monkeypatch):
     assert kwargs["enable_query_classification"] is True
     assert kwargs["search_depth_mode"] == "balanced"
     assert kwargs["discussion_platforms"] == ["stackoverflow", "hackernews"]
+    assert kwargs["enable_suggestions"] is True
+
+
+def test_batch_round2_defaults_apply_when_fields_omitted(monkeypatch):
+    for env_key in (
+        "SEARCH_SUGGESTIONS",
+        "SEARCH_STRUCTURED_RESPONSE",
+        "SEARCH_IMAGE_SEARCH",
+        "SEARCH_VIDEO_SEARCH",
+    ):
+        monkeypatch.delenv(env_key, raising=False)
+
+    monkeypatch.setattr(
+        rag_ep,
+        "get_config_value",
+        _config_value_factory(
+            {
+                "search_suggestions": "true",
+                "search_structured_response": "true",
+                "search_image_search": "false",
+                "search_video_search": "true",
+            }
+        ),
+    )
+
+    request = UnifiedBatchRequest(queries=["q1"])
+    payload = {}
+    rag_ep._apply_search_agent_defaults(
+        request,
+        payload,
+        allowed_fields=rag_ep._BATCH_ROUND2_DEFAULT_FIELDS,
+    )
+
+    assert payload["enable_suggestions"] is True
+    assert payload["enable_structured_response"] is True
+    assert payload["enable_image_search"] is False
+    assert payload["enable_video_search"] is True

@@ -381,6 +381,18 @@ def test_split_references_merges_author_prefix_with_markdown_year_line():
     assert any("Courtois H. M." in r and "2023, A&A, 670, L15" in r for r in refs)
 
 
+def test_split_references_merges_arxiv_category_fragment_tail():
+    refs_text = (
+        "[17] M. Piani and J. Rubio, JCAP **12**, 002, arXiv:2304.13056\n"
+        "[[hep-ph].]\n"
+        "[18] S.-Y. Zhou et al., JHEP **10**, 026, arXiv:1304.6094\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) == 2
+    assert any("2304.13056" in r for r in refs)
+    assert not any(r.strip() == "[[hep-ph].]" for r in refs)
+
+
 def test_parse_reference_basic_normalizes_markdown_link_text_but_keeps_identifiers():
     raw = (
         "[Abbott T. M. C., et al., 2022, Physical Review D, 105, 023520]"
@@ -405,6 +417,14 @@ def test_parse_reference_basic_normalizes_broken_markdown_fragment():
     assert "](" not in parsed.raw_text
     assert "Learn-" in parsed.raw_text
     assert parsed.year == 2022
+
+
+def test_parse_reference_basic_infers_year_from_arxiv_id_when_missing():
+    raw = "[17] M. Piani and J. Rubio, JCAP **12**, 002, arXiv:2304.13056"
+    parsed = refs_mod._parse_reference_basic(raw)
+
+    assert parsed.arxiv_id == "2304.13056"
+    assert parsed.year == 2023
 
 
 @pytest.mark.asyncio
