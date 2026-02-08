@@ -222,25 +222,61 @@ class RateLimiter:
         self._request_times: deque = deque(maxlen=max_requests_per_hour)
         self._lock = asyncio.Lock()
 
+    def _prune_old_request_times(self, now: float) -> None:
+        """Drop timestamps outside the hourly window."""
+        cutoff_hour = now - 3600
+        while self._request_times and self._request_times[0] < cutoff_hour:
+            self._request_times.popleft()
+
+    def _legacy_wait_reason(self, now: float) -> tuple[str, float] | None:
+        """Return the legacy wait reason and delay without mutating counters."""
+        if len(self._request_times) >= self.max_rph:
+            wait_time = 3600 - (now - self._request_times[0])
+            if wait_time > 0:
+                return "hourly", wait_time
+
+        minute_ago = now - 60
+        recent_times = [t for t in self._request_times if t > minute_ago]
+        if len(recent_times) >= self.max_rpm:
+            oldest_recent = min(recent_times) if recent_times else now
+            wait_time = 60 - (now - oldest_recent)
+            if wait_time > 0:
+                return "minute", wait_time
+
+        if self._request_times and (now - self._request_times[-1]) < (1.0 / self.max_rps):
+            wait_time = (1.0 / self.max_rps) - (now - self._request_times[-1])
+            if wait_time > 0:
+                return "second", wait_time
+
+        return None
+
     async def acquire(self):
         """Acquire permission to make a request"""
         async with self._lock:
-            rg_decision = await _maybe_enforce_with_rg_web_scraping()
-            if rg_decision is not None and not rg_decision["allowed"]:
-                retry_after = rg_decision.get("retry_after") or 1
-                logger.info(
-                    "Web scraping request delayed by ResourceGovernor: retry_after={}s",
-                    retry_after,
-                )
-                # For scraping, we model RG denials as backoff rather than hard 429s.
-                await asyncio.sleep(retry_after)
+            rg_active = _rg_web_scraping_enabled()
+            rg_decision = await _maybe_enforce_with_rg_web_scraping() if rg_active else None
+            if rg_active:
+                if rg_decision is None:
+                    _log_rg_web_fallback("rg_decision_unavailable")
+                elif not rg_decision["allowed"]:
+                    retry_after = rg_decision.get("retry_after") or 1
+                    logger.info(
+                        "Web scraping request delayed by ResourceGovernor: retry_after={}s",
+                        retry_after,
+                    )
+                    # For scraping, we model RG denials as backoff rather than hard 429s.
+                    await asyncio.sleep(retry_after)
+
+                now = time.time()
+                self._prune_old_request_times(now)
+                legacy_wait = self._legacy_wait_reason(now)
+                if legacy_wait is not None:
+                    reason, wait_time = legacy_wait
+                    _log_rg_web_legacy_diagnostic(reason=reason, wait_time=wait_time)
+                return
 
             now = time.time()
-
-            # Clean old request times
-            cutoff_hour = now - 3600
-            while self._request_times and self._request_times[0] < cutoff_hour:
-                self._request_times.popleft()
+            self._prune_old_request_times(now)
 
             # Check hourly limit
             if len(self._request_times) >= self.max_rph:
@@ -272,6 +308,33 @@ class RateLimiter:
 _rg_web_governor = None
 _rg_web_loader = None
 _rg_web_lock = asyncio.Lock()
+_rg_web_fallback_logged = False
+_rg_web_legacy_diag_logged = False
+
+
+def _log_rg_web_fallback(reason: str) -> None:
+    global _rg_web_fallback_logged
+    if _rg_web_fallback_logged:
+        return
+    _rg_web_fallback_logged = True
+    logger.warning(
+        "Web scraping ResourceGovernor unavailable; using diagnostics-only legacy shim (no sleeps/counters). "
+        "reason={}",
+        reason,
+    )
+
+
+def _log_rg_web_legacy_diagnostic(*, reason: str, wait_time: float) -> None:
+    global _rg_web_legacy_diag_logged
+    if _rg_web_legacy_diag_logged:
+        return
+    _rg_web_legacy_diag_logged = True
+    logger.warning(
+        "Web scraping legacy limiter would throttle while RG path is active; allowed by diagnostics-only shim. "
+        "reason={} wait_time={:.3f}",
+        reason,
+        wait_time,
+    )
 
 
 def _rg_web_scraping_enabled() -> bool:
@@ -324,7 +387,7 @@ async def _get_web_scraping_rg_governor():
             return gov
         except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - optional path
             logger.debug(
-                "Web scraping RG governor init failed; using legacy RateLimiter: {}", exc
+                "Web scraping RG governor init failed; using diagnostics-only legacy shim: {}", exc
             )
             return None
 

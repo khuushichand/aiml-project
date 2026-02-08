@@ -277,6 +277,7 @@ def test_build_references_cache_key_includes_scope(mock_db):
         offset=0,
         limit=50,
         parse_cap=None,
+        search_query=None,
     )
     assert "user:42" in key
     assert f"db:{mock_db.db_path_str}" in key
@@ -292,6 +293,7 @@ def test_build_references_cache_key_includes_reference_index(mock_db):
         offset=10,
         limit=25,
         parse_cap=200,
+        search_query=None,
         reference_index=3,
     )
     assert ":idx:3" in key

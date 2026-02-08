@@ -312,10 +312,8 @@ Logs:
 
 ## 14) Known Gaps (As Of 2026-02-08)
 
-- Explicit tests still needed for:
-  - segment truncation policy behavior at/over 64KB,
-  - `voice_id` / `voice_name` history filters,
-  - end-to-end `speech/jobs` -> artifact -> history linkage.
+- No known functional implementation gaps remain.
+- Remaining work is Stage 5 validation/performance closeout.
 
 ---
 

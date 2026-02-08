@@ -39,7 +39,7 @@
 - `tests/TTS/test_tts_history_utils.py` (segment truncation cases).
 - `tests/TTS_NEW/unit/test_tts_history_endpoints.py` (voice filter cases).
 - `tests/TTS_NEW/integration/` new job-history integration test.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Validation, Performance Sanity, And Closeout
 **Goal**: Verify all changes and close out the gap list with evidence.

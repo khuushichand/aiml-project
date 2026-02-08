@@ -117,3 +117,63 @@ def test_history_text_exact_search(test_client, auth_headers, monkeypatch):
     finally:
         app.dependency_overrides.pop(get_media_db_for_user, None)
         db.close_connection()
+
+
+def test_history_voice_id_and_voice_name_filters(test_client, auth_headers):
+    db = MediaDatabase(db_path=":memory:", client_id="tts_history_voice_filters")
+    first_id = db.create_tts_history_entry(
+        user_id="1",
+        text_hash="voice_hash_1",
+        text="OpenAI Alloy",
+        text_length=12,
+        provider="openai",
+        model="tts-1",
+        voice_id="alloy",
+        voice_name="Alloy",
+        status="success",
+    )
+    second_id = db.create_tts_history_entry(
+        user_id="1",
+        text_hash="voice_hash_2",
+        text="ElevenLabs Rachel",
+        text_length=17,
+        provider="elevenlabs",
+        model="eleven_multilingual_v2",
+        voice_id="rachel_v2",
+        voice_name="Rachel",
+        status="success",
+    )
+    db.create_tts_history_entry(
+        user_id="1",
+        text_hash="voice_hash_3",
+        text="Custom voice",
+        text_length=12,
+        provider="openai",
+        model="tts-1",
+        voice_id="custom_demo",
+        voice_name="Demo Voice",
+        status="success",
+    )
+
+    app.dependency_overrides[get_media_db_for_user] = _override_media_db(db)
+    try:
+        resp = test_client.get("/api/v1/audio/history?voice_id=rachel_v2", headers=auth_headers)
+        assert resp.status_code == status.HTTP_200_OK
+        payload = resp.json()
+        assert [item["id"] for item in payload["items"]] == [second_id]
+
+        resp = test_client.get("/api/v1/audio/history?voice_name=Alloy", headers=auth_headers)
+        assert resp.status_code == status.HTTP_200_OK
+        payload = resp.json()
+        assert [item["id"] for item in payload["items"]] == [first_id]
+
+        resp = test_client.get(
+            "/api/v1/audio/history?voice_id=alloy&voice_name=Alloy",
+            headers=auth_headers,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        payload = resp.json()
+        assert [item["id"] for item in payload["items"]] == [first_id]
+    finally:
+        app.dependency_overrides.pop(get_media_db_for_user, None)
+        db.close_connection()

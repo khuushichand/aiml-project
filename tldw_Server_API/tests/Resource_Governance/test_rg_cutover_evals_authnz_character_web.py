@@ -88,6 +88,52 @@ async def test_evaluations_rg_allows_bypasses_legacy_denies(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_evaluations_rg_unavailable_uses_diagnostics_only_shim(monkeypatch):
+    monkeypatch.setenv("RG_ENABLED", "1")
+
+    limiter = evals_rl.UserRateLimiter()
+
+    async def _no_rg_decision(*args, **kwargs):  # noqa: ARG001
+        return None
+
+    async def _deny_minute(*args, **kwargs):  # noqa: ARG001
+        return False, {"error": "legacy minute deny"}
+
+    async def _deny_daily(*args, **kwargs):  # noqa: ARG001
+        return False, {"error": "legacy daily deny"}
+
+    async def _deny_cost(*args, **kwargs):  # noqa: ARG001
+        return False, {"error": "legacy cost deny"}
+
+    async def _record_should_not_run(*args, **kwargs):  # noqa: ARG001
+        raise AssertionError("legacy counter writes must not run in diagnostics-only mode")
+
+    monkeypatch.setattr(evals_rl, "_maybe_enforce_with_rg_evaluations", _no_rg_decision)
+    monkeypatch.setattr(limiter, "_check_minute_limit", _deny_minute)
+    monkeypatch.setattr(limiter, "_check_daily_limits", _deny_daily)
+    monkeypatch.setattr(limiter, "_check_cost_limits", _deny_cost)
+    monkeypatch.setattr(limiter, "_record_request", _record_should_not_run)
+
+    allowed, meta = await limiter.check_rate_limit(
+        user_id="user-123",
+        endpoint="/api/v1/evaluations",
+        tokens_requested=123,
+        estimated_cost=1.25,
+    )
+
+    assert allowed is True
+    assert meta.get("policy_id") == "evals.free"
+    assert meta.get("rate_limit_source") == "resource_governor"
+    assert meta.get("legacy_fallback_mode") == "diagnostic_only"
+    assert meta.get("legacy_would_deny") is True
+    reasons = meta.get("legacy_diagnostic_reasons")
+    assert isinstance(reasons, list)
+    assert "legacy minute deny" in reasons
+    assert "legacy daily deny" in reasons
+    assert "legacy cost deny" in reasons
+
+
+@pytest.mark.asyncio
 async def test_character_chat_rg_denies(monkeypatch):
     monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_CHARACTER_CHAT_ENFORCE_REQUESTS", "1")
@@ -162,3 +208,29 @@ async def test_web_scraping_rg_denies(monkeypatch):
     assert categories == {"requests": {"units": 1}}
     assert tags.get("module") == "web_scraping"
     # We do not assert strict timing here to avoid flakiness, just that the call returned.
+
+
+@pytest.mark.asyncio
+async def test_web_scraping_rg_unavailable_uses_diagnostics_only_shim(monkeypatch):
+    monkeypatch.setenv("RG_ENABLED", "1")
+
+    async def _no_rg_decision():
+        return None
+
+    async def _sleep_should_not_run(_delay: float):
+        raise AssertionError("legacy sleep path must not run in diagnostics-only mode")
+
+    monkeypatch.setattr(web_rl, "_maybe_enforce_with_rg_web_scraping", _no_rg_decision)
+    monkeypatch.setattr(web_rl.asyncio, "sleep", _sleep_should_not_run)
+
+    limiter = web_rl.RateLimiter(
+        max_requests_per_second=1000.0,
+        max_requests_per_minute=1,
+        max_requests_per_hour=1,
+    )
+    limiter._request_times.append(web_rl.time.time())
+    before = list(limiter._request_times)
+
+    await limiter.acquire()
+
+    assert list(limiter._request_times) == before

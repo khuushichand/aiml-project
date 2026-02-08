@@ -29,6 +29,39 @@ class ProviderStatus(str, Enum):
     DISABLED = "disabled"
     UNKNOWN = "unknown"
 
+    @classmethod
+    def from_value(cls, value: Any) -> "ProviderStatus":
+        """Normalize raw domain status values into canonical provider status."""
+        if isinstance(value, cls):
+            return value
+
+        # Accept foreign Enums by preferring .value, then .name
+        if isinstance(value, Enum):
+            raw = getattr(value, "value", None)
+            if raw is None:
+                raw = getattr(value, "name", None)
+        else:
+            raw = value
+
+        normalized = str(raw or "").strip().lower().replace("_", "-")
+        if not normalized:
+            return cls.UNKNOWN
+
+        enabled_aliases = {"enabled", "enable", "available", "ready", "healthy", "ok"}
+        failed_aliases = {"failed", "fail", "error", "unhealthy", "unavailable", "circuit-open"}
+        disabled_aliases = {"disabled", "disable", "not-configured", "off", "inactive"}
+        unknown_aliases = {"unknown", "initializing", "pending", "not-initialized"}
+
+        if normalized in enabled_aliases:
+            return cls.ENABLED
+        if normalized in failed_aliases:
+            return cls.FAILED
+        if normalized in disabled_aliases:
+            return cls.DISABLED
+        if normalized in unknown_aliases:
+            return cls.UNKNOWN
+        return cls.UNKNOWN
+
 
 @dataclass
 class ProviderRegistryConfig:
@@ -78,12 +111,14 @@ class ProviderRegistryBase(Generic[AdapterT]):
         config: ProviderRegistryConfig | None = None,
         adapter_spec_validator: Callable[[Any], bool] | None = None,
         adapter_validator: Callable[[Any], bool] | None = None,
+        status_mapper: Callable[[Any], Any] | None = None,
         aliases: dict[str, str] | None = None,
         normalize_name: Callable[[str], str] | None = None,
     ) -> None:
         self._config = config or ProviderRegistryConfig()
         self._adapter_spec_validator = adapter_spec_validator
         self._adapter_validator = adapter_validator
+        self._status_mapper = status_mapper
         self._normalizer = (
             normalize_name
             or self._config.normalize_name
@@ -116,6 +151,10 @@ class ProviderRegistryBase(Generic[AdapterT]):
             return raw
         normalized = self._normalizer(raw)
         return str(normalized).strip()
+
+    def normalize_provider_name(self, name: str | None) -> str:
+        """Return the canonical provider key before alias resolution."""
+        return self._normalize_name(name)
 
     def resolve_provider_name(self, name: str | None) -> str:
         normalized = self._normalize_name(name)
@@ -320,6 +359,72 @@ class ProviderRegistryBase(Generic[AdapterT]):
         for provider_name in self.list_providers(include_disabled=True):
             status_map[provider_name] = self.get_status(provider_name)
         return status_map
+
+    def map_status(self, raw_status: Any) -> ProviderStatus:
+        """
+        Convert a domain-specific status value to canonical `ProviderStatus`.
+
+        Wrappers can provide `status_mapper` to convert custom status objects
+        before canonical normalization.
+        """
+        candidate = raw_status
+        if self._status_mapper is not None:
+            try:
+                mapped = self._status_mapper(raw_status)
+            except Exception:
+                return ProviderStatus.UNKNOWN
+            if mapped is not None:
+                candidate = mapped
+        return ProviderStatus.from_value(candidate)
+
+    @staticmethod
+    def _default_capability_getter(adapter: Any) -> Any:
+        maybe = getattr(adapter, "capabilities", None)
+        if callable(maybe):
+            return maybe()
+        return maybe
+
+    def list_capabilities(
+        self,
+        *,
+        capability_getter: Callable[[AdapterT], Any] | None = None,
+        include_disabled: bool = True,
+    ) -> list[dict[str, Any]]:
+        """
+        Return provider capabilities with availability metadata.
+
+        Envelope shape:
+            {"provider": str, "availability": str, "capabilities": Any}
+        """
+        getter = capability_getter or self._default_capability_getter
+        output: list[dict[str, Any]] = []
+        provider_names = self.list_providers(include_disabled=include_disabled)
+
+        for provider_name in provider_names:
+            status = self.get_status(provider_name)
+            capabilities: Any = None
+
+            if status == ProviderStatus.ENABLED:
+                adapter = self.get_adapter(provider_name)
+                status = self.get_status(provider_name)
+                if adapter is not None and status == ProviderStatus.ENABLED:
+                    try:
+                        capabilities = getter(adapter)
+                    except Exception as exc:
+                        logger.warning(
+                            "Capability discovery failed for provider '{}': {}",
+                            provider_name,
+                            exc,
+                        )
+
+            output.append(
+                {
+                    "provider": provider_name,
+                    "availability": status.value,
+                    "capabilities": capabilities,
+                }
+            )
+        return output
 
     def clear_cache(self) -> None:
         with self._lock:

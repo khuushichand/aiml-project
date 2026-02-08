@@ -317,6 +317,49 @@ class UserRateLimiter:
                 return True, metadata
 
             _log_rg_evals_fallback("rg_decision_unavailable")
+            diagnostics: list[str] = []
+
+            # RG remains the sole enforcer. Legacy checks are diagnostics-only.
+            try:
+                minute_ok, minute_meta = await self._check_minute_limit(user_id, endpoint, is_batch, config)
+                if not minute_ok:
+                    diagnostics.append(str(minute_meta.get("error") or "legacy_minute_limit_exceeded"))
+            except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS as exc:
+                diagnostics.append(f"legacy_minute_check_error:{type(exc).__name__}")
+
+            try:
+                daily_ok, daily_meta = await self._check_daily_limits(
+                    user_id, tokens_requested, estimated_cost, config
+                )
+                if not daily_ok:
+                    diagnostics.append(str(daily_meta.get("error") or "legacy_daily_limit_exceeded"))
+            except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS as exc:
+                diagnostics.append(f"legacy_daily_check_error:{type(exc).__name__}")
+
+            try:
+                cost_ok, cost_meta = await self._check_cost_limits(user_id, estimated_cost, config)
+                if not cost_ok:
+                    diagnostics.append(str(cost_meta.get("error") or "legacy_cost_limit_exceeded"))
+            except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS as exc:
+                diagnostics.append(f"legacy_cost_check_error:{type(exc).__name__}")
+
+            if diagnostics:
+                _log_rg_evals_legacy_diagnostic(
+                    user_id=user_id,
+                    endpoint=endpoint,
+                    policy_id=policy_id,
+                    reasons=diagnostics,
+                )
+
+            metadata = {
+                "policy_id": policy_id,
+                "rate_limit_source": "resource_governor",
+                "legacy_fallback_mode": "diagnostic_only",
+            }
+            if diagnostics:
+                metadata["legacy_would_deny"] = True
+                metadata["legacy_diagnostic_reasons"] = diagnostics
+            return True, metadata
 
         # RG disabled → use legacy per-user limits and headers.
         minute_ok, minute_meta = await self._check_minute_limit(user_id, endpoint, is_batch, config)
@@ -995,6 +1038,7 @@ _rg_evals_lock = asyncio.Lock()
 _rg_evals_init_error: Optional[str] = None
 _rg_evals_init_error_logged = False
 _rg_evals_fallback_logged = False
+_rg_evals_legacy_diag_logged = False
 
 
 def _rg_evals_context() -> dict[str, str]:
@@ -1038,7 +1082,7 @@ def _log_rg_evals_init_failure(exc: Exception) -> None:
     _rg_evals_init_error_logged = True
     ctx = _rg_evals_context()
     logger.exception(
-        "Evaluations ResourceGovernor init failed; falling back to legacy limiter. "
+        "Evaluations ResourceGovernor init failed; using diagnostics-only legacy shim (no enforcement). "
         "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
         "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
         "reload_interval={policy_reload_interval} cwd={cwd}",
@@ -1053,13 +1097,34 @@ def _log_rg_evals_fallback(reason: str) -> None:
     _rg_evals_fallback_logged = True
     ctx = _rg_evals_context()
     logger.error(
-        "Evaluations ResourceGovernor unavailable; falling back to legacy limiter. "
+        "Evaluations ResourceGovernor unavailable; using diagnostics-only legacy shim (no enforcement). "
         "reason={} init_error={} backend={backend} policy_path={policy_path} "
         "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
         "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
         reason,
         _rg_evals_init_error,
         **ctx,
+    )
+
+
+def _log_rg_evals_legacy_diagnostic(
+    *,
+    user_id: str,
+    endpoint: str,
+    policy_id: str,
+    reasons: list[str],
+) -> None:
+    global _rg_evals_legacy_diag_logged
+    if _rg_evals_legacy_diag_logged:
+        return
+    _rg_evals_legacy_diag_logged = True
+    logger.warning(
+        "Evaluations legacy limiter would deny request while RG unavailable; allowed by diagnostics-only shim. "
+        "user_id={} endpoint={} policy_id={} reasons={}",
+        user_id,
+        endpoint,
+        policy_id,
+        ",".join(reasons),
     )
 
 # --- Generic daily ledger plumbing (optional) ------------------------------
