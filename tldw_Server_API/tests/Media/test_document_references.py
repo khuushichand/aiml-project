@@ -473,6 +473,27 @@ def test_parse_reference_basic_infers_year_from_arxiv_id_when_missing():
     assert parsed.year == 2023
 
 
+def test_split_references_keeps_19th_century_entries_in_numbered_lists():
+    refs_text = (
+        "[7] Joseph T Chang. Reply to discussants: Recent common ancestors of all present-day individuals. "
+        "_Advances in Applied Probability_, 31(4):1036-1038, 1999.\n"
+        "[8] Charles Darwin. _The Voyage of the Beagle_ . 1839.\n"
+        "[9] Charles Darwin. _On The Origin of Species_ . John Murray, 6th edition, 1872.\n"
+        "[10] Francis Darwin. The Knight-Darwin Law. _Nature_, 58(1513):630-632, 1898.\n"
+        "[11] Peter Donnelly et al. Discussion: Recent common ancestors of all present-day individuals. "
+        "_Advances in Applied Probability_, 31(4):1027-1035, 1999.\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert any(r.startswith("[8] Charles Darwin") for r in refs)
+    assert any(r.startswith("[9] Charles Darwin") for r in refs)
+    assert any(r.startswith("[10] Francis Darwin") for r in refs)
+
+
+def test_extract_year_supports_19th_century_dates():
+    assert refs_mod._extract_year("Charles Darwin. _The Voyage of the Beagle_ . 1839.") == 1839
+    assert refs_mod._extract_year("Francis Darwin (1898). The Knight-Darwin Law.") == 1898
+
+
 @pytest.mark.asyncio
 async def test_references_endpoint_enriches_only_requested_reference_index(mock_user, mock_db):
     content = (

@@ -28,6 +28,10 @@ export interface DocumentReferencesResponse {
   has_references: boolean
   references: ReferenceEntry[]
   enrichment_source?: string
+  enriched_count?: number
+  enrichment_limited?: boolean
+  total_detected?: number
+  truncated?: boolean
 }
 
 /**

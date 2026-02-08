@@ -492,8 +492,12 @@ export const ReferencesTab: React.FC = () => {
   }
 
   const totalCount = references.length
+  const detectedCount = data.total_detected ?? totalCount
   const arxivCount = references.filter((ref) => ref.arxiv_id).length
   const s2Count = references.filter((ref) => ref.semantic_scholar_id).length
+  const enrichedCount = data.enriched_count ?? 0
+  const enrichmentLimited = Boolean(data.enrichment_limited)
+  const isTruncated = Boolean(data.truncated && detectedCount > totalCount)
 
   const handleEnrichReference = async (index: number, key: string) => {
     if (!activeDocumentId) return
@@ -538,6 +542,44 @@ export const ReferencesTab: React.FC = () => {
             </Tag>
           </div>
           <div className="flex items-center gap-2">
+            {isTruncated && (
+              <Tooltip
+                title={t(
+                  "option:documentWorkspace.referencesTruncatedHint",
+                  "Showing first {{shown}} of {{detected}} detected references",
+                  { shown: totalCount, detected: detectedCount }
+                )}
+              >
+                <Tag className="m-0 text-xs" color="gold">
+                  {t("option:documentWorkspace.referencesTruncated", "truncated")}
+                </Tag>
+              </Tooltip>
+            )}
+            {enrich && enrichedCount > 0 && (
+              <Tooltip
+                title={t(
+                  "option:documentWorkspace.referencesEnrichedCountHint",
+                  "{{count}} references updated from external sources",
+                  { count: enrichedCount }
+                )}
+              >
+                <Tag className="m-0 text-xs" color="blue">
+                  {enrichedCount} {t("option:documentWorkspace.enriched", "enriched")}
+                </Tag>
+              </Tooltip>
+            )}
+            {enrichmentLimited && (
+              <Tooltip
+                title={t(
+                  "option:documentWorkspace.referencesEnrichmentLimitedHint",
+                  "Enrichment is capped to keep response times fast"
+                )}
+              >
+                <Tag className="m-0 text-xs" color="default">
+                  {t("option:documentWorkspace.limited", "limited")}
+                </Tag>
+              </Tooltip>
+            )}
             {data.enrichment_source && (
               <span className="text-xs text-text-muted">
                 {t("option:documentWorkspace.enriched", "enriched")}
@@ -585,9 +627,15 @@ export const ReferencesTab: React.FC = () => {
         {/* Counts */}
         <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-text-muted">
           <span>
-            {t("option:documentWorkspace.referencesCount", "{{count}} references", {
-              count: totalCount,
-            })}
+            {isTruncated
+              ? t(
+                  "option:documentWorkspace.referencesCountTruncated",
+                  "{{shown}} / {{detected}} references",
+                  { shown: totalCount, detected: detectedCount }
+                )
+              : t("option:documentWorkspace.referencesCount", "{{count}} references", {
+                  count: totalCount,
+                })}
           </span>
           {arxivCount > 0 && (
             <span>

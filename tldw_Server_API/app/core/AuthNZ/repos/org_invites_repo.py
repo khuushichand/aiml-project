@@ -40,10 +40,9 @@ class AuthnzOrgInvitesRepo:
     db_pool: DatabasePool
 
     def _is_postgres(self, conn: Any | None = None) -> bool:
-        """Detect whether the current backend/connection is Postgres."""
-        if conn is not None:
-            return hasattr(conn, "fetchrow")
-        return getattr(self.db_pool, "pool", None) is not None
+        """Detect whether the configured backend is PostgreSQL from pool state."""
+        _ = conn  # Compatibility placeholder for legacy call sites.
+        return bool(getattr(self.db_pool, "pool", None))
 
     async def create_invite(
         self,

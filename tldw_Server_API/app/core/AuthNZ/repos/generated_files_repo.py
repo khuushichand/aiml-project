@@ -165,7 +165,7 @@ class AuthnzGeneratedFilesRepo:
 
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     # PostgreSQL path
                     row = await conn.fetchrow(
                         """

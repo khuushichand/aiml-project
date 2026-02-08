@@ -64,6 +64,15 @@ class AuthnzUsageRepo:
 
     db_pool: DatabasePool
 
+    def _is_postgres_backend(self) -> bool:
+        """
+        Return True when the underlying DatabasePool is using PostgreSQL.
+
+        Backend routing should rely on pool state rather than probing
+        connection capabilities.
+        """
+        return bool(getattr(self.db_pool, "pool", None))
+
     async def summarize_key_day(
         self,
         *,
@@ -290,7 +299,7 @@ class AuthnzUsageRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     cutoff_param = cutoff.replace(tzinfo=None) if getattr(cutoff, "tzinfo", None) else cutoff
                     rows = await conn.fetch(
                         "DELETE FROM llm_usage_log WHERE ts < $1 RETURNING 1",
@@ -316,7 +325,7 @@ class AuthnzUsageRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     cutoff_param = cutoff.replace(tzinfo=None) if getattr(cutoff, "tzinfo", None) else cutoff
                     rows = await conn.fetch(
                         "DELETE FROM usage_log WHERE ts < $1 RETURNING 1",
@@ -342,7 +351,7 @@ class AuthnzUsageRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     rows = await conn.fetch(
                         "DELETE FROM usage_daily WHERE day < $1::date RETURNING 1",
                         cutoff_day,
@@ -684,7 +693,7 @@ class AuthnzUsageRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     result = await conn.execute(
                         "DELETE FROM llm_usage_daily WHERE day < $1::date",
                         cutoff_day,

@@ -75,7 +75,8 @@ ARXIV_OLD_PATTERN = r"(?:arXiv[:\s]*)?([a-z-]+(?:\.[A-Z]{2})?/\d{7})"
 URL_PATTERN = r"https?://[^\s\]\)>\"']+"
 
 # Year extraction pattern
-YEAR_PATTERN = r"\b(19\d{2}|20[0-2]\d)\b"
+# Include 18xx so classic works (e.g., Darwin-era citations) are not discarded.
+YEAR_PATTERN = r"\b(18\d{2}|19\d{2}|20[0-3]\d)\b"
 
 
 def _get_db_scope(db: MediaDatabase) -> str:
@@ -961,6 +962,22 @@ def _needs_external_enrichment(ref: ReferenceEntry) -> bool:
     )
 
 
+def _enrichment_fingerprint(ref: ReferenceEntry) -> tuple[Any, ...]:
+    """Return comparable reference fields to detect enrichment changes."""
+    return (
+        ref.title,
+        ref.authors,
+        ref.year,
+        ref.venue,
+        ref.doi,
+        ref.arxiv_id,
+        ref.url,
+        ref.citation_count,
+        ref.semantic_scholar_id,
+        ref.open_access_pdf,
+    )
+
+
 def _apply_crossref_data(ref: ReferenceEntry, item: dict[str, Any]) -> ReferenceEntry:
     """Apply Crossref data to a reference entry."""
     if not ref.title and item.get("title"):
@@ -1221,6 +1238,8 @@ async def get_document_references(
             has_references=False,
             references=[],
             enrichment_source=None,
+            enriched_count=0,
+            enrichment_limited=False,
             total_detected=0,
             truncated=False,
         )
@@ -1236,6 +1255,8 @@ async def get_document_references(
             has_references=False,
             references=[],
             enrichment_source=None,
+            enriched_count=0,
+            enrichment_limited=False,
             total_detected=0,
             truncated=False,
         )
@@ -1251,6 +1272,8 @@ async def get_document_references(
             has_references=False,
             references=[],
             enrichment_source=None,
+            enriched_count=0,
+            enrichment_limited=False,
             total_detected=0,
             truncated=False,
         )
@@ -1263,6 +1286,10 @@ async def get_document_references(
 
     # 6. Enrich with external APIs if requested
     enrichment_sources: set[str] = set()
+    before_enrichment = [_enrichment_fingerprint(ref) for ref in references]
+    enrichment_limited = bool(
+        enrich and reference_index is None and len(references) > MAX_ENRICHMENT_REFS
+    )
     if enrich and references:
         try:
             if reference_index is not None:
@@ -1319,12 +1346,18 @@ async def get_document_references(
             )
             # Continue without enrichment
 
+    enriched_count = sum(
+        1 for idx, ref in enumerate(references)
+        if idx < len(before_enrichment) and _enrichment_fingerprint(ref) != before_enrichment[idx]
+    )
     enrichment_source = ",".join(sorted(enrichment_sources)) if enrichment_sources else None
     response = DocumentReferencesResponse(
         media_id=media_id,
         has_references=len(references) > 0,
         references=references,
         enrichment_source=enrichment_source,
+        enriched_count=enriched_count,
+        enrichment_limited=enrichment_limited,
         total_detected=total_detected,
         truncated=truncated,
     )

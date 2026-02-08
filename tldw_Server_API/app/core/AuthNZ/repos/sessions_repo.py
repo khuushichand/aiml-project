@@ -158,7 +158,7 @@ class AuthnzSessionsRepo:
             async with self.db_pool.transaction() as conn:
                 session_details: dict[str, Any] | None = None
 
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     session_row = await conn.fetchrow(
                         """
                         SELECT id, user_id, access_jti, refresh_jti, expires_at, refresh_expires_at
@@ -239,7 +239,7 @@ class AuthnzSessionsRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 affected = 0
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     if except_session_id:
                         result = await conn.execute(
                             """
@@ -310,7 +310,7 @@ class AuthnzSessionsRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetch"):
+                if self._is_postgres_backend():
                     rows = await conn.fetch(
                         """
                         SELECT id, access_jti, refresh_jti, expires_at, refresh_expires_at
@@ -456,7 +456,7 @@ class AuthnzSessionsRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 affected = 0
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     result = await conn.execute(
                         """
                         UPDATE sessions
@@ -632,7 +632,7 @@ class AuthnzSessionsRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     await conn.execute(
                         "UPDATE sessions SET last_activity = CURRENT_TIMESTAMP WHERE id = $1",
                         session_id,
@@ -658,7 +658,7 @@ class AuthnzSessionsRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     row = await conn.fetchrow(
                         """
                         SELECT s.id,
@@ -731,7 +731,7 @@ class AuthnzSessionsRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     row = await conn.fetchrow(
                         """
                         SELECT s.id,
@@ -806,7 +806,7 @@ class AuthnzSessionsRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     await conn.execute(
                         "UPDATE sessions SET token_hash = $1 WHERE id = $2",
                         new_token_hash,
@@ -847,7 +847,7 @@ class AuthnzSessionsRepo:
             async with self.db_pool.transaction() as conn:
                 session_row: Any | None = None
 
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     # Normalize datetimes for PostgreSQL TIMESTAMP columns
                     pg_access_expires = self._normalize_datetime_for_postgres(access_expires_at)
                     pg_refresh_expires = self._normalize_datetime_for_postgres(refresh_expires_at)
@@ -941,7 +941,7 @@ class AuthnzSessionsRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     for candidate in refresh_hash_candidates:
                         row = await conn.fetchrow(
                             """
@@ -1019,7 +1019,7 @@ class AuthnzSessionsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     exp = expires_at.replace(tzinfo=None) if getattr(expires_at, "tzinfo", None) else expires_at
                     ref = (
                         refresh_expires_at.replace(tzinfo=None)

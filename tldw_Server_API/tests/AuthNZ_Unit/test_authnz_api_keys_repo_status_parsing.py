@@ -34,11 +34,11 @@ class _FakeTx:
 class _FakePool:
     """Pool stub exposing a transaction() context manager."""
 
-    def __init__(self, status: str):
+    def __init__(self, status: str, *, postgres: bool = True):
         self._conn = _FakeConn(status)
+        self.pool = object() if postgres else None
 
     def transaction(self):
-
         return _FakeTx(self._conn)
 
 

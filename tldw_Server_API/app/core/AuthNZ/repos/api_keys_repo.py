@@ -714,7 +714,7 @@ class AuthnzApiKeysRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     norm_revoked_at = revoked_at
                     if isinstance(norm_revoked_at, datetime) and norm_revoked_at.tzinfo is not None:
                         # Store as naive UTC for TIMESTAMP columns
@@ -919,7 +919,7 @@ class AuthnzApiKeysRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     norm_revoked_at = revoked_at
                     if isinstance(norm_revoked_at, datetime) and norm_revoked_at.tzinfo is not None:
                         norm_revoked_at = norm_revoked_at.astimezone(timezone.utc).replace(tzinfo=None)
@@ -977,7 +977,7 @@ class AuthnzApiKeysRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
                     await conn.execute(
                         """
@@ -1022,7 +1022,7 @@ class AuthnzApiKeysRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     norm_now = now
                     if isinstance(norm_now, datetime) and norm_now.tzinfo is not None:
                         norm_now = norm_now.astimezone(timezone.utc).replace(tzinfo=None)
@@ -1081,7 +1081,7 @@ class AuthnzApiKeysRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     await conn.execute(
                         "UPDATE api_keys SET status = $1 WHERE id = $2",
                         expired_status,
@@ -1111,7 +1111,7 @@ class AuthnzApiKeysRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     _details = json.dumps(details) if details is not None else None
                     await conn.execute(
                         """

@@ -1513,6 +1513,10 @@ export class TldwApiClient {
       open_access_pdf?: string
     }>
     enrichment_source?: string
+    enriched_count?: number
+    enrichment_limited?: boolean
+    total_detected?: number
+    truncated?: boolean
   }> {
     const id = encodeURIComponent(String(mediaId))
     const enrich = options?.enrich !== false
@@ -1537,6 +1541,10 @@ export class TldwApiClient {
         open_access_pdf?: string
       }>
       enrichment_source?: string
+      enriched_count?: number
+      enrichment_limited?: boolean
+      total_detected?: number
+      truncated?: boolean
     }>({
       path: `/api/v1/media/${id}/references?enrich=${enrich}${referenceIndex}`,
       method: "GET",

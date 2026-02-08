@@ -35,6 +35,17 @@ class DocumentReferencesResponse(BaseModel):
         None,
         description="External API used for enrichment (semantic_scholar, crossref, arxiv)",
     )
+    enriched_count: int = Field(
+        0,
+        ge=0,
+        description="Number of references modified by external enrichment during this request",
+    )
+    enrichment_limited: bool = Field(
+        False,
+        description=(
+            "True when enrichment was intentionally capped (for example, first N references only)"
+        ),
+    )
     total_detected: int = Field(
         0,
         ge=0,

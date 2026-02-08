@@ -20,6 +20,15 @@ class AuthnzRegistrationCodesRepo:
 
     db_pool: DatabasePool
 
+    def _is_postgres_backend(self) -> bool:
+        """
+        Return True when the underlying DatabasePool is using PostgreSQL.
+
+        Backend routing should rely on pool state instead of probing
+        connection capabilities at runtime.
+        """
+        return bool(getattr(self.db_pool, "pool", None))
+
     async def deactivate_expired_codes(self, cutoff: datetime) -> int:
         """
         Deactivate registration codes whose ``expires_at`` is in the past.
@@ -30,7 +39,7 @@ class AuthnzRegistrationCodesRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 updated = 0
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres_backend():
                     result = await conn.execute(
                         """
                         UPDATE registration_codes

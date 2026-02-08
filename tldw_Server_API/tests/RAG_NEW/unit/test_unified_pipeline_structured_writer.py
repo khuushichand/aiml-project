@@ -38,17 +38,31 @@ def _doc_fixture() -> list[Document]:
 async def test_structured_writer_quality_low_token_budget_marks_degraded_policy(monkeypatch):
     _CaptureGenerator.last_generate_kwargs = None
     monkeypatch.setattr(up, "AnswerGenerator", _CaptureGenerator)
+    # Keep this unit test offline/deterministic: disable quality-mode HyDE helpers.
+    monkeypatch.setattr(up, "generate_hypothetical_answer", None)
+    monkeypatch.setattr(up, "hyde_embed_text", None)
+    # Keep this unit test offline/deterministic: disable quality-mode multi-vector paths.
+    monkeypatch.setattr(up, "apply_multi_vector_passages", None)
+    monkeypatch.setattr(up, "MultiVectorConfig", None)
+    monkeypatch.setattr(up, "apply_precomputed_spans", None)
+    monkeypatch.setattr(up, "PrecomputedSpanConfig", None)
 
-    with patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever") as mock_retriever:
+    with (
+        patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever") as mock_retriever,
+        patch("tldw_Server_API.app.core.RAG.rag_service.database_retrievers.MultiDatabaseRetriever") as mock_db_retriever,
+    ):
         retriever_instance = MagicMock()
         retriever_instance.retrieve = AsyncMock(return_value=_doc_fixture())
         mock_retriever.return_value = retriever_instance
+        mock_db_retriever.return_value = retriever_instance
 
         result = await up.unified_rag_pipeline(
             query="Provide a deep research report",
+            search_mode="fts",
             top_k=1,
             enable_cache=False,
             adaptive_cache=False,
+            enable_reranking=False,
             enable_generation=True,
             enable_structured_response=True,
             search_depth_mode="quality",
@@ -71,17 +85,31 @@ async def test_structured_writer_quality_low_token_budget_marks_degraded_policy(
 async def test_structured_writer_quality_high_token_budget_keeps_full_depth_policy(monkeypatch):
     _CaptureGenerator.last_generate_kwargs = None
     monkeypatch.setattr(up, "AnswerGenerator", _CaptureGenerator)
+    # Keep this unit test offline/deterministic: disable quality-mode HyDE helpers.
+    monkeypatch.setattr(up, "generate_hypothetical_answer", None)
+    monkeypatch.setattr(up, "hyde_embed_text", None)
+    # Keep this unit test offline/deterministic: disable quality-mode multi-vector paths.
+    monkeypatch.setattr(up, "apply_multi_vector_passages", None)
+    monkeypatch.setattr(up, "MultiVectorConfig", None)
+    monkeypatch.setattr(up, "apply_precomputed_spans", None)
+    monkeypatch.setattr(up, "PrecomputedSpanConfig", None)
 
-    with patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever") as mock_retriever:
+    with (
+        patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever") as mock_retriever,
+        patch("tldw_Server_API.app.core.RAG.rag_service.database_retrievers.MultiDatabaseRetriever") as mock_db_retriever,
+    ):
         retriever_instance = MagicMock()
         retriever_instance.retrieve = AsyncMock(return_value=_doc_fixture())
         mock_retriever.return_value = retriever_instance
+        mock_db_retriever.return_value = retriever_instance
 
         result = await up.unified_rag_pipeline(
             query="Provide a deep research report",
+            search_mode="fts",
             top_k=1,
             enable_cache=False,
             adaptive_cache=False,
+            enable_reranking=False,
             enable_generation=True,
             enable_structured_response=True,
             search_depth_mode="quality",
