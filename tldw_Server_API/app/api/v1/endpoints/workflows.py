@@ -76,7 +76,6 @@ from tldw_Server_API.app.core.exceptions import (
 from tldw_Server_API.app.core.http_client import RetryPolicy as _RetryPolicy
 from tldw_Server_API.app.core.http_client import afetch as _http_afetch
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
-from tldw_Server_API.app.core.Resource_Governance.daily_caps import check_daily_cap
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
@@ -127,6 +126,20 @@ _WORKFLOWS_NONCRITICAL_EXCEPTIONS = (
 _WORKFLOWS_BACKFILL_CACHE: set[str] = set()
 _raw_cache_max = int(os.getenv("WORKFLOWS_BACKFILL_CACHE_MAX", "50000") or "50000")
 _WORKFLOWS_BACKFILL_CACHE_MAX = max(1, _raw_cache_max)
+_WORKFLOWS_QUOTA_RG_FALLBACK_LOGGED = False
+
+
+def _log_workflows_quota_rg_fallback_once(*, reason: str, policy_id: str) -> None:
+    global _WORKFLOWS_QUOTA_RG_FALLBACK_LOGGED
+    if _WORKFLOWS_QUOTA_RG_FALLBACK_LOGGED:
+        return
+    _WORKFLOWS_QUOTA_RG_FALLBACK_LOGGED = True
+    logger.error(
+        "Workflows daily-cap RG check unavailable; using diagnostics-only shim (no legacy fallback enforcement). "
+        "reason={} policy_id={}",
+        reason,
+        policy_id,
+    )
 
 
 def _utcnow_iso() -> str:
@@ -878,9 +891,8 @@ async def _enforce_workflows_daily_cap(
     """
     Enforce workflows daily run caps via ResourceDailyLedger/RG.
 
-    Preference order:
-      1) workflows_runs.daily_cap from the active RG policy
-      2) Legacy WORKFLOWS_QUOTA_DAILY_PER_USER env as fallback alias
+    Daily cap source:
+      - workflows_runs.daily_cap from the active RG policy.
 
     Raises HTTPException(429) with legacy-compatible headers on denial.
     """
@@ -932,20 +944,13 @@ async def _enforce_workflows_daily_cap(
         )
         daily_cap_policy = 0
 
-    daily_cap_env = 0
     if daily_cap_policy <= 0:
-        try:
-            daily_cap_env = int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000") or 0)
-        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug(
-                "Workflows quota: WORKFLOWS_QUOTA_DAILY_PER_USER parsing failed: {}",
-                exc,
-            )
-            daily_cap_env = 0
-
-    daily_cap = daily_cap_policy if daily_cap_policy > 0 else daily_cap_env
-    if daily_cap <= 0:
+        _log_workflows_quota_rg_fallback_once(
+            reason="missing_rg_daily_cap_policy",
+            policy_id=policy_id,
+        )
         return
+    daily_cap = daily_cap_policy
 
     # One-time best-effort backfill of today's legacy counts into ledger.
     # Guarded by an in-memory per-(tenant, entity, date) key to avoid
@@ -978,52 +983,45 @@ async def _enforce_workflows_daily_cap(
             exc,
         )
 
-    # Prefer governor check when the policy defines the cap (single-source RG).
-    if daily_cap_policy > 0:
-        try:
-            gov = getattr(request.app.state, "rg_governor", None)
-            if gov is not None:
-                dec = await gov.check(
-                    RGRequest(
-                        entity=entity,
-                        categories={workflows_ledger_category(): {"units": 1}},
-                        tags={"policy_id": policy_id, "endpoint": request.url.path},
-                    )
-                )
-                if not bool(getattr(dec, "allowed", False)):
-                    cats = (dec.details or {}).get("categories") or {}
-                    cat_det = cats.get(workflows_ledger_category()) or {}
-                    remaining = int(cat_det.get("daily_remaining") or cat_det.get("remaining") or 0)
-                    retry_after = int(getattr(dec, "retry_after", None) or cat_det.get("retry_after") or 1)
-                    reset_epoch = int(time.time()) + retry_after
-                    headers = _build_rate_limit_headers(daily_cap, remaining, reset_epoch)
-                    raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
-                return
-        except HTTPException:
-            raise
-        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
-            # Fall back to direct check below.
-            logger.debug(
-                "Workflows quota: governor check failed for entity={} policy_id={}: {}",
-                entity,
-                policy_id,
-                exc,
+    # RG is the single source of workflows daily-cap enforcement.
+    try:
+        gov = getattr(request.app.state, "rg_governor", None)
+        if gov is None:
+            _log_workflows_quota_rg_fallback_once(
+                reason="rg_governor_unavailable",
+                policy_id=policy_id,
             )
-
-    # Fallback direct check using computed cap (env alias).
-    allowed, ra, det = await check_daily_cap(
-        entity_scope=entity_scope,
-        entity_value=entity_value,
-        category=workflows_ledger_category(),
-        daily_cap=daily_cap,
-        units=1,
-    )
-    if not allowed:
-        remaining = int((det or {}).get("daily_remaining") or 0)
-        retry_after = int(ra or 1)
-        reset_epoch = int(time.time()) + retry_after
-        headers = _build_rate_limit_headers(daily_cap, remaining, reset_epoch)
-        raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
+            return
+        dec = await gov.check(
+            RGRequest(
+                entity=entity,
+                categories={workflows_ledger_category(): {"units": 1}},
+                tags={"policy_id": policy_id, "endpoint": request.url.path},
+            )
+        )
+        if not bool(getattr(dec, "allowed", False)):
+            cats = (dec.details or {}).get("categories") or {}
+            cat_det = cats.get(workflows_ledger_category()) or {}
+            remaining = int(cat_det.get("daily_remaining") or cat_det.get("remaining") or 0)
+            retry_after = int(getattr(dec, "retry_after", None) or cat_det.get("retry_after") or 1)
+            reset_epoch = int(time.time()) + retry_after
+            headers = _build_rate_limit_headers(daily_cap, remaining, reset_epoch)
+            raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
+        return
+    except HTTPException:
+        raise
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
+        _log_workflows_quota_rg_fallback_once(
+            reason=f"rg_check_failed:{type(exc).__name__}",
+            policy_id=policy_id,
+        )
+        logger.debug(
+            "Workflows quota: governor check failed for entity={} policy_id={}: {}",
+            entity,
+            policy_id,
+            exc,
+        )
+        return
 
 
 async def _record_workflow_run_usage(
@@ -3567,10 +3565,9 @@ async def get_workflows_config(
             "type": backend_type,
         },
         "rate_limits": {
-            "disabled": _env_bool("WORKFLOWS_DISABLE_RATE_LIMITS", False),
+            "ingress_source": "rg_policy.route_map+requests",
             "quotas_disabled": _env_bool("WORKFLOWS_DISABLE_QUOTAS", False),
-            "quota_burst_per_min": int(os.getenv("WORKFLOWS_QUOTA_BURST_PER_MIN", "60") or 60),
-            "quota_daily_per_user": int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000") or 1000),
+            "quota_daily_cap_source": "rg_policy.workflows_runs.daily_cap",
         },
         "engine": {
             "tenant_concurrency": int(os.getenv("WORKFLOWS_TENANT_CONCURRENCY", "2") or 2),

@@ -67,6 +67,7 @@ const EXPORT_FORMATS: { value: CollectionExportFormat; labelKey: string }[] = [
 ]
 
 const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024
+const MAX_IMPORT_ERRORS_TO_SHOW = 5
 const IMPORT_POLL_INTERVAL_MS = 1500
 const IMPORT_TERMINAL_STATES = new Set<ReadingImportJobState>([
   "completed",
@@ -476,24 +477,49 @@ const ImportSection: React.FC = () => {
       {importWizardStep === "result" && (
         <>
           {importResult ? (
-            <Result
-              status={importResult.errors.length === 0 ? "success" : "warning"}
-              title={t("collections:import.complete", "Import Complete")}
-              subTitle={t(
-                "collections:import.resultSummary",
-                "Imported: {{imported}}, Updated: {{updated}}, Skipped: {{skipped}}",
-                {
-                  imported: importResult.imported,
-                  updated: importResult.updated,
-                  skipped: importResult.skipped
-                }
+            <div className="space-y-3">
+              <Result
+                status={importResult.errors.length === 0 ? "success" : "warning"}
+                title={t("collections:import.complete", "Import Complete")}
+                subTitle={t(
+                  "collections:import.resultSummary",
+                  "Imported: {{imported}}, Updated: {{updated}}, Skipped: {{skipped}}",
+                  {
+                    imported: importResult.imported,
+                    updated: importResult.updated,
+                    skipped: importResult.skipped
+                  }
+                )}
+                extra={[
+                  <Button key="done" type="primary" onClick={resetImportWizard}>
+                    {t("collections:import.importMore", "Import More")}
+                  </Button>
+                ]}
+              />
+              {importResult.errors.length > 0 && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={t("collections:import.topErrorsTitle", "Top import errors")}
+                  description={
+                    <ul className="mb-0 list-disc pl-5">
+                      {importResult.errors.slice(0, MAX_IMPORT_ERRORS_TO_SHOW).map((err, index) => (
+                        <li key={`${err}-${index}`} className="text-sm">
+                          {err}
+                        </li>
+                      ))}
+                      {importResult.errors.length > MAX_IMPORT_ERRORS_TO_SHOW && (
+                        <li className="text-sm">
+                          {t("collections:import.moreErrors", "+{{count}} more errors", {
+                            count: importResult.errors.length - MAX_IMPORT_ERRORS_TO_SHOW
+                          })}
+                        </li>
+                      )}
+                    </ul>
+                  }
+                />
               )}
-              extra={[
-                <Button key="done" type="primary" onClick={resetImportWizard}>
-                  {t("collections:import.importMore", "Import More")}
-                </Button>
-              ]}
-            />
+            </div>
           ) : (
             <Result
               status="error"

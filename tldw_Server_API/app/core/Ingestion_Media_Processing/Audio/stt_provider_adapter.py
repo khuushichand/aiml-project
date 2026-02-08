@@ -18,6 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
+from tldw_Server_API.app.core.Infrastructure.provider_registry import ProviderRegistryBase
 from tldw_Server_API.app.core.config import get_stt_config
 from tldw_Server_API.app.core.exceptions import BadRequestError, CancelCheckError, TranscriptionCancelled
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
@@ -682,22 +683,36 @@ def _normalize_provider_name(name: str | None) -> str:
     """
     Normalize provider identifiers from config or call sites.
 
-    - Accepts both 'faster_whisper' and 'faster-whisper' and normalizes to
-      'faster-whisper'.
-    - Accepts 'vibevoice-asr' aliases and normalizes to 'vibevoice'.
-    - Accepts 'qwen3-asr', 'qwen3_asr', 'qwen3asr' aliases.
-    - Returns lower-cased identifiers for consistency.
+    This uses the shared provider registry normalizer to keep naming behavior
+    aligned with other provider domains while still preserving STT-specific
+    aliases.
     """
-    if not name:
-        return ""
-    lowered = str(name).strip().lower()
-    if lowered in {"faster-whisper", "faster_whisper"}:
-        return "faster-whisper"
-    if lowered in {"vibevoice-asr", "vibevoice_asr"}:
-        return "vibevoice"
-    if lowered in {"qwen3-asr", "qwen3_asr", "qwen3asr"}:
-        return "qwen3-asr"
-    return lowered
+    return _STT_PROVIDER_NAME_REGISTRY.resolve_provider_name(name)
+
+
+def _build_stt_provider_name_registry() -> ProviderRegistryBase[Any]:
+    return ProviderRegistryBase[SttProviderAdapter](aliases=_STT_PROVIDER_ALIASES)
+
+
+_STT_PROVIDER_ALIASES: dict[str, str] = {
+    # Whisper/faster-whisper aliases
+    "whisper": SttProviderName.FASTER_WHISPER.value,
+    "fasterwhisper": SttProviderName.FASTER_WHISPER.value,
+    "fw": SttProviderName.FASTER_WHISPER.value,
+    # Nemo family aliases
+    "nemo-parakeet": SttProviderName.PARAKEET.value,
+    "nemo-canary": SttProviderName.CANARY.value,
+    # VibeVoice aliases
+    "vibevoice-asr": SttProviderName.VIBEVOICE.value,
+    # Qwen3-ASR aliases
+    "qwen3asr": SttProviderName.QWEN3_ASR.value,
+    "qwen-3-asr": SttProviderName.QWEN3_ASR.value,
+    # External aliases
+    "external-provider": SttProviderName.EXTERNAL.value,
+}
+
+
+_STT_PROVIDER_NAME_REGISTRY = _build_stt_provider_name_registry()
 
 
 class SttProviderRegistry:
@@ -708,16 +723,48 @@ class SttProviderRegistry:
     ML models and only exposes capability metadata and config-driven selection.
     """
 
+    DEFAULT_ADAPTERS: dict[str, type[SttProviderAdapter]] = {
+        SttProviderName.FASTER_WHISPER.value: FasterWhisperAdapter,
+        SttProviderName.PARAKEET.value: ParakeetAdapter,
+        SttProviderName.CANARY.value: CanaryAdapter,
+        SttProviderName.QWEN2AUDIO.value: Qwen2AudioAdapter,
+        SttProviderName.QWEN3_ASR.value: Qwen3ASRAdapter,
+        SttProviderName.VIBEVOICE.value: VibeVoiceAdapter,
+        SttProviderName.EXTERNAL.value: ExternalAdapter,
+    }
+
     def __init__(self) -> None:
-        self._adapters: dict[str, SttProviderAdapter] = {
-            SttProviderName.FASTER_WHISPER.value: FasterWhisperAdapter(),
-            SttProviderName.PARAKEET.value: ParakeetAdapter(),
-            SttProviderName.CANARY.value: CanaryAdapter(),
-            SttProviderName.QWEN2AUDIO.value: Qwen2AudioAdapter(),
-            SttProviderName.QWEN3_ASR.value: Qwen3ASRAdapter(),
-            SttProviderName.VIBEVOICE.value: VibeVoiceAdapter(),
-            SttProviderName.EXTERNAL.value: ExternalAdapter(),
-        }
+        self._base: ProviderRegistryBase[SttProviderAdapter] = ProviderRegistryBase(
+            aliases=_STT_PROVIDER_ALIASES,
+            adapter_validator=lambda adapter: isinstance(adapter, SttProviderAdapter),
+            provider_enabled_callback=self._is_provider_enabled_by_config,
+        )
+        for provider_name, adapter_spec in self.DEFAULT_ADAPTERS.items():
+            self._base.register_adapter(provider_name, adapter_spec)
+
+    def _is_provider_enabled_by_config(self, provider_name: str) -> bool | None:
+        """
+        STT keeps provider enablement decisions outside registry lookup today.
+
+        This callback intentionally returns no opinion so existing STT
+        precedence remains unchanged while still wiring the shared callback
+        interface required for cross-domain parity.
+        """
+        _ = provider_name
+        return None
+
+    def register_adapter(
+        self,
+        provider_name: str,
+        adapter: Any,
+        *,
+        aliases: list[str] | tuple[str, ...] | set[str] | None = None,
+        enabled: bool = True,
+    ) -> None:
+        normalized = _normalize_provider_name(provider_name)
+        if not normalized:
+            raise ValueError("Provider name must be non-empty")
+        self._base.register_adapter(normalized, adapter, aliases=aliases, enabled=enabled)
 
     # --------------------------------------------------------------------- #
     # Public API
@@ -752,18 +799,36 @@ class SttProviderRegistry:
         """
         key = _normalize_provider_name(provider_name) if provider_name else self.get_default_provider_name()
 
-        adapter = self._adapters.get(key)
+        adapter = self._base.get_adapter(key)
         if adapter is not None:
             return adapter
 
         # Defensive fallback to faster-whisper
-        return self._adapters[SttProviderName.FASTER_WHISPER.value]
+        fallback = self._base.get_adapter(SttProviderName.FASTER_WHISPER.value)
+        if fallback is not None:
+            return fallback
+        raise RuntimeError("faster-whisper adapter is not available")
 
     def get_capabilities(self, provider_name: str | None = None) -> SttProviderCapabilities:
         """
         Convenience helper to fetch capability metadata for a provider.
         """
         return self.get_adapter(provider_name).get_capabilities()
+
+    def get_status(self, provider_name: str | None) -> str:
+        """
+        Return canonical availability status for a provider.
+        """
+        return self._base.get_status(provider_name).value
+
+    def list_capabilities(self) -> list[dict[str, Any]]:
+        """
+        Return capability envelopes for all registered STT providers.
+        """
+        return self._base.list_capabilities(
+            capability_getter=lambda adapter: adapter.get_capabilities(),
+            include_disabled=True,
+        )
 
     def resolve_provider_for_model(self, model_name: str | None) -> tuple[str, str, str | None]:
         """

@@ -353,13 +353,20 @@ docker compose up</code></pre>
     document.querySelectorAll('.copy-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const code = btn.getAttribute('data-code');
+        const original = btn.textContent;
         navigator.clipboard.writeText(code).then(() => {
-          const original = btn.textContent;
           btn.textContent = 'Copied!';
           btn.classList.add('copied');
           setTimeout(() => {
             btn.textContent = original;
             btn.classList.remove('copied');
+          }, 2000);
+        }).catch(() => {
+          btn.textContent = 'Failed';
+          btn.classList.add('copy-error');
+          setTimeout(() => {
+            btn.textContent = original;
+            btn.classList.remove('copy-error');
           }, 2000);
         });
       });

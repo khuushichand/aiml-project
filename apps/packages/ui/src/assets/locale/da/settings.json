@@ -582,7 +582,7 @@
           "label": "Tilpas Headers",
           "add": "Tilføj Header",
           "key": {
-            "label": "Header Værdi",
+            "label": "Header-nøgle",
             "placeholder": "Autorisation"
           },
           "value": {
@@ -776,7 +776,7 @@
         "label": "Embeddingsmodel",
         "required": "Vælg venligst en model",
         "help": "Det anbefales stærkt at bruge indlejringsmodeller som `nomic-embed-text`.",
-        "placeholder": "Vælg a model",
+        "placeholder": "Vælg en model",
         "helpRecommended": "Anbefalet: {{model}} (fra serverkonfiguration)",
         "helpMissing": "Den tidligere gemte embeddingsmodel er ikke længere tilgængelig på serveren. Vælg en anden model."
       },
@@ -797,8 +797,8 @@
       },
       "noOfRetrievedDocs": {
         "label": "Antal Hentede Dokumenter",
-        "placeholder": "Indtast Number of Retrieved Documents",
-        "required": "Venligst indtast the number of retrieved documents"
+        "placeholder": "Indtast antal hentede dokumenter",
+        "required": "Indtast venligst antal hentede dokumenter"
       },
       "splittingSeparator": {
         "label": "Adskiller",
@@ -821,7 +821,7 @@
       "webSearchPromptError": "Venligst indtast a web search prompt",
       "webSearchPromptPlaceholder": "Indtast Websøgningsprompt",
       "webSearchFollowUpPrompt": "Websøgnings opfølgningsprompt",
-      "webSearchFollowUpPromptHelp": "Do not remove `{chat_history}` og `{question}` from the prompt.",
+      "webSearchFollowUpPromptHelp": "Fjern ikke `{chat_history}` og `{question}` fra prompten.",
       "webSearchFollowUpPromptError": "Indtast venligst din websøgning opfølgende prompt!",
       "webSearchFollowUpPromptPlaceholder": "Din Websøgnings opfølgende Prompt"
     }

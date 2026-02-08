@@ -12,10 +12,11 @@ Initial version ships without default adapters; providers can be registered
 by initialization code or tests. Future phases may add defaults.
 """
 
-import importlib
 from typing import Any
 
 from loguru import logger
+
+from tldw_Server_API.app.core.Infrastructure.provider_registry import ProviderRegistryBase
 
 from .providers.base import ChatProvider
 
@@ -51,70 +52,142 @@ class ChatProviderRegistry:
         "aphrodite": "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.AphroditeAdapter",
     }
 
-    def __init__(self, config: dict[str, Any] | None = None):
+    DEFAULT_ALIASES: dict[str, tuple[str, ...]] = {
+        "openai": ("oai",),
+        "bedrock": ("aws-bedrock", "amazon-bedrock"),
+        "custom-openai-api": (
+            "custom_openai_api",
+            "custom-openai",
+            "openai-compatible",
+            "customopenai",
+        ),
+        "custom-openai-api-2": (
+            "custom_openai_api_2",
+            "custom-openai-2",
+            "openai-compatible-2",
+            "customopenai2",
+        ),
+        "llama.cpp": ("llama-cpp", "llama_cpp", "llamacpp"),
+        "kobold": ("kobold-cpp", "kobold_cpp", "koboldcpp"),
+        "ooba": ("oobabooga", "text-generation-webui", "text_generation_webui"),
+        "tabbyapi": ("tabby-api", "tabby_api", "tabby"),
+        "local-llm": ("local_llm",),
+        "zai": ("z-ai", "z.ai"),
+    }
+
+    @staticmethod
+    def _parse_optional_bool(value: Any) -> bool | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        lowered = str(value).strip().lower()
+        if lowered in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if lowered in {"0", "false", "no", "off", "disabled"}:
+            return False
+        return None
+
+    def _is_provider_enabled_by_config(self, provider_name: str) -> bool | None:
+        if not isinstance(self._config, dict):
+            return None
+
+        provider_key = str(provider_name or "").strip()
+        if not provider_key:
+            return None
+
+        providers_cfg = self._config.get("providers")
+        if isinstance(providers_cfg, dict):
+            cfg_entry = providers_cfg.get(provider_key)
+            if cfg_entry is None:
+                cfg_entry = providers_cfg.get(provider_key.replace("-", "_"))
+            if isinstance(cfg_entry, dict) and "enabled" in cfg_entry:
+                return self._parse_optional_bool(cfg_entry.get("enabled"))
+
+        enabled_keys = [
+            f"{provider_key}_enabled",
+            f"{provider_key.replace('-', '_')}_enabled",
+        ]
+        for enabled_key in enabled_keys:
+            if enabled_key in self._config:
+                return self._parse_optional_bool(self._config.get(enabled_key))
+        return None
+
+    def __init__(
+        self,
+        config: dict[str, Any] | None = None,
+        *,
+        include_defaults: bool = True,
+    ):
         # Keep config available for future adapter initialization needs
         self._config = config or {}
-        self._adapters: dict[str, ChatProvider] = {}
-        # Start with defaults; tests or init code can override/register more
-        self._adapter_specs: dict[str, Any] = self.DEFAULT_ADAPTERS.copy()
+        self._adapter_specs: dict[str, Any] = (
+            self.DEFAULT_ADAPTERS.copy() if include_defaults else {}
+        )
+        self._base: ProviderRegistryBase[ChatProvider] = ProviderRegistryBase(
+            adapter_validator=lambda adapter: isinstance(adapter, ChatProvider),
+            provider_enabled_callback=self._is_provider_enabled_by_config,
+        )
+        for provider_name, adapter_spec in self._adapter_specs.items():
+            aliases = self.DEFAULT_ALIASES.get(provider_name)
+            self._base.register_adapter(provider_name, adapter_spec, aliases=aliases)
 
-    def register_adapter(self, name: str, adapter: Any) -> None:
+    def register_adapter(
+        self,
+        name: str,
+        adapter: Any,
+        *,
+        aliases: list[str] | tuple[str, ...] | set[str] | None = None,
+    ) -> None:
         """Register an adapter class or dotted path for a provider name."""
-        self._adapter_specs[name] = adapter
+        provider_key = self._base.normalize_provider_name(name)
+        all_aliases = set(self.DEFAULT_ALIASES.get(provider_key, ()))
+        if aliases:
+            all_aliases.update(str(alias) for alias in aliases)
+        self._base.register_adapter(name, adapter, aliases=sorted(all_aliases) if all_aliases else None)
+        self._adapter_specs[provider_key] = adapter
         try:
             n = adapter.__name__  # type: ignore[attr-defined]
         except Exception:
             n = str(adapter)
         logger.info(f"Registered LLM adapter {n} for provider '{name}'")
 
-    def _resolve_adapter_class(self, spec: Any) -> type[ChatProvider]:
-        if isinstance(spec, str):
-            module_path, _, class_name = spec.rpartition(".")
-            if not module_path:
-                raise ImportError(f"Invalid adapter spec '{spec}'")
-            module = importlib.import_module(module_path)
-            cls = getattr(module, class_name)
-            return cls
-        return spec
-
     def get_adapter(self, name: str) -> ChatProvider | None:
         """Return an initialized adapter instance for a provider name, if any."""
-        if name in self._adapters:
-            return self._adapters[name]
-
-        spec = self._adapter_specs.get(name)
-        if not spec:
-            logger.debug(f"No adapter spec registered for provider '{name}'")
+        adapter = self._base.get_adapter(name)
+        if adapter is None:
+            provider_key = self._base.resolve_provider_name(name)
+            if provider_key not in self._adapter_specs:
+                logger.debug(f"No adapter spec registered for provider '{name}'")
+            else:
+                logger.debug(f"Adapter for provider '{name}' is currently unavailable")
             return None
-
-        try:
-            adapter_cls = self._resolve_adapter_class(spec)
-            adapter = adapter_cls()  # type: ignore[call-arg]
-            if not isinstance(adapter, ChatProvider):
-                logger.error(f"Adapter for '{name}' does not implement ChatProvider")
-                return None
-            self._adapters[name] = adapter
-            return adapter
-        except Exception as e:
-            logger.error(f"Failed to initialize adapter for '{name}': {e}")
-            return None
+        return adapter
 
     def get_all_capabilities(self) -> dict[str, dict[str, Any]]:
         """Return capabilities for all registered providers, initializing as needed."""
         out: dict[str, dict[str, Any]] = {}
-        for name in list(self._adapter_specs.keys()):
-            adapter = self.get_adapter(name)
-            if not adapter:
-                continue
-            try:
-                out[name] = adapter.capabilities() or {}
-            except Exception as e:
-                logger.warning(f"Capability discovery failed for '{name}': {e}")
+        entries = self._base.list_capabilities(
+            capability_getter=lambda adapter: adapter.capabilities() or {}
+        )
+        for entry in entries:
+            provider_name = str(entry.get("provider") or "")
+            capabilities = entry.get("capabilities")
+            if provider_name and isinstance(capabilities, dict):
+                out[provider_name] = capabilities
         return out
+
+    def list_capabilities(self) -> list[dict[str, Any]]:
+        """Return standardized capability envelopes for registered providers."""
+        return self._base.list_capabilities(
+            capability_getter=lambda adapter: adapter.capabilities() or {}
+        )
 
     def list_providers(self) -> list[str]:
         """Return a sorted list of registered provider names."""
-        return sorted(self._adapter_specs.keys())
+        return self._base.list_providers(include_disabled=True)
 
 
 _registry: ChatProviderRegistry | None = None

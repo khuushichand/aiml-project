@@ -44,6 +44,19 @@ const FORMAT_COLORS: Record<TemplateFormat, string> = {
   mp3: "purple"
 }
 
+const formatTemplateUpdatedAt = (updatedAt?: string): string | null => {
+  if (!updatedAt) return null
+  const parsed = new Date(updatedAt)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  })
+}
+
 export const TemplatesList: React.FC = () => {
   const { t } = useTranslation(["collections", "common"])
   const api = useTldwApiClient()
@@ -272,6 +285,7 @@ const TemplateCard: React.FC<TemplateCardProps> = ({
   onDuplicate
 }) => {
   const { t } = useTranslation("collections")
+  const updatedAtLabel = formatTemplateUpdatedAt(template.updated_at)
 
   return (
     <Card
@@ -320,6 +334,13 @@ const TemplateCard: React.FC<TemplateCardProps> = ({
               {t(`collections:templateTypes.${template.type}`, template.type)}
             </span>
           </div>
+          {updatedAtLabel && (
+            <div className="mt-2 text-xs text-zinc-400">
+              {t("collections:templates.updatedAt", "Updated {{date}}", {
+                date: updatedAtLabel
+              })}
+            </div>
+          )}
         </div>
       </div>
     </Card>

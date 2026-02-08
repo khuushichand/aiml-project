@@ -25,7 +25,13 @@ from tldw_Server_API.app.core.Logging.log_context import new_request_id
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Metrics.metrics_manager import MetricDefinition, MetricType
 
-from .adapter_registry import TTSAdapterFactory, TTSProvider, close_tts_factory, get_tts_factory
+from .adapter_registry import (
+    TTSAdapterFactory,
+    TTSAdapterRegistry,
+    TTSProvider,
+    close_tts_factory,
+    get_tts_factory,
+)
 from .adapters.base import AudioFormat, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse
 from .audio_utils import (
     crossfade_audio,
@@ -974,9 +980,9 @@ class TTSServiceV2:
         if adapter is None and self.factory is not None:
             # Try to resolve via new factory/registry by provider enum name
             try:
-                from .adapter_registry import TTSProvider
-                prov_enum = TTSProvider(provider)
-                adapter = await self.factory.registry.get_adapter(prov_enum)  # type: ignore[union-attr]
+                prov_enum = TTSAdapterRegistry.resolve_provider(provider)
+                if prov_enum is not None:
+                    adapter = await self.factory.registry.get_adapter(prov_enum)  # type: ignore[union-attr]
             except _TTS_NONCRITICAL_EXCEPTIONS:
                 adapter = None
         if adapter is None:
@@ -1012,9 +1018,9 @@ class TTSServiceV2:
                 adapter = None
         if adapter is None and self.factory is not None:
             try:
-                from .adapter_registry import TTSProvider
-                prov_enum = TTSProvider(provider)
-                adapter = await self.factory.registry.get_adapter(prov_enum)  # type: ignore[union-attr]
+                prov_enum = TTSAdapterRegistry.resolve_provider(provider)
+                if prov_enum is not None:
+                    adapter = await self.factory.registry.get_adapter(prov_enum)  # type: ignore[union-attr]
             except _TTS_NONCRITICAL_EXCEPTIONS:
                 adapter = None
         if adapter is None:
@@ -2164,13 +2170,13 @@ class TTSServiceV2:
         factory = await self._ensure_factory()
         if provider:
             # Specific provider requested
-            try:
-                provider_enum = TTSProvider(provider.lower())
+            provider_enum = TTSAdapterRegistry.resolve_provider(provider)
+            if provider_enum is None:
+                logger.warning(f"Unknown provider: {provider}")
+            else:
                 if overrides:
                     return await factory.registry.create_adapter_with_overrides(provider_enum, overrides)
                 return await factory.registry.get_adapter(provider_enum)
-            except ValueError:
-                logger.warning(f"Unknown provider: {provider}")
 
         # Get adapter by model name
         return await factory.get_adapter_by_model(model)

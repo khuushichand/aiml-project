@@ -214,7 +214,7 @@ Notes:
 ## Audio Jobs
 - `AUDIO_JOBS_WORKER_ENABLED`: Enable the in-process Audio Jobs worker (`true|false`, default follows route policy for `audio-jobs`). When true, the worker starts at app startup and polls the Jobs backend for the `audio` domain pipeline stages.
 - `AUDIO_JOBS_OWNER_STRICT`: Enable owner-aware acquisition for fairness across users (`true|false`, default `false`). When enabled, the worker preferentially acquires jobs for owners under their concurrent-job caps.
-- `AUDIO_QUOTA_USE_REDIS`: Use Redis for distributed audio concurrency tracking (`true|false`, default `true` when `REDIS_URL` is set). Falls back to in-process counters when disabled or unavailable.
+- `REDIS_URL`: Optional Redis URL used by Resource Governor when `RG_BACKEND=redis`.
 
 ## Media Ingest Jobs
 - `MEDIA_INGEST_JOBS_WORKER_ENABLED`: Enable the in-process media ingest jobs worker (`true|false`, default follows route policy for `media`). When true, the worker starts at app startup and polls the Jobs backend for the `media_ingest` domain.

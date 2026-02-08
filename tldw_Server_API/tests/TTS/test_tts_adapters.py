@@ -336,6 +336,15 @@ class TestAdapterRegistry:
         assert adapter is not None
         assert adapter.status == ProviderStatus.AVAILABLE
 
+    async def test_get_adapter_with_alias_string(self):
+        """Test alias normalization for provider names."""
+        config = {"openai_api_key": "test-key", "openai_enabled": True}
+        registry = TTSAdapterRegistry(config)
+
+        adapter = await registry.get_adapter("open_ai")
+        assert adapter is not None
+        assert adapter.status == ProviderStatus.AVAILABLE
+
     async def test_disabled_provider(self):
         """Test disabled provider"""
         config = {"openai_enabled": False}
@@ -400,6 +409,13 @@ class TestTTSAdapterFactory:
         # Unknown model
         adapter = await factory.get_adapter_by_model("unknown-model")
         assert adapter is None
+
+    def test_get_provider_for_model_alias(self):
+        """Factory should resolve provider aliases when model mapping is absent."""
+        factory = TTSAdapterFactory({})
+
+        assert factory.get_provider_for_model("open_ai") == TTSProvider.OPENAI
+        assert factory.get_provider_for_model("vibevoice-realtime") == TTSProvider.VIBEVOICE_REALTIME
 
     async def test_get_best_adapter(self):
         """Test getting best adapter for requirements"""

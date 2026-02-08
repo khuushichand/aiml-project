@@ -39,6 +39,7 @@ chmod 700 "${USER_HOME}/.ssh"
 if [ -f "${USER_HOME}/.ssh/authorized_keys" ]; then
   chmod 600 "${USER_HOME}/.ssh/authorized_keys"
 fi
+chown -R "${USER_NAME}" "${USER_HOME}/.ssh"
 
 /usr/sbin/sshd -D -e &
 

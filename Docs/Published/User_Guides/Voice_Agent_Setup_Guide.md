@@ -18,7 +18,14 @@ If you want protocol/reference details, see [Voice Assistant API](../API/Voice_A
    - FFmpeg
    - At least one TTS provider if you want spoken responses (`include_tts=true`)
    - At least one STT backend if you want audio input over WebSocket
-4. Optional for WebSocket smoke tests:
+4. **jq** – used in sections 2, 3, and 7 to parse JSON responses from the API:
+   ```bash
+   # macOS
+   brew install jq
+   # Debian/Ubuntu
+   sudo apt-get install -y jq
+   ```
+5. Optional for WebSocket smoke tests:
    ```bash
    python -m pip install websockets numpy
    ```

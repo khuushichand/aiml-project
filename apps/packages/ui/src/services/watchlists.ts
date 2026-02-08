@@ -480,6 +480,37 @@ export const downloadWatchlistOutput = async (outputId: number): Promise<string>
 // Templates API
 // ─────────────────────────────────────────────────────────────────────────────
 
+export interface JobOutputTemplateSummary {
+  id: string
+  name: string
+  format: "md" | "html" | "mp3" | string
+  updated_at?: string | null
+}
+
+export const fetchJobOutputTemplates = async (
+  params?: { q?: string; limit?: number; offset?: number }
+): Promise<{ items: JobOutputTemplateSummary[]; total: number }> => {
+  const qs = buildQuery(params || {})
+  const data = await bgRequest<{ items?: Array<Record<string, unknown>>; total?: number }>({
+    path: `/api/v1/outputs/templates${qs}` as any,
+    method: "GET"
+  })
+  const items = Array.isArray(data?.items)
+    ? data.items
+      .filter((item) => typeof item?.name === "string" && item.name.trim().length > 0)
+      .map((item) => ({
+        id: String(item.id),
+        name: String(item.name).trim(),
+        format: typeof item.format === "string" ? item.format : "md",
+        updated_at: typeof item.updated_at === "string" ? item.updated_at : null
+      }))
+    : []
+  return {
+    items,
+    total: Number.isFinite(data?.total) ? Number(data.total) : items.length
+  }
+}
+
 export const fetchWatchlistTemplates = async (): Promise<{ items: WatchlistTemplate[] }> => {
   return bgRequest<{ items: WatchlistTemplate[] }>({
     path: "/api/v1/watchlists/templates",

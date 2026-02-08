@@ -2960,7 +2960,6 @@ async def lifespan(app: FastAPI):
                 _test_flags = {
                     "TEST_MODE": _os.getenv("TEST_MODE", ""),
                     "TLDW_TEST_MODE": _os.getenv("TLDW_TEST_MODE", ""),
-                    "WORKFLOWS_DISABLE_RATE_LIMITS": _os.getenv("WORKFLOWS_DISABLE_RATE_LIMITS", ""),
                 }
                 _enabled = [k for k, v in _test_flags.items() if _shared_is_truthy(v)]
                 if _enabled:

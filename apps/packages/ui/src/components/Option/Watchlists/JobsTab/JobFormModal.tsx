@@ -3,6 +3,7 @@ import { Button, Collapse, Form, Input, InputNumber, Modal, Select, Switch, mess
 import { useTranslation } from "react-i18next"
 import {
   createWatchlistJob,
+  fetchJobOutputTemplates,
   fetchWatchlistTemplates,
   updateWatchlistJob
 } from "@/services/watchlists"
@@ -353,27 +354,78 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    fetchWatchlistTemplates()
-      .then((result) => {
-        if (cancelled) return
-        const items = Array.isArray(result.items) ? result.items : []
-        setTemplateOptions(
-          items.map((item) => ({
-            label: item.name,
-            value: item.name
-          }))
-        )
-      })
-      .catch((err) => {
-        console.error("Failed to load watchlist templates for job form:", err)
-        if (!cancelled) {
-          setTemplateOptions([])
+    const loadTemplates = async () => {
+      const [outputsResult, legacyResult] = await Promise.allSettled([
+        fetchJobOutputTemplates({ limit: 200, offset: 0 }),
+        fetchWatchlistTemplates()
+      ])
+      if (cancelled) return
+
+      const optionsByName = new Map<string, { label: string; value: string }>()
+
+      if (outputsResult.status === "fulfilled") {
+        for (const item of outputsResult.value.items) {
+          const normalizedName = item.name.trim()
+          if (!normalizedName) continue
+          const formatSuffix = item.format ? ` (${String(item.format).toUpperCase()})` : ""
+          optionsByName.set(normalizedName, {
+            label: `${normalizedName}${formatSuffix} · ${t("watchlists:jobs.form.templateSource.outputs", "Outputs template")}`,
+            value: normalizedName
+          })
         }
-      })
+      }
+
+      if (legacyResult.status === "fulfilled") {
+        const items = Array.isArray(legacyResult.value.items) ? legacyResult.value.items : []
+        for (const item of items) {
+          const normalizedName = item.name.trim()
+          if (!normalizedName || optionsByName.has(normalizedName)) continue
+          optionsByName.set(normalizedName, {
+            label: `${normalizedName} · ${t("watchlists:jobs.form.templateSource.legacy", "Legacy watchlists template")}`,
+            value: normalizedName
+          })
+        }
+      }
+
+      if (outputsResult.status === "rejected" && legacyResult.status === "rejected") {
+        console.error("Failed to load output template options for job form", {
+          outputs: outputsResult.reason,
+          legacy: legacyResult.reason
+        })
+      }
+
+      setTemplateOptions(
+        Array.from(optionsByName.values()).sort((a, b) => a.label.localeCompare(b.label))
+      )
+    }
+
+    void loadTemplates().catch((err) => {
+      console.error("Failed to load output template options for job form:", err)
+      if (!cancelled) {
+        setTemplateOptions([])
+      }
+    })
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, t])
+
+  useEffect(() => {
+    const normalizedName = outputTemplateName?.trim()
+    if (!normalizedName) return
+    setTemplateOptions((previous) => {
+      if (previous.some((option) => option.value === normalizedName)) {
+        return previous
+      }
+      return [
+        ...previous,
+        {
+          label: `${normalizedName} · ${t("watchlists:jobs.form.templateSource.current", "Current selection")}`,
+          value: normalizedName
+        }
+      ]
+    })
+  }, [outputTemplateName, t])
 
   const handleSubmit = async () => {
     try {

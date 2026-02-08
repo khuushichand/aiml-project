@@ -126,8 +126,7 @@ Egress & Outbound Policy (global + Workflows)
 ## Audio Quotas & Workers
 - `AUDIO_JOBS_WORKER_ENABLED`: Start the in-process Audio Jobs worker on app startup (`true|false`, default follows route policy for `audio-jobs`).
 - `AUDIO_JOBS_OWNER_STRICT`: Enable owner-aware acquisition heuristic for fair scheduling (`true|false`).
-- `AUDIO_QUOTA_USE_REDIS`: Store active streams/jobs counters in Redis for multi-instance fairness. Defaults to true when `REDIS_URL` is set.
-- `REDIS_URL`: Redis connection string (e.g., `redis://localhost:6379`).
+- `REDIS_URL`: Redis connection string for Resource Governor when `RG_BACKEND=redis` (e.g., `redis://localhost:6379`).
 
 Audio Chat (non-streaming)
 - `AUDIO_CHAT_MAX_BYTES`: Max input audio size (bytes) for `/api/v1/audio/chat` (default `20MB`). Requests exceeding this return HTTP 413 before STT runs.

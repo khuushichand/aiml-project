@@ -60,6 +60,12 @@ def _http_json(
     payload: dict[str, Any] | None = None,
     timeout: float = 30.0,
 ) -> dict[str, Any]:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise RuntimeError(
+            f"Unsupported URL scheme {parsed.scheme!r}: only http and https are allowed"
+        )
+
     body = None
     if payload is not None:
         json_body = json.dumps(payload)
@@ -122,13 +128,27 @@ def _ensure_custom_command(base_url: str, headers: dict[str, str], args: argpars
     return created.get("id", "<new-command>")
 
 
+_SENSITIVE_KEYS = frozenset({"token", "api_key", "password", "secret", "authorization"})
+
+
+def _redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy of *payload* with sensitive values replaced."""
+    redacted = {}
+    for k, v in payload.items():
+        if k.lower() in _SENSITIVE_KEYS:
+            redacted[k] = "**REDACTED**"
+        else:
+            redacted[k] = v
+    return redacted
+
+
 async def _ws_send_json(ws, payload: dict[str, Any]) -> None:
     """
     Serialize and send a WebSocket JSON message.
-    Prints the exact JSON string before sending.
+    Prints a redacted version of the payload before sending.
     """
     json_body = json.dumps(payload)
-    print(f"WS JSON body: {json_body}")
+    print(f"WS JSON body: {json.dumps(_redact_payload(payload))}")
     await ws.send(json_body)
 
 
