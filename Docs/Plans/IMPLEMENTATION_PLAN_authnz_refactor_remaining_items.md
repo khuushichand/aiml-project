@@ -53,6 +53,7 @@ This active plan tracks unfinished work split from:
 **Progress Notes**:
 - 2026-02-08: Removed residual backend detection-by-`hasattr(conn, "fetchval")` in `app/core/AuthNZ/repos/quotas_repo.py`; backend path now keys off `DatabasePool` backend state. Added unit coverage in `tests/AuthNZ/unit/test_authnz_quotas_repo_backend_selection.py` to lock SQLite/Postgres path selection behavior.
 - 2026-02-08: Removed remaining `hasattr(conn, "fetchval")` backend branching in `app/core/AuthNZ/repos/api_keys_repo.py` and `app/core/AuthNZ/repos/sessions_repo.py`; these paths now also key off `DatabasePool` backend state. Verified with focused AuthNZ repo tests under the venv (`10 passed, 5 skipped` across SQLite + unit repo suites).
+- 2026-02-08: Embeddings policy enforcement now resolves admin bypass claim-first from `request.state.auth` principal (role/is_admin) with compatibility fallback to `User.is_admin`. Updated `/api/v1/embeddings` and `/api/v1/embeddings/batch` policy checks and metrics config reporting to use request-aware evaluation. Added unit coverage in `tests/Embeddings/test_embeddings_policy_claim_first.py`.
 
 ## Stage 5: RG v1.1 Legacy Limiter Retirement
 **Goal**: Safely retire remaining legacy limiters/shims once RG parity is verified, leaving ResourceGovernor as the sole enforcer.

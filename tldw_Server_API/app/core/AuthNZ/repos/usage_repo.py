@@ -8,6 +8,49 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 
+_SQLITE_CORRUPTION_SIGNATURES = (
+    "database disk image is malformed",
+    "malformed database schema",
+    "file is not a database",
+)
+_SQLITE_CORRUPTION_WARNING_KEYS: set[str] = set()
+
+
+def _looks_like_sqlite_corruption(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    if not text:
+        return False
+    return any(signature in text for signature in _SQLITE_CORRUPTION_SIGNATURES)
+
+
+def _sqlite_pool_label(db_pool: DatabasePool) -> str:
+    raw = getattr(db_pool, "_sqlite_fs_path", None) or getattr(db_pool, "db_path", None) or "unknown"
+    try:
+        text = str(raw).strip()
+        return text or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _log_sqlite_corruption_skip_once(*, operation: str, db_pool: DatabasePool, exc: Exception) -> None:
+    db_label = _sqlite_pool_label(db_pool)
+    key = f"{operation}:{db_label}"
+    if key in _SQLITE_CORRUPTION_WARNING_KEYS:
+        logger.debug(
+            "AuthnzUsageRepo.{} skipping due to previously detected sqlite corruption ({}): {}",
+            operation,
+            db_label,
+            exc,
+        )
+        return
+    _SQLITE_CORRUPTION_WARNING_KEYS.add(key)
+    logger.warning(
+        "AuthnzUsageRepo.{} detected sqlite corruption at {}; skipping aggregate until DB is repaired: {}",
+        operation,
+        db_label,
+        exc,
+    )
+
 
 @dataclass
 class AuthnzUsageRepo:
@@ -540,6 +583,13 @@ class AuthnzUsageRepo:
                         day_str,
                     )
         except Exception as exc:  # pragma: no cover - surfaced via callers
+            if _looks_like_sqlite_corruption(exc):
+                _log_sqlite_corruption_skip_once(
+                    operation="aggregate_usage_daily_for_day",
+                    db_pool=self.db_pool,
+                    exc=exc,
+                )
+                return
             logger.error(f"AuthnzUsageRepo.aggregate_usage_daily_for_day failed: {exc}")
             raise
 
@@ -616,6 +666,13 @@ class AuthnzUsageRepo:
                     day_str,
                 )
         except Exception as exc:  # pragma: no cover - surfaced via callers
+            if _looks_like_sqlite_corruption(exc):
+                _log_sqlite_corruption_skip_once(
+                    operation="aggregate_llm_usage_daily_for_day",
+                    db_pool=self.db_pool,
+                    exc=exc,
+                )
+                return
             logger.error(f"AuthnzUsageRepo.aggregate_llm_usage_daily_for_day failed: {exc}")
             raise
 

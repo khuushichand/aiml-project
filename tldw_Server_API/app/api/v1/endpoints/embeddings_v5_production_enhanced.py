@@ -111,7 +111,7 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
-from tldw_Server_API.app.core.testing import env_flag_enabled, is_truthy
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode, is_truthy
 from tldw_Server_API.app.core.Usage.usage_tracker import (
     backfill_legacy_tokens_to_ledger,
     log_llm_usage,
@@ -1443,7 +1443,37 @@ def decide_and_apply_l2(
             arr = np.array(embedding)
         return arr, False
 
-def _should_enforce_policy(user: User | None = None) -> bool:
+def _resolve_auth_principal_from_request(request: Request | None) -> AuthPrincipal | None:
+    """Best-effort extraction of AuthPrincipal from request state."""
+    if request is None:
+        return None
+    try:
+        ctx = getattr(request.state, "auth", None)
+        if isinstance(ctx, AuthContext):
+            return ctx.principal
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+        return None
+    return None
+
+
+def _is_policy_bypass_admin(principal: AuthPrincipal | None, user: User | None) -> bool:
+    """
+    Determine whether policy checks should allow admin bypass.
+
+    Claim-first behavior:
+    - Prefer principal claims (`is_admin` or role `admin`) when principal exists.
+    - Fall back to legacy user.is_admin for compatibility when principal is absent.
+    """
+    if principal is not None:
+        try:
+            roles = {str(role).strip().lower() for role in (principal.roles or [])}
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+            roles = set()
+        return bool(principal.is_admin or ("admin" in roles))
+    return bool(user and getattr(user, "is_admin", False))
+
+
+def _should_enforce_policy(user: User | None = None, principal: AuthPrincipal | None = None) -> bool:
     # 1) Explicit env override takes highest precedence
     env_val = os.getenv("EMBEDDINGS_ENFORCE_POLICY")
     if env_val is not None:
@@ -1461,8 +1491,7 @@ def _should_enforce_policy(user: User | None = None) -> bool:
     # 4) Admin bypass unless strict enforcement requested
     try:
         if (
-            user
-            and getattr(user, "is_admin", False)
+            _is_policy_bypass_admin(principal=principal, user=user)
             and not is_truthy(os.getenv("EMBEDDINGS_ENFORCE_POLICY_STRICT", "false"))
         ):
             return False
@@ -1470,6 +1499,23 @@ def _should_enforce_policy(user: User | None = None) -> bool:
         pass
     # Default: do not enforce
     return False
+
+
+def _should_enforce_policy_for_request(
+    request: Request | None,
+    user: User | None = None,
+) -> bool:
+    """
+    Request-aware policy enforcement with claim-first principal handling.
+
+    Includes a compatibility fallback for tests that monkeypatch
+    `_should_enforce_policy` with a single-argument callable.
+    """
+    principal = _resolve_auth_principal_from_request(request)
+    try:
+        return _should_enforce_policy(user, principal)
+    except TypeError:
+        return _should_enforce_policy(user)
 
 def resolve_fallback_chain(primary_provider: str) -> list[str]:
     # Configurable chain; else default
@@ -2219,7 +2265,7 @@ async def create_embedding_endpoint(
 
         # Provider/model allowlist enforcement (after input validation)
         # Enforce allowlists based on config/env; admin may bypass unless STRICT is set
-        enforce_policy = _should_enforce_policy(current_user)
+        enforce_policy = _should_enforce_policy_for_request(request, current_user)
         allowed_providers = _get_allowed_providers()
         if enforce_policy and allowed_providers is not None and provider.lower() not in allowed_providers:
             embedding_policy_denied_total.labels(provider=provider, model=model, policy_type="provider").inc()
@@ -2705,7 +2751,7 @@ async def create_embeddings_batch_endpoint(
 
     _validate_dimensions_request(provider, model, payload.dimensions)
 
-    enforce_policy = _should_enforce_policy(current_user)
+    enforce_policy = _should_enforce_policy_for_request(request, current_user)
     allowed_providers = _get_allowed_providers()
     if enforce_policy and allowed_providers is not None and provider.lower() not in allowed_providers:
         embedding_policy_denied_total.labels(provider=provider, model=model, policy_type="provider").inc()
@@ -3344,6 +3390,7 @@ async def reset_circuit_breaker(
     dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def get_metrics(
+    request: Request,
     current_user: User = Depends(get_request_user),
 ):
     """Get detailed service metrics - requires admin privileges"""
@@ -3401,7 +3448,7 @@ async def get_metrics(
             "token_inputs": _details(embedding_token_inputs_total),
         },
         "config": {
-            "enforce_policy": _should_enforce_policy(current_user),
+            "enforce_policy": _should_enforce_policy_for_request(request, current_user),
             "dimension_policy": _dimension_policy(),
             "cache": {
                 "ttl_seconds": CACHE_TTL_SECONDS,

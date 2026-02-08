@@ -109,7 +109,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Rate-limit headers deterministic under non-test mode with configured backend.
   - tldw_Server_API/tests/Watchlists/test_rate_limit_headers_strict.py
 
-**Status**: Complete (dedup/seen inspect-reset API + DB support shipped; scheduler controls and broader scale validation tests added; operational limits boundary tests + admin UI surfacing for dedup/seen completed; verification rerun on 2026-02-08: Stage-5 backend slice `40 passed`, SourceSeenDrawer UI tests `14 passed`)
+**Status**: Complete (dedup/seen inspect-reset API + DB support shipped; scheduler controls and broader scale validation tests added; operational limits boundary tests + admin UI surfacing for dedup/seen completed; verification rerun on 2026-02-08: Stage-5 backend slice `40 passed`, SourceSeenDrawer UI tests `14 passed`; AuthNZ usage aggregation sqlite-corruption logging hardened with one-time warning + skip behavior and dedicated tests)
 
 Stage 5 scale target matrix is tracked in:
 - `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_scale_validation_dedup_ui.md` (all 5 stages complete)
@@ -148,3 +148,5 @@ Checklist (quick)
 - [x] Stage 5: runs/export/details API load validation (`test_watchlists_scale_load_api.py`)
 - [x] Stage 5: operational limits boundary tests (`test_operational_limits.py`)
 - [x] Stage 5: admin UI dedup/seen drawer (`SourceSeenDrawer.tsx` + component tests)
+- [x] Stage 5: AuthNZ usage aggregation sqlite-corruption warning hardening + tests (`test_authnz_usage_repo_corruption_sqlite.py`)
+- [x] Stage 5: strict rate-limit header tests made rerun-safe via isolated temp DB base path (`test_rate_limit_headers_strict.py`)

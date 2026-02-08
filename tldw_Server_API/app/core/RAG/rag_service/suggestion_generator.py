@@ -63,9 +63,10 @@ _GENERIC_TEMPLATES = [
 
 def _extract_topic(query: str) -> str:
     """Extract a rough topic phrase from the query for heuristic fallbacks."""
-    # Remove question words and common filler
+    # Remove question-word phrases like "what is", "how does", "can you tell me about"
     cleaned = re.sub(
-        r"^(what|how|why|when|where|who|which|can|could|should|does|do|is|are|was|were)\s+",
+        r"^(what|how|why|when|where|who|which|can|could|should|does|do)"
+        r"(\s+(is|are|was|were|does|do|did|can|could|would|should|you|me|we|about|the))* *",
         "",
         query.lower().strip().rstrip("?"),
         flags=re.IGNORECASE,

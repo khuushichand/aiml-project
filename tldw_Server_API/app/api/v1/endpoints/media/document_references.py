@@ -513,9 +513,29 @@ def _split_references(refs_text: str) -> list[str]:
                 modeled_refs.append(current_ref.strip())
             current_ref = ""
             continue
-        # Treat markdown-like fragment lines as continuation-only noise when a
-        # reference is already being built; keep them if they appear standalone.
+        markdown_label = _extract_markdown_link_text(line)
+        # Treat markdown-like fragment lines as continuation when the current
+        # line is likely an author prefix that has not reached a year yet.
+        # Otherwise skip them to avoid fragment-only entries becoming new refs.
         if _looks_like_fragment_line(line) and current_ref:
+            if (
+                not re.search(YEAR_PATTERN, current_ref)
+                and current_ref.rstrip().endswith(",")
+                and _is_probable_authorish_start(current_ref)
+            ):
+                current_ref = f"{current_ref} {line}".strip()
+            continue
+        # Some PDF extractions split one author list across two lines where the
+        # second line is a markdown-link entry containing the year.
+        if (
+            current_ref
+            and markdown_label
+            and not re.search(YEAR_PATTERN, current_ref)
+            and current_ref.count(",") >= 3
+            and _is_probable_authorish_start(current_ref)
+            and _is_probable_authorish_start(markdown_label)
+        ):
+            current_ref = f"{current_ref} {line}".strip()
             continue
         line_has_explicit_label = _has_explicit_reference_label(line)
         if (

@@ -1791,46 +1791,87 @@ async def unified_search_stream_endpoint(
 
             docs = []
 
-            # Research progress streaming callback for NDJSON events
-            _research_events: list[dict] = []
+            def _normalize_research_event(event: Any) -> dict[str, Any]:
+                event_type_raw = getattr(event, "event_type", "research_update")
+                event_type = str(event_type_raw) if event_type_raw is not None else "research_update"
+                if not event_type.startswith("research_"):
+                    event_type = f"research_{event_type}"
+                data = getattr(event, "data", {})
+                if not isinstance(data, dict):
+                    data = {"value": data}
+                return {"type": event_type, "data": data}
 
-            async def _stream_research_progress(event):
-                """Buffer research progress events for streaming."""
-                _research_events.append({
-                    "type": f"research_{event.event_type}" if not event.event_type.startswith("research_") else event.event_type,
-                    "data": event.data,
-                })
+            async def _run_streaming_retrieval(
+                *,
+                progress_queue: Optional[asyncio.Queue[Any]] = None,
+                done_marker: Any = None,
+            ) -> None:
+                nonlocal docs
+                try:
+                    if db_paths:
+                        _sync_retriever_overrides_to_pipeline()
+                        kwargs = _build_unified_pipeline_kwargs(
+                            request=request,
+                            db_paths={
+                                "media_db_path": media_db.db_path if media_db else None,
+                                "notes_db_path": chacha_db.db_path if chacha_db else None,
+                                "character_db_path": chacha_db.db_path if chacha_db else None,
+                                "kanban_db_path": kanban_db_path,
+                            },
+                            media_db=media_db,
+                            chacha_db=chacha_db,
+                            current_user=current_user,
+                        )
+                        kwargs["enable_generation"] = False
 
-            try:
-                if db_paths:
-                    _sync_retriever_overrides_to_pipeline()
-                    kwargs = _build_unified_pipeline_kwargs(
-                        request=request,
-                        db_paths={
-                            "media_db_path": media_db.db_path if media_db else None,
-                            "notes_db_path": chacha_db.db_path if chacha_db else None,
-                            "character_db_path": chacha_db.db_path if chacha_db else None,
-                            "kanban_db_path": kanban_db_path,
-                        },
-                        media_db=media_db,
-                        chacha_db=chacha_db,
-                        current_user=current_user,
+                        if (
+                            progress_queue is not None
+                            and bool(getattr(request, "enable_research_progress", False))
+                        ):
+                            async def _stream_research_progress(event: Any) -> None:
+                                await progress_queue.put(_normalize_research_event(event))
+
+                            kwargs["research_progress_callback"] = _stream_research_progress
+                            kwargs["enable_research_progress"] = True
+
+                        retrieval_result = await unified_rag_pipeline(**kwargs)
+                        docs = _normalize_documents_for_generation(
+                            getattr(retrieval_result, "documents", []) or []
+                        )
+                except Exception:  # noqa: BLE001 - streaming prefetch should be best-effort
+                    docs = []
+                finally:
+                    if progress_queue is not None and done_marker is not None:
+                        await progress_queue.put(done_marker)
+
+            if bool(getattr(request, "enable_research_progress", False)) and db_paths:
+                progress_queue: asyncio.Queue[Any] = asyncio.Queue()
+                done_marker = object()
+                retrieval_task = asyncio.create_task(
+                    _run_streaming_retrieval(
+                        progress_queue=progress_queue,
+                        done_marker=done_marker,
                     )
-                    kwargs["enable_generation"] = False
-                    # Inject research progress callback for streaming
-                    if getattr(request, "enable_research_progress", False):
-                        kwargs["research_progress_callback"] = _stream_research_progress
-                        kwargs["enable_research_progress"] = True
-                    retrieval_result = await unified_rag_pipeline(**kwargs)
-                    docs = _normalize_documents_for_generation(
-                        getattr(retrieval_result, "documents", []) or []
-                    )
-            except Exception:  # noqa: BLE001 - streaming prefetch should be best-effort
-                docs = []
-
-            # Emit buffered research progress events
-            for evt in _research_events:
-                yield json.dumps(evt) + "\n"
+                )
+                try:
+                    while True:
+                        queued = await progress_queue.get()
+                        if queued is done_marker:
+                            break
+                        yield json.dumps(queued) + "\n"
+                finally:
+                    if not retrieval_task.done():
+                        retrieval_task.cancel()
+                        try:
+                            await retrieval_task
+                        except asyncio.CancelledError:
+                            pass
+                try:
+                    await retrieval_task
+                except asyncio.CancelledError:
+                    pass
+            else:
+                await _run_streaming_retrieval()
 
             # If strategy=agentic, assemble ephemeral chunk and emit plan + spans first
             if getattr(request, 'strategy', 'standard') == 'agentic':

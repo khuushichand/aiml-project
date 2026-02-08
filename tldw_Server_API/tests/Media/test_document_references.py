@@ -367,6 +367,20 @@ def test_split_references_merges_split_arxiv_e_prints_fragment():
     assert any("Hoekstra H." in r for r in refs)
 
 
+def test_split_references_merges_author_prefix_with_markdown_year_line():
+    refs_text = (
+        "Górski K. M., Hivon E., Banday A. J., Wandelt B. D., Hansen\n"
+        "[F. K., Reinecke M., Bartelmann M., 2005, ApJ, 622, 759]"
+        "(http://dx.doi.org/10.1086/427976)\n\n"
+        "Courtois H. M., Dupuy A., Guinet D., Baulieu G., Ruppin F.,\n"
+        "[Brenas P., 2023, A&A, 670, L15](http://dx.doi.org/10.1051/0004-6361/202245331)\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) == 2
+    assert any("Górski K. M." in r and "2005, ApJ, 622, 759" in r for r in refs)
+    assert any("Courtois H. M." in r and "2023, A&A, 670, L15" in r for r in refs)
+
+
 @pytest.mark.asyncio
 async def test_references_endpoint_enriches_only_requested_reference_index(mock_user, mock_db):
     content = (
