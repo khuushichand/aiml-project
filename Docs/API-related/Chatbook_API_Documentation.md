@@ -745,3 +745,10 @@ Retention and cleanup:
 Export limits:
 - `CHATBOOKS_EVAL_EXPORT_MAX_ROWS` - max rows exported per evaluation run (default `200`).
 - `CHATBOOKS_BINARY_LIMITS_MB` - JSON map of content type to max bundled size in MB (for example, `{"media": 0, "conversations": 10, "generated_docs": 25}`).
+
+Template/import controls:
+- `CHATBOOKS_TEMPLATE_MODE` - default manifest template mode for exports (`pass_through|render_on_export`, default `pass_through`).
+- `CHATBOOKS_TEMPLATE_DEFAULTS_JSON` - optional JSON object merged into template defaults.
+- `CHATBOOKS_TEMPLATE_TIMEZONE` - default timezone used for template rendering (default `UTC`).
+- `CHATBOOKS_TEMPLATE_LOCALE` - optional default locale for template rendering.
+- `CHATBOOKS_IMPORT_DICT_STRICT` - when `true`, Chatbooks import skips embedded dictionaries that contain fatal validation errors and continues best-effort for the rest.

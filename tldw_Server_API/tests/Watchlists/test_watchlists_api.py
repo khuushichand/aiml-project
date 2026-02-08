@@ -25,6 +25,8 @@ def client_with_user(monkeypatch, tmp_path):
     base_dir = Path.cwd() / "Databases" / "test_user_dbs"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    # Keep this suite focused on watchlists API behavior; seeding behavior is covered separately.
+    monkeypatch.setenv("WATCHLISTS_SEED_OUTPUT_TEMPLATES", "false")
 
     mod = import_module("tldw_Server_API.app.main")
     app = getattr(mod, "app")

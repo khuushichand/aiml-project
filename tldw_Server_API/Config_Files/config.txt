@@ -199,8 +199,20 @@ commands_enabled = false
 injection_mode = system
 
 # Per-user, per-command requests per minute (RPM) limit
+# env: CHAT_COMMANDS_RATE_LIMIT_USER
+commands_rate_limit_user = 10
+
+# Global per-command requests per minute (RPM) limit
+# env: CHAT_COMMANDS_RATE_LIMIT_GLOBAL
+commands_rate_limit_global = 100
+
+# Legacy per-user alias retained for compatibility
 # env: CHAT_COMMANDS_RATE_LIMIT
 commands_rate_limit = 10
+
+# Maximum characters injected from a command result
+# env: CHAT_COMMANDS_MAX_CHARS
+commands_max_chars = 300
 
 # Enforce RBAC permissions on commands (env: CHAT_COMMANDS_REQUIRE_PERMISSIONS)
 require_permissions = false

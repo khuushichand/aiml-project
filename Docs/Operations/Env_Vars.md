@@ -198,6 +198,21 @@ Notes:
 - `DATA_TABLES_LLM_MAX_TOKENS`: LLM response token budget for table generation (default `2000`).
 - `DATA_TABLES_LLM_TEMPERATURE`: LLM temperature for table generation (default `0.2`).
 
+## Chat Commands & Weather
+- `CHAT_COMMANDS_ENABLED`: Enable slash-command preprocessing (`true|false`, default `false`).
+- `CHAT_COMMAND_INJECTION_MODE`: Slash-command injection mode (`system|preface|replace`, default `system`).
+- `CHAT_COMMANDS_REQUIRE_PERMISSIONS`: Require per-command RBAC permission checks (`true|false`, default `false`).
+- `CHAT_COMMANDS_RATE_LIMIT_USER`: Per-user, per-command RPM limit (accepts `10` or `10/min`; default `10`).
+- `CHAT_COMMANDS_RATE_LIMIT`: Backward-compatible alias for `CHAT_COMMANDS_RATE_LIMIT_USER`.
+- `CHAT_COMMANDS_RATE_LIMIT_GLOBAL`: Global, per-command RPM limit (accepts `100` or `100/min`; default `100`).
+- `CHAT_COMMANDS_MAX_CHARS`: Max characters injected from a slash-command result (default `300`).
+- `DEFAULT_LOCATION`: Optional fallback location for `/weather` when no argument is supplied.
+- `WEATHER_PROVIDER`: Weather backend (`openweather`, `noop`, `none`, `disabled`; default `openweather`).
+- `OPENWEATHER_API_KEY`: API key for the `openweather` provider.
+- `WEATHER_UNITS`: Unit system for weather summaries (`metric|imperial`, default `metric`).
+- `WEATHER_LANG`: OpenWeather language code for descriptions (default `en`).
+- `WEATHER_TIMEOUT_MS`: OpenWeather HTTP timeout in milliseconds (default `1500`).
+
 ## Chatbooks
 - `CHATBOOKS_JOBS_BACKEND`: Backend is fixed to "core"; this environment variable exists for compatibility and is ignored.
 - `CHATBOOKS_CORE_WORKER_ENABLED`: Enable shared Chatbooks worker when backend=core (default `true`).
@@ -209,6 +224,10 @@ Notes:
 - `CHATBOOKS_CLEANUP_INTERVAL_SEC`: Scheduled cleanup cadence in seconds (set `0` to disable scheduling).
 - `CHATBOOKS_EVAL_EXPORT_MAX_ROWS`: Max rows exported per evaluation run (default `200`).
 - `CHATBOOKS_BINARY_LIMITS_MB`: JSON map of content type to max bundled size in MB (for example, `{"media": 0, "conversations": 10, "generated_docs": 25}`).
+- `CHATBOOKS_TEMPLATE_MODE`: Default Chatbooks template mode (`pass_through|render_on_export`; default `pass_through`).
+- `CHATBOOKS_TEMPLATE_DEFAULTS_JSON`: JSON object merged into Chatbooks template defaults (optional).
+- `CHATBOOKS_TEMPLATE_TIMEZONE`: Default timezone used for Chatbooks template rendering (default `UTC`).
+- `CHATBOOKS_TEMPLATE_LOCALE`: Optional default locale used for Chatbooks template rendering.
 - `CHATBOOKS_IMPORT_DICT_STRICT`: When true, skip dictionaries with fatal validation errors instead of importing with warnings.
 
 ## Audio Jobs

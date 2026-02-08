@@ -753,6 +753,20 @@ class ChatCompletionRequest(BaseModel):
     # --- Optional Character Chat Parameters ---
     character_id: Optional[str] = Field(None, description="Optional ID of the character to use for context.")
     conversation_id: Optional[str] = Field(None, description="Optional ID of the conversation to use for context.")
+    persona_exemplar_budget_tokens: Optional[int] = Field(
+        None,
+        ge=1,
+        le=20_000,
+        description="[Extension] Optional override for persona exemplar selection token budget.",
+    )
+    persona_exemplar_strategy: Optional[Literal["off", "default", "hybrid", "embeddings"]] = Field(
+        None,
+        description="[Extension] Persona exemplar selection strategy. 'off' disables selection for this request.",
+    )
+    persona_debug: Optional[bool] = Field(
+        False,
+        description="[Extension] Include persona selection debug metadata in response payload when available.",
+    )
     save_to_db: Optional[bool] = Field(
         None,
         description=(

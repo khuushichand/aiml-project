@@ -2981,7 +2981,7 @@ class ChatbookService:
                     # Extract citations from RAG context if available
                     try:
                         rag_context = self.db.get_message_rag_context(msg['id'])
-                        if rag_context:
+                        if isinstance(rag_context, dict) and rag_context:
                             # Include retrieved documents as citations
                             retrieved_docs = rag_context.get('retrieved_documents', [])
                             for doc in retrieved_docs:
@@ -3806,7 +3806,18 @@ class ChatbookService:
                     dict_data['name'] = dict_name
 
                 # Check for existing dictionary
-                existing = dict_service.get_dictionary(name=dict_name)
+                existing = None
+                get_dictionary = getattr(dict_service, "get_dictionary", None)
+                if callable(get_dictionary):
+                    try:
+                        existing = get_dictionary(name=dict_name)
+                    except TypeError:
+                        # Compatibility with legacy service/test doubles that only accept positional args.
+                        existing = get_dictionary(dict_name)
+                if existing is None:
+                    get_dictionary_by_name = getattr(dict_service, "get_dictionary_by_name", None)
+                    if callable(get_dictionary_by_name):
+                        existing = get_dictionary_by_name(dict_name)
                 if existing and conflict_resolution == ConflictResolution.SKIP:
                     status.skipped_items += 1
                     continue

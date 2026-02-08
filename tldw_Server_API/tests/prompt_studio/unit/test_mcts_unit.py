@@ -110,25 +110,34 @@ async def test_node_dedup_by_score_bins(monkeypatch, temp_ps_db):
 @pytest.mark.asyncio
 async def test_token_budget_cutoff(monkeypatch, temp_ps_db):
     prompt_id, test_ids = _seed_prompt_and_tests(temp_ps_db)
-    mcts = MCTSOptimizer(temp_ps_db, TestRunner(temp_ps_db))
+    mcts_low = MCTSOptimizer(temp_ps_db, TestRunner(temp_ps_db))
+    mcts_high = MCTSOptimizer(temp_ps_db, TestRunner(temp_ps_db))
 
     # Enable token callback in scorer by configuring a scorer_model and monkeypatching executor
-    mcts.scorer.set_model("gpt-3.5-turbo")
     class _Exec:
         async def _call_llm(self, **kwargs):
             return {"content": "5", "tokens": 50}
-    mcts.scorer.set_executor(_Exec())
+
+    mcts_low.scorer.set_model("gpt-3.5-turbo")
+    mcts_low.scorer.set_executor(_Exec())
+    mcts_high.scorer.set_model("gpt-3.5-turbo")
+    mcts_high.scorer.set_executor(_Exec())
 
     # Decomposer: single segment to allow one expansion
-    monkeypatch.setattr(mcts.decomposer, "decompose_text", lambda _: ["seg"])  # type: ignore[attr-defined]
+    monkeypatch.setattr(mcts_low.decomposer, "decompose_text", lambda _: ["seg"])  # type: ignore[attr-defined]
+    monkeypatch.setattr(mcts_high.decomposer, "decompose_text", lambda _: ["seg"])  # type: ignore[attr-defined]
     # _propose_candidates: one child
-    monkeypatch.setattr(mcts, "_propose_candidates", lambda sys, seg, k: [sys + " X"])  # type: ignore[misc]
+    monkeypatch.setattr(mcts_low, "_propose_candidates", lambda sys, seg, k: [sys + " X"])  # type: ignore[misc]
+    monkeypatch.setattr(mcts_high, "_propose_candidates", lambda sys, seg, k: [sys + " X"])  # type: ignore[misc]
     # Evaluator: constant score
     async def fake_eval(*args, **kwargs):
         return {"success": True, "scores": {"aggregate_score": 0.1}}
     monkeypatch.setattr(TestRunner, "run_single_test", fake_eval)
 
-    res = await mcts.optimize(
+    low_budget = 40
+    high_budget = 1_000
+
+    res_low = await mcts_low.optimize(
         initial_prompt_id=prompt_id,
         test_case_ids=test_ids,
         model_config={"model": "dummy"},
@@ -136,12 +145,27 @@ async def test_token_budget_cutoff(monkeypatch, temp_ps_db):
         target_metric=MetricType.ACCURACY,
         strategy_params={
             "mcts_simulations": 50,
-            "token_budget": 40,  # smaller than fake tokens per scorer call
+            "token_budget": low_budget,  # smaller than fake tokens per scorer call
             "mcts_max_depth": 2,
         },
     )
-    # Should stop early due to token budget before exhausting all sims
-    assert res["iterations"] < 50
+    res_high = await mcts_high.optimize(
+        initial_prompt_id=prompt_id,
+        test_case_ids=test_ids,
+        model_config={"model": "dummy"},
+        max_iterations=50,
+        target_metric=MetricType.ACCURACY,
+        strategy_params={
+            "mcts_simulations": 50,
+            "token_budget": high_budget,
+            "mcts_max_depth": 2,
+        },
+    )
+    # Budget materially affects loop length.
+    assert res_low["iterations"] < res_high["iterations"]
+    assert res_low["iterations"] < 50
+    assert res_low["final_metrics"]["applied_params"]["token_budget"] == low_budget
+    assert res_high["final_metrics"]["applied_params"]["token_budget"] == high_budget
 
 
 @pytest.mark.asyncio
@@ -167,3 +191,97 @@ async def test_early_stop_no_improve(monkeypatch, temp_ps_db):
     )
     # Expect iterations equal to early_stop_no_improve before break
     assert res["iterations"] == 2
+
+
+@pytest.mark.asyncio
+async def test_scorer_model_parameter_applies_to_runtime(monkeypatch, temp_ps_db):
+    prompt_id, test_ids = _seed_prompt_and_tests(temp_ps_db)
+    mcts = MCTSOptimizer(temp_ps_db, TestRunner(temp_ps_db))
+    seen: dict[str, str] = {}
+
+    original_set_model = mcts.scorer.set_model
+
+    def capture_set_model(model_name: str):
+        seen["model"] = str(model_name)
+        return original_set_model(model_name)
+
+    monkeypatch.setattr(mcts.scorer, "set_model", capture_set_model, raising=True)
+    monkeypatch.setattr(mcts.decomposer, "decompose_text", lambda _: ["seg"])  # type: ignore[attr-defined]
+    monkeypatch.setattr(mcts, "_propose_candidates", lambda sys, seg, k: [sys + " X"])  # type: ignore[misc]
+
+    async def fake_eval_prompt(self, prompt_id: int, test_case_ids, model_config, target_metric):
+        return 0.4
+
+    monkeypatch.setattr(MCTSOptimizer, "_evaluate_prompt", fake_eval_prompt, raising=True)
+
+    res = await mcts.optimize(
+        initial_prompt_id=prompt_id,
+        test_case_ids=test_ids,
+        model_config={"model": "dummy"},
+        max_iterations=2,
+        target_metric=MetricType.ACCURACY,
+        strategy_params={
+            "mcts_simulations": 2,
+            "mcts_max_depth": 2,
+            "scorer_model": "gpt-4o-mini",
+            "feedback_enabled": False,
+        },
+    )
+
+    assert seen.get("model") == "gpt-4o-mini"
+    assert res["final_metrics"]["applied_params"]["scorer_model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_feedback_knobs_change_refinement_behavior(monkeypatch, temp_ps_db):
+    prompt_id, test_ids = _seed_prompt_and_tests(temp_ps_db)
+
+    class _FakeRefiner:
+        calls = 0
+
+        def __init__(self, db, test_runner):
+            self.db = db
+            self.test_runner = test_runner
+
+        async def optimize(self, *, prompt_id, test_case_ids, model_config, max_iterations=1, optimization_id=None):
+            _FakeRefiner.calls += 1
+            return {"optimized_prompt_id": int(prompt_id) + 100_000}
+
+    async def fake_eval_prompt(self, prompt_id: int, test_case_ids, model_config, target_metric):
+        return 0.95 if int(prompt_id) >= 100_000 else 0.2
+
+    monkeypatch.setattr(MCTSOptimizer, "_evaluate_prompt", fake_eval_prompt, raising=True)
+
+    async def _run_once(*, feedback_enabled: bool, feedback_max_retries: int):
+        mcts = MCTSOptimizer(temp_ps_db, TestRunner(temp_ps_db))
+        mcts._refiner_cls = _FakeRefiner
+        monkeypatch.setattr(mcts.decomposer, "decompose_text", lambda _: ["seg"])  # type: ignore[attr-defined]
+        monkeypatch.setattr(mcts, "_propose_candidates", lambda sys, seg, k: [sys + " X"])  # type: ignore[misc]
+        _FakeRefiner.calls = 0
+        result = await mcts.optimize(
+            initial_prompt_id=prompt_id,
+            test_case_ids=test_ids,
+            model_config={"model": "dummy"},
+            max_iterations=1,
+            target_metric=MetricType.ACCURACY,
+            strategy_params={
+                "mcts_simulations": 1,
+                "mcts_max_depth": 1,
+                "feedback_enabled": feedback_enabled,
+                "feedback_threshold": 9.0,
+                "feedback_max_retries": feedback_max_retries,
+            },
+        )
+        return result, _FakeRefiner.calls
+
+    disabled_result, disabled_calls = await _run_once(feedback_enabled=False, feedback_max_retries=2)
+    zero_retry_result, zero_retry_calls = await _run_once(feedback_enabled=True, feedback_max_retries=0)
+    enabled_result, enabled_calls = await _run_once(feedback_enabled=True, feedback_max_retries=2)
+
+    assert disabled_calls == 0
+    assert zero_retry_calls == 0
+    assert enabled_calls >= 1
+    assert enabled_result["final_score"] > disabled_result["final_score"]
+    assert enabled_result["final_score"] > zero_retry_result["final_score"]
+    assert enabled_result["final_metrics"]["applied_params"]["feedback_enabled"] is True
+    assert enabled_result["final_metrics"]["applied_params"]["feedback_max_retries"] == 2

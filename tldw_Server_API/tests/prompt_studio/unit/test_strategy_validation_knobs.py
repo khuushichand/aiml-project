@@ -68,6 +68,11 @@ def test_genetic_extra_knobs_ok():
         {"strategy_params": {"mcts_exploration_c": 0.0}},
         {"strategy_params": {"prompt_candidates_per_node": 20}},
         {"strategy_params": {"token_budget": 0}},
+        {"strategy_params": {"min_quality": -0.1}},
+        {"strategy_params": {"min_quality": 1.1}},
+        {"strategy_params": {"feedback_enabled": "definitely"}},
+        {"strategy_params": {"ws_throttle_every": 0}},
+        {"strategy_params": {"trace_top_k": 0}},
     ],
 )
 def test_mcts_knobs_invalid(cfg, monkeypatch):
@@ -85,6 +90,19 @@ def test_mcts_knobs_ok(monkeypatch):
             "mcts_exploration_c": 1.5,
             "prompt_candidates_per_node": 3,
             "token_budget": 1000,
+            "min_quality": 0.25,
+            "feedback_enabled": False,
+            "ws_throttle_every": 2,
+            "trace_top_k": 5,
+            "scorer_model": "gpt-4o-mini",
         }
     }
     pso._validate_strategy_config("mcts", cfg)
+
+
+def test_mcts_rollout_model_explicitly_rejected(monkeypatch):
+    monkeypatch.setenv("PROMPT_STUDIO_ENABLE_MCTS", "true")
+    cfg = {"strategy_params": {"rollout_model": "gpt-4o-mini"}}
+    with pytest.raises(HTTPException) as exc:
+        pso._validate_strategy_config("mcts", cfg)
+    assert "unsupported" in str(exc.value.detail).lower()

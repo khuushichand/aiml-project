@@ -230,4 +230,4 @@ def test_import_dict_render_on_import_with_global_template_flag(service, db, tmp
     assert template_dict is not None
     entries = dict_service.get_entries(int(template_dict["id"]), active_only=False)
     assert len(entries) == 1
-    assert entries[0]["content"] == "Hello Apollo"
+    assert entries[0]["replacement"] == "Hello Apollo"

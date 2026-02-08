@@ -112,6 +112,13 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
     map_sender_to_role,
 )
+from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_embeddings import (
+    score_exemplars_with_embeddings,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_selector import (
+    PersonaExemplarSelectorConfig,
+    select_character_exemplars,
+)
 from tldw_Server_API.app.core.Chat.chat_exceptions import (
     ChatDatabaseError,
     ChatErrorCode,
@@ -362,6 +369,9 @@ _active_request_counts: dict[str, int] = defaultdict(int)
 _active_request_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = WeakKeyDictionary()
 _active_request_guard = threading.Lock()
 
+_PERSONA_EXEMPLAR_DEFAULT_BUDGET = 600
+_PERSONA_EXEMPLAR_MAX_CHARS_PER_EXEMPLAR = 280
+
 
 @dataclass
 class _SystemMessageLockEntry:
@@ -450,6 +460,97 @@ def _schedule_audit_background_task(awaitable: Any, *, task_name: str) -> asynci
 
     task.add_done_callback(_consume)
     return task
+
+
+def _extract_text_from_message_content(content: Any) -> str:
+    """Extract text content from OpenAI-style message payload content."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    text_val = part.get("text")
+                    if isinstance(text_val, str) and text_val.strip():
+                        text_parts.append(text_val.strip())
+                continue
+            part_type = getattr(part, "type", None)
+            if part_type == "text":
+                text_val = getattr(part, "text", None)
+                if isinstance(text_val, str) and text_val.strip():
+                    text_parts.append(text_val.strip())
+        return "\n".join(text_parts).strip()
+    return ""
+
+
+def _extract_latest_user_turn_text(messages: list[Any]) -> str:
+    """Return the most recent user text message from request payload."""
+    for msg in reversed(messages or []):
+        role = getattr(msg, "role", None)
+        if role is None and isinstance(msg, dict):
+            role = msg.get("role")
+        if role != "user":
+            continue
+        content = getattr(msg, "content", None) if not isinstance(msg, dict) else msg.get("content")
+        text = _extract_text_from_message_content(content)
+        if text:
+            return text
+    return ""
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    """Normalize mixed payload list/string values into list[str]."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    normalized = str(value).strip()
+    return [normalized] if normalized else []
+
+
+def _format_persona_exemplar_guidance(
+    selected_exemplars: list[dict[str, Any]],
+    *,
+    max_chars_per_exemplar: int = _PERSONA_EXEMPLAR_MAX_CHARS_PER_EXEMPLAR,
+) -> str:
+    """Build persona exemplar instructions to append to the system layer."""
+    if not selected_exemplars:
+        return ""
+
+    lines = [
+        "[Persona Exemplars]",
+        "Use the following exemplars as style anchors for tone and cadence.",
+        "Do not copy verbatim. Synthesize the style while following policy and system constraints.",
+    ]
+
+    for idx, exemplar in enumerate(selected_exemplars, start=1):
+        raw_text = re.sub(r"\s+", " ", str(exemplar.get("text") or "")).strip()
+        if not raw_text:
+            continue
+        if len(raw_text) > max_chars_per_exemplar:
+            raw_text = f"{raw_text[:max_chars_per_exemplar].rstrip()}..."
+
+        emotion = str(exemplar.get("emotion") or "other").strip() or "other"
+        scenario = str(exemplar.get("scenario") or "other").strip() or "other"
+        rhetorical = ", ".join(_normalize_string_list(exemplar.get("rhetorical"))) or "unspecified"
+        lines.append(
+            f"{idx}. [{scenario} | {emotion} | {rhetorical}] {raw_text}"
+        )
+
+    return "\n".join(lines).strip()
+
+
+def _resolve_persona_strategy(raw_strategy: str | None) -> str:
+    """Normalize persona exemplar strategy from request."""
+    normalized = (raw_strategy or "default").strip().lower()
+    allowed = {"off", "default", "hybrid", "embeddings"}
+    if normalized not in allowed:
+        return "default"
+    return normalized
 
 
 async def _increment_active_request(user_id: str) -> int:
@@ -2045,6 +2146,8 @@ async def create_chat_completion(
 
         character_card_for_context: dict[str, Any] | None = None
         final_conversation_id: str | None = request_data.conversation_id
+        persona_debug_requested = bool(getattr(request_data, "persona_debug", False))
+        persona_debug_meta: dict[str, Any] | None = None
 
         try:
             # In TEST_MODE or when explicitly enabled via config/env, allow
@@ -2141,7 +2244,14 @@ async def create_chat_completion(
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
             # --- Character/Conversation Context, History, and Current Turn ---
-            character_card_for_context, _, final_conversation_id, conversation_created_this_turn, llm_payload_messages, should_persist = await build_context_and_messages(
+            (
+                character_card_for_context,
+                character_db_id_for_context,
+                final_conversation_id,
+                conversation_created_this_turn,
+                llm_payload_messages,
+                should_persist,
+            ) = await build_context_and_messages(
                 chat_db=chat_db,
                 request_data=request_data,
                 loop=current_loop,
@@ -2157,6 +2267,91 @@ async def create_chat_completion(
                 character_card=character_card_for_context or {},
                 llm_payload_messages=llm_payload_messages,
             )
+
+            # Persona exemplar augmentation (character chat path)
+            persona_strategy = _resolve_persona_strategy(
+                getattr(request_data, "persona_exemplar_strategy", None)
+            )
+            if persona_debug_requested:
+                persona_debug_meta = {
+                    "debug_id": uuid.uuid4().hex,
+                    "enabled": True,
+                    "strategy": persona_strategy,
+                    "selection": {
+                        "selected_count": 0,
+                        "selected_exemplar_ids": [],
+                        "budget_tokens_used": 0,
+                        "coverage": {
+                            "openers": 0,
+                            "emphasis": 0,
+                            "enders": 0,
+                            "catchphrases_used": 0,
+                        },
+                    },
+                    "applied": False,
+                    "reason": "not_run",
+                }
+
+            if persona_strategy != "off" and character_db_id_for_context is not None:
+                user_turn_text = _extract_latest_user_turn_text(getattr(request_data, "messages", []))
+                if user_turn_text:
+                    budget_override = getattr(request_data, "persona_exemplar_budget_tokens", None)
+                    budget_tokens = int(budget_override) if budget_override is not None else _PERSONA_EXEMPLAR_DEFAULT_BUDGET
+                    selector_config = PersonaExemplarSelectorConfig(
+                        budget_tokens=max(1, budget_tokens),
+                        max_exemplar_tokens=120,
+                        mmr_lambda=0.7,
+                    )
+                    embedding_callback = None
+                    if persona_strategy in {"hybrid", "embeddings"}:
+
+                        def _embedding_callback(turn_text: str, candidates: list[dict[str, Any]]) -> dict[str, float]:
+                            return score_exemplars_with_embeddings(turn_text, candidates)
+
+                        embedding_callback = _embedding_callback
+
+                    selected_result = select_character_exemplars(
+                        db=chat_db,
+                        character_id=character_db_id_for_context,
+                        user_turn=user_turn_text,
+                        config=selector_config,
+                        embedding_score_fn=embedding_callback,
+                    )
+                    persona_guidance_block = _format_persona_exemplar_guidance(selected_result.selected)
+                    if persona_guidance_block:
+                        if final_system_message and final_system_message.strip():
+                            final_system_message = f"{final_system_message.rstrip()}\n\n{persona_guidance_block}"
+                        else:
+                            final_system_message = persona_guidance_block
+
+                    if persona_debug_meta is not None:
+                        persona_debug_meta["applied"] = bool(persona_guidance_block)
+                        persona_debug_meta["reason"] = "selected" if persona_guidance_block else "no_exemplars_selected"
+                        persona_debug_meta["selection"] = {
+                            "selected_count": len(selected_result.selected),
+                            "selected_exemplar_ids": [
+                                str(item.get("id")) for item in selected_result.selected if item.get("id")
+                            ],
+                            "budget_tokens_used": selected_result.budget_tokens_used,
+                            "coverage": selected_result.coverage,
+                        }
+                        persona_debug_meta["budget_tokens"] = selector_config.budget_tokens
+                elif persona_debug_meta is not None:
+                    persona_debug_meta["reason"] = "no_user_turn_text"
+            elif persona_debug_meta is not None:
+                if persona_strategy == "off":
+                    persona_debug_meta["reason"] = "disabled_by_strategy"
+                elif character_db_id_for_context is None:
+                    persona_debug_meta["reason"] = "character_context_unavailable"
+
+            if persona_debug_meta is not None and "budget_tokens" not in persona_debug_meta:
+                budget_override = getattr(request_data, "persona_exemplar_budget_tokens", None)
+                persona_debug_meta["budget_tokens"] = (
+                    int(budget_override)
+                    if budget_override is not None
+                    else _PERSONA_EXEMPLAR_DEFAULT_BUDGET
+                )
+
             if user_base_dir is not None and current_user and getattr(current_user, "id", None) is not None:
                 final_system_message = build_system_message_with_skills(
                     final_system_message,
@@ -2524,7 +2719,7 @@ async def create_chat_completion(
                     return base
 
             if request_data.stream:
-                return await execute_streaming_call(
+                stream_response = await execute_streaming_call(
                     current_loop=current_loop,
                     cleaned_args=cleaned_args,
                     selected_provider=selected_provider,
@@ -2560,6 +2755,12 @@ async def create_chat_completion(
                     ),
                     self_monitoring_service=_self_mon_service,
                 )
+                if persona_debug_requested and persona_debug_meta and persona_debug_meta.get("debug_id"):
+                    try:
+                        stream_response.headers["X-TLDW-Persona-Debug-ID"] = str(persona_debug_meta["debug_id"])
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                        pass
+                return stream_response
 
             else: # Non-streaming
                 encoded_payload = await execute_non_stream_call(
@@ -2590,6 +2791,16 @@ async def create_chat_completion(
                     on_success=_touch_byok,
                     self_monitoring_service=_self_mon_service,
                 )
+                if (
+                    persona_debug_requested
+                    and persona_debug_meta is not None
+                    and isinstance(encoded_payload, dict)
+                ):
+                    meta_payload = encoded_payload.get("meta")
+                    if not isinstance(meta_payload, dict):
+                        meta_payload = {}
+                        encoded_payload["meta"] = meta_payload
+                    meta_payload["persona"] = persona_debug_meta
                 # Track response size and return
                 if isinstance(encoded_payload, dict):
                     response_size = len(json.dumps(encoded_payload))
