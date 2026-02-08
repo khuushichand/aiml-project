@@ -292,6 +292,20 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
       ? "panel-elevated relative"
       : "panel-card mb-2 relative"
 
+  const showApplyActions = settings.isDirty
+
+  const handleApplyAndSearch = React.useCallback(() => {
+    if (activeTab === "file-search") {
+      void fileSearch.runSearch({ applyFirst: true })
+      return
+    }
+
+    void qaSearch.runQASearch({ applyFirst: true })
+    if (activeTab !== "qa-search") {
+      handleTabChange("qa-search")
+    }
+  }, [activeTab, fileSearch.runSearch, handleTabChange, qaSearch.runQASearch])
+
   return (
     <div className={wrapperClassName}>
       <div className={panelClassName}>
@@ -418,29 +432,24 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
           />
         )}
 
-        {/* Apply actions (visible across tabs) */}
-        <div className="flex items-center justify-end gap-2 px-3 py-3 border-t border-border bg-surface">
-          <button
-            onClick={settings.applySettings}
-            disabled={!settings.isDirty || activeTab === "file-search"}
-            className="px-3 py-1.5 text-sm text-text bg-surface2 rounded hover:bg-surface3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {t("sidepanel:rag.apply", "Apply")}
-          </button>
-          <button
-            onClick={() => {
-              if (activeTab === "file-search") {
-                fileSearch.runSearch({ applyFirst: true })
-              } else {
-                qaSearch.runQASearch({ applyFirst: true })
-                handleTabChange("qa-search")
-              }
-            }}
-            className="px-3 py-1.5 text-sm text-white bg-accent rounded hover:bg-accent/90 transition-colors"
-          >
-            {t("sidepanel:rag.applyAndSearch", "Apply & Search")}
-          </button>
-        </div>
+        {/* Apply actions (shown only while staged settings are dirty) */}
+        {showApplyActions && (
+          <div className="flex items-center justify-end gap-2 px-3 py-3 border-t border-border bg-surface">
+            <button
+              onClick={settings.applySettings}
+              disabled={activeTab === "file-search"}
+              className="px-3 py-1.5 text-sm text-text bg-surface2 rounded hover:bg-surface3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {t("sidepanel:rag.apply", "Apply")}
+            </button>
+            <button
+              onClick={handleApplyAndSearch}
+              className="px-3 py-1.5 text-sm text-white bg-accent rounded hover:bg-accent/90 transition-colors"
+            >
+              {t("sidepanel:rag.applyAndSearch", "Apply & Search")}
+            </button>
+          </div>
+        )}
 
         {/* Preview Modal */}
         <Modal

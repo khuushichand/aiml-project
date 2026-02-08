@@ -41,7 +41,7 @@
 **Tests**:
 - Locale key presence tests for new keys.
 - UI tests for footer visibility/enabled/disabled matrix by tab and dirty state.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Test Suite Restructure and Regression Coverage
 **Goal**: Implement the planned hook test split and close regression gaps in tab routing and compatibility behavior.
@@ -53,7 +53,7 @@
 - `useFileSearch.test.ts` (media filters, attach state tracking, search payload).
 - `useQASearch.test.ts` (request building, normalization, answer/chunk actions).
 - `KnowledgePanel`/`KnowledgeTabs` tests for backward compatibility + keyboard switching.
-**Status**: Not Started
+**Status**: Complete
 
 ## Execution Notes
 **Order**:

@@ -64,6 +64,34 @@ describe("useQASearch", () => {
     return { ...hook, applySettings, onInsert, onPin }
   }
 
+  it("builds RAG request payload and applies settings when requested", async () => {
+    vi.mocked(buildRagSearchRequest).mockReturnValue({
+      query: "built query",
+      options: { strategy: "agentic", rerankTopK: 15 },
+      timeoutMs: 4500
+    })
+    vi.mocked(tldwClient.ragSearch).mockResolvedValue({})
+
+    const { result, applySettings } = createHook("user supplied query")
+
+    await act(async () => {
+      await result.current.runQASearch({ applyFirst: true })
+    })
+
+    expect(applySettings).toHaveBeenCalledTimes(1)
+    expect(buildRagSearchRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "user supplied query" })
+    )
+    expect(tldwClient.ragSearch).toHaveBeenCalledWith(
+      "built query",
+      expect.objectContaining({
+        strategy: "agentic",
+        rerankTopK: 15,
+        timeoutMs: 4500
+      })
+    )
+  })
+
   it("normalizes responses that return documents in `results`", async () => {
     vi.mocked(tldwClient.ragSearch).mockResolvedValue({
       query: "normalized query",
@@ -211,5 +239,75 @@ describe("useQASearch", () => {
     expect(result.current.response).toBeNull()
     expect(result.current.timedOut).toBe(false)
     expect(result.current.loading).toBe(false)
+  })
+
+  it("supports answer and chunk actions (copy/insert/pin)", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText }
+    })
+
+    const doc = {
+      id: "doc-9",
+      content: "Chunk body",
+      score: 0.88,
+      media_id: 77,
+      metadata: {
+        title: "Doc title",
+        source: "knowledge base"
+      }
+    }
+
+    vi.mocked(tldwClient.ragSearch).mockResolvedValue({
+      generated_answer: "Answer text",
+      documents: [doc]
+    })
+
+    const { result, onInsert, onPin } = createHook("question")
+
+    await act(async () => {
+      await result.current.runQASearch()
+    })
+
+    await act(async () => {
+      await result.current.copyAnswer()
+    })
+    expect(writeText).toHaveBeenCalledWith("Answer text")
+
+    act(() => {
+      result.current.insertAnswer()
+    })
+    expect(onInsert).toHaveBeenCalledWith("Answer text")
+
+    act(() => {
+      result.current.insertChunk(doc)
+    })
+    expect(onInsert).toHaveBeenCalledWith(
+      expect.stringContaining("**Doc title**")
+    )
+    expect(onInsert).toHaveBeenCalledWith(expect.stringContaining("Chunk body"))
+
+    await act(async () => {
+      await result.current.copyChunk(doc, "text")
+    })
+    expect(writeText).toHaveBeenLastCalledWith(
+      expect.stringContaining("Chunk body")
+    )
+
+    act(() => {
+      result.current.pinChunk(doc)
+    })
+    expect(onPin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Chunk body",
+        metadata: expect.objectContaining({
+          title: "Doc title",
+          media_id: 77,
+          id: "doc-9"
+        }),
+        score: 0.88
+      })
+    )
   })
 })
