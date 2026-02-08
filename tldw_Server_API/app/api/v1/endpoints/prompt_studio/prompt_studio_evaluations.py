@@ -35,23 +35,14 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
-from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError, PromptStudioDatabase
-from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
-    ensure_app_config,
-    normalize_provider,
-    resolve_provider_api_key_from_config,
-    resolve_provider_model,
-)
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
 from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter(prefix="/api/v1/prompt-studio", tags=["prompt-studio"])
-import contextlib
 
 from tldw_Server_API.app.core.Logging.log_context import (
     ensure_request_id,
@@ -292,6 +283,7 @@ async def create_evaluation(
                     request_id=req_id,
                     traceparent=tp,
                 )
+                refreshed = db.get_evaluation(eval_id) or {}
                 return EvaluationResponse(
                     id=eval_id,
                     uuid=eval_uuid,
@@ -299,8 +291,9 @@ async def create_evaluation(
                     prompt_id=evaluation.prompt_id,
                     name=evaluation.name or "Evaluation",
                     description=evaluation.description or "",
-                    status="completed",
+                    status=refreshed.get("status", "completed"),
                     created_at=datetime.now().isoformat(),
+                    metrics=refreshed.get("aggregate_metrics"),
                 )
             else:
                 # Schedule via FastAPI BackgroundTasks for normal operation.
@@ -702,256 +695,102 @@ async def run_evaluation_async(
                 "PS evaluation.async.start evaluation_id={}",
                 evaluation_id,
             )
-        # Load the evaluation record
-        cursor.execute(
-            """
-            SELECT id, project_id, prompt_id, test_case_ids, model_configs
-            FROM prompt_studio_evaluations
-            WHERE id = ?
-            """,
-            (evaluation_id,),
-        )
-        row = cursor.fetchone()
-        if not row:
-            raise RuntimeError("Evaluation not found")
 
-        # Move to running
-        cursor.execute(
-            """
-            UPDATE prompt_studio_evaluations
-            SET status = 'running', started_at = ?
-            WHERE id = ?
-            """,
-            (datetime.now().isoformat(), evaluation_id),
-        )
-        conn.commit()
-
-        _id, project_id, prompt_id, tc_ids_json, model_cfg_json = row
-        try:
-            test_case_ids = _json.loads(tc_ids_json) if tc_ids_json else []
-        except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
-            test_case_ids = []
-        try:
-            cfg_raw = _json.loads(model_cfg_json) if model_cfg_json else {}
-        except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
-            cfg_raw = {}
-        # Support list or dict
-        if isinstance(cfg_raw, list) and cfg_raw:
-            cfg = cfg_raw[0]
-        elif isinstance(cfg_raw, dict):
-            cfg = cfg_raw
-        else:
-            cfg = {}
-        model_name = cfg.get("model_name") or cfg.get("model") or "gpt-3.5-turbo"
-        temperature = cfg.get("temperature", 0.7)
-        max_tokens = cfg.get("max_tokens", 1000)
-        provider_name = (cfg.get("provider") or cfg.get("api_name") or provider or "openai").strip() or "openai"
-        provider_key = provider_name.lower()
-        provider_norm = normalize_provider(provider_key)
-        use_llm = not _is_prompt_studio_test_mode()
-        adapter = get_registry().get_adapter(provider_norm) if use_llm else None
-        _chat_call = None
-        if use_llm and adapter is None:
-            try:
-                from tldw_Server_API.app.core.Chat.chat_service import (
-                    perform_chat_api_call as _chat_call,  # type: ignore
-                )
-            except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
-                _chat_call = None  # Fallback: no chat; mark errors per test case
-
-        byok_resolution = None
-        provider_api_key = None
-        app_config_override = None
-        if user_id is not None:
-            def _fallback_resolver(name: str) -> Optional[str]:
-                key_val, _ = resolve_provider_api_key(
-                    name,
-                    prefer_module_keys_in_tests=True,
-                )
-                return key_val
-
-            byok_resolution = await resolve_byok_credentials(
-                provider_key,
-                user_id=user_id,
-                request=None,
-                fallback_resolver=_fallback_resolver,
-            )
-            provider_api_key = byok_resolution.api_key
-            app_config_override = byok_resolution.app_config
-
-        if provider_requires_api_key(provider_key) and not provider_api_key and not _is_prompt_studio_test_mode():
-            raise RuntimeError(f"Provider '{provider_name}' requires an API key.")
-
-        # Fetch prompt
-        cursor.execute(
-            """
-            SELECT system_prompt, user_prompt, name
-            FROM prompt_studio_prompts
-            WHERE id = ? AND deleted = 0
-            """,
-            (prompt_id,),
-        )
-        prompt_row = cursor.fetchone()
-        if not prompt_row:
-            raise RuntimeError(f"Prompt {prompt_id} not found")
-        system_prompt, user_prompt, prompt_name = prompt_row
-        system_prompt = system_prompt or ""
-        user_prompt = user_prompt or ""
-
-        # Fetch test cases
-        if not test_case_ids:
-            results = []
-        else:
-            placeholders = ",".join("?" * len(test_case_ids))
             cursor.execute(
-                f"""
-                SELECT id, inputs, expected_outputs
-                FROM prompt_studio_test_cases
-                WHERE id IN ({placeholders}) AND deleted = 0
+                """
+                SELECT id, project_id, prompt_id, test_case_ids, model_configs
+                FROM prompt_studio_evaluations
+                WHERE id = ?
                 """,
-                test_case_ids,
+                (evaluation_id,),
             )
-            tc_rows = cursor.fetchall()
+            row = cursor.fetchone()
+            if not row:
+                raise RuntimeError("Evaluation not found")
 
-            results = []
-            total_score = 0.0
-            for tc in tc_rows:
-                tc_id, inputs_json, expected_json = tc
-                try:
-                    inputs = _json.loads(inputs_json) if inputs_json else {}
-                except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
-                    inputs = {}
-                try:
-                    expected = _json.loads(expected_json) if expected_json else {}
-                except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
-                    expected = {}
+            cursor.execute(
+                """
+                UPDATE prompt_studio_evaluations
+                SET status = 'running', started_at = ?
+                WHERE id = ?
+                """,
+                (datetime.now().isoformat(), evaluation_id),
+            )
+            conn.commit()
 
-                # Format user prompt with inputs
-                formatted_user_prompt = user_prompt
-                try:
-                    for k, v in (inputs or {}).items():
-                        formatted_user_prompt = formatted_user_prompt.replace(f"{{{k}}}", str(v))
-                except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
-                    pass
+            _id, _project_id, prompt_id, tc_ids_json, model_cfg_json = row
+            try:
+                test_case_ids = _json.loads(tc_ids_json) if tc_ids_json else []
+            except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
+                test_case_ids = []
+            try:
+                cfg_raw = _json.loads(model_cfg_json) if model_cfg_json else {}
+            except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
+                cfg_raw = {}
 
-                # LLM call best-effort (skip if chat function unavailable)
-                actual_output = ""
-                error = None
-                try:
-                    if not use_llm:
-                        raise RuntimeError("LLM chat function not available")
-                    if adapter is not None:
-                        app_config = ensure_app_config(app_config_override)
-                        resolved_model = model_name or resolve_provider_model(provider_norm, app_config)
-                        if not resolved_model:
-                            raise RuntimeError(f"Model is required for provider '{provider_name}'.")
-                        api_key = provider_api_key or resolve_provider_api_key_from_config(provider_norm, app_config)
-                        request = {
-                            "messages": [{"role": "user", "content": formatted_user_prompt}],
-                            "system_message": system_prompt,
-                            "model": resolved_model,
-                            "api_key": api_key,
-                            "temperature": temperature,
-                            "max_tokens": max_tokens,
-                            "app_config": app_config,
-                            "stream": False,
-                        }
-                        try:
-                            resp = await adapter.achat(request)
-                        except NotImplementedError:
-                            resp = await asyncio.to_thread(adapter.chat, request)
-                    else:
-                        if _chat_call is None:
-                            raise RuntimeError("LLM chat function not available")
-                        resp = _chat_call(
-                            api_endpoint=provider_name,
-                            model=model_name,
-                            messages=[
-                                {"role": "system", "content": system_prompt},
-                                {"role": "user", "content": formatted_user_prompt},
-                            ],
-                            temperature=temperature,
-                            max_tokens=max_tokens,
-                            api_key=provider_api_key,
-                            app_config=app_config_override,
-                        )
-                    if isinstance(resp, list) and resp:
-                        actual_output = str(resp[0])
-                    else:
-                        actual_output = extract_response_content(resp) or str(resp)
-                except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS as e:
-                    error = str(e)
+            if isinstance(cfg_raw, list) and cfg_raw:
+                cfg = cfg_raw[0]
+            elif isinstance(cfg_raw, dict):
+                cfg = cfg_raw
+            else:
+                cfg = {}
 
-                # Score: simple exact/contains match on 'response' field
-                def _score(exp: dict, act: dict) -> float:
-                    if not exp:
-                        return 1.0
-                    exp_str = str(exp.get("response", "")).lower().strip()
-                    act_str = str(act.get("response", "")).lower().strip()
-                    if exp_str == act_str:
-                        return 1.0
-                    if exp_str and act_str and (exp_str in act_str or act_str in exp_str):
-                        return 0.5
-                    if not exp_str:
-                        return 0.0
-                    exp_words = set(exp_str.split())
-                    act_words = set(act_str.split())
-                    if not exp_words:
-                        return 0.0
-                    overlap = len(exp_words & act_words)
-                    return overlap / max(1, len(exp_words))
+            model_name = cfg.get("model_name") or cfg.get("model") or "gpt-3.5-turbo"
+            try:
+                temperature = float(cfg.get("temperature", 0.7))
+            except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
+                temperature = 0.7
+            try:
+                max_tokens = int(cfg.get("max_tokens", 1000))
+            except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
+                max_tokens = 1000
+            provider_name = (cfg.get("provider") or cfg.get("api_name") or provider or "openai").strip() or "openai"
+            provider_key = provider_name.lower()
 
-                actual = {"response": actual_output} if not error else {"error": error}
-                score = _score(expected, {"response": actual_output}) if not error else 0.0
-                total_score += score
-                results.append(
-                    {
-                        "test_case_id": tc_id,
-                        "inputs": inputs,
-                        "expected": expected,
-                        "actual": actual,
-                        "score": score,
-                        "passed": score >= 0.5,
-                    }
+            byok_resolution = None
+            provider_api_key = None
+            app_config_override = None
+            if user_id is not None:
+                def _fallback_resolver(name: str) -> Optional[str]:
+                    key_val, _ = resolve_provider_api_key(
+                        name,
+                        prefer_module_keys_in_tests=True,
+                    )
+                    return key_val
+
+                byok_resolution = await resolve_byok_credentials(
+                    provider_key,
+                    user_id=user_id,
+                    request=None,
+                    fallback_resolver=_fallback_resolver,
                 )
+                provider_api_key = byok_resolution.api_key
+                app_config_override = byok_resolution.app_config
 
-        passed = sum(1 for r in results if r.get("passed"))
-        total = len(results)
-        aggregate_metrics = {
-            "average_score": (sum(r.get("score", 0.0) for r in results) / total) if total else 0.0,
-            "total_tests": total,
-            "passed": passed,
-            "failed": total - passed,
-            "pass_rate": (passed / total) if total else 0.0,
-        }
+            if provider_requires_api_key(provider_key) and not provider_api_key and not _is_prompt_studio_test_mode():
+                raise RuntimeError(f"Provider '{provider_name}' requires an API key.")
 
-        if byok_resolution and byok_resolution.uses_byok:
-            await byok_resolution.touch_last_used()
+            eval_manager = EvaluationManager(db)
+            result = await eval_manager.run_evaluation_with_existing_record(
+                evaluation_id=evaluation_id,
+                prompt_id=int(prompt_id),
+                test_case_ids=[int(t) for t in (test_case_ids or [])],
+                model=model_name,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                provider=provider_name,
+                api_key=provider_api_key,
+                app_config=app_config_override,
+            )
 
-        # Update evaluation to completed with metrics
-        cursor.execute(
-            """
-            UPDATE prompt_studio_evaluations
-            SET status = 'completed',
-                completed_at = ?,
-                aggregate_metrics = ?,
-                test_run_ids = ?
-            WHERE id = ?
-            """,
-            (
-                datetime.now().isoformat(),
-                _json.dumps(aggregate_metrics),
-                _json.dumps([r["test_case_id"] for r in results]) if results else _json.dumps([]),
-                evaluation_id,
-            ),
-        )
-        conn.commit()
-        with contextlib.suppress(_PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS):
+            if byok_resolution and byok_resolution.uses_byok:
+                await byok_resolution.touch_last_used()
+
             _log.info(
                 "PS evaluation.async.done evaluation_id={} total_tests={} pass_rate={}",
                 evaluation_id,
-                aggregate_metrics.get("total_tests", 0),
-                round(aggregate_metrics.get("pass_rate", 0.0), 3),
+                (result.get("metrics") or {}).get("total_tests", 0),
+                round(float((result.get("metrics") or {}).get("pass_rate", 0.0)), 3),
             )
 
     except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS as e:

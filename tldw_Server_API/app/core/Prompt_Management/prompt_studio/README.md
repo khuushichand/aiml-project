@@ -709,6 +709,11 @@ Enable:
 - `PROMPT_STUDIO_ENABLE_CODE_EVAL=true` to enable globally, and/or
 - Set project metadata `{ "enable_code_eval": true }`.
 
+Runtime knobs:
+- `PROMPT_STUDIO_CODE_EVAL_TIMEOUT_MS` (wall timeout)
+- `PROMPT_STUDIO_CODE_EVAL_MEM_MB` (memory ceiling)
+- `PROMPT_STUDIO_CODE_EVAL_IMPORT_WHITELIST` (comma-separated module allowlist)
+
 Runner convention:
 - Test cases that should be executed must declare `runner="python"` and provide inputs/expected_outputs compatible with the evaluator.
 - The evaluator extracts fenced code blocks or heuristically detects Python in the output.

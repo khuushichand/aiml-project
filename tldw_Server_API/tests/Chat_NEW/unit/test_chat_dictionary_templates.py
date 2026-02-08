@@ -46,3 +46,31 @@ def test_regex_templating_with_group():
     new_text, count = apply_replacement_once(text, entry)
     assert count >= 1
     assert "WIDGET is priced" in new_text
+
+
+def test_entry_override_disables_templates_when_global_enabled():
+
+
+    _enable_templates()
+    entry = ChatDictionary(
+        key="today",
+        content="Year={{ now('%Y', tz='UTC') }}",
+        enable_templates=False,
+    )
+    out = process_user_input("today", [entry])
+    assert "Year={{ now('%Y', tz='UTC') }}" in out
+
+
+def test_entry_override_forces_templates_without_auto_detect():
+
+
+    _enable_templates()
+    # No "{{" present, but forced rendering should still execute render path
+    # and preserve plain text as-is.
+    entry = ChatDictionary(
+        key="today",
+        content="plain replacement text",
+        enable_templates=True,
+    )
+    out = process_user_input("today", [entry])
+    assert "plain replacement text" in out

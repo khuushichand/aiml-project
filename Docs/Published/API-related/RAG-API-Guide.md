@@ -164,15 +164,16 @@ const data = await response.json();
 Search-Agent defaults for omitted request fields:
 - The server applies `[Search-Agent]` defaults from `tldw_Server_API/Config_Files/config.txt`.
 - Environment variables override config values.
-- Round 2 toggles and defaults:
-  - `enable_suggestions` ← `SEARCH_SUGGESTIONS` / `search_suggestions` (default `false`)
-  - `enable_structured_response` ← `SEARCH_STRUCTURED_RESPONSE` / `search_structured_response` (default `false`)
-  - `enable_image_search` ← `SEARCH_IMAGE_SEARCH` / `search_image_search` (default `false`)
-  - `enable_video_search` ← `SEARCH_VIDEO_SEARCH` / `search_video_search` (default `false`)
-  - `enable_query_classification` ← `QUERY_CLASSIFICATION` / `query_classification` (default `true`)
-  - `enable_research_loop` ← `RESEARCH_LOOP` / `research_loop` (default `false`)
-  - `search_depth_mode` ← `SEARCH_DEPTH_MODE` / `search_depth_mode` (default `"shallow"`)
-  - `num_suggestions` ← `NUM_SUGGESTIONS` / `num_suggestions` (default `3`)
+- Only fields **not** explicitly provided by the caller are filled from config/env.
+- `num_suggestions` has no env/config override; the schema default of `5` always applies.
+- Toggles and their env / config keys:
+  - `enable_query_classification` ← `SEARCH_QUERY_CLASSIFICATION` / `search_query_classification` (schema default `false`)
+  - `enable_research_loop` ← `SEARCH_RESEARCH_LOOP` / `search_research_loop` (schema default `false`)
+  - `enable_suggestions` ← `SEARCH_SUGGESTIONS` / `search_suggestions` (schema default `false`)
+  - `enable_structured_response` ← `SEARCH_STRUCTURED_RESPONSE` / `search_structured_response` (schema default `false`)
+  - `enable_image_search` ← `SEARCH_IMAGE_SEARCH` / `search_image_search` (schema default `false`)
+  - `enable_video_search` ← `SEARCH_VIDEO_SEARCH` / `search_video_search` (schema default `false`)
+  - `search_depth_mode` ← `SEARCH_DEFAULT_MODE` / `search_default_mode` (schema default `null`; must be one of `speed`, `balanced`, `quality`)
 
 ### 2. Advanced Search - `GET /advanced`
 

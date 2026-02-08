@@ -8,6 +8,8 @@ from tldw_Server_API.app.core.Templating.template_renderer import (
     TemplateContext,
     TemplateEnv,
     TemplateOptions,
+    _clear_template_cache,
+    _ENV,
     render,
 )
 
@@ -62,3 +64,37 @@ def test_max_output_cap_truncates():
     out = render("{{ big }}", ctx, opts)
     assert len(out) == 2000
     assert out == "x" * 2000
+
+
+def test_block_tag_construct_falls_back_to_original():
+
+
+    ctx = TemplateContext()
+    tpl = "{% if true %}x{% endif %}"
+    out = render(tpl, ctx)
+    assert out == tpl
+
+
+def test_compiled_template_cache_reuses_compiled_template(monkeypatch):
+
+
+    _clear_template_cache()
+    calls = {"n": 0}
+    original_from_string = _ENV.from_string
+
+    def counting_from_string(src):
+        calls["n"] += 1
+        return original_from_string(src)
+
+    monkeypatch.setattr(_ENV, "from_string", counting_from_string)
+
+    ctx = TemplateContext(extra={"v": "ok"})
+    opts = TemplateOptions(cache_max_entries=16)
+    tpl = "{{ v }}"
+
+    out1 = render(tpl, ctx, opts)
+    out2 = render(tpl, ctx, opts)
+
+    assert out1 == "ok"
+    assert out2 == "ok"
+    assert calls["n"] == 1

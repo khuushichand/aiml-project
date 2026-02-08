@@ -3,7 +3,8 @@
 #
 # Imports
 import json
-from typing import Any, Optional, Union
+from datetime import datetime
+from typing import Any, Literal, Optional, Union
 
 #
 # Third-party imports
@@ -161,6 +162,110 @@ class CharacterImportResponse(BaseModel):
 class DeletionResponse(BaseModel):
     message: str
     character_id: int
+
+
+class CharacterExemplarSource(BaseModel):
+    type: Literal['audio_transcript', 'video_transcript', 'article', 'other'] = 'other'
+    url_or_id: Optional[str] = None
+    date: Optional[str] = None
+
+
+class CharacterExemplarLabels(BaseModel):
+    emotion: Literal['angry', 'neutral', 'happy', 'other'] = 'other'
+    scenario: Literal['press_challenge', 'fan_banter', 'debate', 'boardroom', 'small_talk', 'other'] = 'other'
+    rhetorical: list[str] = Field(default_factory=list)
+    register: Optional[str] = None
+
+
+class CharacterExemplarSafety(BaseModel):
+    allowed: list[str] = Field(default_factory=list)
+    blocked: list[str] = Field(default_factory=list)
+
+
+class CharacterExemplarRights(BaseModel):
+    public_figure: bool = True
+    notes: Optional[str] = None
+
+
+class CharacterExemplarIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=100_000)
+    source: CharacterExemplarSource = Field(default_factory=CharacterExemplarSource)
+    novelty_hint: Literal['post_cutoff', 'unknown', 'pre_cutoff'] = 'unknown'
+    labels: CharacterExemplarLabels = Field(default_factory=CharacterExemplarLabels)
+    safety: CharacterExemplarSafety = Field(default_factory=CharacterExemplarSafety)
+    rights: CharacterExemplarRights = Field(default_factory=CharacterExemplarRights)
+    length_tokens: Optional[int] = Field(default=None, ge=1, le=10_000)
+
+
+class CharacterExemplarUpdate(BaseModel):
+    text: Optional[str] = Field(default=None, min_length=1, max_length=100_000)
+    source: Optional[CharacterExemplarSource] = None
+    novelty_hint: Optional[Literal['post_cutoff', 'unknown', 'pre_cutoff']] = None
+    labels: Optional[CharacterExemplarLabels] = None
+    safety: Optional[CharacterExemplarSafety] = None
+    rights: Optional[CharacterExemplarRights] = None
+    length_tokens: Optional[int] = Field(default=None, ge=1, le=10_000)
+
+
+class CharacterExemplarResponse(CharacterExemplarIn):
+    id: str
+    character_id: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class CharacterExemplarSearchFilter(BaseModel):
+    emotion: Optional[Literal['angry', 'neutral', 'happy', 'other']] = None
+    scenario: Optional[Literal['press_challenge', 'fan_banter', 'debate', 'boardroom', 'small_talk', 'other']] = None
+    rhetorical: list[str] = Field(default_factory=list)
+
+
+class CharacterExemplarSearchRequest(BaseModel):
+    query: Optional[str] = None
+    filter: CharacterExemplarSearchFilter = Field(default_factory=CharacterExemplarSearchFilter)
+    limit: int = Field(default=20, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
+
+
+class CharacterExemplarSearchResponse(BaseModel):
+    items: list[CharacterExemplarResponse]
+    total: int = Field(default=0, ge=0)
+
+
+class CharacterExemplarSelectionConfig(BaseModel):
+    budget_tokens: int = Field(default=600, ge=1, le=20_000)
+    max_exemplar_tokens: int = Field(default=120, ge=1, le=20_000)
+    mmr_lambda: float = Field(default=0.7, ge=0.0, le=1.0)
+
+
+class CharacterExemplarSelectionDebugRequest(BaseModel):
+    user_turn: str = Field(..., min_length=1, max_length=100_000)
+    selection_config: CharacterExemplarSelectionConfig = Field(default_factory=CharacterExemplarSelectionConfig)
+
+
+class CharacterExemplarCoverage(BaseModel):
+    openers: int = Field(default=0, ge=0)
+    emphasis: int = Field(default=0, ge=0)
+    enders: int = Field(default=0, ge=0)
+    catchphrases_used: int = Field(default=0, ge=0)
+
+
+class CharacterExemplarScore(BaseModel):
+    id: str
+    score: float
+
+
+class CharacterExemplarSelectionDebug(BaseModel):
+    selected: list[CharacterExemplarResponse]
+    budget_tokens: int = Field(..., ge=0)
+    coverage: CharacterExemplarCoverage
+    scores: list[CharacterExemplarScore]
+
+
+class CharacterExemplarDeletionResponse(BaseModel):
+    message: str
+    character_id: int
+    exemplar_id: str
 
 #
 # End of character_schemas.py
