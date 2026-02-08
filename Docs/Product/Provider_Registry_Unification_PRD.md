@@ -124,13 +124,13 @@ Provide a `ProviderRegistryBase` with:
 
 ## 15. Requirement-by-Requirement Implementation Checklist
 Current assessment date: 2026-02-08
-Current implementation status: Not implemented (shared base missing; registries still independent)
+Current implementation status: Partially implemented (R1 complete; wrappers still independent)
 
 Use this as the execution tracker for this PRD. Mark each item complete only when code, tests, and API behavior are all verified.
 
 | ID | Requirement (from this PRD) | Concrete Implementation Tasks | Target Files (create/update) | Tests (create/update) | Status |
 | --- | --- | --- | --- | --- | --- |
-| R1 | Shared `ProviderRegistryBase` exists in Infrastructure (Sections 8.1, 9.1) | Create shared base module with registry core, config object, and public API. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py` (new), `tldw_Server_API/app/core/Infrastructure/__init__.py` | `tldw_Server_API/tests/Infrastructure/test_provider_registry_base.py` (new) | [ ] |
+| R1 | Shared `ProviderRegistryBase` exists in Infrastructure (Sections 8.1, 9.1) | Create shared base module with registry core, config object, and public API. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py` (new), `tldw_Server_API/app/core/Infrastructure/__init__.py` | `tldw_Server_API/tests/Infrastructure/test_provider_registry_base.py` (new) | [x] |
 | R2 | Registration supports class, instance, dotted-path string (Section 8.1) | Implement `register_adapter()` and resolver that accepts all 3 forms and validates adapter type via wrapper hook. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py` | `tldw_Server_API/tests/Infrastructure/test_provider_registry_base.py` | [ ] |
 | R3 | Lazy initialization with caching (Section 8.1) | Implement lazy materialization and adapter instance cache with cache invalidation on re-register. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py` | `tldw_Server_API/tests/Infrastructure/test_provider_registry_base.py` | [ ] |
 | R4 | Failure tracking + retry backoff parity (Section 8.1) | Implement failed-provider tracking, retry timestamps, configurable retry window, and "retry disabled" mode. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py` | `tldw_Server_API/tests/Infrastructure/test_provider_registry_backoff.py` (new), `tldw_Server_API/tests/TTS/*` parity tests | [ ] |

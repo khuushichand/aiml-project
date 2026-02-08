@@ -375,6 +375,58 @@ class TestTTSStreamingEndpoint:
         assert row["error_message"]
         assert row["text"] == "Error test history"
 
+    async def test_history_write_failure_logs_request_id(self, test_client, auth_headers, monkeypatch, tmp_path):
+        """History write failures should include request_id in debug logs and not fail response."""
+        user_db_base = tmp_path / "user_dbs"
+        monkeypatch.setenv("USER_DB_BASE_DIR", str(user_db_base))
+        monkeypatch.setenv("TTS_HISTORY_ENABLED", "true")
+        monkeypatch.setenv("TTS_HISTORY_STORE_TEXT", "true")
+        monkeypatch.setenv("TTS_HISTORY_HASH_KEY", "test-history-key")
+        monkeypatch.setattr(settings, "TTS_HISTORY_ENABLED", True, raising=False)
+        monkeypatch.setattr(settings, "TTS_HISTORY_STORE_TEXT", True, raising=False)
+        monkeypatch.setattr(settings, "TTS_HISTORY_HASH_KEY", "test-history-key", raising=False)
+
+        debug_lines: list[str] = []
+
+        def _capture_debug(message, *args, **kwargs):
+            try:
+                rendered = str(message).format(*args)
+            except Exception:
+                rendered = f"{message} {args}"
+            debug_lines.append(rendered)
+
+        monkeypatch.setattr(audio_endpoints.audio_tts.logger, "debug", _capture_debug)
+
+        async def mock_stream(*args, **kwargs):
+            yield b"history-write-failure-audio"
+
+        req_id = "req-stage2-history-write-fail"
+        headers = {**auth_headers, "X-Request-ID": req_id}
+
+        with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech, \
+                patch(
+                    'tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase.create_tts_history_entry',
+                    side_effect=RuntimeError("history insert failure"),
+                ):
+            mock_generate_speech.side_effect = lambda *args, **kwargs: mock_stream()
+
+            response = test_client.post(
+                "/api/v1/audio/speech",
+                json={
+                    "input": "request id correlation test",
+                    "voice": "alloy",
+                    "response_format": "mp3",
+                    "stream": False,
+                },
+                headers=headers,
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert any(
+            "failed to write record" in line and f"request_id={req_id}" in line
+            for line in debug_lines
+        )
+
     @pytest.mark.streaming
     async def test_streaming_quota_exceeded_maps_to_402(self, test_client, auth_headers):
         """Streaming quota exceeded should ideally map to HTTP 402."""

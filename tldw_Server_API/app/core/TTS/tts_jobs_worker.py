@@ -137,6 +137,7 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
     jm = JobManager()
     tts_service = await get_tts_service_v2()
     job_id = int(job.get("id") or 0)
+    request_id = str(job.get("request_id") or payload.get("request_id") or "")
     start_ts = asyncio.get_event_loop().time()
 
     history_cfg = _tts_history_config()
@@ -149,6 +150,7 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
         *,
         error_message: str | None = None,
         output_id: int | None = None,
+        artifact_ids: list[Any] | None = None,
     ) -> None:
         nonlocal history_written
         if history_written or history_db is None:
@@ -158,7 +160,12 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
         try:
             text_hash = compute_tts_history_text_hash(request.input, history_cfg.get("hash_key"))
         except _TTS_JOBS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("TTS jobs worker: failed to compute text hash: {}", exc)
+            logger.debug(
+                "TTS jobs worker: failed to compute text hash: {} (job_id={}, request_id={})",
+                exc,
+                job_id,
+                request_id or "unknown",
+            )
             return
         metadata = getattr(request, "_tts_metadata", None)
         if not isinstance(metadata, dict):
@@ -209,6 +216,7 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
                 segments_json=segments_json,
                 job_id=job_id if job_id > 0 else None,
                 output_id=output_id,
+                artifact_ids=artifact_ids,
                 error_message=error_message,
             )
             try:
@@ -228,7 +236,12 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
                 pass
             history_written = True
         except _TTS_JOBS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("TTS jobs worker: failed to write history record: {}", exc)
+            logger.debug(
+                "TTS jobs worker: failed to write history record: {} (job_id={}, request_id={})",
+                exc,
+                job_id,
+                request_id or "unknown",
+            )
 
     def _emit_progress(percent: float, message: str, eta_seconds: float | None = None) -> None:
         if job_id <= 0:
@@ -321,7 +334,10 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
             )
 
         if history_enabled:
-            _record_history("success", output_id=row.id)
+            artifact_ids: list[Any] | None = None
+            if getattr(row, "id", None) is not None:
+                artifact_ids = [f"output:{int(row.id)}"]
+            _record_history("success", output_id=row.id, artifact_ids=artifact_ids)
 
         _emit_progress(100.0, "tts_completed", eta_seconds=0.0)
         return {

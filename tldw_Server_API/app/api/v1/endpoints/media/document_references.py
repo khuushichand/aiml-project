@@ -97,15 +97,22 @@ def _build_references_cache_key(
     offset: int,
     limit: int,
     parse_cap: int | None,
+    search_query: str | None,
     reference_index: int | None = None,
 ) -> str:
     scope_str = f"user:{user_id}:db:{db_scope}"
     enrich_flag = "enrich" if enrich else "basic"
     index_flag = f":idx:{reference_index}" if reference_index is not None else ""
     page_flag = f":offset:{offset}:limit:{limit}:cap:{parse_cap if parse_cap is not None else 'all'}"
+    normalized_query = re.sub(r"\s+", " ", (search_query or "").strip().lower())
+    query_flag = (
+        f":q:{hashlib.md5(normalized_query.encode('utf-8')).hexdigest()[:12]}"
+        if normalized_query
+        else ":q:none"
+    )
     return (
         f"cache:/api/v1/media/{media_id}/references:"
-        f"{scope_str}:{enrich_flag}{index_flag}{page_flag}:v{REFERENCES_PARSER_VERSION}"
+        f"{scope_str}:{enrich_flag}{index_flag}{page_flag}{query_flag}:v{REFERENCES_PARSER_VERSION}"
     )
 
 
@@ -1305,6 +1312,13 @@ async def get_document_references(
             "Unset means no parser cap."
         ),
     ),
+    search: str | None = Query(
+        None,
+        description=(
+            "Optional case-insensitive substring filter applied to the full "
+            "reference list before pagination."
+        ),
+    ),
     db: MediaDatabase = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> DocumentReferencesResponse:
@@ -1354,6 +1368,7 @@ async def get_document_references(
         offset=offset,
         limit=limit,
         parse_cap=parse_cap,
+        search_query=search,
         reference_index=reference_index,
     )
     cached = get_cached_response(cache_key)
@@ -1492,17 +1507,27 @@ async def get_document_references(
         cache_response(cache_key, response.model_dump(), media_id=media_id)
         return response
 
-    # 5. Apply parse cap and paginate raw references
+    # 5. Apply parse cap, filter, and paginate raw references
     if parse_cap is None:
         capped_refs = raw_refs_all
     else:
         capped_refs = raw_refs_all[:parse_cap]
 
-    total_available = len(capped_refs)
-    truncated = len(raw_refs_all) > total_available
+    truncated = len(raw_refs_all) > len(capped_refs)
+    normalized_search = re.sub(r"\s+", " ", (search or "").strip().lower())
+    if normalized_search:
+        filtered_refs = [
+            ref
+            for ref in capped_refs
+            if normalized_search in _normalize_reference_display_text(ref).lower()
+        ]
+    else:
+        filtered_refs = capped_refs
+
+    total_available = len(filtered_refs)
     page_start = min(offset, total_available)
     page_end = min(page_start + limit, total_available)
-    page_raw_refs = capped_refs[page_start:page_end]
+    page_raw_refs = filtered_refs[page_start:page_end]
 
     if not page_raw_refs:
         response = DocumentReferencesResponse(
@@ -1548,7 +1573,7 @@ async def get_document_references(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="reference_index out of range",
                     )
-                target_raw = capped_refs[reference_index]
+                target_raw = filtered_refs[reference_index]
                 target_ref = _parse_reference_basic(target_raw)
                 enriched_refs = [target_ref]
                 if not _is_provider_cooldown("semantic_scholar"):
