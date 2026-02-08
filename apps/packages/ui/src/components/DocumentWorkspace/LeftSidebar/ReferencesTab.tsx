@@ -451,31 +451,20 @@ export const ReferencesTab: React.FC = () => {
       offset,
       limit: pageSize,
       parseCap,
+      search: searchQuery,
     }
   )
 
   const references = data?.references ?? []
-  const query = searchQuery.trim().toLowerCase()
-  const filteredReferences = React.useMemo(() => {
-    return references
-      .map((ref, index) => ({ ref, index, globalIndex: offset + index }))
-      .filter(({ ref }) => {
-        if (!query) return true
-        const haystack = [
-          ref.title,
-          ref.authors,
-          ref.venue,
-          ref.doi,
-          ref.arxiv_id,
-          ref.semantic_scholar_id,
-          ref.raw_text,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase()
-        return haystack.includes(query)
-      })
-  }, [offset, query, references])
+  const referencesWithIndex = React.useMemo(
+    () =>
+      references.map((ref, index) => ({
+        ref,
+        globalIndex: offset + index,
+      })),
+    [offset, references]
+  )
+  const normalizedSearchQuery = searchQuery.trim()
 
   // No document selected
   if (!activeDocumentId) {
@@ -497,14 +486,18 @@ export const ReferencesTab: React.FC = () => {
     return <ErrorState error={error as Error} />
   }
 
-  // No references found
-  if (!data?.has_references || (data.total_available ?? data.references.length) === 0) {
-    return <NoReferencesState />
-  }
-
   const totalCount = data.returned_count ?? references.length
   const totalAvailable = data.total_available ?? totalCount
   const detectedCount = data.total_detected ?? totalAvailable
+
+  // No references found
+  if (totalAvailable === 0) {
+    if (normalizedSearchQuery.length > 0 && detectedCount > 0) {
+      return <NoFilteredReferencesState />
+    }
+    return <NoReferencesState />
+  }
+
   const arxivCount = references.filter((ref) => ref.arxiv_id).length
   const s2Count = references.filter((ref) => ref.semantic_scholar_id).length
   const enrichedCount = data.enriched_count ?? 0
@@ -524,6 +517,7 @@ export const ReferencesTab: React.FC = () => {
     offset,
     pageSize,
     parseCap ?? null,
+    normalizedSearchQuery || null,
   ] as const
 
   const handleEnrichReference = async (globalIndex: number, key: string) => {
@@ -536,14 +530,31 @@ export const ReferencesTab: React.FC = () => {
         offset,
         limit: pageSize,
         parseCap,
+        ...(normalizedSearchQuery.length > 0 ? { search: normalizedSearchQuery } : {}),
       })
       queryClient.setQueryData(currentQueryKey, response)
       queryClient.setQueryData(
-        ["document-references", activeDocumentId, true, offset, pageSize, parseCap ?? null],
+        [
+          "document-references",
+          activeDocumentId,
+          true,
+          offset,
+          pageSize,
+          parseCap ?? null,
+          normalizedSearchQuery || null,
+        ],
         response
       )
       queryClient.setQueryData(
-        ["document-references", activeDocumentId, false, offset, pageSize, parseCap ?? null],
+        [
+          "document-references",
+          activeDocumentId,
+          false,
+          offset,
+          pageSize,
+          parseCap ?? null,
+          normalizedSearchQuery || null,
+        ],
         response
       )
     } catch (err) {
@@ -664,7 +675,10 @@ export const ReferencesTab: React.FC = () => {
             "Search references..."
           )}
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          onChange={(e) => {
+            setSearchQuery(e.target.value)
+            setOffset(0)
+          }}
           size="small"
           prefix={<Search className="h-4 w-4 text-muted" />}
           className="mb-3"
@@ -747,11 +761,11 @@ export const ReferencesTab: React.FC = () => {
         </div>
 
         {/* References list */}
-        {filteredReferences.length === 0 ? (
+        {referencesWithIndex.length === 0 ? (
           <NoFilteredReferencesState />
         ) : (
           <div className="space-y-2">
-            {filteredReferences.map(({ ref, index, globalIndex }) => {
+            {referencesWithIndex.map(({ ref, globalIndex }) => {
               const key = getReferenceKey(ref, globalIndex)
               return (
                 <ReferenceCard

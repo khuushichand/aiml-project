@@ -234,6 +234,42 @@ class UserRateLimiter:
 
             return True, None
 
+    def peek_rate_limit_non_mutating(
+        self,
+        user_id: str,
+        cost: int = 1,
+    ) -> tuple[bool, Optional[int]]:
+        """
+        Side-effect-light rate limit check that does not consume or create entries.
+
+        Used by RG diagnostics-only fallback paths to report what legacy would
+        have done without mutating enforcement state.
+        """
+        cost = int(cost) if cost is not None else 1
+        if cost <= 0:
+            cost = 1
+        with self._lock:
+            current_time = time.time()
+            window_start = current_time - self.window_seconds
+
+            existing = self.user_requests.get(user_id)
+            if existing is None:
+                current_count = 0
+                oldest_ts = None
+            else:
+                # Snapshot only recent entries; do not mutate queue in this path.
+                recent = [entry for entry in existing if entry[0] >= window_start]
+                current_count = sum(entry[1] for entry in recent)
+                oldest_ts = recent[0][0] if recent else None
+
+            limit = self.get_user_limit(user_id)
+            burst_limit = int(limit * self.burst_allowance)
+            if current_count + cost > burst_limit:
+                retry_after = int(oldest_ts + self.window_seconds - current_time) + 1 if oldest_ts is not None else 1
+                return False, retry_after
+
+            return True, None
+
     def peek_shadow_rate_limit(
         self,
         user_id: str,
@@ -562,6 +598,22 @@ class AsyncRateLimiter:
             ip_address,
         )
 
+    async def _peek_legacy_rate_limit(
+        self,
+        user_id: str,
+        cost: int,
+    ) -> tuple[bool, Optional[int]]:
+        """Non-mutating legacy check for RG diagnostics-only fallback."""
+        if self.rate_limiter is None:
+            self.rate_limiter = get_rate_limiter()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self.executor,
+            self.rate_limiter.peek_rate_limit_non_mutating,
+            user_id,
+            cost,
+        )
+
     async def check_rate_limit_async(
         self,
         user_id: str,
@@ -641,7 +693,13 @@ class AsyncRateLimiter:
             return rg_allowed, rg_decision.get("retry_after")
 
         _log_rg_embeddings_fallback("rg_decision_unavailable")
-        return await self._legacy_check_rate_limit(user_id, legacy_cost, ip_address)
+        legacy_allowed, legacy_retry = await self._peek_legacy_rate_limit(user_id, legacy_cost)
+        _log_rg_embeddings_legacy_diagnostic(
+            reason="rg_decision_unavailable",
+            legacy_allowed=legacy_allowed,
+            legacy_retry_after=legacy_retry,
+        )
+        return True, None
 
     async def record_usage_async(self, user_id: str, cost: int = 1):
         """Record usage asynchronously (for post-processing)"""
@@ -679,6 +737,7 @@ _rg_embeddings_lock = asyncio.Lock()
 _rg_embeddings_init_error: Optional[str] = None
 _rg_embeddings_init_error_logged = False
 _rg_embeddings_fallback_logged = False
+_rg_embeddings_legacy_diag_logged = False
 
 _rate_limit_mode_warned = False
 
@@ -729,7 +788,7 @@ def _log_rg_embeddings_init_failure(exc: Exception) -> None:
     _rg_embeddings_init_error_logged = True
     ctx = _rg_embeddings_context()
     logger.exception(
-        "Embeddings ResourceGovernor init failed; falling back to legacy limiter. "
+        "Embeddings ResourceGovernor init failed; legacy limiter remains diagnostics-only. "
         "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
         "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
         "reload_interval={policy_reload_interval} cwd={cwd}",
@@ -744,13 +803,33 @@ def _log_rg_embeddings_fallback(reason: str) -> None:
     _rg_embeddings_fallback_logged = True
     ctx = _rg_embeddings_context()
     logger.error(
-        "Embeddings ResourceGovernor unavailable; falling back to legacy limiter. "
+        "Embeddings ResourceGovernor unavailable; using diagnostics-only legacy shim (no enforcement). "
         "reason={} init_error={} backend={backend} policy_path={policy_path} "
         "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
         "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
         reason,
         _rg_embeddings_init_error,
         **ctx,
+    )
+
+
+def _log_rg_embeddings_legacy_diagnostic(
+    *,
+    reason: str,
+    legacy_allowed: bool,
+    legacy_retry_after: Optional[int],
+) -> None:
+    """Log one-shot diagnostics-only legacy decision details."""
+    global _rg_embeddings_legacy_diag_logged
+    if _rg_embeddings_legacy_diag_logged:
+        return
+    _rg_embeddings_legacy_diag_logged = True
+    logger.warning(
+        "Embeddings legacy limiter diagnostics-only shim active; enforcement bypassed. "
+        "reason={} legacy_allowed={} legacy_retry_after={}",
+        reason,
+        legacy_allowed,
+        legacy_retry_after,
     )
 
 

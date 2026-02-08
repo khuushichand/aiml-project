@@ -1497,6 +1497,7 @@ export class TldwApiClient {
       offset?: number
       limit?: number
       parseCap?: number
+      search?: string
       signal?: AbortSignal
     }
   ): Promise<{
@@ -1539,6 +1540,10 @@ export class TldwApiClient {
       typeof options?.limit === "number" ? `&limit=${Math.max(1, options.limit)}` : ""
     const parseCap =
       typeof options?.parseCap === "number" ? `&parse_cap=${Math.max(1, options.parseCap)}` : ""
+    const search =
+      typeof options?.search === "string" && options.search.trim().length > 0
+        ? `&search=${encodeURIComponent(options.search.trim())}`
+        : ""
     return await bgRequest<{
       media_id: number
       has_references: boolean
@@ -1567,7 +1572,7 @@ export class TldwApiClient {
       has_more?: boolean
       next_offset?: number | null
     }>({
-      path: `/api/v1/media/${id}/references?enrich=${enrich}${referenceIndex}${offset}${limit}${parseCap}`,
+      path: `/api/v1/media/${id}/references?enrich=${enrich}${referenceIndex}${offset}${limit}${parseCap}${search}`,
       method: "GET",
       abortSignal: options?.signal,
       timeoutMs: 45000

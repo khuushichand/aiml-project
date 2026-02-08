@@ -77,3 +77,44 @@ async def test_chat_rate_limiter_falls_back_to_legacy_when_rg_disabled(monkeypat
 
     assert allowed is True
     assert error is None
+
+
+@pytest.mark.asyncio
+async def test_chat_rate_limiter_rg_unavailable_uses_diagnostics_only_shim(monkeypatch):
+    monkeypatch.setenv("RG_ENABLED", "1")
+
+    async def fake_rg_chat(**_: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Chat.rate_limiter._maybe_enforce_with_rg_chat",
+        fake_rg_chat,
+        raising=False,
+    )
+
+    limiter = ConversationRateLimiter(
+        RateLimitConfig(
+            global_rpm=1,
+            per_user_rpm=1,
+            per_conversation_rpm=1,
+            per_user_tokens_per_minute=1,
+            burst_multiplier=1.0,
+        )
+    )
+    limiter.global_bucket.tokens = 0.0
+    before_tokens = limiter.global_bucket.tokens
+
+    async def _legacy_should_not_run(*args: object, **kwargs: object):  # pragma: no cover
+        raise AssertionError("legacy limiter enforcement should be bypassed when RG is enabled")
+
+    monkeypatch.setattr(limiter, "_check_legacy_rate_limit", _legacy_should_not_run, raising=True)
+
+    allowed, error = await limiter.check_rate_limit(
+        user_id="user-diagnostics",
+        conversation_id="conv-diagnostics",
+        estimated_tokens=10,
+    )
+
+    assert allowed is True
+    assert error is None
+    assert limiter.global_bucket.tokens == before_tokens

@@ -45,6 +45,7 @@ export interface UseDocumentReferencesOptions {
   offset?: number
   limit?: number
   parseCap?: number
+  search?: string
 }
 
 /**
@@ -68,6 +69,10 @@ export function useDocumentReferences(
   const enrich = options.enrich ?? false
   const offset = options.offset ?? 0
   const limit = options.limit ?? 50
+  const search =
+    typeof options.search === "string" && options.search.trim().length > 0
+      ? options.search.trim()
+      : undefined
 
   return useQuery({
     queryKey: [
@@ -77,6 +82,7 @@ export function useDocumentReferences(
       offset,
       limit,
       options.parseCap ?? null,
+      search ?? null,
     ],
     queryFn: async (): Promise<DocumentReferencesResponse | null> => {
       if (mediaId === null) return null
@@ -85,6 +91,7 @@ export function useDocumentReferences(
         offset,
         limit,
         parseCap: options.parseCap,
+        search,
       })
     },
     enabled: mediaId !== null && isServerAvailable,

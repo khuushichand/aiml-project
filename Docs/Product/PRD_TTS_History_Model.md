@@ -312,9 +312,6 @@ Logs:
 
 ## 14) Known Gaps (As Of 2026-02-08)
 
-- Job-based history rows do not yet populate `artifact_ids` on successful writes.
-- History insert failure logs do not consistently include request/job correlation IDs.
-- TTS history cleanup reads retention config from env directly; align with shared settings resolution.
 - Explicit tests still needed for:
   - segment truncation policy behavior at/over 64KB,
   - `voice_id` / `voice_name` history filters,

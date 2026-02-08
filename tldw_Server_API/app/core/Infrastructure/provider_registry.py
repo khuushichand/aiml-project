@@ -76,11 +76,13 @@ class ProviderRegistryBase(Generic[AdapterT]):
         self,
         *,
         config: ProviderRegistryConfig | None = None,
+        adapter_spec_validator: Callable[[Any], bool] | None = None,
         adapter_validator: Callable[[Any], bool] | None = None,
         aliases: dict[str, str] | None = None,
         normalize_name: Callable[[str], str] | None = None,
     ) -> None:
         self._config = config or ProviderRegistryConfig()
+        self._adapter_spec_validator = adapter_spec_validator
         self._adapter_validator = adapter_validator
         self._normalizer = (
             normalize_name
@@ -144,16 +146,24 @@ class ProviderRegistryBase(Generic[AdapterT]):
             - Adapter class (instantiated lazily)
             - Adapter instance (reused as-is)
             - Dotted path string ("package.module.ClassName")
+
+        Validation behavior:
+            - `adapter_spec_validator` is applied at registration time.
+              For dotted paths, the class is resolved before validation.
+            - `adapter_validator` is applied at registration time for
+              instance adapters, and again after lazy materialization in
+              `get_adapter`.
         """
 
         provider_key = self._normalize_name(name)
         if not provider_key:
             raise ValueError("Provider name must be non-empty")
 
+        self._validate_registration_spec(provider_key=provider_key, spec=adapter)
+
         with self._lock:
             self._providers[provider_key] = _ProviderRecord(spec=adapter, enabled=bool(enabled))
-            self._adapter_cache.pop(provider_key, None)
-            self._failed_providers.pop(provider_key, None)
+            self._invalidate_provider_state_locked(provider_key)
 
         if aliases:
             for alias in aliases:
@@ -178,6 +188,40 @@ class ProviderRegistryBase(Generic[AdapterT]):
             adapter_cls = self._resolve_adapter_class(spec)
             return adapter_cls()  # type: ignore[return-value,call-arg]
         return spec
+
+    def _invalidate_provider_state_locked(self, provider_key: str) -> None:
+        """Clear cached adapter and failure markers for a provider key."""
+        self._adapter_cache.pop(provider_key, None)
+        self._failed_providers.pop(provider_key, None)
+
+    def _validate_registration_spec(self, *, provider_key: str, spec: Any) -> None:
+        candidate_for_spec = spec
+        if self._adapter_spec_validator is not None and isinstance(spec, (str, type)):
+            candidate_for_spec = self._resolve_adapter_class(spec)
+
+        if self._adapter_spec_validator is not None:
+            try:
+                valid_spec = bool(self._adapter_spec_validator(candidate_for_spec))
+            except Exception as exc:
+                raise TypeError(
+                    f"Adapter spec validation failed for provider '{provider_key}'"
+                ) from exc
+            if not valid_spec:
+                raise TypeError(
+                    f"Adapter spec is not valid for provider '{provider_key}'"
+                )
+
+        if self._adapter_validator is not None and not isinstance(spec, (str, type)):
+            try:
+                valid_instance = bool(self._adapter_validator(spec))
+            except Exception as exc:
+                raise TypeError(
+                    f"Adapter validation failed for provider '{provider_key}'"
+                ) from exc
+            if not valid_instance:
+                raise TypeError(
+                    f"Adapter instance is not valid for provider '{provider_key}'"
+                )
 
     def _mark_failure_locked(self, provider_key: str) -> None:
         retry_seconds = self._config.failure_retry_seconds
@@ -208,7 +252,7 @@ class ProviderRegistryBase(Generic[AdapterT]):
                 raise KeyError(f"Provider '{name}' is not registered")
             record.enabled = bool(enabled)
             if not enabled:
-                self._adapter_cache.pop(provider_key, None)
+                self._invalidate_provider_state_locked(provider_key)
 
     def enable_provider(self, name: str) -> None:
         self.set_provider_enabled(name, True)

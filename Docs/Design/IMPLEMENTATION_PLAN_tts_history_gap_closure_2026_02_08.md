@@ -17,7 +17,7 @@
 **Tests**:
 - Unit/integration: job run creates history row with `artifact_ids` populated.
 - Unit/integration: history write failure log path includes request correlation field.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Cleanup Configuration Source Consistency
 **Goal**: Ensure TTS history cleanup uses the same config source semantics as the rest of the app.
@@ -27,7 +27,7 @@
 - Existing disable semantics (`<=0` checks) remain intact.
 **Tests**:
 - Unit tests for cleanup config resolution precedence and disable behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Test Coverage For Remaining PRD Expectations
 **Goal**: Add explicit tests for the currently unverified PRD requirements.

@@ -137,8 +137,7 @@ class ConversationRateLimiter:
     Rate limiter with per-conversation, per-user, and global limits.
 
     Legacy shim – when ResourceGovernor is enabled, chat ingress should be
-    governed via RG and this in-process limiter should be treated as a
-    fallback-only compatibility path.
+    governed via RG and this in-process limiter is diagnostics-only.
     """
 
     def __init__(self, config: RateLimitConfig):
@@ -212,8 +211,8 @@ class ConversationRateLimiter:
         Legacy in-process rate limit evaluation using token buckets.
 
         This path is retained as a compatibility shim when ResourceGovernor is
-        enabled and remains the primary enforcement mechanism when RG is
-        disabled or unavailable.
+        disabled and remains the primary enforcement mechanism only when RG is
+        disabled.
         """
         # Opportunistic idle cleanup every 5 minutes (with lock to prevent concurrent cleanup)
         now = time.time()
@@ -297,6 +296,66 @@ class ConversationRateLimiter:
 
         return True, None
 
+    @staticmethod
+    def _bucket_has_capacity(
+        bucket: TokenBucket,
+        *,
+        units: int,
+        now_ts: float,
+    ) -> bool:
+        """Best-effort non-mutating capacity check for diagnostics-only paths."""
+        if units <= 0:
+            return True
+        try:
+            capacity = float(bucket.capacity)
+            tokens = float(bucket.tokens)
+            refill_rate = float(bucket.refill_rate)
+            last_refill = float(bucket.last_refill)
+        except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS:
+            return True
+
+        elapsed = max(0.0, now_ts - last_refill)
+        available = min(capacity, tokens + (elapsed * refill_rate))
+        return available >= float(units)
+
+    async def _peek_legacy_rate_limit(
+        self,
+        *,
+        user_id: str,
+        conversation_id: Optional[str],
+        estimated_tokens: int,
+    ) -> tuple[bool, Optional[str]]:
+        """
+        Non-mutating legacy check used only for diagnostics when RG is enabled.
+
+        This helper never creates buckets, consumes tokens, or updates usage
+        counters. It reports what legacy enforcement *would* have done.
+        """
+        now_ts = time.time()
+
+        if not self._bucket_has_capacity(self.global_bucket, units=1, now_ts=now_ts):
+            return False, "Global rate limit exceeded"
+
+        user_bucket = self.user_buckets.get(user_id)
+        if user_bucket is not None and not self._bucket_has_capacity(user_bucket, units=1, now_ts=now_ts):
+            return False, f"User rate limit exceeded for {user_id}"
+
+        if conversation_id:
+            conv_bucket = self.conversation_buckets.get(conversation_id)
+            if conv_bucket is not None and not self._bucket_has_capacity(conv_bucket, units=1, now_ts=now_ts):
+                return False, f"Conversation rate limit exceeded for {conversation_id}"
+
+        if estimated_tokens > 0:
+            token_bucket = self.user_token_buckets.get(user_id)
+            if token_bucket is not None and not self._bucket_has_capacity(
+                token_bucket,
+                units=max(0, int(estimated_tokens)),
+                now_ts=now_ts,
+            ):
+                return False, f"Token limit exceeded for user {user_id}"
+
+        return True, None
+
     async def check_rate_limit(
         self,
         user_id: str,
@@ -336,13 +395,19 @@ class ConversationRateLimiter:
             rg_decision = None
 
         if rg_decision is None:
-            # RG unavailable - fallback to legacy limiter instead of failing
+            # RG unavailable: keep legacy path as diagnostics-only (no counters).
             _log_rg_chat_fallback("rg_decision_unavailable")
-            return await self._check_legacy_rate_limit(
+            legacy_allowed, legacy_error = await self._peek_legacy_rate_limit(
                 user_id=user_id,
                 conversation_id=conversation_id,
                 estimated_tokens=estimated_tokens,
             )
+            _log_rg_chat_legacy_diagnostic(
+                reason="rg_decision_unavailable",
+                legacy_allowed=legacy_allowed,
+                legacy_error=legacy_error,
+            )
+            return True, None
 
         if not rg_decision.get("allowed", False):
             policy_id = rg_decision.get("policy_id", "chat.default")
@@ -580,6 +645,7 @@ _rg_chat_lock = asyncio.Lock()
 _rg_chat_init_error: Optional[str] = None
 _rg_chat_init_error_logged = False
 _rg_chat_fallback_logged = False
+_rg_chat_legacy_diag_logged = False
 
 
 def _rg_chat_context() -> dict[str, str]:
@@ -610,7 +676,7 @@ def _log_rg_chat_init_failure(exc: Exception) -> None:
     _rg_chat_init_error_logged = True
     ctx = _rg_chat_context()
     logger.exception(
-        "Chat ResourceGovernor init failed; falling back to legacy limiter. "
+        "Chat ResourceGovernor init failed; legacy limiter remains diagnostics-only. "
         "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
         "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
         "reload_interval={policy_reload_interval} cwd={cwd}",
@@ -625,13 +691,33 @@ def _log_rg_chat_fallback(reason: str) -> None:
     _rg_chat_fallback_logged = True
     ctx = _rg_chat_context()
     logger.error(
-        "Chat ResourceGovernor unavailable; falling back to legacy limiter. "
+        "Chat ResourceGovernor unavailable; using diagnostics-only legacy shim (no enforcement). "
         "reason={} init_error={} backend={backend} policy_path={policy_path} "
         "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
         "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
         reason,
         _rg_chat_init_error,
         **ctx,
+    )
+
+
+def _log_rg_chat_legacy_diagnostic(
+    *,
+    reason: str,
+    legacy_allowed: bool,
+    legacy_error: Optional[str],
+) -> None:
+    """Log one-shot diagnostic-only legacy decision details."""
+    global _rg_chat_legacy_diag_logged
+    if _rg_chat_legacy_diag_logged:
+        return
+    _rg_chat_legacy_diag_logged = True
+    logger.warning(
+        "Chat legacy limiter diagnostics-only shim active; enforcement bypassed. "
+        "reason={} legacy_allowed={} legacy_error={}",
+        reason,
+        legacy_allowed,
+        legacy_error,
     )
 
 try:  # pragma: no cover - RG is optional

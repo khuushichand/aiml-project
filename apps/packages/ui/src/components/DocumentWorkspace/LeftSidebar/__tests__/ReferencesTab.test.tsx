@@ -7,16 +7,13 @@ import { useConnectionStore } from "@/store/connection"
 import { tldwClient } from "@/services/tldw"
 
 let mockReferencesResponse: any = null
+const mockUseDocumentReferences = vi.fn()
 
 vi.mock("@/hooks/document-workspace", async () => {
   const actual = await vi.importActual<any>("@/hooks/document-workspace")
   return {
     ...actual,
-    useDocumentReferences: () => ({
-      data: mockReferencesResponse,
-      isLoading: false,
-      error: null,
-    }),
+    useDocumentReferences: (...args: any[]) => mockUseDocumentReferences(...args),
   }
 })
 
@@ -43,6 +40,12 @@ describe("ReferencesTab", () => {
         disconnect() {}
       }
     }
+    mockUseDocumentReferences.mockImplementation(() => ({
+      data: mockReferencesResponse,
+      isLoading: false,
+      error: null,
+      isFetching: false,
+    }))
   })
 
   afterEach(() => {
@@ -55,7 +58,7 @@ describe("ReferencesTab", () => {
     vi.clearAllMocks()
   })
 
-  it("filters references by search query", () => {
+  it("passes search query to backend hook for cross-page filtering", async () => {
     mockReferencesResponse = {
       media_id: 1,
       has_references: true,
@@ -73,6 +76,9 @@ describe("ReferencesTab", () => {
         },
       ],
       enrichment_source: "semantic_scholar",
+      total_available: 2,
+      total_detected: 2,
+      returned_count: 2,
     }
 
     render(
@@ -86,8 +92,15 @@ describe("ReferencesTab", () => {
 
     const searchInput = screen.getByPlaceholderText("Search references...")
     fireEvent.change(searchInput, { target: { value: "With DOI" } })
-    expect(screen.getByText("With DOI")).toBeInTheDocument()
-    expect(screen.queryByText("No DOI")).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(mockUseDocumentReferences).toHaveBeenLastCalledWith(1, {
+        enrich: false,
+        offset: 0,
+        limit: 50,
+        parseCap: undefined,
+        search: "With DOI",
+      })
+    })
   })
 
   it("enriches a single reference using reference_index", async () => {

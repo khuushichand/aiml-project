@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from collections import deque
 
 import pytest
@@ -76,6 +77,36 @@ async def test_embeddings_shadow_does_not_mutate_legacy_enforcement_state(monkey
     # Shadow comparisons should track their own queue for drift metrics.
     shadow_store = getattr(legacy, "_shadow_user_requests", {})
     assert len(shadow_store.get("u123", deque())) == 1
+
+
+@pytest.mark.asyncio
+async def test_embeddings_rg_unavailable_uses_diagnostics_only_shim(monkeypatch):
+    monkeypatch.setenv("RG_ENABLED", "1")
+
+    async def _fake_rg_none(**_: object) -> None:
+        return None
+
+    monkeypatch.setattr(emb_rl, "_maybe_enforce_with_rg", _fake_rg_none)
+
+    legacy = emb_rl.UserRateLimiter(default_limit=1, window_seconds=60)
+    legacy.user_requests["u123"].append((time.time(), 1))
+    limiter = emb_rl.AsyncRateLimiter(rate_limiter=legacy)
+
+    def _legacy_should_not_run(*args, **kwargs):  # pragma: no cover
+        raise AssertionError("legacy limiter enforcement should be bypassed when RG is enabled")
+
+    monkeypatch.setattr(limiter.rate_limiter, "check_rate_limit", _legacy_should_not_run, raising=True)
+    before_len = len(legacy.user_requests.get("u123", deque()))
+    before_total_requests = legacy.total_requests
+    before_total_blocked = legacy.total_blocked
+
+    allowed, retry_after = await limiter.check_rate_limit_async("u123", cost=1)
+
+    assert allowed is True
+    assert retry_after is None
+    assert len(legacy.user_requests.get("u123", deque())) == before_len
+    assert legacy.total_requests == before_total_requests
+    assert legacy.total_blocked == before_total_blocked
 
 
 @pytest.mark.asyncio

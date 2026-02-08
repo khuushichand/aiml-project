@@ -124,15 +124,15 @@ Provide a `ProviderRegistryBase` with:
 
 ## 15. Requirement-by-Requirement Implementation Checklist
 Current assessment date: 2026-02-08
-Current implementation status: Partially implemented (R1 complete; wrappers still independent)
+Current implementation status: Partially implemented (R1-R3 complete; wrappers still independent)
 
 Use this as the execution tracker for this PRD. Mark each item complete only when code, tests, and API behavior are all verified.
 
 | ID | Requirement (from this PRD) | Concrete Implementation Tasks | Target Files (create/update) | Tests (create/update) | Status |
 | --- | --- | --- | --- | --- | --- |
 | R1 | Shared `ProviderRegistryBase` exists in Infrastructure (Sections 8.1, 9.1) | Create shared base module with registry core, config object, and public API. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py` (new), `tldw_Server_API/app/core/Infrastructure/__init__.py` | `tldw_Server_API/tests/Infrastructure/test_provider_registry_base.py` (new) | [x] |
-| R2 | Registration supports class, instance, dotted-path string (Section 8.1) | Implement `register_adapter()` and resolver that accepts all 3 forms and validates adapter type via wrapper hook. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py` | `tldw_Server_API/tests/Infrastructure/test_provider_registry_base.py` | [ ] |
-| R3 | Lazy initialization with caching (Section 8.1) | Implement lazy materialization and adapter instance cache with cache invalidation on re-register. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py` | `tldw_Server_API/tests/Infrastructure/test_provider_registry_base.py` | [ ] |
+| R2 | Registration supports class, instance, dotted-path string (Section 8.1) | Implement `register_adapter()` and resolver that accepts all 3 forms and validates adapter type via wrapper hook. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py` | `tldw_Server_API/tests/Infrastructure/test_provider_registry_base.py` | [x] |
+| R3 | Lazy initialization with caching (Section 8.1) | Implement lazy materialization and adapter instance cache with cache invalidation on re-register. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py` | `tldw_Server_API/tests/Infrastructure/test_provider_registry_base.py` | [x] |
 | R4 | Failure tracking + retry backoff parity (Section 8.1) | Implement failed-provider tracking, retry timestamps, configurable retry window, and "retry disabled" mode. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py` | `tldw_Server_API/tests/Infrastructure/test_provider_registry_backoff.py` (new), `tldw_Server_API/tests/TTS/*` parity tests | [ ] |
 | R5 | Unified provider availability statuses (`enabled`, `failed`, `disabled`, `unknown`) (Section 8.1, 9.2) | Add shared `ProviderStatus` enum and conversion/mapping hooks for domain-specific states. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py`, wrapper registries | `tldw_Server_API/tests/Infrastructure/test_provider_registry_status.py` (new) | [ ] |
 | R6 | Consistent provider normalization + alias mapping hooks (Section 8.1) | Implement canonical name normalization utility and alias table support in base; make wrappers register aliases. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py`, `tldw_Server_API/app/core/LLM_Calls/adapter_registry.py`, `tldw_Server_API/app/core/TTS/adapter_registry.py`, `tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/stt_provider_adapter.py` | `tldw_Server_API/tests/Infrastructure/test_provider_registry_normalization.py` (new), `tldw_Server_API/tests/Audio/test_stt_provider_adapter.py` | [ ] |
