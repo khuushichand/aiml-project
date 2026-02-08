@@ -20,6 +20,7 @@ type QAResultsViewProps = {
   onCopyChunk: (doc: QADocument) => void
   onInsertChunk: (doc: QADocument) => void
   onPinChunk: (doc: QADocument) => void
+  onPreviewChunk: (doc: QADocument) => void
 }
 
 /**
@@ -38,7 +39,8 @@ export const QAResultsView: React.FC<QAResultsViewProps> = ({
   onInsertAnswer,
   onCopyChunk,
   onInsertChunk,
-  onPinChunk
+  onPinChunk,
+  onPreviewChunk
 }) => {
   const { t } = useTranslation(["sidepanel"])
 
@@ -103,6 +105,7 @@ export const QAResultsView: React.FC<QAResultsViewProps> = ({
           onCopy={onCopyChunk}
           onInsert={onInsertChunk}
           onPin={onPinChunk}
+          onPreview={onPreviewChunk}
         />
       )}
     </div>

@@ -16,10 +16,11 @@ import {
   useKnowledgeSearch,
   toPinnedResult,
   withFullMediaTextIfAvailable,
+  qaDocumentToRagResult,
   type RagResult
 } from "./hooks"
 import { useFileSearch } from "./hooks/useFileSearch"
-import { useQASearch } from "./hooks/useQASearch"
+import { useQASearch, type QADocument } from "./hooks/useQASearch"
 
 /**
  * Tab identifiers for the 4-tab architecture.
@@ -189,6 +190,13 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     setPreviewItem(toPinnedResult(result))
   }, [])
 
+  const handlePreviewChunk = React.useCallback(
+    (doc: QADocument) => {
+      handlePreview(qaDocumentToRagResult(doc))
+    },
+    [handlePreview]
+  )
+
   // Discard staged settings on close
   const previousOpen = React.useRef(isOpen)
   React.useEffect(() => {
@@ -339,6 +347,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
             onCopyChunk={qaSearch.copyChunk}
             onInsertChunk={qaSearch.insertChunk}
             onPinChunk={qaSearch.pinChunk}
+            onPreviewChunk={handlePreviewChunk}
             isConnected={isConnected}
             autoFocus={autoFocus}
             onOpenContext={() => handleTabChange("context")}

@@ -358,6 +358,8 @@ class DockerRunner:
             port_mappings = list(getattr(spec, "port_mappings", []) or [])
         except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             port_mappings = []
+        # OpenSSH in capability-dropped containers needs a small capability set for pre-auth.
+        needs_ssh_caps = False
         for mapping in port_mappings:
             try:
                 host_ip = str(mapping.get("host_ip") or "127.0.0.1")
@@ -365,7 +367,11 @@ class DockerRunner:
                 container_port = int(mapping.get("container_port"))
             except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 continue
+            if container_port == 22:
+                needs_ssh_caps = True
             cmd += ["-p", f"{host_ip}:{host_port}:{container_port}"]
+        if needs_ssh_caps:
+            cmd += ["--cap-add", "SYS_CHROOT", "--cap-add", "SETUID", "--cap-add", "SETGID"]
 
         image = spec.base_image or "python:3.11-slim"
         cmd.append(image)

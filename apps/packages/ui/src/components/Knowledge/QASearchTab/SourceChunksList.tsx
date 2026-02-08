@@ -12,6 +12,7 @@ type SourceChunksListProps = {
   onCopy: (doc: QADocument) => void
   onInsert: (doc: QADocument) => void
   onPin: (doc: QADocument) => void
+  onPreview: (doc: QADocument) => void
 }
 
 type ChunkSortMode = "relevance" | "source"
@@ -37,7 +38,8 @@ export const SourceChunksList: React.FC<SourceChunksListProps> = ({
   pinnedResults,
   onCopy,
   onInsert,
-  onPin
+  onPin,
+  onPreview
 }) => {
   const { t } = useTranslation(["sidepanel"])
   const [sortMode, setSortMode] = React.useState<ChunkSortMode>("relevance")
@@ -144,6 +146,7 @@ export const SourceChunksList: React.FC<SourceChunksListProps> = ({
               onCopy={onCopy}
               onInsert={onInsert}
               onPin={onPin}
+              onPreview={onPreview}
               isPinned={isPinned(doc)}
             />
           </div>

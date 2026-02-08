@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import random
 import re
 import time
@@ -2518,9 +2519,18 @@ def search_web_serper(
     """Query Serper.dev and return raw JSON results."""
     cfg = get_loaded_config().get("search_engines", {})
     if not serper_api_url:
-        serper_api_url = cfg.get("serper_search_api_url") or "https://google.serper.dev/search"
+        serper_api_url = (
+            cfg.get("serper_search_api_url")
+            or os.getenv("SERPER_API_URL")
+            or os.getenv("SEARCH_ENGINE_API_URL_SERPER")
+            or "https://google.serper.dev/search"
+        )
     if not serper_api_key:
-        serper_api_key = cfg.get("serper_search_api_key")
+        serper_api_key = (
+            cfg.get("serper_search_api_key")
+            or os.getenv("SERPER_API_KEY")
+            or os.getenv("SEARCH_ENGINE_API_KEY_SERPER")
+        )
     if not serper_api_key:
         raise ValueError("Please provide a valid Serper API key")
 

@@ -42,6 +42,7 @@ describe("SourceChunksList", () => {
         onCopy={vi.fn()}
         onInsert={vi.fn()}
         onPin={vi.fn()}
+        onPreview={vi.fn()}
       />
     )
 
@@ -62,6 +63,7 @@ describe("SourceChunksList", () => {
     const onCopy = vi.fn()
     const onInsert = vi.fn()
     const onPin = vi.fn()
+    const onPreview = vi.fn()
 
     render(
       <SourceChunksList
@@ -70,6 +72,7 @@ describe("SourceChunksList", () => {
         onCopy={onCopy}
         onInsert={onInsert}
         onPin={onPin}
+        onPreview={onPreview}
       />
     )
 
@@ -79,10 +82,12 @@ describe("SourceChunksList", () => {
     const firstItemScope = within(firstItem)
     fireEvent.click(firstItemScope.getByRole("button", { name: "Copy" }))
     fireEvent.click(firstItemScope.getByRole("button", { name: "Insert" }))
+    fireEvent.click(firstItemScope.getByRole("button", { name: "Preview" }))
     fireEvent.click(firstItemScope.getByRole("button", { name: "Pin" }))
 
     expect(onCopy).toHaveBeenCalledTimes(1)
     expect(onInsert).toHaveBeenCalledTimes(1)
+    expect(onPreview).toHaveBeenCalledTimes(1)
     expect(onPin).toHaveBeenCalledTimes(1)
     expect(onCopy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -95,6 +100,11 @@ describe("SourceChunksList", () => {
       })
     )
     expect(onPin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ title: "Alpha Doc" })
+      })
+    )
+    expect(onPreview).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: expect.objectContaining({ title: "Alpha Doc" })
       })

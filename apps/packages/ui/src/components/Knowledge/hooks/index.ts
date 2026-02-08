@@ -36,3 +36,4 @@ export type {
   QADocument,
   QACitation
 } from "./useQASearch"
+export { qaDocumentToRagResult } from "./useQASearch"

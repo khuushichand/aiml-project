@@ -30,7 +30,7 @@
 **Tests**:
 - Component/integration test proving QA chunk -> preview modal open.
 - Test insert/ask actions from modal for QA chunk content.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Finish i18n + Footer Logic Compliance
 **Goal**: Remove fallback-only strings and align footer behavior with the staged-settings design.

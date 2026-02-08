@@ -335,6 +335,42 @@ def test_search_web_serper_builds_expected_request(monkeypatch: pytest.MonkeyPat
     assert " -this" in payload["q"]
 
 
+def test_search_web_serper_uses_env_key_when_config_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_fetch_json(*, method: str, url: str, headers: Dict[str, str], json: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+        captured["method"] = method
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return {"organic": []}
+
+    from tldw_Server_API.app.core import http_client
+    from tldw_Server_API.app.core.Security import egress as egress_module
+
+    monkeypatch.setattr(http_client, "fetch_json", fake_fetch_json)
+    monkeypatch.setattr(egress_module, "evaluate_url_policy", lambda _url: SimpleNamespace(allowed=True))
+    monkeypatch.setattr(
+        web_search,
+        "get_loaded_config",
+        lambda: {
+            "search_engines": {
+                "serper_search_api_url": "https://google.serper.dev/search",
+            }
+        },
+    )
+    monkeypatch.delenv("SEARCH_ENGINE_API_KEY_SERPER", raising=False)
+    monkeypatch.setenv("SERPER_API_KEY", "env-serper-key")
+
+    result = web_search.search_web_serper(search_query="capital of france")
+
+    assert result == {"organic": []}
+    assert captured["method"] == "POST"
+    assert captured["headers"]["X-API-KEY"] == "env-serper-key"
+    assert captured["url"] == "https://google.serper.dev/search"
+
+
 def test_generate_and_search_propagates_include_domains_alias(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: Dict[str, Any] = {}
 

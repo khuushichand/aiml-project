@@ -230,7 +230,7 @@ const normalizeQAResponse = (
 /**
  * Convert a QADocument to a RagResult for reuse with shared helpers.
  */
-const docToRagResult = (doc: QADocument): RagResult => ({
+export const qaDocumentToRagResult = (doc: QADocument): RagResult => ({
   content: doc.content || doc.text || doc.chunk || "",
   metadata: {
     ...doc.metadata,
@@ -325,7 +325,7 @@ export function useQASearch({
 
   const insertChunk = React.useCallback(
     (doc: QADocument) => {
-      const ragResult = docToRagResult(doc)
+      const ragResult = qaDocumentToRagResult(doc)
       const pinned = toPinnedResult(ragResult)
       onInsert(formatRagResult(pinned, "markdown"))
     },
@@ -334,7 +334,7 @@ export function useQASearch({
 
   const copyChunk = React.useCallback(
     async (doc: QADocument, format: RagCopyFormat = "markdown") => {
-      const ragResult = docToRagResult(doc)
+      const ragResult = qaDocumentToRagResult(doc)
       const pinned = toPinnedResult(ragResult)
       if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
         return
@@ -350,7 +350,7 @@ export function useQASearch({
 
   const pinChunk = React.useCallback(
     (doc: QADocument) => {
-      const ragResult = docToRagResult(doc)
+      const ragResult = qaDocumentToRagResult(doc)
       onPin(ragResult)
     },
     [onPin]

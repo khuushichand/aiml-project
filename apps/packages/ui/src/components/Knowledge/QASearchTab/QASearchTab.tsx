@@ -41,6 +41,7 @@ type QASearchTabProps = {
   onCopyChunk: (doc: QADocument) => void
   onInsertChunk: (doc: QADocument) => void
   onPinChunk: (doc: QADocument) => void
+  onPreviewChunk: (doc: QADocument) => void
 
   // Connection state
   isConnected?: boolean
@@ -74,6 +75,7 @@ export const QASearchTab: React.FC<QASearchTabProps> = ({
   onCopyChunk,
   onInsertChunk,
   onPinChunk,
+  onPreviewChunk,
   isConnected = true,
   autoFocus = true,
   onOpenContext
@@ -122,6 +124,7 @@ export const QASearchTab: React.FC<QASearchTabProps> = ({
         onCopyChunk={onCopyChunk}
         onInsertChunk={onInsertChunk}
         onPinChunk={onPinChunk}
+        onPreviewChunk={onPreviewChunk}
       />
 
       {pinnedResults.length > 0 && (

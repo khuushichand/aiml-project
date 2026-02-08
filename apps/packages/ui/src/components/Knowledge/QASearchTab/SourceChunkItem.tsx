@@ -1,6 +1,6 @@
 import React from "react"
 import { Button, Tooltip } from "antd"
-import { Check, Copy, Pin, Plus } from "lucide-react"
+import { Check, Copy, Eye, Pin, Plus } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import type { QADocument } from "../hooks/useQASearch"
 import { highlightText } from "@/utils/text-highlight"
@@ -12,6 +12,7 @@ type SourceChunkItemProps = {
   onCopy: (doc: QADocument) => void
   onInsert: (doc: QADocument) => void
   onPin: (doc: QADocument) => void
+  onPreview: (doc: QADocument) => void
   isPinned?: boolean
 }
 
@@ -24,7 +25,16 @@ const formatScore = (score?: number) =>
  * Individual source chunk card displaying retrieved text with relevance score.
  */
 export const SourceChunkItem: React.FC<SourceChunkItemProps> = React.memo(
-  ({ document, index, query, onCopy, onInsert, onPin, isPinned = false }) => {
+  ({
+    document,
+    index,
+    query,
+    onCopy,
+    onInsert,
+    onPin,
+    onPreview,
+    isPinned = false
+  }) => {
     const { t } = useTranslation(["sidepanel"])
     const [copied, setCopied] = React.useState(false)
 
@@ -116,6 +126,18 @@ export const SourceChunkItem: React.FC<SourceChunkItemProps> = React.memo(
               className="text-text-muted hover:text-accent"
             >
               {t("sidepanel:rag.actions.insert", "Insert")}
+            </Button>
+          </Tooltip>
+
+          <Tooltip title={t("sidepanel:rag.actions.preview", "Preview")}>
+            <Button
+              type="text"
+              size="small"
+              onClick={() => onPreview(document)}
+              icon={<Eye className="h-3 w-3" />}
+              className="text-text-muted hover:text-accent"
+            >
+              {t("sidepanel:rag.actions.preview", "Preview")}
             </Button>
           </Tooltip>
 
