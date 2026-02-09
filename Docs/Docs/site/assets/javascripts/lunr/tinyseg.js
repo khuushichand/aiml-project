@@ -93,7 +93,7 @@
           return this;
         }
         TinySegmenter.prototype.ctype_ = function(str) {
-          for (var i in this.chartype_) {
+          for (var i = 0; i < this.chartype_.length; ++i) {
             if (str.match(this.chartype_[i][0])) {
               return this.chartype_[i][1];
             }

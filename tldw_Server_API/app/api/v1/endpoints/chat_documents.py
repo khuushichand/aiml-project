@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
 from starlette.responses import StreamingResponse
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.chat_documents_deps import get_document_generator_service
 from tldw_Server_API.app.api.v1.schemas.document_generator_schemas import (
@@ -36,6 +36,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.Chat.document_generator import (
@@ -82,7 +83,7 @@ async def generate_document(
     http_request: Request,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     service_cls: type[DocumentGeneratorService] = Depends(get_document_generator_service),
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> GenerateDocumentResponse | AsyncGenerationResponse:
     """Generate a document from a conversation."""
     try:
@@ -126,7 +127,8 @@ async def generate_document(
 
             user_id_int = None
             try:
-                user_id_int = int(current_user.get("id"))
+                if principal.user_id is not None:
+                    user_id_int = int(principal.user_id)
             except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS:
                 user_id_int = None
 

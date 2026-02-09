@@ -6,7 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app as fastapi_app
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
 from tldw_Server_API.app.core.PrivilegeMaps.introspection import DependencyMetadata, RouteMetadata
 from tldw_Server_API.app.core.PrivilegeMaps.service import PrivilegeMapService
@@ -256,11 +257,18 @@ def privilege_test_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     asyncio.run(seed_snapshots())
 
-    def override_current_user():
+    def override_principal():
+        return AuthPrincipal(
+            kind="user",
+            user_id=1,
+            username="Admin User",
+            roles=["admin"],
+            permissions=[],
+            is_admin=True,
+            subject="user:1",
+        )
 
-        return {"id": "admin-1", "username": "Admin User", "role": "admin", "is_admin": True}
-
-    fastapi_app.dependency_overrides[get_current_active_user] = override_current_user
+    fastapi_app.dependency_overrides[get_auth_principal] = override_principal
     fastapi_app.dependency_overrides[get_privilege_map_service] = lambda: fake_service
     fastapi_app.dependency_overrides[get_privilege_snapshot_store] = lambda: snapshot_store
 
@@ -439,3 +447,41 @@ def test_create_snapshot_org(privilege_test_client: TestClient):
     payload = response.json()
     assert payload["target_scope"] == "org"
     assert payload["summary"]["users"] >= 1
+
+
+def test_org_requires_admin_claim(privilege_test_client: TestClient):
+    previous = fastapi_app.dependency_overrides[get_auth_principal]
+    fastapi_app.dependency_overrides[get_auth_principal] = lambda: AuthPrincipal(
+        kind="user",
+        user_id=2,
+        username="Viewer User",
+        roles=["viewer"],
+        permissions=[],
+        is_admin=False,
+        subject="user:2",
+    )
+    try:
+        response = privilege_test_client.get("/api/v1/privileges/org")
+        assert response.status_code == 403
+        assert "Administrator privileges required" in response.json()["detail"]
+    finally:
+        fastapi_app.dependency_overrides[get_auth_principal] = previous
+
+
+def test_self_requires_user_principal(privilege_test_client: TestClient):
+    previous = fastapi_app.dependency_overrides[get_auth_principal]
+    fastapi_app.dependency_overrides[get_auth_principal] = lambda: AuthPrincipal(
+        kind="service",
+        user_id=None,
+        username=None,
+        roles=[],
+        permissions=[],
+        is_admin=False,
+        subject="service:watchlist-worker",
+    )
+    try:
+        response = privilege_test_client.get("/api/v1/privileges/self")
+        assert response.status_code == 403
+        assert "User principal required" in response.json()["detail"]
+    finally:
+        fastapi_app.dependency_overrides[get_auth_principal] = previous

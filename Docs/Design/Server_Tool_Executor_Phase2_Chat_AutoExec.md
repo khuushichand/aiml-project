@@ -1,6 +1,7 @@
 # Server Tool Executor Phase 2: Chat Auto-Execution Addendum
 
 ## Intent
+
 Integrate MCP-backed server tool execution into Chat flows in a gated, default-off way.
 
 ## Config Contract
@@ -12,6 +13,7 @@ Integrate MCP-backed server tool execution into Chat flows in a gated, default-o
 - `chat_tool_allow_catalog` (string, default `""` — no tools allowed; explicit opt-in required)
 - `chat_tool_idempotency` (bool, default `true`) — see [Idempotency Key Generation](#idempotency-key-generation) below
 - `chat_tool_auto_continue_once` (bool, default `false`)
+- `chat_tool_fail_fast` (bool, default `false`; accepted values: `true`/`false`) — when `true`, stop processing remaining tool calls on first failure/timeout
 
 Environment overrides:
 
@@ -21,6 +23,7 @@ Environment overrides:
 - `CHAT_TOOL_ALLOW_CATALOG`
 - `CHAT_TOOL_IDEMPOTENCY`
 - `CHAT_TOOL_AUTO_CONTINUE_ONCE`
+- `CHAT_TOOL_FAIL_FAST`
 
 Allow-catalog semantics:
 
@@ -144,6 +147,10 @@ chat_tool_fail_fast = false   # default: false (continue-on-error)
 ```
 
 Environment override: `CHAT_TOOL_FAIL_FAST`
+
+`chat_tool_fail_fast` is a boolean flag and accepts only `true`/`false`
+(`CHAT_TOOL_FAIL_FAST` uses the same boolean parsing). There is no numeric
+clamping for this key; invalid/unset values resolve to the default `false`.
 
 When `chat_tool_fail_fast=true`, the executor stops processing the batch
 immediately upon the first non-success outcome (failure or timeout).
@@ -280,6 +287,7 @@ always execute.
 ```
 
 ## Non-Streaming Flow (target behavior)
+
 1. Provider returns assistant `tool_calls` in the first completion.
 2. If `chat_auto_execute_tools=false`, return existing response behavior unchanged.
 3. If enabled:
@@ -338,6 +346,7 @@ Auto-continue only applies to non-streaming flows (i.e. when
    - `tldw_tool_auto_continue: { attempted: bool, succeeded: bool }`
 
 ## Safety Invariants
+
 - Endpoint auth/RBAC remains unchanged.
 - MCP remains authoritative for per-tool permission and write-policy enforcement.
 - Tool auto-execution failures must be isolated to tool result records; they should not crash the chat endpoint.

@@ -274,8 +274,11 @@ async def test_admin_rate_limit_bypass_is_principal_first(
 
     monkeypatch.setenv("TEST_MODE", "0")
     monkeypatch.setenv("TLDW_TEST_MODE", "0")
-    monkeypatch.setattr(auth_deps, "is_single_user_mode", _mode_helper_should_not_be_called)
-    monkeypatch.setattr(auth_deps, "is_single_user_profile_mode", _profile_helper_should_not_be_called)
+    # Compatibility: these helpers may no longer be imported by auth_deps in
+    # claim-first paths; patch with raising=False so the assertion remains valid
+    # regardless of symbol exposure.
+    monkeypatch.setattr(auth_deps, "is_single_user_mode", _mode_helper_should_not_be_called, raising=False)
+    monkeypatch.setattr(auth_deps, "is_single_user_profile_mode", _profile_helper_should_not_be_called, raising=False)
     monkeypatch.setattr(auth_deps, "get_auth_governor", _boom_auth_governor)
 
     calls = {"count": 0}

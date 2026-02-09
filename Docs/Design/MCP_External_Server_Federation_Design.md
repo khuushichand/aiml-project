@@ -105,7 +105,7 @@ servers:
     enabled: false
     transport: stdio
     stdio:
-      command: "node"
+      command: "/usr/bin/node"
       args: ["/opt/mcp/ci-server.js"]
       env:
         CI_MODE: "1"
@@ -115,6 +115,43 @@ servers:
       allow_writes: true
       require_write_confirmation: true
 ```
+
+## Stdio Transport Security Requirements (Mandatory)
+**Security Note (Critical):** `stdio.command`, `stdio.args`, `stdio.env`, and
+`stdio.cwd` must be pre-vetted static operator configuration and must never be
+derived from or influenced by external/user input.
+
+- Command path validation:
+  - `stdio.command` must resolve to an absolute canonical path (`realpath`) and
+    match an allowlist of permitted executables.
+  - Reject relative paths, traversal segments (`..`), and shell-style command
+    strings.
+  - Prevent symlink race attacks by validating the resolved target at config
+    load and again immediately before process spawn; fail closed on mismatch.
+- Args/env injection prevention:
+  - Launch stdio processes with direct exec APIs (`shell=false`) only.
+  - Validate `stdio.args` as structured tokens (no shell interpolation) and
+    reject arguments that fail per-server policy/schema.
+  - `stdio.env` must be key-whitelisted/sanitized; start from a minimal
+    inherited environment and allow only approved keys/values.
+- Working-directory constraints:
+  - `stdio.cwd` must be an absolute canonical path under an operator-defined
+    allowlisted root.
+  - Reject `cwd` values that escape allowed roots after canonicalization, or
+    point to unsafe writable locations.
+- Process isolation/sandboxing:
+  - Run stdio backends as a dedicated unprivileged service account.
+  - Strongly prefer container/chroot isolation plus kernel policy controls
+    (for example seccomp and SELinux/AppArmor profiles).
+  - Apply resource and privilege restrictions (CPU/memory/file limits,
+    no-new-privileges) to reduce blast radius.
+- Runtime enforcement and audit checks:
+  - Enforce all stdio validation checks at startup and at each execution
+    attempt; reject on any policy violation.
+  - Emit audit records for validation decisions and executions (server_id,
+    resolved executable path, cwd, allowed env key set, caller, outcome).
+  - Include periodic operational checks to detect config drift (allowlist,
+    ownership/permissions, path target changes) and alert on violations.
 
 ## RBAC and Permission Model
 - External tool permissions map to namespaced tool ids:
@@ -129,6 +166,7 @@ servers:
 - Enforce allowlist/denylist before transport invocation.
 - Validate arguments locally against discovered tool schemas when present.
 - Store secrets in env vars; config references env variable names only.
+- Require fail-closed stdio preflight validation for command path, args/env, and cwd.
 - Add outbound host allowlist support (future hardening extension).
 
 ## Failure and Resilience
@@ -145,6 +183,7 @@ servers:
   - `mcp_external_circuit_state{server_id,state}`
 - Audit fields:
   - `user_id`, `client_id`, `server_id`, `tool_name`, `request_id`, `outcome`, `duration_ms`
+  - `transport`, `resolved_command_path`, `cwd`, `env_keys`, `policy_decision`
 
 ## Rollout Plan
 1. **Phase 1 (Read-only federation MVP)**

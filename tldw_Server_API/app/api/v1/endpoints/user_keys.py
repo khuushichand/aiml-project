@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.schemas.user_keys import (
     ProviderKeyTestRequest,
     ProviderKeyTestResponse,
@@ -26,6 +26,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
 from tldw_Server_API.app.core.AuthNZ.byok_testing import test_provider_credentials
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import (
     AuthnzOrgProviderSecretsRepo,
 )
@@ -68,6 +69,17 @@ def _require_byok_enabled() -> None:
         )
 
 
+def _principal_user_id(principal: AuthPrincipal) -> int:
+    raw_id = principal.user_id
+    try:
+        user_id = int(raw_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid user context") from exc
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid user context")
+    return user_id
+
+
 async def _touch_user_last_used_if_match(
     repo: AuthnzUserProviderSecretsRepo,
     *,
@@ -98,7 +110,7 @@ async def _touch_user_last_used_if_match(
 async def upsert_user_provider_key(
     payload: UserProviderKeyUpsertRequest,
     request: Request,
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> UserProviderKeyResponse:
     _require_byok_enabled()
     provider_norm = normalize_provider_name(payload.provider)
@@ -115,7 +127,7 @@ async def upsert_user_provider_key(
             detail="api_key is required",
         )
 
-    allow_base_url = is_trusted_base_url_request(request, user=current_user)
+    allow_base_url = is_trusted_base_url_request(request, principal=principal)
     raw_fields = payload.credential_fields or {}
     if isinstance(raw_fields, dict) and "base_url" in raw_fields and not allow_base_url:
         raise HTTPException(
@@ -162,17 +174,18 @@ async def upsert_user_provider_key(
             detail="BYOK encryption is not configured",
         ) from exc
 
+    user_id = _principal_user_id(principal)
     repo = await _get_user_repo()
     now = datetime.now(timezone.utc)
     row = await repo.upsert_secret(
-        user_id=int(current_user["id"]),
+        user_id=user_id,
         provider=provider_norm,
         encrypted_blob=dumps_envelope(envelope),
         key_hint=key_hint_for_api_key(api_key),
         metadata=payload.metadata,
         updated_at=now,
-        created_by=int(current_user["id"]),
-        updated_by=int(current_user["id"]),
+        created_by=user_id,
+        updated_by=user_id,
     )
     return UserProviderKeyResponse(
         provider=provider_norm,
@@ -184,10 +197,10 @@ async def upsert_user_provider_key(
 @router.get("/keys", response_model=UserProviderKeysResponse)
 async def list_user_provider_keys(
     request: Request,
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> UserProviderKeysResponse:
     _require_byok_enabled()
-    user_id = int(current_user["id"])
+    user_id = _principal_user_id(principal)
     allowlist = resolve_byok_allowlist()
 
     user_repo = await _get_user_repo()
@@ -298,7 +311,7 @@ async def list_user_provider_keys(
 async def test_user_provider_key(
     payload: ProviderKeyTestRequest,
     request: Request,
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> ProviderKeyTestResponse:
     _require_byok_enabled()
     provider_norm = normalize_provider_name(payload.provider)
@@ -308,8 +321,9 @@ async def test_user_provider_key(
             detail="Provider not allowed for BYOK",
         )
 
+    user_id = _principal_user_id(principal)
     repo = await _get_user_repo()
-    row = await repo.fetch_secret_for_user(int(current_user["id"]), provider_norm)
+    row = await repo.fetch_secret_for_user(user_id, provider_norm)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
 
@@ -325,7 +339,7 @@ async def test_user_provider_key(
     if not api_key:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
 
-    allow_base_url = is_trusted_base_url_request(request, user=current_user)
+    allow_base_url = is_trusted_base_url_request(request, principal=principal)
     credential_fields_raw = stored_payload.get("credential_fields") or {}
     if isinstance(credential_fields_raw, dict) and "base_url" in credential_fields_raw and not allow_base_url:
         credential_fields_raw = dict(credential_fields_raw)
@@ -363,7 +377,7 @@ async def test_user_provider_key(
 
     await _touch_user_last_used_if_match(
         repo,
-        user_id=int(current_user["id"]),
+        user_id=user_id,
         provider=provider_norm,
         api_key=api_key,
     )
@@ -378,15 +392,16 @@ async def test_user_provider_key(
 )
 async def delete_user_provider_key(
     provider: str,
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> Response:
     _require_byok_enabled()
+    user_id = _principal_user_id(principal)
     provider_norm = normalize_provider_name(provider)
     repo = await _get_user_repo()
     deleted = await repo.delete_secret(
-        int(current_user["id"]),
+        user_id,
         provider_norm,
-        revoked_by=int(current_user["id"]),
+        revoked_by=user_id,
     )
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")

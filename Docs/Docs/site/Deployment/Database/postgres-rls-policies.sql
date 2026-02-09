@@ -43,6 +43,13 @@ CREATE POLICY ps_prompts_tenant_isolation ON prompt_studio_prompts
       WHERE p.id = prompt_studio_prompts.project_id
         AND p.user_id = current_setting('app.current_user_id', true)::text
     )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM prompt_studio_projects p
+      WHERE p.id = prompt_studio_prompts.project_id
+        AND p.user_id = current_setting('app.current_user_id', true)::text
+    )
   );
 
 -- Signatures (scope via owning project)
@@ -51,6 +58,13 @@ ALTER TABLE IF EXISTS prompt_studio_signatures FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_signatures_tenant_isolation ON prompt_studio_signatures;
 CREATE POLICY ps_signatures_tenant_isolation ON prompt_studio_signatures
   USING (
+    EXISTS (
+      SELECT 1 FROM prompt_studio_projects p
+      WHERE p.id = prompt_studio_signatures.project_id
+        AND p.user_id = current_setting('app.current_user_id', true)::text
+    )
+  )
+  WITH CHECK (
     EXISTS (
       SELECT 1 FROM prompt_studio_projects p
       WHERE p.id = prompt_studio_signatures.project_id
@@ -69,6 +83,13 @@ CREATE POLICY ps_test_cases_tenant_isolation ON prompt_studio_test_cases
       WHERE p.id = prompt_studio_test_cases.project_id
         AND p.user_id = current_setting('app.current_user_id', true)::text
     )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM prompt_studio_projects p
+      WHERE p.id = prompt_studio_test_cases.project_id
+        AND p.user_id = current_setting('app.current_user_id', true)::text
+    )
   );
 
 -- Test runs (scope via owning project)
@@ -77,6 +98,13 @@ ALTER TABLE IF EXISTS prompt_studio_test_runs FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_test_runs_tenant_isolation ON prompt_studio_test_runs;
 CREATE POLICY ps_test_runs_tenant_isolation ON prompt_studio_test_runs
   USING (
+    EXISTS (
+      SELECT 1 FROM prompt_studio_projects p
+      WHERE p.id = prompt_studio_test_runs.project_id
+        AND p.user_id = current_setting('app.current_user_id', true)::text
+    )
+  )
+  WITH CHECK (
     EXISTS (
       SELECT 1 FROM prompt_studio_projects p
       WHERE p.id = prompt_studio_test_runs.project_id
@@ -95,6 +123,13 @@ CREATE POLICY ps_evals_tenant_isolation ON prompt_studio_evaluations
       WHERE p.id = prompt_studio_evaluations.project_id
         AND p.user_id = current_setting('app.current_user_id', true)::text
     )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM prompt_studio_projects p
+      WHERE p.id = prompt_studio_evaluations.project_id
+        AND p.user_id = current_setting('app.current_user_id', true)::text
+    )
   );
 
 -- Optimizations (scope via owning project)
@@ -108,6 +143,13 @@ CREATE POLICY ps_opts_tenant_isolation ON prompt_studio_optimizations
       WHERE p.id = prompt_studio_optimizations.project_id
         AND p.user_id = current_setting('app.current_user_id', true)::text
     )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM prompt_studio_projects p
+      WHERE p.id = prompt_studio_optimizations.project_id
+        AND p.user_id = current_setting('app.current_user_id', true)::text
+    )
   );
 
 -- Optimization iterations (scope via optimization -> project)
@@ -116,6 +158,15 @@ ALTER TABLE IF EXISTS prompt_studio_optimization_iterations FORCE ROW LEVEL SECU
 DROP POLICY IF EXISTS ps_iter_tenant_isolation ON prompt_studio_optimization_iterations;
 CREATE POLICY ps_iter_tenant_isolation ON prompt_studio_optimization_iterations
   USING (
+    EXISTS (
+      SELECT 1
+      FROM prompt_studio_optimizations o
+      JOIN prompt_studio_projects p ON p.id = o.project_id
+      WHERE o.id = prompt_studio_optimization_iterations.optimization_id
+        AND p.user_id = current_setting('app.current_user_id', true)::text
+    )
+  )
+  WITH CHECK (
     EXISTS (
       SELECT 1
       FROM prompt_studio_optimizations o
@@ -162,9 +213,7 @@ CREATE POLICY ps_idem_tenant_isolation ON prompt_studio_idempotency
   );
 
 -- Optional: Prevent BYPASSRLS
--- ALTER TABLE notes FORCE ROW LEVEL SECURITY;
--- ALTER TABLE character_cards FORCE ROW LEVEL SECURITY;
--- ALTER TABLE prompt_studio_projects FORCE ROW LEVEL SECURITY;
+-- FORCE ROW LEVEL SECURITY is already enforced above for notes, character_cards, and prompt_studio_projects.
 
 -- Usage: set the session variable at connection time:
 --   SET SESSION app.current_user_id = '<tenant-id>';
