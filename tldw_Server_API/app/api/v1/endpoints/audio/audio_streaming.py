@@ -22,6 +22,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
     get_chacha_db_for_user_id,
 )
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import _resolve_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import UsageEventLogger, get_usage_event_logger
 from tldw_Server_API.app.api.v1.endpoints.audio.audio_tts import get_tts_service
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
@@ -50,6 +51,7 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
 )
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import upsert_transcript
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
     QuotaExceeded,
     SileroTurnDetector,
@@ -230,6 +232,60 @@ def _audio_ws_quota_error_payload(
     if _audio_ws_compat_error_type_enabled():
         payload["quota"] = quota
     return payload
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    try:
+        lowered = str(value).strip().lower()
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        return default
+    if lowered in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if lowered in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return default
+
+
+def _coerce_positive_float(raw: Any, default: float, *, min_value: float = 0.0) -> float:
+    try:
+        value = float(raw)
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        return default
+    if value < min_value:
+        return default
+    return value
+
+
+def _coerce_positive_int(raw: Any) -> Optional[int]:
+    try:
+        value = int(raw)
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def _stream_model_label(config: UnifiedStreamingConfig) -> str:
+    model = str(getattr(config, "model", "parakeet") or "parakeet").strip().lower()
+    variant = str(getattr(config, "model_variant", "standard") or "standard").strip().lower()
+    return f"stream:{model}:{variant}"
+
+
+def _compose_transcript_snapshot(full_text: str, latest_text: str) -> str:
+    full = str(full_text or "").strip()
+    latest = str(latest_text or "").strip()
+    if full and latest:
+        if full.endswith(latest) or latest in full:
+            return full
+        return f"{full} {latest}".strip()
+    return full or latest
 
 
 def _shim_get_api_keys():
@@ -615,6 +671,175 @@ async def websocket_transcribe(
             return
         acquired_stream = True
 
+        query_params = getattr(websocket, "query_params", {}) or {}
+        persistence_enabled = _coerce_bool(
+            query_params.get("persist_transcript", query_params.get("persist")),
+            default=_coerce_bool(os.getenv("AUDIO_STREAM_TRANSCRIBE_PERSISTENCE", "0"), default=False),
+        )
+        persistence_partial_enabled = _coerce_bool(
+            query_params.get("persist_partial_transcript"),
+            default=_coerce_bool(os.getenv("AUDIO_STREAM_TRANSCRIBE_PARTIAL_PERSISTENCE", "1"), default=True),
+        )
+        persistence_partial_interval_s = _coerce_positive_float(
+            os.getenv("AUDIO_STREAM_TRANSCRIBE_PARTIAL_INTERVAL_S", "2.0"),
+            default=2.0,
+            min_value=0.25,
+        )
+        persistence_media_id = _coerce_positive_int(query_params.get("media_id"))
+        persistence_model = str(
+            query_params.get("transcription_model", "").strip()
+            if hasattr(query_params, "get")
+            else ""
+        ) or _stream_model_label(config)
+        persistence_db = None
+        persistence_warning_sent = False
+        last_partial_persist_ts = 0.0
+
+        async def _send_persistence_warning(message: str, details: Optional[str] = None) -> None:
+            nonlocal persistence_warning_sent
+            if persistence_warning_sent:
+                return
+            persistence_warning_sent = True
+            warning_payload: dict[str, Any] = {
+                "type": "warning",
+                "warning_type": "transcript_persistence_unavailable",
+                "message": message,
+            }
+            if request_id:
+                warning_payload["request_id"] = request_id
+            if details:
+                warning_payload["details"] = details
+            try:
+                if _outer_stream:
+                    await _outer_stream.send_json(warning_payload)
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
+                logger.debug(f"Audio WS transcript persistence warning send failed: {send_exc}")
+
+        async def _ensure_persistence_context() -> Optional[tuple[Any, int]]:
+            nonlocal persistence_db
+            nonlocal persistence_enabled
+            if not persistence_enabled:
+                return None
+            if persistence_media_id is None:
+                persistence_enabled = False
+                await _send_persistence_warning("Transcript persistence requested but media_id is missing")
+                return None
+            if persistence_db is not None:
+                return persistence_db, persistence_media_id
+            try:
+                persistence_user = User(
+                    id=int(user_id_for_usage),
+                    username=f"audio_stream_{user_id_for_usage}",
+                    role="user",
+                    is_active=True,
+                    is_verified=True,
+                )
+                persistence_db = _resolve_media_db_for_user(persistence_user)
+                return persistence_db, persistence_media_id
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(
+                    "Audio WS transcript persistence context unavailable; continuing without persistence. "
+                    f"user_id={user_id_for_usage}, error={exc}"
+                )
+                persistence_enabled = False
+                await _send_persistence_warning(
+                    "Transcript persistence unavailable; continuing without persistence",
+                    str(exc),
+                )
+                return None
+
+        async def _persist_transcript_snapshot(text: str, *, is_final: bool) -> None:
+            nonlocal last_partial_persist_ts
+            nonlocal persistence_enabled
+            snapshot = str(text or "").strip()
+            if not snapshot or not persistence_enabled:
+                return
+            now = time.time()
+            if not is_final:
+                if not persistence_partial_enabled:
+                    return
+                if (now - last_partial_persist_ts) < persistence_partial_interval_s:
+                    return
+            context = await _ensure_persistence_context()
+            if context is None:
+                return
+            db_instance, media_id = context
+            try:
+                upsert_transcript(
+                    db_instance,
+                    media_id=media_id,
+                    transcription=snapshot,
+                    whisper_model=persistence_model,
+                )
+                if not is_final:
+                    last_partial_persist_ts = now
+            except Exception as exc:  # noqa: BLE001 - persistence is fail-open
+                logger.warning(
+                    "Audio WS transcript persistence write failed; continuing without persistence. "
+                    f"media_id={media_id}, model={persistence_model}, error={exc}"
+                )
+                persistence_enabled = False
+                await _send_persistence_warning(
+                    "Failed to persist transcript; continuing stream",
+                    str(exc),
+                )
+
+        async def _on_stream_config_resolved(
+            config_payload: dict[str, Any],
+            resolved_config: UnifiedStreamingConfig,
+        ) -> None:
+            nonlocal persistence_enabled
+            nonlocal persistence_partial_enabled
+            nonlocal persistence_media_id
+            nonlocal persistence_model
+            metadata = config_payload.get("metadata") if isinstance(config_payload, dict) else None
+            if not isinstance(metadata, dict):
+                metadata = {}
+            persist_hint = config_payload.get("persist_transcript") if isinstance(config_payload, dict) else None
+            if persist_hint is None and metadata:
+                persist_hint = metadata.get("persist_transcript", metadata.get("persist"))
+            if persist_hint is not None:
+                persistence_enabled = _coerce_bool(persist_hint, default=persistence_enabled)
+
+            partial_hint = (
+                config_payload.get("persist_partial_transcript") if isinstance(config_payload, dict) else None
+            )
+            if partial_hint is None and metadata:
+                partial_hint = metadata.get("persist_partial_transcript")
+            if partial_hint is not None:
+                persistence_partial_enabled = _coerce_bool(partial_hint, default=persistence_partial_enabled)
+
+            media_id_hint = config_payload.get("media_id") if isinstance(config_payload, dict) else None
+            if media_id_hint is None and metadata:
+                media_id_hint = metadata.get("media_id")
+            media_id_from_cfg = _coerce_positive_int(media_id_hint)
+            if media_id_from_cfg is not None:
+                persistence_media_id = media_id_from_cfg
+
+            model_hint = config_payload.get("transcription_model") if isinstance(config_payload, dict) else None
+            if model_hint is None and metadata:
+                model_hint = metadata.get("transcription_model")
+            if isinstance(model_hint, str) and model_hint.strip():
+                persistence_model = model_hint.strip()
+            else:
+                persistence_model = _stream_model_label(resolved_config)
+
+        async def _on_transcript_result(result: dict[str, Any], full_transcript: str) -> None:
+            if not persistence_enabled:
+                return
+            result_type = str(result.get("type", "")).strip().lower()
+            if result_type not in {"partial", "transcription"}:
+                return
+            text = result.get("text")
+            if not isinstance(text, str) or not text.strip():
+                return
+            is_final = bool(result.get("is_final"))
+            snapshot = _compose_transcript_snapshot(full_transcript, text)
+            await _persist_transcript_snapshot(snapshot, is_final=is_final)
+
+        async def _on_full_transcript(text: str, _auto_commit: bool) -> None:
+            await _persist_transcript_snapshot(text, is_final=True)
+
         # Resource Governor: acquire a 'streams' concurrency lease (policy resolved via route_map)
         # Track and enforce minutes chunk-by-chunk
         used_minutes = 0.0
@@ -736,6 +961,9 @@ async def websocket_transcribe(
                 config,
                 on_audio_seconds=_on_audio_quota,
                 on_heartbeat=_on_heartbeat,
+                on_stream_config_resolved=_on_stream_config_resolved,
+                on_transcript_result=_on_transcript_result,
+                on_full_transcript=_on_full_transcript,
             )
         except _QuotaExceeded as qe:
             try:
@@ -762,6 +990,10 @@ async def websocket_transcribe(
                         f"Failed to release streaming quota slot (stream/transcribe): "
                         f"user_id={user_id_for_usage}, error={e}"
                     )
+            if persistence_db is not None:
+                with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
+                    if hasattr(persistence_db, "release_context_connection"):
+                        persistence_db.release_context_connection()
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")

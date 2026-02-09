@@ -273,63 +273,48 @@ class BaseModule(ABC):
     async def execute_with_circuit_breaker(self, operation, *args, **kwargs):
         """Execute an operation with circuit breaker protection.
 
-        Preserves the existing timeout wrapping and concurrency guard
-        (domain concerns that live outside the generic breaker).
+        Delegates to the unified breaker's ``call_async`` for correct
+        half-open probe slot management and exception-type filtering.
+        The semaphore concurrency guard and timeout wrapping are applied
+        as an inner wrapper around the operation.
         """
         from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
             CircuitBreakerOpenError,
         )
-        if self.is_circuit_breaker_open():
-            raise CircuitBreakerOpenError(
-                f"Circuit breaker is open for module {self.name}",
-                breaker_name=self._circuit_breaker.name,
-                category="mcp",
-                service=self.name,
-            )
         start_time = time.time()
-        acquired = False
-        try:
-            # Concurrency guard
-            if self._semaphore is not None:
-                await self._semaphore.acquire()
-                acquired = True
-            # Execute with timeout
-            result = await asyncio.wait_for(
-                operation(*args, **kwargs),
-                timeout=self.config.timeout_seconds,
-            )
 
-            # Record success
+        async def _guarded_operation():
+            acquired = False
+            try:
+                if self._semaphore is not None:
+                    await self._semaphore.acquire()
+                    acquired = True
+                return await asyncio.wait_for(
+                    operation(*args, **kwargs),
+                    timeout=self.config.timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"Operation timeout in module {self.name}")
+                raise Exception(f"Operation timeout after {self.config.timeout_seconds}s") from None
+            finally:
+                if acquired:
+                    with contextlib.suppress(Exception):
+                        self._semaphore.release()
+
+        try:
+            result = await self._circuit_breaker.call_async(_guarded_operation)
             latency_ms = (time.time() - start_time) * 1000
             self._metrics.record_request(True, latency_ms)
-            self.record_circuit_breaker_success()
-
             return result
-
-        except asyncio.TimeoutError:
-            # Record failure
-            latency_ms = (time.time() - start_time) * 1000
-            self._metrics.record_request(False, latency_ms)
-            self.record_circuit_breaker_failure()
-
-            logger.error(f"Operation timeout in module {self.name}")
-            raise Exception(f"Operation timeout after {self.config.timeout_seconds}s") from None
 
         except CircuitBreakerOpenError:
             raise
 
         except Exception as e:
-            # Record failure
             latency_ms = (time.time() - start_time) * 1000
             self._metrics.record_request(False, latency_ms)
-            self.record_circuit_breaker_failure()
-
             logger.error(f"Operation failed in module {self.name}: {str(e)}")
             raise
-        finally:
-            if acquired:
-                with contextlib.suppress(Exception):
-                    self._semaphore.release()
 
     async def get_tool_def(self, tool_name: str) -> Optional[dict[str, Any]]:
         """Return a single tool definition, using cached tool list if available."""

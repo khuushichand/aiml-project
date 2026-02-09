@@ -60,8 +60,10 @@ def test_tool_autoexec_numeric_bounds_are_clamped(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.unit
 def test_parse_tool_allow_catalog_parses_and_filters_tokens() -> None:
-    assert chat_service._parse_tool_allow_catalog("*") is None
-    assert chat_service._parse_tool_allow_catalog("  ") is None
+    assert chat_service._parse_tool_allow_catalog("*") == ["*"]
+    assert chat_service._parse_tool_allow_catalog("  ") == []
+    assert chat_service._parse_tool_allow_catalog("") == []
+    assert chat_service._parse_tool_allow_catalog(None) == []
     assert chat_service._parse_tool_allow_catalog("notes.search, media.*,notes.search") == [
         "notes.search",
         "media.*",
@@ -70,6 +72,6 @@ def test_parse_tool_allow_catalog_parses_and_filters_tokens() -> None:
 
 
 @pytest.mark.unit
-def test_tool_allow_catalog_fail_open_for_invalid_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tool_allow_catalog_deny_all_for_invalid_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CHAT_TOOL_ALLOW_CATALOG", "@@@,%%%")
-    assert chat_service.get_chat_tool_allow_catalog() is None
+    assert chat_service.get_chat_tool_allow_catalog() == []

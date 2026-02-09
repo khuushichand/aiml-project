@@ -11,7 +11,7 @@ Project metadata takes precedence when set to a boolean; otherwise global flag c
 
 ## Runtime configuration
 
-- `PROMPT_STUDIO_CODE_EVAL_TIMEOUT_MS` (default: `WALL_TIME_SEC` fallback)
+- `PROMPT_STUDIO_CODE_EVAL_TIMEOUT_MS` (default: `8000`, i.e. 8 seconds — derived from the `WALL_TIME_SEC` class constant in `ProgramEvaluator`)
 - `PROMPT_STUDIO_CODE_EVAL_MEM_MB` (default: `256`)
 - `PROMPT_STUDIO_CODE_EVAL_IMPORT_WHITELIST` (default: `math,statistics`)
 

@@ -25,18 +25,20 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, A
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 
+from ..API_Deps.auth_deps import rbac_rate_limit
+from ..API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user as get_chacha_db
 from ....core.AuthNZ.User_DB_Handling import User, get_request_user
 from ....core.Chatbooks.chatbook_models import ContentType, ExportJob, ExportStatus
-from ....core.Chatbooks.exceptions import JobError
 from ....core.Chatbooks.chatbook_service import ChatbookService
 from ....core.Chatbooks.chatbook_validators import ChatbookValidator
+from ....core.Chatbooks.exceptions import JobError
 from ....core.Chatbooks.quota_manager import QuotaManager
 from ....core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ....core.DB_Management.db_path_utils import DatabasePaths
-from ..API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user as get_chacha_db
 from ..schemas.chatbook_schemas import (
     CancelJobResponse,
     ChatbookManifestResponse,
+    ChatbookVersion as SchemaChatbookVersion,
     CleanupExpiredExportsResponse,
     ContinueExportRequest,
     CreateChatbookRequest,
@@ -49,9 +51,6 @@ from ..schemas.chatbook_schemas import (
     ListImportJobsResponse,
     PreviewChatbookResponse,
     RemoveJobResponse,
-)
-from ..schemas.chatbook_schemas import (
-    ChatbookVersion as SchemaChatbookVersion,
 )
 
 _CHATBOOKS_NONCRITICAL_EXCEPTIONS = (
@@ -166,7 +165,11 @@ async def chatbooks_health():
     return health
 
 
-@router.post("/export", response_model=CreateChatbookResponse)
+@router.post(
+    "/export",
+    response_model=CreateChatbookResponse,
+    dependencies=[Depends(rbac_rate_limit("chatbooks.export"))],
+)
 async def create_chatbook(
     request_data: CreateChatbookRequest,
     background_tasks: BackgroundTasks,
@@ -379,7 +382,11 @@ async def create_chatbook(
         raise HTTPException(status_code=500, detail="An error occurred while creating the chatbook") from None
 
 
-@router.post("/export/continue", response_model=CreateChatbookResponse)
+@router.post(
+    "/export/continue",
+    response_model=CreateChatbookResponse,
+    dependencies=[Depends(rbac_rate_limit("chatbooks.export"))],
+)
 async def continue_chatbook_export(
     request_data: ContinueExportRequest,
     request: Request,
@@ -435,7 +442,11 @@ async def continue_chatbook_export(
         ) from None
 
 
-@router.post("/import", response_model=ImportChatbookResponse)
+@router.post(
+    "/import",
+    response_model=ImportChatbookResponse,
+    dependencies=[Depends(rbac_rate_limit("chatbooks.import"))],
+)
 async def import_chatbook(
     background_tasks: BackgroundTasks,
     request: Request,

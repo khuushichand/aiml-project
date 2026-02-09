@@ -101,3 +101,44 @@ async def test_ensure_baseline_rbac_seed_sqlite_idempotent():
         admin_perm_ids = {row[0] for row in await cur.fetchall()}
         for name in expected_permissions:
             assert perm_id[name] in admin_perm_ids
+
+
+@pytest.mark.asyncio
+async def test_ensure_sqlite_rbac_tables_creates_minimal_schema():
+    import aiosqlite
+
+    from tldw_Server_API.app.core.AuthNZ.rbac_seed import ensure_sqlite_rbac_tables
+
+    async with aiosqlite.connect(":memory:") as conn:
+        await ensure_sqlite_rbac_tables(conn)
+        await conn.commit()
+
+        for table in ("roles", "permissions", "role_permissions", "user_roles"):
+            cur = await conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            )
+            assert await cur.fetchone() is not None
+
+
+@pytest.mark.asyncio
+async def test_ensure_baseline_rbac_seed_explicit_backend_hint_skips_detection(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import aiosqlite
+
+    from tldw_Server_API.app.core.AuthNZ import rbac_seed
+
+    async with aiosqlite.connect(":memory:") as conn:
+        await rbac_seed.ensure_sqlite_rbac_tables(conn)
+        await conn.commit()
+
+        def _raise_if_called(_conn):
+            raise AssertionError("backend auto-detection should be bypassed when hint is provided")
+
+        monkeypatch.setattr(rbac_seed, "_is_postgres_connection", _raise_if_called)
+        await rbac_seed.ensure_baseline_rbac_seed(
+            conn,
+            include_mcp_permissions=False,
+            is_postgres=False,
+        )

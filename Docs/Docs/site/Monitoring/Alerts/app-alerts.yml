@@ -8,7 +8,7 @@ groups:
       # HTTP 5xx ratio > 5% for 5 minutes
       - uid: tldw_app_http_5xx_ratio
         title: HTTP 5xx ratio high
-        condition: C
+        condition: D
         for: 5m
         annotations:
           summary: 'HTTP 5xx ratio > 5%'
@@ -45,12 +45,13 @@ groups:
             datasourceUid: __expr__
             model:
               type: math
-              expression: A / B
+              expression: (B > 0.000001) * (A / B) + (B <= 0.000001) * 0
               refId: C
           - refId: D
             datasourceUid: __expr__
             model:
               type: threshold
+              expression: C
               params:
                 - 0.05
               refId: D

@@ -706,7 +706,14 @@ Export/import collections of chat-related content with job management and secure
 Chatbooks can include chat dictionaries and other template-aware content whose behavior is defined in the Chatbook Tools PRD and related APIs:
 - Embedded dictionaries are validated during `POST /api/v1/chatbooks/import` using the same validator exposed at `POST /api/v1/chat/dictionaries/validate`. Validation findings (schema/regex/template issues) appear as per-item warnings/errors in Chatbook import job results.
 - The `strict` flag in `/chat/dictionaries/validate` is not forwarded directly from Chatbooks; instead, import always calls the validator with `strict=false` and uses the `CHATBOOKS_IMPORT_DICT_STRICT` environment flag to decide whether dictionaries with fatal errors are skipped or imported with warnings.
-- Template-related manifest metadata (for example, `metadata.template_mode`, `metadata.template_defaults`, `metadata.template_timezone`, `metadata.template_locale`) is carried through in Chatbook exports/imports and can be evaluated during export/import when template mode is configured (`render_on_export` / `render_on_import`) and template flags permit rendering.
+- Template-related manifest metadata (`metadata.template_mode`, `metadata.template_defaults`, `metadata.template_timezone`, `metadata.template_locale`) controls template evaluation during Chatbook exports and imports. The `template_mode` field accepts three values:
+  - **`pass_through`** (default) — template expressions (e.g. `{{ project }}`) are preserved verbatim in the artifact. No rendering occurs.
+  - **`render_on_export`** — template expressions are evaluated at export time using the variables in `template_defaults`, the timezone from `template_timezone` (default `UTC`), and the locale from `template_locale`. The **rendered result replaces the raw template in-place** in the exported artifact (note markdown files, dictionary JSON files); the original raw template text is *not* retained alongside the rendered output.
+  - **`render_on_import`** — same rendering behavior, but applied at import time. The content stored in the database contains the rendered text, not the raw template.
+
+  **Affected fields**: note titles and content, dictionary names, descriptions, and entry `replacement`/`content` values. For dictionary entry rendering, the `CHAT_DICT_TEMPLATES_ENABLED` environment flag must also be set to `true`.
+
+  **Failure semantics**: rendering uses a fail-safe strategy. If template evaluation fails for any reason (syntax error, undefined variable, timeout, output exceeding the size cap), the **original raw template text is preserved unchanged** in the artifact — the export or import is never aborted due to a render failure. Failures are logged at `DEBUG` level and tracked via the `template_render_failure_total` metrics counter (labeled by source and reason), but no error codes, warnings, or error metadata are surfaced to the client in the job result. To detect silent render failures, operators should monitor the `template_render_failure_total` and `template_render_timeout_total` metrics.
 
 ### Base URL
 `/api/v1/chatbooks`
@@ -994,7 +1001,8 @@ Response body:
       "required_permission": "chat.commands.time",
       "usage": "/time [timezone]",
       "args": ["timezone"],
-      "requires_api_key": false,
+      "requires_provider_key": false,
+      "requires_client_auth": true,
       "rate_limit": "per-user 10/min, global 100/min",
       "rbac_required": true
     },
@@ -1004,7 +1012,8 @@ Response body:
       "required_permission": "chat.commands.weather",
       "usage": "/weather [location]",
       "args": ["location"],
-      "requires_api_key": true,
+      "requires_provider_key": true,
+      "requires_client_auth": true,
       "rate_limit": "per-user 10/min, global 100/min",
       "rbac_required": true
     }
@@ -1012,6 +1021,10 @@ Response body:
 }
 ```
 
+Field definitions:
+- **`requires_provider_key`** — `true` if the server needs a third-party service API key (e.g., a weather-provider key configured server-side) to fulfil this command. Commands where this is `true` may be omitted from the list or return an "unavailable" response when the provider key is not configured.
+- **`requires_client_auth`** — `true` if the caller must present valid client credentials (JWT in multi-user mode, or `X-API-KEY` in single-user mode) to invoke this command. Currently `true` for all commands; included for forward-compatibility with future anonymous/public commands.
+
 Notes:
-- The `commands` list is filtered per-user based on AuthNZ/RBAC and deployment configuration. Commands whose backing providers are not configured (e.g., `weather` without a weather provider/API key) may be omitted entirely or returned but respond with a configurable “unavailable” message when invoked.
+- The `commands` list is filtered per-user based on AuthNZ/RBAC and deployment configuration. Commands whose backing providers are not configured (e.g., `weather` without a weather-provider key) may be omitted entirely or returned but respond with a configurable "unavailable" message when invoked.
 - Clients should treat `GET /api/v1/chat/commands` as the per-session source of truth and avoid caching the list long-term, since RBAC or configuration changes can add or remove commands at any time.

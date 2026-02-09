@@ -30,11 +30,25 @@ def test_admin_root_shim_exports_contract() -> None:
     assert not non_callables, f"Admin shim symbols must be callable: {non_callables}"
 
 
-def test_admin_root_postgres_alias_maps_to_core_helper() -> None:
+@pytest.mark.asyncio
+async def test_admin_root_postgres_alias_uses_pool_state(monkeypatch) -> None:
     from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
-    from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 
-    assert admin_mod._is_postgres_backend is is_postgres_backend
+    class _Pool:
+        def __init__(self, pool_obj):
+            self.pool = pool_obj
+
+    async def _fake_pg_pool():
+        return _Pool(object())
+
+    async def _fake_sqlite_pool():
+        return _Pool(None)
+
+    monkeypatch.setattr(admin_mod, "get_db_pool", _fake_pg_pool)
+    assert await admin_mod._is_postgres_backend() is True
+
+    monkeypatch.setattr(admin_mod, "get_db_pool", _fake_sqlite_pool)
+    assert await admin_mod._is_postgres_backend() is False
 
 
 def test_admin_rbac_repo_factory_uses_root_compat_shim(monkeypatch) -> None:

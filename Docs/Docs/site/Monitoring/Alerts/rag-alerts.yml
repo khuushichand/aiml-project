@@ -192,7 +192,7 @@ groups:
             datasourceUid: __expr__
             model:
               type: math
-              expression: C * D
+              expression: (C > 0) * (D > 0)
               refId: E
           - refId: F
             datasourceUid: __expr__

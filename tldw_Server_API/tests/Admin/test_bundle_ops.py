@@ -754,3 +754,52 @@ def test_import_rejects_path_traversal(tmp_path):
 
     with pytest.raises(BundleImportError, match="path_traversal_detected"):
         import_bundle(file_path=zip_path, user_id=None, admin_user_id=998)
+
+
+# ---------------------------------------------------------------------------
+# GAP-9: Multi-user mode user_id_required test
+# ---------------------------------------------------------------------------
+
+def test_export_user_id_required_multi_user(tmp_path, monkeypatch):
+    """Export of per-user datasets without user_id should fail when auto-resolve fails."""
+    from tldw_Server_API.app.core.exceptions import BundleExportError
+    from tldw_Server_API.app.services import admin_bundle_service
+    from tldw_Server_API.app.services.admin_bundle_service import create_bundle
+
+    admin_bundle_service._rate_limit_windows.clear()
+
+    # Mock get_single_user_id to simulate multi-user mode (no auto-resolve)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.services.admin_bundle_service.DatabasePaths.get_single_user_id",
+        lambda: (_ for _ in ()).throw(RuntimeError("multi-user mode")),
+    )
+
+    with pytest.raises(BundleExportError, match="user_id_required"):
+        create_bundle(
+            datasets=["media"],
+            user_id=None,
+            admin_user_id=999,
+        )
+
+
+def test_import_user_id_required_multi_user(tmp_path, monkeypatch):
+    """Import of per-user datasets without user_id should fail when auto-resolve fails."""
+    from tldw_Server_API.app.core.exceptions import BundleImportError
+    from tldw_Server_API.app.services import admin_bundle_service
+    from tldw_Server_API.app.services.admin_bundle_service import import_bundle
+
+    admin_bundle_service._rate_limit_windows.clear()
+
+    # Mock get_single_user_id to simulate multi-user mode (no auto-resolve)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.services.admin_bundle_service.DatabasePaths.get_single_user_id",
+        lambda: (_ for _ in ()).throw(RuntimeError("multi-user mode")),
+    )
+
+    bundle_buf = _make_bundle_zip(datasets=["media"])
+    zip_path = str(tmp_path / "multiuser_test.zip")
+    with open(zip_path, "wb") as f:
+        f.write(bundle_buf.read())
+
+    with pytest.raises(BundleImportError, match="user_id_required"):
+        import_bundle(file_path=zip_path, user_id=None, admin_user_id=999)

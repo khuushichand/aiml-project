@@ -69,6 +69,7 @@ async def ensure_baseline_rbac_seed(
     conn: Any,
     *,
     include_mcp_permissions: bool = False,
+    is_postgres: bool | None = None,
 ) -> None:
     """
     Ensure baseline RBAC roles, permissions, and role-permission mappings exist.
@@ -80,7 +81,8 @@ async def ensure_baseline_rbac_seed(
     It is intentionally idempotent (INSERT ... ON CONFLICT / OR IGNORE) and
     should be safe to call repeatedly.
     """
-    is_postgres = _is_postgres_connection(conn)
+    if is_postgres is None:
+        is_postgres = _is_postgres_connection(conn)
 
     permissions: list[PermissionDef] = list(_BASELINE_PERMISSIONS)
     if include_mcp_permissions:
@@ -183,3 +185,47 @@ async def ensure_baseline_rbac_seed(
                 "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
                 (rid, pid),
             )
+
+
+async def ensure_sqlite_rbac_tables(conn: Any) -> None:
+    """Ensure minimal RBAC tables exist for SQLite bootstrap paths."""
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            is_system INTEGER DEFAULT 0
+        )
+        """
+    )
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            category TEXT
+        )
+        """
+    )
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS role_permissions (
+            role_id INTEGER NOT NULL,
+            permission_id INTEGER NOT NULL,
+            PRIMARY KEY (role_id, permission_id)
+        )
+        """
+    )
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_roles (
+            user_id INTEGER NOT NULL,
+            role_id INTEGER NOT NULL,
+            granted_by INTEGER,
+            expires_at TIMESTAMP,
+            PRIMARY KEY (user_id, role_id)
+        )
+        """
+    )

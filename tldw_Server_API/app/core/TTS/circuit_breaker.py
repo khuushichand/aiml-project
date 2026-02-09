@@ -148,6 +148,7 @@ class CircuitBreaker:
         # TTS-specific tracking
         self._stats = CircuitStats()
         self._state_changed_at = time.time()
+        self._last_seen_state_change: float = self._cb.last_state_change_time
         self._half_open_calls = 0
         self._lock = asyncio.Lock()
         self._last_health_check = time.time()
@@ -180,7 +181,12 @@ class CircuitBreaker:
             # Record TTS-specific stats (unified breaker already recorded success)
             async with self._lock:
                 self._stats.record_success()
-                if self._cb.state == _UnifiedState.CLOSED and self._state_changed_at != 0:
+                current_change = self._cb.last_state_change_time
+                if (
+                    self._cb.state == _UnifiedState.CLOSED
+                    and current_change != self._last_seen_state_change
+                ):
+                    self._last_seen_state_change = current_change
                     self._state_changed_at = time.time()
                     logger.info(
                         f"Circuit breaker for {self.provider_name} closed after "
@@ -211,7 +217,12 @@ class CircuitBreaker:
                 self._error_categories[error_category] = (
                     self._error_categories.get(error_category, 0) + 1
                 )
-                if self._cb.state == _UnifiedState.OPEN:
+                current_change = self._cb.last_state_change_time
+                if (
+                    self._cb.state == _UnifiedState.OPEN
+                    and current_change != self._last_seen_state_change
+                ):
+                    self._last_seen_state_change = current_change
                     self._state_changed_at = time.time()
                     logger.warning(
                         f"Circuit breaker for {self.provider_name} opened after "
@@ -243,15 +254,16 @@ class CircuitBreaker:
         }
 
     def get_detailed_status(self) -> dict[str, Any]:
+        base = self.get_status()
         return {
-            **self.get_status(),
+            **base,
             "stats": {
-                **self.get_status()["stats"],
+                **base["stats"],
                 "last_failure_time": self._stats.last_failure_time,
                 "last_success_time": self._stats.last_success_time,
             },
             "config": {
-                **self.get_status()["config"],
+                **base["config"],
                 "backoff_base_delay": self.backoff_base_delay,
                 "backoff_max_delay": self.backoff_max_delay,
             },
@@ -267,8 +279,8 @@ class CircuitBreaker:
                 "health_check_interval": self.health_check_interval,
             },
             "state_info": {
-                "state_changed_at": self._state_changed_at,
-                "time_in_state": time.time() - self._state_changed_at,
+                "state_changed_at": self._cb.last_state_change_time,
+                "time_in_state": time.time() - self._cb.last_state_change_time,
                 "half_open_calls": None,
             },
         }
@@ -333,14 +345,15 @@ class CircuitBreaker:
     def _should_attempt_recovery(self) -> bool:
         if self._cb.state != _UnifiedState.OPEN:
             return False
-        if time.time() - self._state_changed_at < self.recovery_timeout:
+        state_changed_at = self._cb.last_state_change_time
+        if time.time() - state_changed_at < self.recovery_timeout:
             return False
         network_errors = self._error_categories.get("network", 0)
         total_errors = sum(self._error_categories.values()) or 1
         network_error_ratio = network_errors / total_errors
         if network_error_ratio > 0.7:
             return True
-        return time.time() - self._state_changed_at >= self.recovery_timeout * 2
+        return time.time() - state_changed_at >= self.recovery_timeout * 2
 
 
 # Backward compatibility

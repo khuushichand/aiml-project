@@ -123,8 +123,10 @@ def _make_result_content(
 
 
 def _matches_allow_catalog(tool_name: str, allow_catalog: list[str] | None) -> bool:
-    if not allow_catalog:
+    if allow_catalog is None:
         return True
+    if not allow_catalog:
+        return False
     for pattern in allow_catalog:
         token = str(pattern or "").strip()
         if not token:

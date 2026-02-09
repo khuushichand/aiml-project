@@ -24,17 +24,43 @@ type PersonaPlanStep = {
   args?: Record<string, unknown>
   description?: string
   why?: string
+  policy?: PersonaToolPolicy
 }
 
 type PendingPlan = {
   planId: string
   steps: PersonaPlanStep[]
+  memory?: PersonaMemoryUsage
 }
 
 type PersonaLogEntry = {
   id: string
   kind: "user" | "assistant" | "tool" | "notice"
   text: string
+}
+
+type PersonaToolPolicy = {
+  allow?: boolean
+  requires_confirmation?: boolean
+  required_scope?: string | null
+  reason_code?: string | null
+  reason?: string | null
+  action?: string | null
+}
+
+type PersonaMemoryUsage = {
+  enabled?: boolean
+  requested_top_k?: number
+  applied_count?: number
+}
+
+type PersonaSessionSummary = {
+  session_id: string
+  persona_id?: string
+  created_at?: string
+  updated_at?: string
+  turn_count?: number
+  pending_plan_count?: number
 }
 
 const SidepanelPersona = () => {
@@ -50,6 +76,10 @@ const SidepanelPersona = () => {
   const [selectedPersonaId, setSelectedPersonaId] =
     React.useState<string>("research_assistant")
   const [sessionId, setSessionId] = React.useState<string | null>(null)
+  const [sessionHistory, setSessionHistory] = React.useState<PersonaSessionSummary[]>([])
+  const [resumeSessionId, setResumeSessionId] = React.useState<string>("")
+  const [memoryEnabled, setMemoryEnabled] = React.useState(true)
+  const [memoryTopK, setMemoryTopK] = React.useState<number>(3)
   const [connected, setConnected] = React.useState(false)
   const [connecting, setConnecting] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -109,16 +139,24 @@ const SidepanelPersona = () => {
                 ? (step.args as Record<string, unknown>)
                 : {},
             description: step?.description ? String(step.description) : undefined,
-            why: step?.why ? String(step.why) : undefined
+            why: step?.why ? String(step.why) : undefined,
+            policy:
+              step?.policy && typeof step.policy === "object"
+                ? (step.policy as PersonaToolPolicy)
+                : undefined
           }))
           .filter((step) => Number.isFinite(step.idx))
 
         const nextMap: Record<number, boolean> = {}
         for (const step of steps) {
-          nextMap[step.idx] = true
+          nextMap[step.idx] = step.policy?.allow !== false
         }
         setApprovedStepMap(nextMap)
-        setPendingPlan({ planId, steps })
+        const memoryPayload =
+          payload?.memory && typeof payload.memory === "object"
+            ? (payload.memory as PersonaMemoryUsage)
+            : undefined
+        setPendingPlan({ planId, steps, memory: memoryPayload })
         appendLog("tool", `Plan proposed (${steps.length} step${steps.length === 1 ? "" : "s"})`)
         return
       }
@@ -198,10 +236,26 @@ const SidepanelPersona = () => {
         setSelectedPersonaId(resolvedPersonaId)
       }
 
+      const sessionsResp = await tldwClient.fetchWithAuth(
+        `/api/v1/persona/sessions?persona_id=${encodeURIComponent(resolvedPersonaId)}&limit=50` as any,
+        {
+          method: "GET"
+        }
+      )
+      let sessionsPayload: PersonaSessionSummary[] = []
+      if (sessionsResp.ok) {
+        const sessionsJson = await sessionsResp.json()
+        sessionsPayload = Array.isArray(sessionsJson)
+          ? (sessionsJson as PersonaSessionSummary[])
+          : []
+      }
+      setSessionHistory(sessionsPayload)
+
       const sessionResp = await tldwClient.fetchWithAuth("/api/v1/persona/session" as any, {
         method: "POST",
         body: {
-          persona_id: resolvedPersonaId
+          persona_id: resolvedPersonaId,
+          resume_session_id: resumeSessionId || undefined
         }
       })
       if (!sessionResp.ok) {
@@ -213,6 +267,10 @@ const SidepanelPersona = () => {
         throw new Error("Persona session response missing session_id")
       }
       setSessionId(nextSessionId)
+      setResumeSessionId(nextSessionId)
+      if (!sessionsPayload.some((item) => item.session_id === nextSessionId)) {
+        setSessionHistory((prev) => [{ session_id: nextSessionId }, ...prev])
+      }
 
       const ws = new WebSocket(buildPersonaWebSocketUrl(config))
       ws.binaryType = "arraybuffer"
@@ -257,7 +315,15 @@ const SidepanelPersona = () => {
     } finally {
       setConnecting(false)
     }
-  }, [appendLog, connected, connecting, disconnect, handleIncomingPayload, selectedPersonaId])
+  }, [
+    appendLog,
+    connected,
+    connecting,
+    disconnect,
+    handleIncomingPayload,
+    resumeSessionId,
+    selectedPersonaId
+  ])
 
   React.useEffect(() => {
     return () => {
@@ -275,7 +341,9 @@ const SidepanelPersona = () => {
         JSON.stringify({
           type: "user_message",
           session_id: sessionId,
-          text: trimmed
+          text: trimmed,
+          use_memory_context: memoryEnabled,
+          memory_top_k: memoryTopK
         })
       )
       appendLog("user", trimmed)
@@ -283,7 +351,32 @@ const SidepanelPersona = () => {
     } catch (err: any) {
       setError(String(err?.message || "Failed to send message"))
     }
-  }, [appendLog, canSend, input, sessionId])
+  }, [appendLog, canSend, input, memoryEnabled, memoryTopK, sessionId])
+
+  const loadSessionHistory = React.useCallback(async () => {
+    if (!sessionId) return
+    const resp = await tldwClient.fetchWithAuth(
+      `/api/v1/persona/sessions/${encodeURIComponent(sessionId)}?limit_turns=100` as any,
+      { method: "GET" }
+    )
+    if (!resp.ok) {
+      setError(resp.error || "Failed to load session history")
+      return
+    }
+    const payload = await resp.json()
+    const turns = Array.isArray(payload?.turns) ? payload.turns : []
+    const historyLogs: PersonaLogEntry[] = turns.map((turn: any, idx: number) => {
+      const role = String(turn?.role || "notice").toLowerCase()
+      const kind: PersonaLogEntry["kind"] =
+        role === "user" || role === "assistant" || role === "tool" ? role : "notice"
+      return {
+        id: String(turn?.turn_id || `${Date.now()}-${idx}`),
+        kind,
+        text: String(turn?.content || "")
+      }
+    })
+    setLogs(historyLogs)
+  }, [sessionId])
 
   const confirmPlan = React.useCallback(() => {
     if (!pendingPlan || !sessionId || !wsRef.current || !connected) return
@@ -398,6 +491,41 @@ const SidepanelPersona = () => {
             }))}
             placeholder={t("sidepanel:persona.select", "Select persona")}
           />
+          <Select
+            data-testid="persona-resume-session-select"
+            size="small"
+            className="min-w-[180px]"
+            value={resumeSessionId || "__new__"}
+            disabled={connected}
+            onChange={(value) =>
+              setResumeSessionId(value === "__new__" ? "" : String(value))
+            }
+            options={[
+              { label: t("sidepanel:persona.newSession", "New session"), value: "__new__" },
+              ...sessionHistory.map((session) => ({
+                label: session.session_id,
+                value: session.session_id
+              }))
+            ]}
+            placeholder={t("sidepanel:persona.resume", "Resume session")}
+          />
+          <Checkbox
+            data-testid="persona-memory-toggle"
+            checked={memoryEnabled}
+            onChange={(event) => setMemoryEnabled(event.target.checked)}
+          >
+            {t("sidepanel:persona.memoryToggle", "Memory")}
+          </Checkbox>
+          <Select
+            data-testid="persona-memory-topk-select"
+            size="small"
+            className="w-[90px]"
+            value={memoryTopK}
+            disabled={!memoryEnabled}
+            onChange={(value) => setMemoryTopK(Number(value))}
+            options={[1, 2, 3, 4, 5].map((k) => ({ label: `k=${k}`, value: k }))}
+            placeholder="k"
+          />
           {!connected ? (
             <Button
               size="small"
@@ -415,6 +543,11 @@ const SidepanelPersona = () => {
             </Button>
           )}
           {sessionId ? <Tag color="blue">{`session: ${sessionId.slice(0, 8)}`}</Tag> : null}
+          {sessionId ? (
+            <Button size="small" onClick={() => void loadSessionHistory()}>
+              {t("sidepanel:persona.loadHistory", "Load history")}
+            </Button>
+          ) : null}
         </div>
 
         {error ? (
@@ -428,11 +561,25 @@ const SidepanelPersona = () => {
             <Typography.Text strong>
               {t("sidepanel:persona.pendingPlan", "Pending tool plan")}
             </Typography.Text>
+            {pendingPlan.memory ? (
+              <div className="mt-1 flex flex-wrap items-center gap-1">
+                <Tag color={pendingPlan.memory.enabled ? "green" : "default"}>
+                  {pendingPlan.memory.enabled ? "memory on" : "memory off"}
+                </Tag>
+                {typeof pendingPlan.memory.requested_top_k === "number" ? (
+                  <Tag color="blue">{`k=${pendingPlan.memory.requested_top_k}`}</Tag>
+                ) : null}
+                {typeof pendingPlan.memory.applied_count === "number" ? (
+                  <Tag color="purple">{`applied=${pendingPlan.memory.applied_count}`}</Tag>
+                ) : null}
+              </div>
+            ) : null}
             <div className="mt-2 space-y-1">
               {pendingPlan.steps.map((step) => (
                 <label key={step.idx} className="flex items-start gap-2 text-xs text-text">
                   <Checkbox
                     checked={approvedStepMap[step.idx] !== false}
+                    disabled={step.policy?.allow === false}
                     onChange={(event) => {
                       const nextChecked = event.target.checked
                       setApprovedStepMap((prev) => ({
@@ -444,6 +591,22 @@ const SidepanelPersona = () => {
                   <span>
                     <span className="font-semibold">{`${step.idx}. ${step.tool}`}</span>
                     {step.description ? ` - ${step.description}` : ""}
+                    <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">
+                      {step.policy?.required_scope ? (
+                        <Tag color="blue">{`scope: ${step.policy.required_scope}`}</Tag>
+                      ) : null}
+                      {step.policy?.requires_confirmation ? (
+                        <Tag color="gold">confirm</Tag>
+                      ) : null}
+                      {step.policy?.allow === false ? (
+                        <Tag color="red">{`blocked${step.policy.reason_code ? `: ${step.policy.reason_code}` : ""}`}</Tag>
+                      ) : null}
+                    </span>
+                    {step.policy?.allow === false && step.policy.reason ? (
+                      <div className="mt-1 text-[11px] text-red-700 dark:text-red-300">
+                        {step.policy.reason}
+                      </div>
+                    ) : null}
                   </span>
                 </label>
               ))}

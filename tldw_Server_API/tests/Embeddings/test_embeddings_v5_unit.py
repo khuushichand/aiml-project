@@ -336,7 +336,7 @@ class TestRetryLogic:
     async def test_retry_on_connection_error(self):
         """Test that connection errors are handled by circuit breaker"""
         from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import create_embeddings_with_circuit_breaker
-        from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker
+        from tldw_Server_API.app.core.Infrastructure.circuit_breaker import CircuitBreaker
 
         attempt_count = 0
 

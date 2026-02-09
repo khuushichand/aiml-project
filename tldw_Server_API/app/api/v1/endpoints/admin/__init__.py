@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateRoleError
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
@@ -65,9 +65,14 @@ _ADMIN_NONCRITICAL_EXCEPTIONS = (
     ResourceNotFoundError,
 )
 
-# Test shim: some tests expect a private helper `_is_postgres_backend` to monkeypatch.
-# Provide an alias to the public function for backward compatibility in tests.
-_is_postgres_backend = is_postgres_backend
+async def _is_postgres_backend() -> bool:
+    """Return True when AuthNZ is backed by PostgreSQL."""
+    try:
+        pool = await get_db_pool()
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Admin backend detection falling back to SQLite due to pool error: {}", exc)
+        return False
+    return bool(getattr(pool, "pool", None) is not None)
 
 
 def _get_rbac_repo() -> AuthnzRbacRepo:

@@ -161,7 +161,23 @@ async def _resolve_prompts_auth_user(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication token",
             )
-        return None
+        # Preserve claim-first authorization semantics in downstream checks by
+        # returning a synthetic admin-style User rather than branching on mode.
+        try:
+            user_id = int(getattr(get_auth_settings(), "SINGLE_USER_FIXED_ID", 1))
+        except _PROMPTS_LOOKUP_EXCEPTIONS:
+            user_id = 1
+        return User(
+            id=user_id,
+            username="single_user",
+            role="admin",
+            is_active=True,
+            is_verified=True,
+            is_superuser=True,
+            roles=["admin"],
+            permissions=["*"],
+            is_admin=True,
+        )
 
     if request is None:
         raise HTTPException(
@@ -205,6 +221,21 @@ async def _resolve_prompts_auth_user(
 
     return user
 
+
+def _is_prompts_admin_user(user: Optional[User]) -> bool:
+    if user is None:
+        return False
+    try:
+        if bool(getattr(user, "is_admin", False) or getattr(user, "is_superuser", False)):
+            return True
+        role_value = str(getattr(user, "role", "")).strip().lower()
+        if role_value == "admin":
+            return True
+        roles = [str(r).strip().lower() for r in (getattr(user, "roles", []) or []) if str(r).strip()]
+        return "admin" in roles
+    except _PROMPTS_LOOKUP_EXCEPTIONS:
+        return False
+
 async def verify_prompts_auth(
     request: Request,
     Token: Optional[str] = Header(None, alias="Token"),
@@ -224,12 +255,7 @@ async def verify_prompts_auth(
         Authorization=Authorization,
     )
 
-    if _is_single_user_auth_mode():
-        return True
-
-    roles = getattr(user, "roles", []) or []
-    is_admin = bool(getattr(user, "is_admin", False) or ("admin" in roles))
-    if not is_admin:
+    if not _is_prompts_admin_user(user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. Required role(s): admin",
@@ -253,17 +279,12 @@ async def verify_prompts_user(
         x_api_key=x_api_key,
         Authorization=Authorization,
     )
-    if _is_single_user_auth_mode():
-        return True
     require_admin = env_flag_enabled("PROMPTS_REQUIRE_ADMIN")
-    if require_admin:
-        roles = getattr(user, "roles", []) or []
-        is_admin = bool(getattr(user, "is_admin", False) or ("admin" in roles))
-        if not is_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. Required role(s): admin",
-            )
+    if require_admin and not _is_prompts_admin_user(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Required role(s): admin",
+        )
     return True
 
 @router.get(

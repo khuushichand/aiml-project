@@ -64,7 +64,9 @@ _EMIT_LEGACY_ALIASES: bool = True
 # Label validation allow-lists (unknown labels normalised to ``"other"``)
 _VALID_CATEGORIES: set[str] = {
     "", "embeddings", "evaluations", "tts", "rag", "chat", "mcp",
-    "websearch", "test_cat", "test", "my_cat",
+    "websearch",
+    # Test-only categories (used by tests/Infrastructure/test_circuit_breaker.py)
+    "test_cat", "test", "my_cat",
 }
 _VALID_REASONS: set[str] = {
     "", "unknown", "threshold", "half_open_failure", "timeout",
@@ -268,6 +270,7 @@ class CircuitBreaker:
         self._success_count: int = 0
         self._last_failure_time: float | None = None
         self._half_open_calls: int = 0
+        self._last_trip_failure_count: int = 0
 
         # Rolling window (only used when window_size > 0)
         self._window: deque[bool] | None = None
@@ -463,6 +466,7 @@ class CircuitBreaker:
             self._failure_count = 0
             self._success_count = 0
             self._half_open_calls = 0
+            self._last_trip_failure_count = 0
             self._last_failure_time = None
             self._last_state_change_time = time.time()
             self._current_recovery_timeout = self.config.recovery_timeout
@@ -472,6 +476,18 @@ class CircuitBreaker:
             if old != CircuitState.CLOSED:
                 self._fire_callbacks(old, CircuitState.CLOSED)
             logger.info("Circuit breaker '{}' manually reset", self.name)
+
+    def force_open(self) -> None:
+        """Force the breaker into OPEN state (e.g. for testing or manual intervention)."""
+        with self._lock:
+            if self._state != CircuitState.OPEN:
+                self._transition(CircuitState.OPEN, reason="unknown")
+
+    def force_half_open(self) -> None:
+        """Force the breaker into HALF_OPEN state (e.g. for testing)."""
+        with self._lock:
+            if self._state != CircuitState.HALF_OPEN:
+                self._transition(CircuitState.HALF_OPEN)
 
     def update_config(self, new_config: CircuitBreakerConfig) -> None:
         """Replace the breaker's config with *new_config* under lock.
@@ -569,12 +585,16 @@ class CircuitBreaker:
                 category=self._category,
                 service=self._service,
                 recovery_timeout=self._current_recovery_timeout,
-                failure_count=self._failure_count,
+                failure_count=self._last_trip_failure_count,
                 recovery_at=recovery_at,
             )
         if self._state == CircuitState.HALF_OPEN:
             if self._half_open_calls >= self.config.half_open_max_calls:
                 self._emit_rejection()
+                recovery_at = (
+                    self._last_failure_time + self._current_recovery_timeout
+                    if self._last_failure_time else None
+                )
                 raise CircuitBreakerOpenError(
                     f"Circuit breaker '{self.name}' HALF_OPEN probe limit reached",
                     breaker_name=self.name,
@@ -582,6 +602,7 @@ class CircuitBreaker:
                     service=self._service,
                     recovery_timeout=self._current_recovery_timeout,
                     failure_count=self._failure_count,
+                    recovery_at=recovery_at,
                 )
 
     def _acquire_half_open_slot(self) -> bool:
@@ -666,6 +687,7 @@ class CircuitBreaker:
                     self._current_recovery_timeout * self.config.backoff_factor,
                     self.config.max_recovery_timeout,
                 )
+            self._last_trip_failure_count = self._failure_count
             self._failure_count = 0
             self._success_count = 0
             self._half_open_calls = 0

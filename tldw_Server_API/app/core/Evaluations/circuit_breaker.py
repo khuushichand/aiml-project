@@ -128,14 +128,12 @@ class CircuitBreaker:
 
     @state.setter
     def state(self, value: str) -> None:
-        mapping = {
-            CircuitState.CLOSED: _UnifiedState.CLOSED,
-            CircuitState.OPEN: _UnifiedState.OPEN,
-            CircuitState.HALF_OPEN: _UnifiedState.HALF_OPEN,
-        }
-        if value in mapping:
-            with self._cb._lock:
-                self._cb._state = mapping[value]
+        if value == CircuitState.CLOSED:
+            self._cb.reset()
+        elif value == CircuitState.OPEN:
+            self._cb.force_open()
+        elif value == CircuitState.HALF_OPEN:
+            self._cb.force_half_open()
 
     # -- internal methods used by tests directly ----------------------------
 
@@ -170,11 +168,7 @@ class CircuitBreaker:
 
     def _transition_to_half_open(self) -> None:
         """Manually transition to HALF_OPEN (for tests)."""
-        with self._cb._lock:
-            self._cb._state = _UnifiedState.HALF_OPEN
-            self._cb._success_count = 0
-            self._cb._failure_count = 0
-            self._cb._half_open_calls = 0
+        self._cb.force_half_open()
 
     # -- main call method ---------------------------------------------------
 
@@ -190,8 +184,7 @@ class CircuitBreaker:
             if asyncio.iscoroutinefunction(func):
                 coro = func(*args, **kwargs)
             else:
-                loop = asyncio.get_event_loop()
-                coro = loop.run_in_executor(None, func, *args)
+                coro = asyncio.to_thread(func, *args, **kwargs)
 
             async def _timed():
                 return await asyncio.wait_for(coro, timeout=self.config.timeout)
@@ -226,8 +219,10 @@ class CircuitBreaker:
             raise
 
         except Exception:
-            # Unexpected exception — don't count as circuit breaker failure
-            # (the unified breaker already recorded it; undo that)
+            # Unexpected exception — not counted in evaluations-level stats.
+            # Note: the unified breaker still records it as a failure (its
+            # expected_exception=Exception matches all), so trip logic is
+            # unaffected; only the local stats diverge intentionally.
             logger.warning(f"Unexpected exception in circuit breaker {self.name}")
             raise
 

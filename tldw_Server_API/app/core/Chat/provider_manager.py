@@ -66,6 +66,7 @@ class CircuitBreaker:
         failure_threshold: int = CIRCUIT_BREAKER_FAILURE_THRESHOLD,
         timeout: int = CIRCUIT_BREAKER_TIMEOUT,
         half_open_requests: int = CIRCUIT_BREAKER_HALF_OPEN_REQUESTS,
+        provider_name: str = "default",
     ):
         from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
             CircuitBreaker as _UnifiedCB,
@@ -74,13 +75,14 @@ class CircuitBreaker:
             CircuitBreakerConfig as _Cfg,
         )
         self._cb = _UnifiedCB(
-            name="chat_provider",
+            name=f"chat_{provider_name}",
             config=_Cfg(
                 failure_threshold=failure_threshold,
                 recovery_timeout=float(timeout),
                 half_open_max_calls=half_open_requests,
                 success_threshold=half_open_requests,
                 category="chat",
+                service=provider_name,
             ),
         )
 
@@ -152,7 +154,7 @@ class ProviderManager:
                 provider_name=provider,
                 status=ProviderStatus.HEALTHY
             )
-            self.circuit_breakers[provider] = CircuitBreaker()
+            self.circuit_breakers[provider] = CircuitBreaker(provider_name=provider)
 
         # Start background health check task
         self._health_check_task = None

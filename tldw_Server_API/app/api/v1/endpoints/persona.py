@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections import defaultdict, deque
 import contextlib
 import json
+import time
 import uuid
 from typing import Any
 
@@ -16,8 +18,10 @@ from starlette.requests import Request as StarletteRequest
 
 from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaInfo,
+    PersonaSessionDetail,
     PersonaSessionRequest,
     PersonaSessionResponse,
+    PersonaSessionSummary,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -38,6 +42,12 @@ from tldw_Server_API.app.core.Persona.session_manager import get_session_manager
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
 router = APIRouter()
+
+_PERSONA_KNOWN_TOOLS = {
+    "ingest_url",
+    "rag_search",
+    "summarize",
+}
 
 
 def _get_persona_max_tool_steps() -> int:
@@ -60,6 +70,248 @@ def _get_persona_memory_top_k() -> int:
     return max(1, min(value, 10))
 
 
+def _get_persona_allowed_audio_formats() -> set[str]:
+    try:
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        raw = str(_app_settings.get("PERSONA_AUDIO_ALLOWED_FORMATS", "pcm16,wav,mp3,opus"))
+    except Exception:
+        raw = "pcm16,wav,mp3,opus"
+    parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    return set(parts) if parts else {"pcm16"}
+
+
+def _get_persona_audio_chunk_max_bytes() -> int:
+    try:
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        value = int(_app_settings.get("PERSONA_AUDIO_CHUNK_MAX_BYTES", 1_048_576))
+    except Exception:
+        value = 1_048_576
+    return max(1024, min(value, 8_388_608))
+
+
+def _get_persona_audio_chunks_per_minute() -> int:
+    try:
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        value = int(_app_settings.get("PERSONA_AUDIO_CHUNKS_PER_MINUTE", 120))
+    except Exception:
+        value = 120
+    return max(1, min(value, 1200))
+
+
+def _get_persona_tts_chunk_size_bytes() -> int:
+    try:
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        value = int(_app_settings.get("PERSONA_TTS_CHUNK_SIZE_BYTES", 8192))
+    except Exception:
+        value = 8192
+    return max(256, min(value, 65536))
+
+
+def _get_persona_tts_max_chunks() -> int:
+    try:
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        value = int(_app_settings.get("PERSONA_TTS_MAX_CHUNKS", 16))
+    except Exception:
+        value = 16
+    return max(1, min(value, 256))
+
+
+def _get_persona_tts_max_total_bytes() -> int:
+    try:
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        value = int(_app_settings.get("PERSONA_TTS_MAX_TOTAL_BYTES", 131072))
+    except Exception:
+        value = 131072
+    return max(1024, min(value, 2_097_152))
+
+
+def _get_persona_tts_max_in_flight_chunks() -> int:
+    try:
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        value = int(_app_settings.get("PERSONA_TTS_MAX_IN_FLIGHT_CHUNKS", 4))
+    except Exception:
+        value = 4
+    return max(1, min(value, 32))
+
+
+def _get_persona_rbac_flags() -> tuple[bool, bool]:
+    """Return (allow_export, allow_delete) from runtime settings."""
+    try:
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        allow_export = bool(_app_settings.get("PERSONA_RBAC_ALLOW_EXPORT", False))
+        allow_delete = bool(_app_settings.get("PERSONA_RBAC_ALLOW_DELETE", False))
+    except Exception:
+        allow_export = False
+        allow_delete = False
+    return allow_export, allow_delete
+
+
+def _get_persona_session_scopes(*, allow_export: bool, allow_delete: bool) -> set[str]:
+    scopes = {"read", "write:preview"}
+    if allow_export:
+        scopes.add("write:export")
+    if allow_delete:
+        scopes.add("write:delete")
+    return scopes
+
+
+def _evaluate_tool_policy(
+    tool_name: str,
+    *,
+    session_scopes: set[str],
+    allow_export: bool,
+    allow_delete: bool,
+) -> dict[str, Any]:
+    """
+    Evaluate policy for a requested tool.
+
+    Returns a policy object suitable for wire payloads and execution checks:
+    { allow, requires_confirmation, required_scope, reason_code?, reason?, action }.
+    """
+    normalized = str(tool_name or "").strip().lower()
+    policy: dict[str, Any] = {
+        "allow": True,
+        "requires_confirmation": False,
+        "required_scope": "read",
+        "reason_code": None,
+        "reason": None,
+        "action": "read",
+    }
+
+    if not normalized:
+        policy.update(
+            {
+                "allow": False,
+                "requires_confirmation": True,
+                "required_scope": "read",
+                "reason_code": "POLICY_INVALID_TOOL",
+                "reason": "Tool name is required.",
+                "action": "unknown",
+            }
+        )
+        return policy
+
+    if normalized in {"rag_search", "summarize"}:
+        policy.update(
+            {
+                "requires_confirmation": False,
+                "required_scope": "read",
+                "action": "read",
+            }
+        )
+    elif normalized == "ingest_url":
+        policy.update(
+            {
+                "requires_confirmation": True,
+                "required_scope": "write:preview",
+                "action": "write",
+            }
+        )
+    elif "export" in normalized:
+        policy.update(
+            {
+                "requires_confirmation": True,
+                "required_scope": "write:export",
+                "action": "export",
+            }
+        )
+    elif "delete" in normalized:
+        policy.update(
+            {
+                "requires_confirmation": True,
+                "required_scope": "write:delete",
+                "action": "delete",
+            }
+        )
+    else:
+        policy.update(
+            {
+                "allow": False,
+                "requires_confirmation": True,
+                "required_scope": "read",
+                "reason_code": "POLICY_TOOL_NOT_ALLOWED",
+                "reason": f"Tool '{tool_name}' is not in the persona allowlist.",
+                "action": "unknown",
+            }
+        )
+        return policy
+
+    if normalized not in _PERSONA_KNOWN_TOOLS and policy["action"] == "read":
+        policy.update(
+            {
+                "allow": False,
+                "reason_code": "POLICY_TOOL_NOT_ALLOWED",
+                "reason": f"Tool '{tool_name}' is not in the persona allowlist.",
+                "action": "unknown",
+            }
+        )
+        return policy
+
+    if policy["action"] == "export" and not allow_export:
+        policy.update(
+            {
+                "allow": False,
+                "reason_code": "POLICY_EXPORT_DISABLED",
+                "reason": "Export tools are disabled by persona policy.",
+            }
+        )
+        return policy
+
+    if policy["action"] == "delete" and not allow_delete:
+        policy.update(
+            {
+                "allow": False,
+                "reason_code": "POLICY_DELETE_DISABLED",
+                "reason": "Delete tools are disabled by persona policy.",
+            }
+        )
+        return policy
+
+    required_scope = str(policy.get("required_scope") or "").strip()
+    if required_scope and required_scope not in session_scopes:
+        policy.update(
+            {
+                "allow": False,
+                "reason_code": "POLICY_SCOPE_MISSING",
+                "reason": f"Missing required scope '{required_scope}'.",
+            }
+        )
+        return policy
+
+    return policy
+
+
+def _build_tool_result(
+    *,
+    ok: bool,
+    output: Any = None,
+    error: str | None = None,
+    reason_code: str | None = None,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ok": bool(ok),
+        "output": output,
+        # Canonical wire key is `output`; keep `result` as a temporary compatibility alias.
+        "result": output,
+    }
+    if error is not None:
+        payload["error"] = str(error)
+    if reason_code:
+        payload["reason_code"] = str(reason_code)
+    if isinstance(policy, dict):
+        payload["policy"] = dict(policy)
+    return payload
+
+
 def _decode_audio_chunk(bytes_base64: str) -> bytes:
     encoded = str(bytes_base64 or "").strip()
     if not encoded:
@@ -68,6 +320,29 @@ def _decode_audio_chunk(bytes_base64: str) -> bytes:
         return base64.b64decode(encoded, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise ValueError("Invalid base64 payload for audio chunk") from exc
+
+
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on", "enabled"}:
+            return True
+        if normalized in {"false", "0", "no", "off", "disabled"}:
+            return False
+    return default
+
+
+def _require_current_user_id(current_user: User) -> str:
+    user_id = str(getattr(current_user, "id", "") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    return user_id
 
 
 def _persona_catalog_items() -> list[PersonaInfo]:
@@ -102,7 +377,14 @@ async def _transcribe_audio_chunk(audio_bytes: bytes, audio_format: str) -> str:
     return f"[audio:{audio_format or 'unknown'}:{len(audio_bytes)} bytes]"
 
 
-async def _generate_tts_audio_chunks(text: str, audio_format: str) -> list[bytes]:
+async def _generate_tts_audio_chunks(
+    text: str,
+    audio_format: str,
+    *,
+    chunk_size_bytes: int,
+    max_chunks: int,
+    max_total_bytes: int,
+) -> list[bytes]:
     """
     Lightweight scaffold TTS chunk generator.
 
@@ -112,8 +394,16 @@ async def _generate_tts_audio_chunks(text: str, audio_format: str) -> list[bytes
     spoken = str(text or "").strip()
     if not spoken:
         return []
-    # Emit a single binary chunk for now; content is deterministic for tests.
-    return [spoken.encode("utf-8")]
+    encoded = spoken.encode("utf-8")
+    if max_total_bytes > 0:
+        encoded = encoded[:max_total_bytes]
+    if not encoded:
+        return []
+    size = max(1, int(chunk_size_bytes))
+    chunks = [encoded[i : i + size] for i in range(0, len(encoded), size)]
+    if max_chunks > 0:
+        chunks = chunks[:max_chunks]
+    return chunks
 
 
 def _is_authnz_access_token(token: str) -> bool:
@@ -301,11 +591,64 @@ async def persona_session(
     """Create or resume a persona session (scaffold)."""
     if not is_persona_enabled():
         raise HTTPException(status_code=404, detail="Persona disabled")
-    session_id = req.resume_session_id or str(uuid.uuid4())
+    user_id = _require_current_user_id(_current_user)
     persona = _persona_catalog_items()[0]
     if req.persona_id and req.persona_id != persona.id:
         logger.info(f"Unknown persona_id requested in scaffold: {req.persona_id}; defaulting to {persona.id}")
-    return PersonaSessionResponse(session_id=session_id, persona=persona, scopes=["read", "write:preview"])
+    session_manager = get_session_manager()
+    try:
+        session = session_manager.create(
+            user_id=user_id,
+            persona_id=persona.id,
+            resume_session_id=req.resume_session_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    session_id = session.session_id
+    allow_export, allow_delete = _get_persona_rbac_flags()
+    scopes = sorted(_get_persona_session_scopes(allow_export=allow_export, allow_delete=allow_delete))
+    return PersonaSessionResponse(session_id=session_id, persona=persona, scopes=scopes)
+
+
+@router.get("/sessions", response_model=list[PersonaSessionSummary], tags=["persona"], status_code=status.HTTP_200_OK)
+async def persona_sessions(
+    persona_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    _current_user: User = Depends(get_request_user),
+) -> list[PersonaSessionSummary]:
+    """List sessions for the authenticated user."""
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    manager = get_session_manager()
+    rows = manager.list_sessions(user_id=user_id, persona_id=persona_id, limit=limit)
+    return [PersonaSessionSummary(**row) for row in rows]
+
+
+@router.get(
+    "/sessions/{session_id}",
+    response_model=PersonaSessionDetail,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def persona_session_detail(
+    session_id: str,
+    limit_turns: int = Query(default=100, ge=0, le=1000),
+    _current_user: User = Depends(get_request_user),
+) -> PersonaSessionDetail:
+    """Get a single session snapshot for the authenticated user."""
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    manager = get_session_manager()
+    snapshot = manager.get_session_snapshot(
+        session_id=session_id,
+        user_id=user_id,
+        limit_turns=None if limit_turns <= 0 else limit_turns,
+    )
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Persona session not found")
+    return PersonaSessionDetail(**snapshot)
 
 
 @router.websocket("/stream")
@@ -363,16 +706,22 @@ async def persona_stream(
         default_session_id = uuid.uuid4().hex
         persona_id = "research_assistant"
 
-        # Basic RBAC policy from settings
-        from tldw_Server_API.app.core.config import settings as _app_settings
-        allow_export = bool(_app_settings.get("PERSONA_RBAC_ALLOW_EXPORT", False))
-        allow_delete = bool(_app_settings.get("PERSONA_RBAC_ALLOW_DELETE", False))
-
-        def _tool_allowed(name: str) -> bool:
-            n = (name or "").lower()
-            if "delete" in n and not allow_delete:
-                return False
-            return not ("export" in n and not allow_export)
+        allow_export, allow_delete = _get_persona_rbac_flags()
+        session_scopes = _get_persona_session_scopes(
+            allow_export=allow_export,
+            allow_delete=allow_delete,
+        )
+        allowed_audio_formats = _get_persona_allowed_audio_formats()
+        audio_chunk_max_bytes = _get_persona_audio_chunk_max_bytes()
+        audio_chunks_per_minute = _get_persona_audio_chunks_per_minute()
+        tts_chunk_size_bytes = _get_persona_tts_chunk_size_bytes()
+        tts_max_chunks = _get_persona_tts_max_chunks()
+        tts_max_total_bytes = _get_persona_tts_max_total_bytes()
+        tts_max_in_flight_chunks = _get_persona_tts_max_in_flight_chunks()
+        audio_rate_windows: dict[str, deque[float]] = defaultdict(deque)
+        transcript_seq_by_session: dict[str, int] = defaultdict(int)
+        tts_seq_by_session: dict[str, int] = defaultdict(int)
+        tts_in_flight_by_session: dict[str, int] = defaultdict(int)
 
         def _record_turn(
             *,
@@ -415,13 +764,27 @@ async def persona_stream(
             session_id: str,
             plan_id: str,
             step_idx: int,
+            policy: dict[str, Any],
             why: str | None = None,
             description: str | None = None,
         ) -> dict:
             if not authenticated_user_id:
-                return {"ok": False, "output": None, "result": None, "error": "Authentication required for tool execution"}
-            if not _tool_allowed(name):
-                return {"ok": False, "output": None, "result": None, "error": f"Tool '{name}' not permitted by policy"}
+                return _build_tool_result(
+                    ok=False,
+                    output=None,
+                    error="Authentication required for tool execution",
+                    reason_code="AUTH_REQUIRED",
+                    policy=policy,
+                )
+            if not bool(policy.get("allow", False)):
+                deny_reason = str(policy.get("reason") or f"Tool '{name}' not permitted by policy")
+                return _build_tool_result(
+                    ok=False,
+                    output=None,
+                    error=deny_reason,
+                    reason_code=str(policy.get("reason_code") or "POLICY_DENIED"),
+                    policy=policy,
+                )
             req = MCPRequest(method="tools/call", params={"name": name, "arguments": arguments})
             server = get_mcp_server()
             if not server.initialized:
@@ -439,9 +802,14 @@ async def persona_stream(
             }
             resp = await server.handle_http_request(req, user_id=authenticated_user_id, metadata=audit_metadata)
             if resp.error:
-                return {"ok": False, "output": None, "result": None, "error": resp.error.message}
-            # Canonical wire key is `output`; keep `result` as a temporary compatibility alias.
-            return {"ok": True, "output": resp.result, "result": resp.result}
+                return _build_tool_result(
+                    ok=False,
+                    output=None,
+                    error=resp.error.message,
+                    reason_code="TOOL_EXECUTION_ERROR",
+                    policy=policy,
+                )
+            return _build_tool_result(ok=True, output=resp.result, policy=policy)
 
         async def _propose_plan(text: str, memory_context: list[str] | None = None) -> dict:
             steps = []
@@ -497,27 +865,87 @@ async def persona_stream(
             if mtype == "user_message":
                 text = (msg.get("text") or msg.get("message") or "").strip()
                 session_id = str(msg.get("session_id") or default_session_id)
+                _ = session_manager.create(
+                    user_id=connection_user_id,
+                    persona_id=persona_id,
+                    resume_session_id=session_id,
+                )
+                existing_preferences = session_manager.get_preferences(
+                    session_id=session_id,
+                    user_id=connection_user_id,
+                )
+                configured_top_k = _get_persona_memory_top_k()
+                default_use_memory = _coerce_bool(
+                    existing_preferences.get("use_memory_context"),
+                    default=True,
+                )
+                use_memory_context = _coerce_bool(
+                    msg.get("use_memory_context"),
+                    default=default_use_memory,
+                )
+                pref_top_k_raw = existing_preferences.get("memory_top_k", configured_top_k)
+                try:
+                    pref_top_k = int(pref_top_k_raw)
+                except (TypeError, ValueError):
+                    pref_top_k = configured_top_k
+                requested_top_k_raw = msg.get("memory_top_k", pref_top_k)
+                try:
+                    memory_top_k = int(requested_top_k_raw)
+                except (TypeError, ValueError):
+                    memory_top_k = pref_top_k
+                memory_top_k = max(1, min(memory_top_k, configured_top_k))
+                with contextlib.suppress(Exception):
+                    session_manager.update_preferences(
+                        session_id=session_id,
+                        user_id=connection_user_id,
+                        preferences={
+                            "use_memory_context": use_memory_context,
+                            "memory_top_k": memory_top_k,
+                        },
+                    )
                 _record_turn(
                     session_id=session_id,
                     role="user",
                     content=text,
                     turn_type="user_message",
-                    metadata={"source": "ws"},
+                    metadata={
+                        "source": "ws",
+                        "use_memory_context": use_memory_context,
+                        "memory_top_k": memory_top_k,
+                    },
                     persist_as_memory=False,
                 )
-                memories = retrieve_top_memories(
-                    user_id=authenticated_user_id,
-                    query_text=text,
-                    top_k=_get_persona_memory_top_k(),
-                )
-                memory_context = [m.content for m in memories]
-                if memory_context:
+                memory_context: list[str] = []
+                if use_memory_context:
+                    memories = retrieve_top_memories(
+                        user_id=authenticated_user_id,
+                        query_text=text,
+                        top_k=memory_top_k,
+                    )
+                    memory_context = [m.content for m in memories]
+                memory_usage = {
+                    "enabled": use_memory_context,
+                    "requested_top_k": memory_top_k,
+                    "applied_count": len(memory_context),
+                }
+                if use_memory_context and memory_context:
                     await stream.send_json(
                         {
                             "event": "notice",
                             "session_id": session_id,
                             "level": "info",
+                            "reason_code": "MEMORY_CONTEXT_APPLIED",
                             "message": f"Applied {len(memory_context)} personalization memories",
+                        }
+                    )
+                elif not use_memory_context:
+                    await stream.send_json(
+                        {
+                            "event": "notice",
+                            "session_id": session_id,
+                            "level": "info",
+                            "reason_code": "MEMORY_CONTEXT_DISABLED",
+                            "message": "Memory context disabled for this message",
                         }
                     )
                 plan = await _propose_plan(text, memory_context=memory_context)
@@ -538,7 +966,7 @@ async def persona_stream(
                     pending_plan = session_manager.put_plan(
                         session_id=session_id,
                         user_id=connection_user_id,
-                        persona_id="research_assistant",
+                        persona_id=persona_id,
                         plan_id=plan_id,
                         steps=proposed_steps,
                     )
@@ -552,13 +980,39 @@ async def persona_stream(
                         "args": step.args,
                         "description": step.description,
                         "why": step.why,
+                        "policy": _evaluate_tool_policy(
+                            step.tool,
+                            session_scopes=session_scopes,
+                            allow_export=allow_export,
+                            allow_delete=allow_delete,
+                        ),
                     }
                     for step in pending_plan.steps
                 ]
-                await stream.send_json({"event": "tool_plan", "session_id": session_id, "plan_id": plan_id, "steps": stored_steps})
+                await stream.send_json(
+                    {
+                        "event": "tool_plan",
+                        "session_id": session_id,
+                        "plan_id": plan_id,
+                        "steps": stored_steps,
+                        "memory": memory_usage,
+                    }
+                )
             elif mtype == "audio_chunk":
                 session_id = str(msg.get("session_id") or default_session_id)
-                audio_format = str(msg.get("audio_format") or "pcm16")
+                audio_format = str(msg.get("audio_format") or "pcm16").strip().lower()
+                if audio_format not in allowed_audio_formats:
+                    await stream.send_json(
+                        {
+                            "event": "notice",
+                            "session_id": session_id,
+                            "level": "error",
+                            "reason_code": "AUDIO_FORMAT_UNSUPPORTED",
+                            "message": f"Unsupported audio_format '{audio_format}'",
+                        }
+                    )
+                    continue
+
                 try:
                     audio_bytes = _decode_audio_chunk(str(msg.get("bytes_base64") or ""))
                 except ValueError as exc:
@@ -572,8 +1026,44 @@ async def persona_stream(
                     )
                     continue
 
+                if len(audio_bytes) > audio_chunk_max_bytes:
+                    await stream.send_json(
+                        {
+                            "event": "notice",
+                            "session_id": session_id,
+                            "level": "error",
+                            "reason_code": "AUDIO_CHUNK_TOO_LARGE",
+                            "message": (
+                                f"Audio chunk exceeds max bytes ({len(audio_bytes)} > {audio_chunk_max_bytes})"
+                            ),
+                        }
+                    )
+                    continue
+
+                now_mono = time.monotonic()
+                session_window = audio_rate_windows[session_id]
+                while session_window and (now_mono - session_window[0]) >= 60.0:
+                    session_window.popleft()
+                if len(session_window) >= audio_chunks_per_minute:
+                    await stream.send_json(
+                        {
+                            "event": "notice",
+                            "session_id": session_id,
+                            "level": "warning",
+                            "reason_code": "AUDIO_RATE_LIMITED",
+                            "message": (
+                                f"Audio chunk rate limit exceeded ({audio_chunks_per_minute}/minute)"
+                            ),
+                        }
+                    )
+                    continue
+                session_window.append(now_mono)
+
+                timestamp_ms = int(time.time() * 1000)
                 transcript_delta = await _transcribe_audio_chunk(audio_bytes, audio_format=audio_format)
                 if transcript_delta:
+                    transcript_seq = transcript_seq_by_session[session_id]
+                    transcript_seq_by_session[session_id] += 1
                     _record_turn(
                         session_id=session_id,
                         role="user",
@@ -587,19 +1077,65 @@ async def persona_stream(
                             "event": "partial_transcript",
                             "session_id": session_id,
                             "text_delta": transcript_delta,
+                            "audio_format": audio_format,
+                            "seq": transcript_seq,
+                            "timestamp_ms": timestamp_ms,
                         }
                     )
 
                 tts_text = str(msg.get("tts_text") or f"You said: {transcript_delta or 'audio received.'}")
-                tts_chunks = await _generate_tts_audio_chunks(tts_text, audio_format=audio_format)
-                for chunk in tts_chunks:
+                tts_source_len = len(tts_text.encode("utf-8"))
+                tts_chunks = await _generate_tts_audio_chunks(
+                    tts_text,
+                    audio_format=audio_format,
+                    chunk_size_bytes=tts_chunk_size_bytes,
+                    max_chunks=tts_max_chunks,
+                    max_total_bytes=tts_max_total_bytes,
+                )
+                emitted_tts_bytes = sum(len(chunk) for chunk in tts_chunks)
+                if tts_chunks and emitted_tts_bytes < tts_source_len:
+                    await stream.send_json(
+                        {
+                            "event": "notice",
+                            "session_id": session_id,
+                            "level": "warning",
+                            "reason_code": "TTS_OUTPUT_TRUNCATED",
+                            "message": (
+                                f"TTS output truncated ({emitted_tts_bytes} of {tts_source_len} bytes)"
+                            ),
+                        }
+                    )
+
+                total_chunks = len(tts_chunks)
+                for idx, chunk in enumerate(tts_chunks):
+                    if tts_in_flight_by_session[session_id] >= tts_max_in_flight_chunks:
+                        await stream.send_json(
+                            {
+                                "event": "notice",
+                                "session_id": session_id,
+                                "level": "warning",
+                                "reason_code": "TTS_BACKPRESSURE_DROP",
+                                "message": (
+                                    f"Dropping TTS chunk due to in-flight limit ({tts_max_in_flight_chunks})"
+                                ),
+                            }
+                        )
+                        break
+
+                    chunk_seq = tts_seq_by_session[session_id]
+                    tts_seq_by_session[session_id] += 1
                     chunk_id = uuid.uuid4().hex
+                    tts_in_flight_by_session[session_id] += 1
                     await stream.send_json(
                         {
                             "event": "tts_audio",
                             "session_id": session_id,
                             "audio_format": audio_format,
                             "chunk_id": chunk_id,
+                            "chunk_index": idx,
+                            "chunk_count": total_chunks,
+                            "seq": chunk_seq,
+                            "timestamp_ms": int(time.time() * 1000),
                         }
                     )
                     try:
@@ -613,7 +1149,13 @@ async def persona_stream(
                                 "message": f"Failed to send tts audio binary chunk: {exc}",
                             }
                         )
+                        tts_in_flight_by_session[session_id] = max(
+                            0, tts_in_flight_by_session[session_id] - 1
+                        )
                         break
+                    tts_in_flight_by_session[session_id] = max(
+                        0, tts_in_flight_by_session[session_id] - 1
+                    )
                 _record_turn(
                     session_id=session_id,
                     role="assistant",
@@ -659,6 +1201,60 @@ async def persona_stream(
                 for step in pending_plan.steps:
                     if step.idx not in approved_step_indices:
                         continue
+                    step_policy = _evaluate_tool_policy(
+                        step.tool,
+                        session_scopes=session_scopes,
+                        allow_export=allow_export,
+                        allow_delete=allow_delete,
+                    )
+                    if not bool(step_policy.get("allow", False)):
+                        deny_reason = str(step_policy.get("reason") or f"Tool '{step.tool}' not permitted by policy")
+                        reason_code = str(step_policy.get("reason_code") or "POLICY_DENIED")
+                        await stream.send_json(
+                            {
+                                "event": "notice",
+                                "session_id": session_id,
+                                "step_idx": step.idx,
+                                "tool": step.tool,
+                                "level": "warning",
+                                "reason_code": reason_code,
+                                "message": deny_reason,
+                            }
+                        )
+                        result = _build_tool_result(
+                            ok=False,
+                            output=None,
+                            error=deny_reason,
+                            reason_code=reason_code,
+                            policy=step_policy,
+                        )
+                        await stream.send_json(
+                            {
+                                "event": "tool_result",
+                                "session_id": session_id,
+                                "step_idx": step.idx,
+                                **result,
+                            }
+                        )
+                        _record_turn(
+                            session_id=session_id,
+                            role="tool",
+                            content=json.dumps(result, ensure_ascii=True),
+                            turn_type="tool_result",
+                            metadata={"tool": step.tool, "step_idx": step.idx},
+                            persist_as_memory=False,
+                            persist_personalization=False,
+                        )
+                        _ = persist_tool_outcome(
+                            user_id=authenticated_user_id,
+                            session_id=session_id,
+                            persona_id=persona_id,
+                            tool_name=step.tool,
+                            step_idx=step.idx,
+                            outcome=result,
+                        )
+                        executed_steps += 1
+                        continue
                     executed_steps += 1
                     await stream.send_json(
                         {
@@ -668,6 +1264,7 @@ async def persona_stream(
                             "tool": step.tool,
                             "args": step.args,
                             "why": step.why,
+                            "policy": step_policy,
                         }
                     )
                     result = await _call_tool(
@@ -676,6 +1273,7 @@ async def persona_stream(
                         session_id=session_id,
                         plan_id=plan_id,
                         step_idx=step.idx,
+                        policy=step_policy,
                         why=step.why,
                         description=step.description,
                     )

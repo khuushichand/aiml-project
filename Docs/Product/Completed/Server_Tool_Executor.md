@@ -50,7 +50,7 @@ Add to `config.txt` / ENV:
 chat_auto_execute_tools = false        # default off
 chat_max_tool_calls = 3               # per response ceiling
 chat_tool_timeout_ms = 15000          # per call budget
-chat_tool_allow_catalog = *           # comma-sep names/prefixes or '*' (server still enforces RBAC)
+chat_tool_allow_catalog =              # empty = no tools (opt-in); set to '*' for unrestricted or comma-sep names/prefixes
 chat_tool_idempotency = true          # attach idempotencyKey for write tools
 chat_tool_auto_continue_once = false  # optional single non-stream follow-up turn
 ```

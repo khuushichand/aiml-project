@@ -1,0 +1,54 @@
+# External MCP server federation configuration (example)
+#
+# Copy to: tldw_Server_API/Config_Files/mcp_external_servers.yaml
+# Or set: MCP_EXTERNAL_SERVERS_CONFIG=/path/to/file
+
+servers:
+  - id: docs
+    name: "Docs MCP"
+    enabled: true
+    transport: websocket
+    websocket:
+      url: "wss://mcp.example.com/ws"
+      subprotocols: ["bearer"]
+      headers:
+        x-client: "tldw"
+    auth:
+      mode: bearer_env
+      token_env: "EXTERNAL_MCP_DOCS_TOKEN"
+    policy:
+      # Empty allowlist means "all tools", subject to deny list.
+      allow_tool_patterns: []
+      deny_tool_patterns:
+        - "*.delete"
+        - "*.exec"
+      allow_writes: false
+      require_write_confirmation: true
+    timeouts:
+      connect_seconds: 10
+      request_seconds: 30
+    retries:
+      max_attempts: 1
+      backoff_seconds: 0.5
+    circuit_breaker:
+      failure_threshold: 5
+      recovery_timeout_seconds: 60
+
+  - id: local_ci
+    name: "Local CI MCP"
+    enabled: false
+    transport: stdio
+    stdio:
+      command: "node"
+      args: ["/opt/mcp/ci-server.js"]
+      env:
+        CI_MODE: "1"
+      cwd: "/opt/mcp"
+    auth:
+      mode: none
+    policy:
+      allow_tool_patterns:
+        - "ci.*"
+      deny_tool_patterns: []
+      allow_writes: true
+      require_write_confirmation: true

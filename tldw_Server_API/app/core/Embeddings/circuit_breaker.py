@@ -4,15 +4,7 @@
 # All consumers that import from Embeddings.circuit_breaker continue to work.
 # Prefer importing directly from Infrastructure.circuit_breaker for new code.
 
-import warnings as _warnings
-
-_warnings.warn(
-    "Import from Infrastructure.circuit_breaker instead of Embeddings.circuit_breaker",
-    DeprecationWarning,
-    stacklevel=2,
-)
-
-from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (  # noqa: F401, E402
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (  # noqa: F401
     CircuitBreaker,
     CircuitBreakerConfig,
     CircuitBreakerRegistry,
@@ -20,7 +12,7 @@ from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (  # noqa: F
     circuit_breaker,
     registry,
 )
-from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (  # noqa: E402
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
     CircuitBreakerOpenError as CircuitBreakerError,
 )
 

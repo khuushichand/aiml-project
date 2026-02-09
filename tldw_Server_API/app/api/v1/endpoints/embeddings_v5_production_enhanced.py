@@ -82,8 +82,9 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
 # Circuit Breaker
-from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker, CircuitBreakerError
-from tldw_Server_API.app.core.Embeddings.circuit_breaker import registry as circuit_breaker_registry
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import CircuitBreaker
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import CircuitBreakerOpenError as CircuitBreakerError
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import registry as circuit_breaker_registry
 from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
 from tldw_Server_API.app.core.Embeddings.messages import validate_schema
 from tldw_Server_API.app.core.Embeddings.request_batching import (

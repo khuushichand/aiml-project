@@ -56,6 +56,17 @@ class AuthnzOrgProviderSecretsRepo:
     def _normalize_datetime_for_postgres(dt: datetime) -> datetime:
         return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
 
+    @staticmethod
+    def _row_to_dict(row: Any) -> dict[str, Any]:
+        if isinstance(row, dict):
+            return dict(row)
+        try:
+            keys = row.keys()
+            return {key: row[key] for key in keys}
+        except Exception:
+            pass
+        return dict(row)
+
     async def upsert_secret(
         self,
         *,
@@ -102,7 +113,7 @@ class AuthnzOrgProviderSecretsRepo:
                     updated_by,
                     ts,
                 )
-                return dict(row) if row else {}
+                return self._row_to_dict(row) if row else {}
 
             await self.db_pool.execute(
                 """
@@ -141,7 +152,7 @@ class AuthnzOrgProviderSecretsRepo:
                 """,
                 (scope_norm, int(scope_id), provider_norm),
             )
-            return dict(row) if row else {}
+            return self._row_to_dict(row) if row else {}
         except Exception as exc:
             logger.error(f"AuthnzOrgProviderSecretsRepo.upsert_secret failed: {exc}")
             raise
@@ -181,7 +192,7 @@ class AuthnzOrgProviderSecretsRepo:
                     """,
                     (scope_norm, int(scope_id), provider_norm),
                 )
-            return dict(row) if row else None
+            return self._row_to_dict(row) if row else None
         except Exception as exc:
             logger.error(f"AuthnzOrgProviderSecretsRepo.fetch_secret failed: {exc}")
             raise
@@ -256,7 +267,7 @@ class AuthnzOrgProviderSecretsRepo:
                     tuple(params),
                 )
 
-            return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row} for row in rows]
+            return [self._row_to_dict(row) for row in rows]
         except Exception as exc:
             logger.error(f"AuthnzOrgProviderSecretsRepo.list_secrets failed: {exc}")
             raise

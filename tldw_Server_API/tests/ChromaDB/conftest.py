@@ -44,7 +44,7 @@ from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create imp
     create_embeddings_batch,
 )
 from tldw_Server_API.app.core.Embeddings.connection_pool import ConnectionPool
-from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import CircuitBreaker
 from tldw_Server_API.app.core.Embeddings.error_recovery import ErrorRecoveryManager
 # Legacy Embeddings audit logger was removed. Provide a minimal stub to satisfy tests
 class AuditLogger:  # type: ignore

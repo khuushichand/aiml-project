@@ -195,15 +195,12 @@ class CircuitBreaker:
 
     async def call(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Call function through circuit breaker (handles both sync and async)."""
-        try:
-            if asyncio.iscoroutinefunction(func):
-                return await self._cb.call_async(func, *args, **kwargs)
-            else:
-                async def _wrap():
-                    return await asyncio.to_thread(func, *args, **kwargs)
-                return await self._cb.call_async(_wrap)
-        except CircuitBreakerOpenError as e:
-            raise CircuitOpenError(f"Circuit breaker '{self.name}' is open") from e
+        if asyncio.iscoroutinefunction(func):
+            return await self._cb.call_async(func, *args, **kwargs)
+        else:
+            async def _wrap():
+                return await asyncio.to_thread(func, *args, **kwargs)
+            return await self._cb.call_async(_wrap)
 
     def reset(self):
         """Reset circuit breaker to closed state."""

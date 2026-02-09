@@ -15,6 +15,7 @@
         module.exports = factory()
     } else {
         // Browser globals (root is window)
+        root.lunr = root.lunr || {};
         factory()(root.lunr);
     }
 }(this, function () {
@@ -113,6 +114,7 @@
           var seg = ["B3","B2","B1"];
           var ctype = ["O","O","O"];
           var o = input.split("");
+          var i;
           for (i = 0; i < o.length; ++i) {
             seg.push(o[i]);
             ctype.push(this.ctype_(o[i]))
@@ -127,7 +129,7 @@
           var p1 = "U";
           var p2 = "U";
           var p3 = "U";
-          for (var i = 4; i < seg.length - 3; ++i) {
+          for (i = 4; i < seg.length - 3; ++i) {
             var score = this.BIAS__;
             var w1 = seg[i-3];
             var w2 = seg[i-2];

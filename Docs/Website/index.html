@@ -127,14 +127,15 @@
     footer{border-top:1px solid var(--ring);padding:36px 0;color:#a1a1aa}
 
     /* Reveal on view */
-    .reveal{opacity:0;transform:translateY(10px);transition:opacity .5s ease, transform .5s ease}
-    .reveal.show{opacity:1;transform:none}
+    .reveal{opacity:1;transform:none}
+    .js .reveal{opacity:0;transform:translateY(10px);transition:opacity .5s ease, transform .5s ease}
+    .js .reveal.show{opacity:1;transform:none}
 
     /* Respect motion */
     @media (prefers-reduced-motion: reduce){
       html{scroll-behavior:auto}
       .dot{animation:none}
-      .reveal{transition:none}
+      .js .reveal{transition:none}
     }
 
     /* Accessibility */
@@ -343,11 +344,18 @@ docker compose up</code></pre>
     // Dynamic year
     document.getElementById('year').textContent = new Date().getFullYear();
 
+    // Mark JS-enabled for progressive enhancement
+    document.documentElement.classList.add('js');
+
     // Reveal on view
-    const observer = new IntersectionObserver((entries)=>{
-      for(const e of entries){ if(e.isIntersecting){ e.target.classList.add('show'); observer.unobserve(e.target); } }
-    }, {threshold: .25});
-    document.querySelectorAll('.reveal').forEach(el=>observer.observe(el));
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries)=>{
+        for(const e of entries){ if(e.isIntersecting){ e.target.classList.add('show'); observer.unobserve(e.target); } }
+      }, {threshold: .25});
+      document.querySelectorAll('.reveal').forEach(el=>observer.observe(el));
+    } else {
+      document.querySelectorAll('.reveal').forEach(el=>el.classList.add('show'));
+    }
 
     // Copy to clipboard
     document.querySelectorAll('.copy-btn').forEach(btn => {

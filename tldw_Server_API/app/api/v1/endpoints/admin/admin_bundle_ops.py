@@ -112,37 +112,44 @@ def _metadata_to_item(m: svc.BundleMetadata) -> BundleItem:
 
 
 def _handle_bundle_error(exc: BundleError) -> HTTPException:
-    """Map domain exceptions to HTTP responses."""
-    detail = str(exc)
+    """Map domain exceptions to HTTP responses using structured error_code."""
+    code = getattr(exc, "error_code", "bundle_error")
+
+    # --- Export errors ---
     if isinstance(exc, BundleExportError):
-        if "vector_store_export_not_supported" in detail:
-            return HTTPException(status_code=422, detail="vector_store_export_not_supported")
-        if "user_id_required" in detail:
-            return HTTPException(status_code=400, detail="user_id_required")
-        return HTTPException(status_code=400, detail=detail)
+        if code == "vector_store_export_not_supported":
+            return HTTPException(status_code=422, detail=code)
+        if code == "user_id_required":
+            return HTTPException(status_code=400, detail=code)
+        return HTTPException(status_code=400, detail=code)
+
+    # --- Specific typed exceptions with fixed status codes ---
     if isinstance(exc, BundleNotFoundError):
-        return HTTPException(status_code=404, detail="bundle_not_found")
+        return HTTPException(status_code=404, detail=code)
     if isinstance(exc, BundleSchemaIncompatibleError):
-        return HTTPException(status_code=409, detail="schema_incompatible")
+        return HTTPException(status_code=409, detail=code)
     if isinstance(exc, BundleConcurrencyError):
-        return HTTPException(status_code=409, detail="bundle_operation_in_progress")
+        return HTTPException(status_code=409, detail=code)
     if isinstance(exc, BundleRateLimitError):
         retry_after = str(getattr(exc, "retry_after", 3600))
         return HTTPException(
             status_code=429,
-            detail="rate_limit_exceeded",
+            detail=code,
             headers={"Retry-After": retry_after},
         )
     if isinstance(exc, BundleDiskSpaceError):
-        return HTTPException(status_code=507, detail="insufficient_disk_space")
+        return HTTPException(status_code=507, detail=code)
+
+    # --- Import errors ---
     if isinstance(exc, BundleImportError):
-        if "checksum_verification_failed" in detail:
-            return HTTPException(status_code=400, detail="checksum_verification_failed")
-        if "unsupported_manifest_version" in detail:
-            return HTTPException(status_code=400, detail="unsupported_manifest_version")
-        if "user_id_required" in detail:
-            return HTTPException(status_code=400, detail="user_id_required")
-        return HTTPException(status_code=400, detail=detail)
+        if code in (
+            "checksum_verification_failed",
+            "unsupported_manifest_version",
+            "user_id_required",
+        ):
+            return HTTPException(status_code=400, detail=code)
+        return HTTPException(status_code=400, detail=code)
+
     return HTTPException(status_code=500, detail="bundle_operation_failed")
 
 
@@ -179,6 +186,7 @@ async def create_bundle(
             include_vector_store=payload.include_vector_store,
             notes=payload.notes,
             max_backups=payload.max_backups,
+            retention_hours=payload.retention_hours,
             admin_user_id=admin_uid,
         )
 

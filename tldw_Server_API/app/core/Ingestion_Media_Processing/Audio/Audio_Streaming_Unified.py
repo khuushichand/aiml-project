@@ -2194,6 +2194,9 @@ async def handle_unified_websocket(
     config: Optional[UnifiedStreamingConfig] = None,
     on_audio_seconds: Optional[Callable[[float, int], Awaitable[None]]] = None,
     on_heartbeat: Optional[Callable[[], Awaitable[None]]] = None,
+    on_stream_config_resolved: Optional[Callable[[dict[str, Any], UnifiedStreamingConfig], Awaitable[None]]] = None,
+    on_transcript_result: Optional[Callable[[dict[str, Any], str], Awaitable[None]]] = None,
+    on_full_transcript: Optional[Callable[[str, bool], Awaitable[None]]] = None,
 ):
     """
     Handle a WebSocket connection to perform unified real-time transcription across Parakeet, Canary, Whisper, and Qwen3-ASR models.
@@ -2205,6 +2208,9 @@ async def handle_unified_websocket(
         config (Optional[UnifiedStreamingConfig]): Optional initial streaming configuration; updated if a client config message is received.
         on_audio_seconds (Optional[Callable[[float, int], Awaitable[None]]]): Optional callback invoked before processing each audio chunk with two arguments: computed audio duration in seconds and the sample rate in Hz.
         on_heartbeat (Optional[Callable[[], Awaitable[None]]]): Optional callback invoked on each received audio message to refresh external TTLs (e.g., Redis-based heartbeats).
+        on_stream_config_resolved (Optional[Callable[[dict[str, Any], UnifiedStreamingConfig], Awaitable[None]]]): Optional callback invoked after config handling resolves, with raw config payload and resolved config object.
+        on_transcript_result (Optional[Callable[[dict[str, Any], str], Awaitable[None]]]): Optional callback invoked for each emitted partial/final transcript result, with the outgoing result payload and current full transcript snapshot.
+        on_full_transcript (Optional[Callable[[str, bool], Awaitable[None]]]): Optional callback invoked whenever the handler emits a full transcript (manual/auto commit).
     """
     logger.info("=== handle_unified_websocket STARTED ===")
 
@@ -2245,12 +2251,15 @@ async def handle_unified_websocket(
     try:
         # Always wait for configuration message from client
         config_received = False
+        config_payload: dict[str, Any] = {}
         try:
             logger.info("Waiting for configuration message from client...")
             config_message = await asyncio.wait_for(websocket.receive_text(), timeout=15.0)  # Increased timeout
             # Do not log raw payload contents (may include base64 audio); log metadata only
             logger.info(f"Received message (length={len(config_message)})")
             config_data = json.loads(config_message)
+            if isinstance(config_data, dict):
+                config_payload = config_data
             logger.info(f"Parsed config data type: {config_data.get('type')}")
 
             if config_data.get("type") == "config":
@@ -2405,6 +2414,12 @@ async def handle_unified_websocket(
 
         if not config_received:
             logger.warning(f"No valid config received. Proceeding with: model={config.model}, variant={config.model_variant}")
+
+        if on_stream_config_resolved is not None:
+            try:
+                await on_stream_config_resolved(config_payload, config)
+            except Exception as cb_exc:  # noqa: BLE001 - callback failures must not break streaming
+                logger.debug(f"on_stream_config_resolved callback failed: {cb_exc}")
 
         # Create transcriber with config
         if transcriber is None:
@@ -2628,6 +2643,11 @@ async def handle_unified_websocket(
             }
             if auto_commit:
                 payload["auto_commit"] = True
+            if on_full_transcript is not None:
+                try:
+                    await on_full_transcript(full_transcript, auto_commit)
+                except Exception as cb_exc:  # noqa: BLE001 - callback failures must not break streaming
+                    logger.debug(f"on_full_transcript callback failed: {cb_exc}")
             await stream.send_json(payload)
             # Record STT finalization latency metric (commit → final emit)
             try:
@@ -2774,6 +2794,16 @@ async def handle_unified_websocket(
                                         result.setdefault("speaker_label", speaker_info["speaker_label"])
                             except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
                                 logger.exception("Diarization update failed: {}", diar_err)
+
+                        if on_transcript_result is not None:
+                            try:
+                                full_snapshot = transcriber.get_full_transcript() if transcriber else ""
+                            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                                full_snapshot = ""
+                            try:
+                                await on_transcript_result(result, full_snapshot)
+                            except Exception as cb_exc:  # noqa: BLE001 - callback failures must not break streaming
+                                logger.debug(f"on_transcript_result callback failed: {cb_exc}")
 
                         await stream.send_json(result)
                         if insights_engine and result.get("is_final"):

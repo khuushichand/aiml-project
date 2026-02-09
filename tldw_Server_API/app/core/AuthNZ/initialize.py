@@ -490,7 +490,11 @@ async def setup_database():
             # Seed baseline RBAC roles and permissions (centralized helper to avoid drift)
             from tldw_Server_API.app.core.AuthNZ.rbac_seed import ensure_baseline_rbac_seed
             async with pool.transaction() as conn:
-                await ensure_baseline_rbac_seed(conn, include_mcp_permissions=False)
+                await ensure_baseline_rbac_seed(
+                    conn,
+                    include_mcp_permissions=False,
+                    is_postgres=True,
+                )
 
             # Ensure API key tables after org/team tables exist
             ok_api_keys = await ensure_api_keys_tables_pg(pool)
@@ -674,6 +678,11 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     ensure_err,
                 )
 
+        from tldw_Server_API.app.core.AuthNZ.rbac_seed import (
+            ensure_baseline_rbac_seed,
+            ensure_sqlite_rbac_tables,
+        )
+
         # SQLite in-memory DBs cannot run file-based migrations; create minimal
         # RBAC tables as a backstop so baseline seed can succeed.
         if not is_postgres_backend:
@@ -693,46 +702,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
             if sqlite_is_memory:
                 async with pool.transaction() as conn:  # type: ignore[attr-defined]
                     try:
-                        await conn.execute(
-                            """
-                            CREATE TABLE IF NOT EXISTS roles (
-                                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                name TEXT UNIQUE NOT NULL,
-                                description TEXT,
-                                is_system INTEGER DEFAULT 0
-                            )
-                            """
-                        )
-                        await conn.execute(
-                            """
-                            CREATE TABLE IF NOT EXISTS permissions (
-                                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                name TEXT UNIQUE NOT NULL,
-                                description TEXT,
-                                category TEXT
-                            )
-                            """
-                        )
-                        await conn.execute(
-                            """
-                            CREATE TABLE IF NOT EXISTS role_permissions (
-                                role_id INTEGER NOT NULL,
-                                permission_id INTEGER NOT NULL,
-                                PRIMARY KEY (role_id, permission_id)
-                            )
-                            """
-                        )
-                        await conn.execute(
-                            """
-                            CREATE TABLE IF NOT EXISTS user_roles (
-                                user_id INTEGER NOT NULL,
-                                role_id INTEGER NOT NULL,
-                                granted_by INTEGER,
-                                expires_at TIMESTAMP,
-                                PRIMARY KEY (user_id, role_id)
-                            )
-                            """
-                        )
+                        await ensure_sqlite_rbac_tables(conn)
                     except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as table_err:
                         logger.debug(
                             "SQLite in-memory RBAC table creation skipped (tables may already exist): {}",
@@ -741,10 +711,12 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     with contextlib.suppress(_AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS):
                         await conn.commit()  # type: ignore[attr-defined]
 
-        from tldw_Server_API.app.core.AuthNZ.rbac_seed import ensure_baseline_rbac_seed
-
         async with pool.transaction() as conn:
-            await ensure_baseline_rbac_seed(conn, include_mcp_permissions=True)
+            await ensure_baseline_rbac_seed(
+                conn,
+                include_mcp_permissions=True,
+                is_postgres=is_postgres_backend,
+            )
             if not is_postgres_backend:
                 with contextlib.suppress(_AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS):
                     await conn.commit()  # type: ignore[attr-defined]
@@ -828,44 +800,6 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
         )
 
 
-def _coerce_row_int(row: object, key: str, index: int = 0) -> Optional[int]:
-    """Best-effort row value -> int for both sqlite rows and dict-like records."""
-    value = None
-    try:
-        if hasattr(row, "keys"):
-            value = row[key]  # type: ignore[index]
-        elif isinstance(row, dict):
-            value = row.get(key)
-        else:
-            value = row[index]  # type: ignore[index]
-    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
-        value = None
-    try:
-        return int(value) if value is not None else None
-    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
-        return None
-
-
-def _coerce_row_str(row: object, key: str, index: int = 0) -> Optional[str]:
-    """Best-effort row value -> str for both sqlite rows and dict-like records."""
-    value = None
-    try:
-        if hasattr(row, "keys"):
-            value = row[key]  # type: ignore[index]
-        elif isinstance(row, dict):
-            value = row.get(key)
-        else:
-            value = row[index]  # type: ignore[index]
-    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
-        value = None
-    if value is None:
-        return None
-    try:
-        return str(value)
-    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
-        return None
-
-
 async def _collect_single_user_invariant_errors(
     pool: DatabasePool,
     *,
@@ -874,19 +808,25 @@ async def _collect_single_user_invariant_errors(
     check_keys: bool,
 ) -> list[str]:
     """Return a list of invariant violations for single-user bootstrap."""
+    from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
+    from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
+
     errors: list[str] = []
-    is_postgres = getattr(pool, "pool", None) is not None
-    active_clause = "is_active = TRUE" if is_postgres else "is_active = 1"
+
+    users_repo = AuthnzUsersRepo(db_pool=pool)
+    api_keys_repo = AuthnzApiKeysRepo(db_pool=pool)
 
     try:
-        active_rows = await pool.fetch(
-            f"SELECT id FROM users WHERE {active_clause}"
+        active_rows, _active_total = await users_repo.list_users(
+            offset=0,
+            limit=10_000,
+            is_active=True,
         )
         active_ids = sorted(
             {
-                _coerce_row_int(row, "id", 0)
+                int(row["id"])
                 for row in active_rows
-                if _coerce_row_int(row, "id", 0) is not None
+                if row.get("id") is not None
             }
         )
         if expected_user_id not in active_ids:
@@ -903,15 +843,17 @@ async def _collect_single_user_invariant_errors(
         errors.append(f"Failed to verify active users: {exc}")
 
     try:
-        admin_rows = await pool.fetch(
-            f"SELECT id FROM users WHERE role = ? AND {active_clause}",
-            "admin",
+        admin_rows, _admin_total = await users_repo.list_users(
+            offset=0,
+            limit=10_000,
+            role="admin",
+            is_active=True,
         )
         admin_ids = sorted(
             {
-                _coerce_row_int(row, "id", 0)
+                int(row["id"])
                 for row in admin_rows
-                if _coerce_row_int(row, "id", 0) is not None
+                if row.get("id") is not None
             }
         )
         extra_admins = [uid for uid in admin_ids if uid != expected_user_id]
@@ -924,20 +866,20 @@ async def _collect_single_user_invariant_errors(
         errors.append(f"Failed to verify admin users: {exc}")
 
     if check_keys and expected_key_hash:
-        virtual_clause = "is_virtual = FALSE" if is_postgres else "is_virtual = 0"
         try:
-            key_rows = await pool.fetch(
-                f"""
-                SELECT id, key_hash FROM api_keys
-                WHERE user_id = ? AND status = ? AND {virtual_clause}
-                """,
-                expected_user_id,
-                "active",
+            key_rows = await api_keys_repo.list_user_keys(
+                user_id=expected_user_id,
+                include_revoked=False,
             )
-            key_ids = [
-                _coerce_row_int(row, "id", 0)
+            active_non_virtual_rows = [
+                row
                 for row in key_rows
-                if _coerce_row_int(row, "id", 0) is not None
+                if not bool(row.get("is_virtual", False))
+            ]
+            key_ids = [
+                int(row["id"])
+                for row in active_non_virtual_rows
+                if row.get("id") is not None
             ]
             if not key_ids:
                 errors.append(
@@ -949,7 +891,8 @@ async def _collect_single_user_invariant_errors(
                     + ", ".join(str(kid) for kid in key_ids)
                 )
             else:
-                row_hash = _coerce_row_str(key_rows[0], "key_hash", 1)
+                raw_hash = active_non_virtual_rows[0].get("key_hash")
+                row_hash = str(raw_hash) if raw_hash is not None else None
                 if row_hash != expected_key_hash:
                     errors.append(
                         "Active primary API key does not match SINGLE_USER_API_KEY."

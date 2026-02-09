@@ -153,7 +153,7 @@ The following additional step types are available and surfaced via `/step-types`
 - AuthNZ: All HTTP endpoints use standard API auth; WS requires a JWT and enforces run-owner equality (subject must match `run.user_id`).
 - Tenant Isolation: Read operations enforce tenant boundaries, and HTTP reads now enforce run-owner or admin (consistent with WS).
 - Rate Limits: Ad-hoc runs and run-saved endpoints are rate-limited via RG policies.
-  - Tests/CI typically use test-mode defaults and/or permissive RG test policies.
+  - When `TEST_MODE=true` is set, endpoint rate limits and restrictive RG policies are disabled. Stress tests (`TLDW_WORKFLOW_STRESS=1`) re-enable rate limits to validate throttling behavior.
 - Egress Controls: Webhook step checks URL via `is_url_allowed` to block private IPs/SSRF; optional HMAC signature header.
 - Artifact Downloads: Only `file://` URIs; size and MIME allowlists enforced; basic path containment checks.
 
@@ -247,7 +247,7 @@ In single-user mode, the fixed user is exposed with admin-like claims for compat
   - `POST /api/v1/workflows/runs/{run_id}/artifacts/verify-batch` with `{items:[{artifact_id, expected_sha256?}]}` returns calculated hashes and mismatch status. If `expected_sha256` is not provided, the recorded checksum is used when present.
 
 - Quotas and rate limits:
-  - Endpoint rate-limits (RG) remain as before and are disabled in tests.
+  - Endpoint rate-limits (RG): disabled when `TEST_MODE=true` is set. Stress tests (`TLDW_WORKFLOW_STRESS=1`) re-enable rate limits to validate throttling behavior.
   - Per-user quotas at run start (saved and ad-hoc):
     - Burst ingress control: RG policy `requests` settings (for example `rpm`/`burst`).
     - Daily: `workflows_runs.daily_cap` from the active RG policy.
@@ -353,8 +353,8 @@ Ordering is stable with a tie-breaker (`run_id` for runs; `event_id` for events)
   - Uses shared content backend (see `Config_Files/config.txt` → `[Database] type=sqlite|postgres`); Workflows will default to Postgres when the content backend is Postgres.
   - SQLite DB path (fallback): `Databases/workflows.db` (config key `workflows_path`).
 
-- Rate limits and quotas (disabled in tests automatically)
-  - Endpoint rate limits (RG): disabled by turning off RG or using permissive policies in tests.
+- Rate limits and quotas (disabled when `TEST_MODE=true` is set; stress tests with `TLDW_WORKFLOW_STRESS=1` re-enable rate limits)
+  - Endpoint rate limits (RG): disabled when `TEST_MODE=true` is set.
   - Quotas at run start:
     - Burst: RG policy `requests` limits.
     - Daily: `workflows_runs.daily_cap` from policy.

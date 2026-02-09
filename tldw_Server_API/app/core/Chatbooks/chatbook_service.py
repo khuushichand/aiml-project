@@ -2807,6 +2807,161 @@ class ChatbookService:
             logger.error(f"Error cleaning up expired exports: {e}")
             return 0
 
+    def cleanup_import_orphans(
+        self,
+        age_threshold_hours: int = 24,
+        batch_size: int = 100,
+    ) -> int:
+        """Clean up orphaned import files from failed, cancelled, or stale jobs.
+
+        Handles three scenarios:
+        1. Failed/cancelled jobs whose archive files still exist on disk.
+        2. Jobs stuck in pending/validating for longer than *age_threshold_hours*.
+        3. Files in import_dir/temp_dir with no corresponding job record.
+
+        Args:
+            age_threshold_hours: Only process jobs/files older than this many hours.
+            batch_size: Number of jobs to process per batch.
+
+        Returns:
+            Number of orphaned files deleted.
+        """
+        try:
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None)
+            cutoff -= timedelta(hours=age_threshold_hours)
+            cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S.%f")
+            deleted_count = 0
+            no_progress_batches = 0
+
+            # --- Phase 1: clean files for terminal-state jobs ---
+            terminal_statuses = (
+                ImportStatus.FAILED.value,
+                ImportStatus.CANCELLED.value,
+                ImportStatus.COMPLETED.value,
+            )
+            for status_val in terminal_statuses:
+                offset = 0
+                while True:
+                    cursor = self.db.execute_query(
+                        "SELECT job_id, chatbook_path FROM import_jobs "
+                        "WHERE user_id = ? AND status = ? AND created_at < ? "
+                        "LIMIT ? OFFSET ?",
+                        (self.user_id, status_val, cutoff_str, batch_size, offset),
+                    )
+                    results = self._fetch_results(cursor)
+                    if not results:
+                        break
+                    for row in results:
+                        if isinstance(row, dict):
+                            chatbook_path = row.get("chatbook_path")
+                        else:
+                            chatbook_path = row[1] if len(row) > 1 else None
+
+                        if chatbook_path:
+                            deleted_count += self._try_delete_import_file(chatbook_path)
+
+                    offset += len(results)
+                    if len(results) < batch_size:
+                        break
+
+            # --- Phase 2: mark stale pending/validating jobs as failed ---
+            stale_statuses = (
+                ImportStatus.PENDING.value,
+                ImportStatus.VALIDATING.value,
+            )
+            for status_val in stale_statuses:
+                cursor = self.db.execute_query(
+                    "SELECT job_id, chatbook_path FROM import_jobs "
+                    "WHERE user_id = ? AND status = ? AND created_at < ? "
+                    "LIMIT ?",
+                    (self.user_id, status_val, cutoff_str, batch_size),
+                )
+                results = self._fetch_results(cursor)
+                for row in (results or []):
+                    if isinstance(row, dict):
+                        job_id = row.get("job_id")
+                        chatbook_path = row.get("chatbook_path")
+                    else:
+                        job_id = row[0] if row else None
+                        chatbook_path = row[1] if len(row) > 1 else None
+
+                    if chatbook_path:
+                        deleted_count += self._try_delete_import_file(chatbook_path)
+
+                    if job_id:
+                        try:
+                            self.db.execute_query(
+                                "UPDATE import_jobs SET status = ?, error_message = ? "
+                                "WHERE job_id = ?",
+                                (
+                                    ImportStatus.FAILED.value,
+                                    "Marked failed by orphan cleanup (stale job)",
+                                    job_id,
+                                ),
+                                commit=True,
+                            )
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+                            logger.warning(f"Failed to mark stale import job {job_id} as failed: {e}")
+
+            # --- Phase 3: scan import_dir and temp_dir for untracked files ---
+            for scan_dir in (self.import_dir, self.temp_dir):
+                try:
+                    resolved_base = Path(scan_dir).resolve()
+                    if not resolved_base.is_dir():
+                        continue
+                    for entry in resolved_base.iterdir():
+                        if not entry.is_file():
+                            continue
+                        try:
+                            file_age = datetime.fromtimestamp(
+                                entry.stat().st_mtime, tz=timezone.utc
+                            ).replace(tzinfo=None)
+                            if file_age > cutoff:
+                                continue  # too recent
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
+                            continue
+
+                        # Check if any job references this file
+                        cursor = self.db.execute_query(
+                            "SELECT 1 FROM import_jobs WHERE user_id = ? AND chatbook_path = ? LIMIT 1",
+                            (self.user_id, str(entry)),
+                        )
+                        refs = self._fetch_results(cursor)
+                        if not refs:
+                            # No job references this file — orphan
+                            try:
+                                entry.unlink()
+                                deleted_count += 1
+                                logger.debug(f"Removed orphaned import file: {entry}")
+                            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+                                logger.warning(f"Failed to remove orphaned import file {entry}: {e}")
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+                    logger.warning(f"Error scanning {scan_dir} for orphaned imports: {e}")
+
+            return deleted_count
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Error cleaning up import orphans: {e}")
+            return 0
+
+    def _try_delete_import_file(self, file_path_str: str) -> int:
+        """Try to delete an import archive file. Returns 1 if deleted, 0 otherwise."""
+        try:
+            file_path = Path(file_path_str).resolve()
+            # Validate path is within expected directories
+            import_base = Path(self.import_dir).resolve()
+            temp_base = Path(self.temp_dir).resolve()
+            in_import = os.path.commonpath([str(file_path), str(import_base)]) == str(import_base)
+            in_temp = os.path.commonpath([str(file_path), str(temp_base)]) == str(temp_base)
+            if not (in_import or in_temp):
+                logger.warning(f"Refusing to delete import file outside expected dirs: {file_path}")
+                return 0
+            if file_path.exists() and file_path.is_file():
+                file_path.unlink()
+                return 1
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+            logger.warning(f"Failed to delete import file {file_path_str}: {e}")
+        return 0
+
     def _collect_prompts(
         self,
         prompt_ids: list[str],

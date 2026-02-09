@@ -160,7 +160,7 @@ Reserved keys are enforced by the server and will be removed or overwritten:
 - `collections_feed_job_id`, `collections_job_id`
 - `collections.origin`, `collections.job_id`
 
-For supported `settings` fields (history/backfill options, limits), see `Docs/Published/API-related/Watchlists_API.md` and `tldw_Server_API/app/core/Watchlists/fetchers.py`.
+For supported `settings` fields (history/backfill options, limits), see `Docs/API-related/Watchlists_API.md` and `tldw_Server_API/app/core/Watchlists/fetchers.py`.
 
 ## Collections ingestion behavior
 

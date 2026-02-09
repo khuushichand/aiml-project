@@ -28,3 +28,17 @@ class PersonaSessionResponse(BaseModel):
     session_id: str
     persona: PersonaInfo
     scopes: list[str] = Field(default_factory=list)
+
+
+class PersonaSessionSummary(BaseModel):
+    session_id: str
+    persona_id: str
+    created_at: str
+    updated_at: str
+    turn_count: int = 0
+    pending_plan_count: int = 0
+    preferences: dict[str, object] = Field(default_factory=dict)
+
+
+class PersonaSessionDetail(PersonaSessionSummary):
+    turns: list[dict[str, object]] = Field(default_factory=list)

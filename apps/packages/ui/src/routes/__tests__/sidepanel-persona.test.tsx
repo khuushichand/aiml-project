@@ -1,5 +1,5 @@
 import React from "react"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
@@ -179,6 +179,12 @@ describe("SidepanelPersona", () => {
           json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
         })
       }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
       if (path.includes("/persona/session")) {
         return Promise.resolve({
           ok: true,
@@ -197,8 +203,12 @@ describe("SidepanelPersona", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect" }))
 
     await waitFor(() => {
-      expect(mocks.fetchWithAuth).toHaveBeenCalledTimes(2)
+      expect(mocks.fetchWithAuth).toHaveBeenCalled()
     })
+    const calledPaths = mocks.fetchWithAuth.mock.calls.map(([path]) => String(path))
+    expect(calledPaths.some((path) => path.includes("/persona/sessions"))).toBe(true)
+    expect(calledPaths.some((path) => path.includes("/persona/session"))).toBe(true)
+    expect(calledPaths.some((path) => path.includes("/persona/catalog"))).toBe(true)
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(1)
     })
@@ -240,7 +250,9 @@ describe("SidepanelPersona", () => {
     )
 
     await screen.findByText("Pending tool plan")
-    const checkboxes = screen.getAllByRole("checkbox")
+    const planRoot = screen.getByText("Pending tool plan").closest("div")
+    expect(planRoot).not.toBeNull()
+    const checkboxes = within(planRoot as HTMLElement).getAllByRole("checkbox")
     fireEvent.click(checkboxes[0])
     fireEvent.click(screen.getByRole("button", { name: "Confirm plan" }))
 
@@ -276,6 +288,229 @@ describe("SidepanelPersona", () => {
             payload.reason === "user_cancelled"
         )
       ).toBe(true)
+    })
+  })
+
+  it("prefers tool_result.output and falls back to legacy result alias", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-legacy" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument()
+    })
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        step_idx: 2,
+        output: "canonical-output",
+        result: "legacy-alias"
+      })
+    )
+    await screen.findByText("Result step 2: canonical-output")
+    expect(screen.queryByText("Result step 2: legacy-alias")).not.toBeInTheDocument()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        step_idx: 3,
+        result: "legacy-only"
+      })
+    )
+    await screen.findByText("Result step 3: legacy-only")
+  })
+
+  it("renders policy metadata and keeps blocked steps out of approvals", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-policy" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_plan",
+        plan_id: "plan-policy",
+        steps: [
+          {
+            idx: 0,
+            tool: "export_report",
+            description: "Export report",
+            policy: {
+              allow: false,
+              requires_confirmation: true,
+              required_scope: "write:export",
+              reason_code: "POLICY_EXPORT_DISABLED",
+              reason: "Export tools are disabled by persona policy."
+            }
+          },
+          {
+            idx: 1,
+            tool: "rag_search",
+            description: "Search notes",
+            policy: {
+              allow: true,
+              requires_confirmation: false,
+              required_scope: "read"
+            }
+          }
+        ]
+      })
+    )
+
+    await screen.findByText("Pending tool plan")
+    await screen.findByText("scope: write:export")
+    await screen.findByText("blocked: POLICY_EXPORT_DISABLED")
+    await screen.findByText("Export tools are disabled by persona policy.")
+
+    const planRoot = screen.getByText("Pending tool plan").closest("div")
+    expect(planRoot).not.toBeNull()
+    const checkboxes = within(planRoot as HTMLElement).getAllByRole("checkbox")
+    expect(checkboxes[0]).toBeDisabled()
+    expect(checkboxes[0]).not.toBeChecked()
+    expect(checkboxes[1]).toBeChecked()
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm plan" }))
+    await waitFor(() => {
+      const sentPayloads = getSentPayloads(ws)
+      expect(
+        sentPayloads.some(
+          (payload) =>
+            payload.type === "confirm_plan" &&
+            payload.plan_id === "plan-policy" &&
+            JSON.stringify(payload.approved_steps) === JSON.stringify([1])
+        )
+      ).toBe(true)
+    })
+  })
+
+  it("sends per-message memory controls in user_message payload", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-memory-controls" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    fireEvent.click(screen.getByTestId("persona-memory-toggle"))
+    fireEvent.change(screen.getByPlaceholderText("Ask Persona..."), {
+      target: { value: "memory toggle payload" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+
+    await waitFor(() => {
+      const sentPayloads = getSentPayloads(ws)
+      const userMessage = sentPayloads.find((payload) => payload.type === "user_message")
+      expect(userMessage).toBeTruthy()
+      expect(userMessage?.use_memory_context).toBe(false)
+      expect(userMessage?.memory_top_k).toBe(3)
     })
   })
 })

@@ -20,6 +20,11 @@ class BundleCreateRequest(BaseModel):
         description="Include vector store data (not yet supported).",
     )
     max_backups: int | None = Field(None, ge=1, le=1000)
+    retention_hours: int | None = Field(
+        None,
+        ge=1,
+        description="Auto-delete bundles older than this many hours (not yet enforced).",
+    )
     notes: str | None = Field(None, max_length=2000)
 
     model_config = ConfigDict(from_attributes=True)
@@ -90,6 +95,10 @@ class BundleImportResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     safety_snapshots: dict[str, str] = Field(default_factory=dict)
     validations: list[BundleImportValidation] = Field(default_factory=list)
+    rollback_failures: list[str] = Field(
+        default_factory=list,
+        description="Datasets whose rollback failed during an import error.",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 

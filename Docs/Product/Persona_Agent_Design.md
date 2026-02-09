@@ -44,6 +44,15 @@ Introduce a first-class Persona agent (text + optional voice + avatar) that chat
 - v0.1.0
   - Initial draft design with goals, architecture, and API outline.
 
+## `tool_result.result` Deprecation Plan (set 2026-02-09)
+
+- Canonical contract now: `tool_result.output`.
+- Compatibility window: through `2026-06-30`, server continues emitting both `output` and legacy `result`.
+- Client behavior during window:
+  - Read `output` first.
+  - Fall back to `result` only for older server compatibility.
+- Planned removal window: starting `2026-07-01` (or next compatible minor/major release after that date), stop emitting `result` once WebUI/extension compatibility checks are green in CI for output-only payloads.
+
 ## Goals
 
 - Provide a persistent chat persona with configurable style, voice, and capabilities.
@@ -104,18 +113,30 @@ Base path: `/api/v1/persona`
   - Req: `{ persona_id, project_id?, resume_session_id? }`
   - Res: `{ session_id, persona: {...}, scopes: [...] }`
 
+- `GET /sessions`
+  - Auth: required
+  - Disabled behavior: `404 { "detail": "Persona disabled" }`
+  - Query: `persona_id?`, `limit?`
+  - Res: `[ { session_id, persona_id, created_at, updated_at, turn_count, pending_plan_count, preferences } ]`
+
+- `GET /sessions/{session_id}`
+  - Auth: required
+  - Disabled behavior: `404 { "detail": "Persona disabled" }`
+  - Query: `limit_turns?`
+  - Res: `{ session_id, persona_id, created_at, updated_at, turn_count, pending_plan_count, preferences, turns: [...] }`
+
 - `WS /stream` (bi-directional)
   - Auth: required before interaction (`Authorization: Bearer ...`, `X-API-KEY`, or `token`/`api_key` query params)
   - Missing/invalid auth: connection is closed (`1008` policy violation)
   - Client → Server messages (JSON):
-    - `user_message`: `{ session_id, text }`
+    - `user_message`: `{ session_id, text, use_memory_context?, memory_top_k? }`
     - `audio_chunk`: `{ session_id, audio_format, bytes_base64 }`
     - `confirm_plan`: `{ session_id, plan_id, approved_steps: [idx...] }`
     - `cancel`: `{ session_id, reason? }`
   - Server → Client events (JSON frames; audio in separate binary frames if supported):
     - `assistant_delta`: `{ session_id, text_delta }`
     - `partial_transcript`: `{ session_id, text_delta }`
-    - `tool_plan`: `{ session_id, plan_id, steps: [ { idx, tool, args, description } ] }`
+    - `tool_plan`: `{ session_id, plan_id, steps: [ { idx, tool, args, description, policy } ], memory?: { enabled, requested_top_k, applied_count } }`
     - `tool_call`: `{ session_id, step_idx, tool, args }`
     - `tool_result`: `{ session_id, step_idx, ok, output, error? }`
       - Compatibility: `result` may also be present temporarily as an alias for `output`.

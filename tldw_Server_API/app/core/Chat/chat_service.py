@@ -134,24 +134,28 @@ def _coerce_int_bounded(
 
 
 _TOOL_ALLOW_CATALOG_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:-]+(?:\*)?$")
-_TOOL_ALLOW_CATALOG_DEFAULT = "*"
+_TOOL_ALLOW_CATALOG_DEFAULT = ""
 _CHAT_TOOL_CALLS_MIN = 1
 _CHAT_TOOL_CALLS_MAX = 20
 _CHAT_TOOL_TIMEOUT_MS_MIN = 1000
 _CHAT_TOOL_TIMEOUT_MS_MAX = 120_000
 
 
-def _parse_tool_allow_catalog(value: str | None) -> list[str] | None:
+def _parse_tool_allow_catalog(value: str | None) -> list[str]:
     """Parse chat tool allow-catalog from comma-separated names/prefixes.
 
-    - `*` or blank means allow all (`None`).
-    - Entries support exact names (`notes.search`) and suffix wildcard prefixes
-      (`notes.*`).
+    - Empty string or blank means no tools allowed (empty list).
+    - `*` means allow all (returns ``["*"]``).
+    - Entries support exact names (``notes.search``) and suffix wildcard prefixes
+      (``notes.*``).
     - Invalid entries are ignored.
     """
     raw = (value or "").strip()
-    if not raw or raw == "*":
-        return None
+    if not raw:
+        return []
+
+    if raw == "*":
+        return ["*"]
 
     items: list[str] = []
     seen: set[str] = set()
@@ -160,7 +164,7 @@ def _parse_tool_allow_catalog(value: str | None) -> list[str] | None:
         if not entry:
             continue
         if entry == "*":
-            return None
+            return ["*"]
         if "*" in entry[:-1]:
             continue
         if not _TOOL_ALLOW_CATALOG_TOKEN_RE.match(entry):
@@ -168,7 +172,7 @@ def _parse_tool_allow_catalog(value: str | None) -> list[str] | None:
         if entry not in seen:
             seen.add(entry)
             items.append(entry)
-    return items or None
+    return items
 
 
 _MAX_HISTORY_MESSAGES = max(1, _coerce_int(_chat_config.get("max_history_messages"), 200))
@@ -309,8 +313,8 @@ def get_chat_tool_timeout_ms() -> int:
     return CHAT_TOOL_TIMEOUT_MS
 
 
-def get_chat_tool_allow_catalog() -> list[str] | None:
-    """Return allow-catalog patterns (`None` means unrestricted)."""
+def get_chat_tool_allow_catalog() -> list[str]:
+    """Return allow-catalog patterns (empty list means no tools allowed)."""
     raw = os.getenv("CHAT_TOOL_ALLOW_CATALOG")
     if raw is not None:
         return _parse_tool_allow_catalog(raw)

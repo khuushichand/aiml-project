@@ -27,7 +27,7 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class ChatbookVersion(Enum):
+class ChatbookVersion(str, Enum):
     """
     Chatbook format versions.
 
@@ -45,7 +45,7 @@ class ChatbookVersion(Enum):
     V2 = "2.0.0"  # Future version with enhanced features
 
 
-class ContentType(Enum):
+class ContentType(str, Enum):
     """Types of content that can be included in a chatbook."""
     CONVERSATION = "conversation"
     NOTE = "note"
@@ -59,7 +59,7 @@ class ContentType(Enum):
     GENERATED_DOCUMENT = "generated_document"
 
 
-class ExportStatus(Enum):
+class ExportStatus(str, Enum):
     """Status of export job."""
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
@@ -69,7 +69,7 @@ class ExportStatus(Enum):
     EXPIRED = "expired"
 
 
-class ImportStatus(Enum):
+class ImportStatus(str, Enum):
     """Status of import job."""
     PENDING = "pending"
     VALIDATING = "validating"
@@ -79,8 +79,8 @@ class ImportStatus(Enum):
     CANCELLED = "cancelled"
 
 
-class ConflictResolution(Enum):
-    """How to handle conflicts during import."""
+class ConflictResolution(str, Enum):
+    """How to handle conflicts during import (full set including future strategies)."""
     SKIP = "skip"          # Skip conflicting items
     OVERWRITE = "overwrite"  # Overwrite existing items
     RENAME = "rename"      # Rename imported items
@@ -408,12 +408,8 @@ class ExportJob:
     # Provide dict-like access for test compatibility
     def __getitem__(self, key: str):  # type: ignore[override]
         val = getattr(self, key)
-        try:
-            from enum import Enum
-            if isinstance(val, Enum):
-                return val.value
-        except Exception:
-            pass
+        if isinstance(val, Enum):
+            return val.value
         return val
 
 
@@ -461,12 +457,8 @@ class ImportJob:
     # Provide dict-like access for test compatibility
     def __getitem__(self, key: str):  # type: ignore[override]
         val = getattr(self, key)
-        try:
-            from enum import Enum
-            if isinstance(val, Enum):
-                return val.value
-        except Exception:
-            pass
+        if isinstance(val, Enum):
+            return val.value
         return val
 
 

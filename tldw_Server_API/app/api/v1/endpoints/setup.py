@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import inspect
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
-    get_current_user,
     get_db_transaction,
     require_permissions,
     require_roles,
@@ -23,6 +22,7 @@ from tldw_Server_API.app.core.Setup import install_manager, setup_manager
 from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
 from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.services.auth_service import mark_user_verified
 
 router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
 
@@ -219,7 +219,7 @@ async def reset_setup_flags(
     ),
 )
 async def setup_self_verify(
-    current_user: dict[str, Any] = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
     db=Depends(get_db_transaction),
     _guard: None = Depends(require_local_setup_access),
 ) -> dict[str, Any]:
@@ -231,7 +231,7 @@ async def setup_self_verify(
             detail="Self-verify is only available while initial setup is in progress.",
         )
 
-    raw_id = current_user.get("id")
+    raw_id = principal.user_id
     try:
         user_id = int(raw_id)
     except (TypeError, ValueError) as exc:
@@ -242,39 +242,12 @@ async def setup_self_verify(
     if user_id <= 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid user context")
 
-    raw_conn = getattr(db, "_conn", db)
-
-    def _conn_module_name(conn: Any) -> str:
-        module = getattr(conn.__class__, "__module__", "")
-        return module or ""
-
     try:
-        module_name = _conn_module_name(raw_conn)
-        is_asyncpg = module_name.startswith("asyncpg")
-
-        if is_asyncpg:
-            await db.execute(
-                "UPDATE users SET is_verified = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
-                True,
-                user_id,
-            )
-        else:
-            await db.execute(
-                "UPDATE users SET is_verified = ?, updated_at = datetime('now') WHERE id = ?",
-                (1, user_id),
-            )
-            # SQLite-style adapters should commit; Postgres path above does not
-            commit = getattr(db, "commit", None)
-            if callable(commit):
-                result = commit()
-                if inspect.isawaitable(result):
-                    await result
-            if raw_conn is not db:
-                commit2 = getattr(raw_conn, "commit", None)
-                if callable(commit2):
-                    result2 = commit2()
-                    if inspect.isawaitable(result2):
-                        await result2
+        await mark_user_verified(
+            db,
+            user_id=user_id,
+            now_utc=datetime.now(timezone.utc),
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to self-verify during setup")
         # Avoid leaking raw DB/driver errors to clients; keep detail generic.

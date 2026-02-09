@@ -105,3 +105,68 @@ def test_session_manager_turn_append_and_list_limit():
     limited = manager.list_turns(session_id="sess_turns", user_id="user_1", limit=1)
     assert len(limited) == 1
     assert limited[0]["role"] == "assistant"
+
+
+def test_session_manager_list_sessions_and_snapshot():
+    manager = SessionManager()
+    manager.append_turn(
+        session_id="sess_1",
+        user_id="user_1",
+        persona_id="research_assistant",
+        role="user",
+        content="hello",
+        turn_type="user_message",
+    )
+    manager.append_turn(
+        session_id="sess_2",
+        user_id="user_1",
+        persona_id="research_assistant",
+        role="user",
+        content="another",
+        turn_type="user_message",
+    )
+    manager.append_turn(
+        session_id="sess_3",
+        user_id="user_2",
+        persona_id="research_assistant",
+        role="user",
+        content="foreign",
+        turn_type="user_message",
+    )
+
+    listed = manager.list_sessions(user_id="user_1")
+    assert len(listed) == 2
+    assert all(item["session_id"] in {"sess_1", "sess_2"} for item in listed)
+    assert all(item["turn_count"] == 1 for item in listed)
+
+    snapshot = manager.get_session_snapshot(session_id="sess_1", user_id="user_1", limit_turns=10)
+    assert snapshot is not None
+    assert snapshot["session_id"] == "sess_1"
+    assert snapshot["turn_count"] == 1
+    assert len(snapshot["turns"]) == 1
+
+    assert manager.get_session_snapshot(session_id="sess_1", user_id="user_2") is None
+
+
+def test_session_manager_preferences_roundtrip():
+    manager = SessionManager()
+    _ = manager.create(user_id="user_1", persona_id="research_assistant", resume_session_id="sess_prefs")
+
+    updated = manager.update_preferences(
+        session_id="sess_prefs",
+        user_id="user_1",
+        preferences={"use_memory_context": False, "memory_top_k": 2},
+    )
+    assert updated["use_memory_context"] is False
+    assert updated["memory_top_k"] == 2
+
+    prefs = manager.get_preferences(session_id="sess_prefs", user_id="user_1")
+    assert prefs["use_memory_context"] is False
+    assert prefs["memory_top_k"] == 2
+
+    with pytest.raises(ValueError, match="ownership mismatch"):
+        manager.update_preferences(
+            session_id="sess_prefs",
+            user_id="user_2",
+            preferences={"use_memory_context": True},
+        )

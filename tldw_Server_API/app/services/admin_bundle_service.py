@@ -13,6 +13,7 @@ import tempfile
 import time
 import zipfile
 from dataclasses import dataclass
+from types import MappingProxyType
 from datetime import datetime, timezone
 from typing import Any
 
@@ -60,8 +61,8 @@ class BundleMetadata:
     user_id: int | None
     created_at: datetime
     size_bytes: int
-    datasets: list[str]
-    schema_versions: dict[str, int | None]
+    datasets: tuple[str, ...]
+    schema_versions: MappingProxyType[str, int | None]
     app_version: str | None
     manifest_version: int
     notes: str | None
@@ -103,17 +104,26 @@ def _bundle_base_dir() -> str:
 
 
 def _check_rate_limit(user_id: int, op_type: str) -> None:
+    """Verify the rate limit has not been exceeded (does NOT record usage)."""
     key = (user_id, op_type)
     now = time.monotonic()
     window = _rate_limit_windows.get(key, [])
     # Prune old entries
     window = [t for t in window if now - t < _RATE_LIMIT_WINDOW_SECONDS]
+    _rate_limit_windows[key] = window
     if len(window) >= _RATE_LIMIT_MAX:
         oldest = min(window)
         retry_after = int(_RATE_LIMIT_WINDOW_SECONDS - (now - oldest)) + 1
         exc = BundleRateLimitError("rate_limit_exceeded")
         exc.retry_after = retry_after  # type: ignore[attr-defined]
         raise exc
+
+
+def _record_rate_limit(user_id: int, op_type: str) -> None:
+    """Record a successful operation against the rate limit window."""
+    key = (user_id, op_type)
+    now = time.monotonic()
+    window = _rate_limit_windows.get(key, [])
     window.append(now)
     _rate_limit_windows[key] = window
 
@@ -176,8 +186,9 @@ def _build_manifest(
     files: dict[str, dict[str, str]],
     schema_versions: dict[str, int | None],
     notes: str | None,
+    retention_hours: int | None = None,
 ) -> dict[str, Any]:
-    return {
+    manifest: dict[str, Any] = {
         "manifest_version": _MANIFEST_VERSION,
         "app_version": _get_app_version(),
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -192,6 +203,9 @@ def _build_manifest(
             "sqlite": sqlite3.sqlite_version,
         },
     }
+    if retention_hours is not None:
+        manifest["retention_hours"] = retention_hours
+    return manifest
 
 
 def _validate_bundle_id(bundle_id: str) -> str:
@@ -212,10 +226,38 @@ def _resolve_bundle_path(bundle_id: str) -> str:
     return path
 
 
+def _sidecar_path(zip_path: str) -> str:
+    """Return the path to the sidecar manifest cache for a bundle ZIP."""
+    return zip_path + ".manifest.json"
+
+
+def _write_sidecar_manifest(zip_path: str, manifest: dict[str, Any]) -> None:
+    """Write manifest data to a sidecar JSON file for fast listing."""
+    try:
+        with open(_sidecar_path(zip_path), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+    except OSError:
+        pass  # non-critical
+
+
+def _read_manifest_cached(zip_path: str) -> dict[str, Any]:
+    """Read manifest from sidecar cache first, falling back to the ZIP."""
+    sc = _sidecar_path(zip_path)
+    if os.path.isfile(sc):
+        try:
+            with open(sc, encoding="utf-8") as f:
+                return json.loads(f.read())
+        except Exception:
+            pass  # fall through to ZIP
+    return _read_manifest_from_zip(zip_path)
+
+
 def _read_manifest_from_zip(zip_path: str) -> dict[str, Any]:
     with zipfile.ZipFile(zip_path, "r") as zf:
         if "manifest.json" not in zf.namelist():
-            raise BundleImportError("missing_manifest")
+            raise BundleImportError(
+                "missing_manifest", error_code="missing_manifest"
+            )
         with zf.open("manifest.json") as mf:
             return json.loads(mf.read())
 
@@ -230,11 +272,15 @@ def create_bundle(
     include_vector_store: bool = False,
     notes: str | None = None,
     max_backups: int | None = None,
+    retention_hours: int | None = None,
     admin_user_id: int = 0,
 ) -> BundleMetadata:
     """Create a backup bundle ZIP containing snapshots of the requested datasets."""
     if include_vector_store:
-        raise BundleExportError("vector_store_export_not_supported")
+        raise BundleExportError(
+            "vector_store_export_not_supported",
+            error_code="vector_store_export_not_supported",
+        )
 
     effective_datasets = list(datasets) if datasets else list(_ALL_DATASETS)
 
@@ -249,7 +295,9 @@ def create_bundle(
         try:
             user_id = DatabasePaths.get_single_user_id()
         except Exception as exc:
-            raise BundleExportError("user_id_required") from exc
+            raise BundleExportError(
+                "user_id_required", error_code="user_id_required"
+            ) from exc
 
     # Rate limit
     _check_rate_limit(admin_user_id, "export")
@@ -296,6 +344,7 @@ def create_bundle(
             files=files_meta,
             schema_versions=schema_versions,
             notes=notes,
+            retention_hours=retention_hours,
         )
 
         manifest_path = os.path.join(staging_dir, "manifest.json")
@@ -318,14 +367,18 @@ def create_bundle(
         final_path = os.path.join(dest_dir, zip_name)
         shutil.move(zip_path, final_path)
 
+        # Write sidecar manifest cache for fast listing
+        _write_sidecar_manifest(final_path, manifest)
+
         stat = os.stat(final_path)
+        _record_rate_limit(admin_user_id, "export")
         return BundleMetadata(
             bundle_id=zip_name,
             user_id=user_id,
             created_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
             size_bytes=int(stat.st_size),
-            datasets=effective_datasets,
-            schema_versions=schema_versions,
+            datasets=tuple(effective_datasets),
+            schema_versions=MappingProxyType(schema_versions),
             app_version=manifest.get("app_version"),
             manifest_version=_MANIFEST_VERSION,
             notes=notes,
@@ -341,6 +394,7 @@ async def create_bundle_async(
     include_vector_store: bool = False,
     notes: str | None = None,
     max_backups: int | None = None,
+    retention_hours: int | None = None,
     admin_user_id: int = 0,
 ) -> BundleMetadata:
     """Async wrapper that acquires the concurrency lock, then runs create_bundle in a thread."""
@@ -354,6 +408,7 @@ async def create_bundle_async(
             include_vector_store=include_vector_store,
             notes=notes,
             max_backups=max_backups,
+            retention_hours=retention_hours,
             admin_user_id=admin_user_id,
         )
 
@@ -374,7 +429,7 @@ def list_bundles(
         if not entry.is_file() or not entry.name.endswith(".zip"):
             continue
         try:
-            manifest = _read_manifest_from_zip(entry.path)
+            manifest = _read_manifest_cached(entry.path)
         except Exception:
             logger.warning("Skipping unreadable bundle: {}", entry.name)
             continue
@@ -389,8 +444,8 @@ def list_bundles(
             user_id=bundle_user_id,
             created_at=datetime.fromisoformat(manifest["created_at"]) if manifest.get("created_at") else datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
             size_bytes=int(stat.st_size),
-            datasets=manifest.get("datasets", []),
-            schema_versions=manifest.get("schema_versions", {}),
+            datasets=tuple(manifest.get("datasets", [])),
+            schema_versions=MappingProxyType(manifest.get("schema_versions", {})),
             app_version=manifest.get("app_version"),
             manifest_version=manifest.get("manifest_version", 0),
             notes=manifest.get("notes"),
@@ -411,8 +466,8 @@ def get_bundle_metadata(bundle_id: str) -> BundleMetadata:
         user_id=manifest.get("user_id"),
         created_at=datetime.fromisoformat(manifest["created_at"]) if manifest.get("created_at") else datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
         size_bytes=int(stat.st_size),
-        datasets=manifest.get("datasets", []),
-        schema_versions=manifest.get("schema_versions", {}),
+        datasets=tuple(manifest.get("datasets", [])),
+        schema_versions=MappingProxyType(manifest.get("schema_versions", {})),
         app_version=manifest.get("app_version"),
         manifest_version=manifest.get("manifest_version", 0),
         notes=manifest.get("notes"),
@@ -425,9 +480,15 @@ def get_bundle_path(bundle_id: str) -> str:
 
 
 def delete_bundle(bundle_id: str) -> None:
-    """Delete a bundle ZIP from disk."""
+    """Delete a bundle ZIP and its sidecar manifest from disk."""
     path = _resolve_bundle_path(bundle_id)
     os.remove(path)
+    sc = _sidecar_path(path)
+    if os.path.isfile(sc):
+        try:
+            os.remove(sc)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -448,23 +509,31 @@ def import_bundle(
     _check_rate_limit(admin_user_id, "import")
 
     if not os.path.isfile(file_path):
-        raise BundleImportError("file_not_found")
+        raise BundleImportError("file_not_found", error_code="file_not_found")
 
-    # Check disk space (3x ZIP size)
+    # Check disk space (3x ZIP size) on all partitions that will be written:
+    # the system temp dir (staging extraction) and the live DB directory.
     zip_size = os.path.getsize(file_path)
+    required = zip_size * 3
+    _check_disk_space(tempfile.gettempdir(), required)
     _check_disk_space(
         os.path.dirname(file_path) or _bundle_base_dir(),
-        zip_size * 3,
+        required,
     )
 
     try:
         manifest = _read_manifest_from_zip(file_path)
     except Exception as exc:
-        raise BundleImportError(f"invalid_bundle: {exc}") from exc
+        raise BundleImportError(
+            f"invalid_bundle: {exc}", error_code="invalid_bundle"
+        ) from exc
 
     m_version = manifest.get("manifest_version", 0)
     if m_version > _MANIFEST_VERSION:
-        raise BundleImportError("unsupported_manifest_version")
+        raise BundleImportError(
+            "unsupported_manifest_version",
+            error_code="unsupported_manifest_version",
+        )
 
     current_versions = _get_schema_versions()
     manifest_versions = manifest.get("schema_versions", {})
@@ -477,7 +546,9 @@ def import_bundle(
         try:
             user_id = DatabasePaths.get_single_user_id()
         except Exception as exc:
-            raise BundleImportError("user_id_required") from exc
+            raise BundleImportError(
+                "user_id_required", error_code="user_id_required"
+            ) from exc
 
     warnings: list[str] = []
     validations: list[dict[str, Any]] = []
@@ -526,64 +597,65 @@ def import_bundle(
             f"schema_incompatible: {', '.join(v['dataset'] for v in incompatible)}"
         )
 
-    # Verify checksums
-    with zipfile.ZipFile(file_path, "r") as zf:
-        for filename, meta in files_meta.items():
-            if filename not in zf.namelist():
-                raise BundleImportError(f"missing_file_in_bundle: {filename}")
-            # Extract to temp and verify
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp.write(zf.read(filename))
-                tmp_path = tmp.name
-            try:
-                actual_size = os.path.getsize(tmp_path)
-                expected_size = meta.get("size_bytes")
-                if expected_size is not None and actual_size != int(expected_size):
-                    raise BundleImportError(
-                        f"size_verification_failed: {filename} "
-                        f"(expected {expected_size}, got {actual_size})"
-                    )
-                actual_hash = _compute_sha256(tmp_path)
-                expected_hash = meta.get("sha256", "")
-                if actual_hash != expected_hash:
-                    raise BundleImportError(
-                        f"checksum_verification_failed: {filename}"
-                    )
-            finally:
-                os.unlink(tmp_path)
-
-    if dry_run:
-        return {
-            "status": "compatible",
-            "datasets_restored": [],
-            "warnings": warnings,
-            "safety_snapshots": {},
-            "validations": validations,
-        }
-
-    # Real import
+    # Extract once to staging dir — verify checksums and path safety in
+    # a single pass (avoids the previous double-extraction overhead).
     staging_dir = tempfile.mkdtemp(prefix="tldw_bundle_import_")
     safety_snapshots: dict[str, str] = {}
     datasets_restored: list[str] = []
 
     try:
-        # Extract files with path traversal protection
+        # Extract with path traversal protection
         with zipfile.ZipFile(file_path, "r") as zf:
             for member in zf.infolist():
-                # Reject any member whose resolved path escapes staging_dir
                 target = os.path.realpath(
                     os.path.join(staging_dir, member.filename)
                 )
                 if not target.startswith(os.path.realpath(staging_dir) + os.sep) and target != os.path.realpath(staging_dir):
                     raise BundleImportError(
-                        f"path_traversal_detected: {member.filename}"
+                        f"path_traversal_detected: {member.filename}",
+                        error_code="path_traversal_detected",
                     )
                 zf.extract(member, staging_dir)
+
+        # Verify checksums on the extracted files
+        for filename, meta in files_meta.items():
+            extracted = os.path.join(staging_dir, filename)
+            if not os.path.isfile(extracted):
+                raise BundleImportError(
+                    f"missing_file_in_bundle: {filename}",
+                    error_code="missing_file_in_bundle",
+                )
+            actual_size = os.path.getsize(extracted)
+            expected_size = meta.get("size_bytes")
+            if expected_size is not None and actual_size != int(expected_size):
+                raise BundleImportError(
+                    f"size_verification_failed: {filename} "
+                    f"(expected {expected_size}, got {actual_size})",
+                    error_code="size_verification_failed",
+                )
+            actual_hash = _compute_sha256(extracted)
+            expected_hash = meta.get("sha256", "")
+            if actual_hash != expected_hash:
+                raise BundleImportError(
+                    f"checksum_verification_failed: {filename}",
+                    error_code="checksum_verification_failed",
+                )
+
+        if dry_run:
+            return {
+                "status": "compatible",
+                "datasets_restored": [],
+                "warnings": warnings,
+                "safety_snapshots": {},
+                "validations": validations,
+            }
 
         for ds in datasets:
             ds_user_id = None if ds == "authnz" else user_id
 
-            # Create safety snapshot before overwriting
+            # Create safety snapshot before overwriting — if this fails we
+            # must NOT overwrite the live DB because rollback would be
+            # impossible.  Skip the dataset with a warning instead.
             try:
                 safety = create_backup_snapshot(
                     dataset=ds,
@@ -594,6 +666,10 @@ def import_bundle(
                 safety_snapshots[ds] = safety.filename
             except Exception as exc:
                 logger.warning("Safety snapshot failed for {}: {}", ds, exc)
+                warnings.append(
+                    f"Skipped restoring '{ds}': safety snapshot failed ({exc})"
+                )
+                continue
 
             # Find the matching file in the bundle
             ds_filename = None
@@ -619,6 +695,7 @@ def import_bundle(
             except Exception as exc:
                 logger.error("Failed to restore dataset {}: {}", ds, exc)
                 # Rollback already-restored datasets
+                rollback_failures: list[str] = []
                 for restored_ds in datasets_restored:
                     snap_id = safety_snapshots.get(restored_ds)
                     if snap_id:
@@ -636,10 +713,17 @@ def import_bundle(
                             logger.error(
                                 "Rollback failed for {}: {}", restored_ds, rollback_exc
                             )
-                raise BundleImportError(
-                    f"restore_failed:{ds}: {exc}"
-                ) from exc
+                            rollback_failures.append(
+                                f"{restored_ds}: {rollback_exc}"
+                            )
+                detail = f"restore_failed:{ds}: {exc}"
+                if rollback_failures:
+                    detail += (
+                        f"; rollback_failures: {'; '.join(rollback_failures)}"
+                    )
+                raise BundleImportError(detail) from exc
 
+        _record_rate_limit(admin_user_id, "import")
         return {
             "status": "imported",
             "datasets_restored": datasets_restored,

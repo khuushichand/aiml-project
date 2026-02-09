@@ -391,16 +391,23 @@ class TestAuthEndpointsIntegration:
     async def test_logout_success(self, mock_db_pool, jwt_service, session_manager, test_user, valid_access_token):
         """Test successful logout."""
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-            get_current_user,
+            get_auth_principal,
             get_session_manager_dep,
-            get_jwt_service_dep
+            get_jwt_service_dep,
         )
+        from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
-        # Mock current user
-        async def mock_get_current_user():
-            return test_user
+        async def mock_get_auth_principal():
+            return AuthPrincipal(
+                kind="user",
+                user_id=int(test_user["id"]),
+                username=test_user.get("username"),
+                email=test_user.get("email"),
+                roles=[str(test_user.get("role") or "user")],
+                is_admin=bool(test_user.get("is_admin", False)),
+            )
 
-        app.dependency_overrides[get_current_user] = mock_get_current_user
+        app.dependency_overrides[get_auth_principal] = mock_get_auth_principal
         app.dependency_overrides[get_session_manager_dep] = lambda: session_manager
         app.dependency_overrides[get_jwt_service_dep] = lambda: jwt_service
 

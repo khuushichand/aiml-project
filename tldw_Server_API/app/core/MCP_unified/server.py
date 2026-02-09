@@ -518,6 +518,8 @@ class MCPServer:
             try:
                 await asyncio.sleep(60)  # Check every minute
                 await self._cleanup_stale_connections()
+            except asyncio.CancelledError:
+                raise
             except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in connection cleanup: {e}")
 
@@ -548,6 +550,8 @@ class MCPServer:
             try:
                 await asyncio.sleep(300)  # Every 5 minutes
                 await self._log_metrics()
+            except asyncio.CancelledError:
+                raise
             except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in metrics collection: {e}")
 
@@ -566,6 +570,8 @@ class MCPServer:
             try:
                 await asyncio.sleep(60)
                 await self._cleanup_stale_sessions()
+            except asyncio.CancelledError:
+                raise
             except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in session cleanup: {e}")
 

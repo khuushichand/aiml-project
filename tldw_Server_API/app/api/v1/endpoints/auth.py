@@ -27,8 +27,8 @@ from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_auth_rate_limit,
+    get_auth_principal,
     get_current_active_user,
-    get_current_user,
     get_db_transaction,
     get_jwt_service_dep,
     get_password_service_dep,
@@ -57,7 +57,7 @@ from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import (
     global_settings as _csrf_globals,
 )
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
     DuplicateOrganizationError,
@@ -77,6 +77,7 @@ from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_profile, get_settings
@@ -792,7 +793,7 @@ class SelfVirtualKeyRequest(BaseModel):
 @router.post("/virtual-key")
 async def mint_self_virtual_key(
     body: SelfVirtualKeyRequest,
-    current_user: dict[str, Any] = Depends(get_current_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     settings: Settings = Depends(get_settings),
 ):
     """Mint a short-lived, scoped JWT for the current user.
@@ -803,6 +804,16 @@ async def mint_self_virtual_key(
     """
     if settings.AUTH_MODE != "multi_user":
         raise HTTPException(status_code=400, detail="Virtual keys require multi-user mode")
+    try:
+        user_id = int(current_user.user_id) if current_user.user_id is not None else 0
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid user context") from exc
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid user context")
+
+    username = str(current_user.username or current_user.email or "user")
+    role = "admin" if current_user.is_admin else str(current_user.roles[0] if current_user.roles else "user")
+
     try:
         svc = JWTService(settings)
         add_claims: dict[str, Any] = {}
@@ -816,7 +827,7 @@ async def mint_self_virtual_key(
             add_claims["max_calls"] = int(body.max_calls)
         if body.max_runs is not None:
             add_claims["max_runs"] = int(body.max_runs)
-        scope_claims = await _build_scope_claims(int(current_user.get("id")))
+        scope_claims = await _build_scope_claims(user_id)
         if scope_claims:
             add_claims.update(scope_claims)
         if body.not_before:
@@ -828,9 +839,9 @@ async def mint_self_virtual_key(
             except _AUTH_NONCRITICAL_EXCEPTIONS:
                 pass
         token = svc.create_virtual_access_token(
-            user_id=int(current_user.get("id")),
-            username=str(current_user.get("username") or current_user.get("email") or "user"),
-            role=("admin" if bool(current_user.get("is_admin")) else str(current_user.get("role") or "user")),
+            user_id=user_id,
+            username=username,
+            role=role,
             scope=str(body.scope or "workflows"),
             ttl_minutes=int(body.ttl_minutes),
             schedule_id=(str(body.schedule_id) if body.schedule_id else None),
@@ -852,7 +863,7 @@ async def mint_self_virtual_key(
         else:
             logger.exception(
                 "Failed to mint self virtual key for user_id={} scope={} ttl_minutes={} error_type={}",
-                current_user.get("id"),
+                user_id,
                 body.scope,
                 body.ttl_minutes,
                 type(e).__name__,
@@ -1325,7 +1336,7 @@ async def login(
 async def logout(
     request: Request,
     data: Optional[LogoutRequest] = None,
-    current_user: dict[str, Any] = Depends(get_current_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
 ) -> MessageResponse:
@@ -1340,11 +1351,15 @@ async def logout(
         all_devices = bool(getattr(data, "all_devices", False)) if data is not None else False
 
         def _user_id_from(obj: Any) -> int:
+            if isinstance(obj, AuthPrincipal):
+                return int(obj.user_id or 0)
             if isinstance(obj, dict):
                 return int(obj.get("id") or obj.get("user_id") or 0)
-            return int(getattr(obj, "id", 0) or 0)
+            return int(getattr(obj, "user_id", 0) or getattr(obj, "id", 0) or 0)
 
         user_id = _user_id_from(current_user)
+        if user_id <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user context")
 
         if all_devices:
             try:
@@ -1371,7 +1386,7 @@ async def logout(
                 try:
                     # NOTE: Using sync verify_token() here is acceptable - we're extracting
                     # claims for revocation cleanup, not making authorization decisions.
-                    # The user has already been authenticated via the current_user dependency.
+                    # The user has already been authenticated via the claim-first dependency.
                     payload = jwt_service.verify_token(token)
                 except _AUTH_NONCRITICAL_EXCEPTIONS:
                     payload = {}

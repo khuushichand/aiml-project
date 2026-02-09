@@ -220,7 +220,7 @@ async def test_non_stream_autoexec_enabled_handles_mixed_results(monkeypatch: py
     monkeypatch.setattr(chat_service, "should_auto_execute_tools", lambda: True)
     monkeypatch.setattr(chat_service, "get_chat_max_tool_calls", lambda: 3)
     monkeypatch.setattr(chat_service, "get_chat_tool_timeout_ms", lambda: 5000)
-    monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: None)
+    monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["*"])
     monkeypatch.setattr(chat_service, "should_attach_tool_idempotency", lambda: False)
 
     async def fake_autoexec(**_kwargs):
@@ -279,7 +279,7 @@ async def test_non_stream_autoexec_failure_is_non_fatal(monkeypatch: pytest.Monk
     monkeypatch.setattr(chat_service, "should_auto_execute_tools", lambda: True)
     monkeypatch.setattr(chat_service, "get_chat_max_tool_calls", lambda: 3)
     monkeypatch.setattr(chat_service, "get_chat_tool_timeout_ms", lambda: 5000)
-    monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: None)
+    monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["*"])
     monkeypatch.setattr(chat_service, "should_attach_tool_idempotency", lambda: False)
 
     async def fake_autoexec(**_kwargs):

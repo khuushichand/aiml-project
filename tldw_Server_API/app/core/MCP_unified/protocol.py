@@ -1598,6 +1598,22 @@ class MCPProtocol:
                             context
                         )
                         span.set_attribute("mcp.status", "success")
+                    except InvalidParamsException as _tool_e:
+                        span.set_attribute("mcp.status", "failure")
+                        span.set_attribute("mcp.error_type", _tool_e.__class__.__name__)
+                        span.set_attribute("mcp.error_message", str(_tool_e)[:200])
+                        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                            self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
+                        raise
+                    except (TypeError, ValueError) as _tool_e:
+                        # Module argument validators often raise ValueError/TypeError.
+                        # Normalize those to INVALID_PARAMS so HTTP callers receive 400.
+                        span.set_attribute("mcp.status", "failure")
+                        span.set_attribute("mcp.error_type", _tool_e.__class__.__name__)
+                        span.set_attribute("mcp.error_message", str(_tool_e)[:200])
+                        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                            self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
+                        raise InvalidParamsException(str(_tool_e)) from _tool_e
                     except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as _tool_e:
                         span.set_attribute("mcp.status", "failure")
                         span.set_attribute("mcp.error_type", _tool_e.__class__.__name__)

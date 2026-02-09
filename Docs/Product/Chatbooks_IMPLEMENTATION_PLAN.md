@@ -32,7 +32,7 @@ Items are classified to help prioritize remaining work:
 | Import parity for prompts and media | GA-blocking | 3b |
 | `overwrite` conflict strategy | GA-blocking | 3c |
 | Fix stale status tracking (this document) | GA-blocking | N/A (done) |
-| Warn users when unsupported import types are silently skipped | GA-blocking | 3b |
+| ~~Warn users when unsupported import types are silently skipped~~ | **Complete** — endpoint already rejects unsupported types with HTTP 400 (see `chatbooks.py:480-500`) | 3a |
 | Import parity for evaluations, embeddings, generated docs | Post-GA | 3b |
 | `merge` conflict strategy (full per-type semantics) | Post-GA | 3c |
 | Evaluation continuation tokens | Post-GA | 2 |
@@ -59,7 +59,7 @@ Items are classified to help prioritize remaining work:
 - Unit: manifest builder (per-type mappers and statistics), JSON Schema validation against `Docs/Schemas/chatbooks_manifest_v1.json`, job model/state transitions, per-user storage path construction (`USER_DB_BASE_DIR`, defined in `tldw_Server_API.app.core.config`; override via environment variable or `Config_Files/config.txt`).
 - Integration: end-to-end export for a user with mixed content types; verification of manifest counts and identities; retry/export of large-but-metadata-only archives; download completed exports; listing jobs by user and (for admins) by team/org.
 
-**Status**: **Completed** — 16 endpoints, manifest schema, job lifecycle all working.
+**Status**: **Completed** — 15 endpoints, manifest schema, job lifecycle all working.
 
 ---
 
@@ -123,7 +123,7 @@ Items are classified to help prioritize remaining work:
 - [ ] Evaluation definition + run import handler
 - [ ] Embedding set import handler
 - [ ] Generated document import handler
-- [ ] Return explicit warnings (not silent skips) when a user requests import of unsupported content types — currently the import endpoint silently sets unsupported types to `false`, which can cause partial results without user awareness
+- [x] ~~Return explicit warnings (not silent skips) when a user requests import of unsupported content types~~ — **Already implemented**: the import endpoint raises HTTP 400 listing unsupported types by name (see `chatbooks.py:480-500`); the inner service fallback at `chatbook_service.py:2091-2108` is defense-in-depth only and unreachable through the normal API
 - [ ] Dictionary/templating validation from Chatbook-Tools wired into import (**blocked** on Chatbook-Tools validator)
 - [ ] Content-type policy controls: operators can disable/restrict specific types via config flags
 
@@ -131,7 +131,7 @@ Items are classified to help prioritize remaining work:
 - Dictionary validation: depends on Chatbook-Tools implementation plan completion
 - Citation metadata: depends on ChaChaNotes upstream storage
 
-**Prerequisite recommendation**: Split `chatbook_service.py` (~6000+ lines) into `chatbook_export_service.py` and `chatbook_import_service.py` before adding more import handlers, to prevent further monolith growth.
+**Prerequisite recommendation**: Split `chatbook_service.py` (~5,354 lines) into `chatbook_export_service.py` and `chatbook_import_service.py` before adding more import handlers, to prevent further monolith growth.
 
 **Tests**:
 - Unit: import handler for each new content type; content-type policy flag handling; dictionary validator wiring and strict/non-strict behavior; explicit warning generation for unsupported types.

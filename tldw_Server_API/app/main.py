@@ -2924,10 +2924,10 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("🔐 Authentication Mode: MULTI USER")
             try:
-                # Prefer unified backend detector for diagnostics
-                from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend as _is_pg_backend
+                from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_db_pool
 
-                _is_pg = await _is_pg_backend()
+                _pool = await _get_db_pool()
+                _is_pg = bool(getattr(_pool, "pool", None) is not None)
                 if _is_pg:
                     logger.info("JWT Bearer tokens required for authentication")
                 else:
@@ -2964,9 +2964,10 @@ async def lifespan(app: FastAPI):
         _db_url = _s.DATABASE_URL
         # Use the unified backend detector for the engine label in diagnostics
         try:
-            from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend as _is_pg_backend
+            from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_db_pool
 
-            _is_pg = await _is_pg_backend()
+            _pool = await _get_db_pool()
+            _is_pg = bool(getattr(_pool, "pool", None) is not None)
             _db_engine = "postgresql" if _is_pg else ("sqlite" if str(_db_url).startswith("sqlite") else "other")
         except _STARTUP_GUARD_EXCEPTIONS:
             _db_engine = "other"

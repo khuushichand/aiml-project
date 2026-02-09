@@ -98,6 +98,7 @@ class MetricsRegistry:
             "circuit_breaker_successes_total",
             "circuit_breaker_rejections_total",
             "circuit_breaker_trips_total",
+            "circuit_breaker_timeouts_total",
         }
 
         # Initialize with telemetry manager
@@ -1364,6 +1365,14 @@ class MetricsRegistry:
                 type=MetricType.COUNTER,
                 description="Total circuit breaker trips",
                 labels=["category", "service", "reason"]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="circuit_breaker_timeouts_total",
+                type=MetricType.COUNTER,
+                description="Total circuit breaker call timeouts",
+                labels=["category", "service", "operation"]
             )
         )
 

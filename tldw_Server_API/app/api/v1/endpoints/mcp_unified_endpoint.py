@@ -40,6 +40,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import (
     get_settings,
+    is_single_user_mode as _authnz_is_single_user_mode,
     is_single_user_profile_mode,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
@@ -64,6 +65,9 @@ _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS = (
     ipaddress.AddressValueError,
     ipaddress.NetmaskValueError,
 )
+
+# Test compatibility alias: some MCP auth tests monkeypatch this symbol.
+is_single_user_mode = _authnz_is_single_user_mode
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
@@ -175,7 +179,9 @@ def _should_use_single_user_api_key_compat() -> bool:
     if flag in {"0", "false", "off"}:
         return False
     try:
-        return is_single_user_profile_mode()
+        single_mode_fn = globals().get("is_single_user_mode")
+        single_mode = bool(single_mode_fn()) if callable(single_mode_fn) else False
+        return bool(is_single_user_profile_mode() or single_mode)
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "MCP unified: single-user profile detection failed; defaulting compat shim to False",
@@ -205,14 +211,34 @@ class McpAuthContext:
     raw_api_key: Optional[str]
 
 
+def _principal_to_token_data(principal: AuthPrincipal) -> Optional[TokenData]:
+    """Best-effort conversion from claim-first principal to MCP TokenData."""
+    sub: str = ""
+    if principal.user_id is not None:
+        sub = str(principal.user_id)
+    elif principal.subject:
+        sub = str(principal.subject)
+    elif principal.api_key_id is not None:
+        sub = f"api_key:{principal.api_key_id}"
+    if not sub:
+        return None
+    return TokenData(
+        sub=sub,
+        username=principal.username,
+        roles=list(principal.roles or []),
+        permissions=list(principal.permissions or []),
+        token_type=str(principal.token_type or "access"),
+    )
+
+
 # Dependency functions
 
-async def get_current_user(
+async def _resolve_token_data_compat(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Security(security),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
 ) -> Optional[TokenData]:
-    """Get current user (AuthNZ JWT, MCP JWT, or API key).
+    """Compatibility resolver for TokenData (AuthNZ JWT, MCP JWT, or API key).
 
     The resolution order deliberately mirrors the main AuthNZ stack:
     1) AuthNZ access JWT (multi-user).
@@ -377,7 +403,7 @@ async def get_current_user(
             if info and info.get("user_id"):
                 # Attach API key metadata to the request state so downstream
                 # handlers can reuse it without re-validating (avoids double
-                # usage/audit updates when get_current_user is used as a
+                # usage/audit updates when the compatibility resolver is used as a
                 # dependency alongside per-endpoint validate_api_key calls).
                 try:
                     if request is not None:
@@ -397,7 +423,7 @@ async def get_current_user(
                 )
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
-            "API key check failed in MCP unified get_current_user",
+            "API key check failed in MCP unified compatibility token resolver",
             extra={"auth_method": "api_key"},
             exc_info=True,
         )
@@ -429,17 +455,36 @@ async def _get_optional_auth_principal(request: Request) -> Optional[AuthPrincip
         return None
 
 
+async def _get_optional_token_data(
+    request: Request,
+    principal: Optional[AuthPrincipal] = Depends(_get_optional_auth_principal),
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+) -> Optional[TokenData]:
+    """Claim-first TokenData resolver with compatibility fallback."""
+    if principal is not None:
+        token_data = _principal_to_token_data(principal)
+        if token_data is not None:
+            return token_data
+    return await _resolve_token_data_compat(
+        request=request,
+        credentials=credentials,
+        x_api_key=x_api_key,
+    )
+
+
 async def get_mcp_auth_context(
     request: Request,
-    user: Optional[TokenData] = Depends(get_current_user),
+    user: Optional[TokenData] = Depends(_get_optional_token_data),
     principal: Optional[AuthPrincipal] = Depends(_get_optional_auth_principal),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
 ) -> McpAuthContext:
     """Resolve MCP auth context (user + API key metadata) for HTTP endpoints.
 
-    Reuses :func:`get_current_user` for primary auth and surfaces any API key
-    metadata attached to ``request.state.mcp_api_key_info`` by the multi-user
-    API key path. HTTP handlers should rely on the resulting
+    Prefers the claim-first principal for user claims and falls back to
+    :func:`_resolve_token_data_compat` only when needed for compatibility. Surfaces any
+    API key metadata attached to ``request.state.mcp_api_key_info`` by the
+    multi-user API key path. HTTP handlers should rely on the resulting
     :class:`McpAuthContext` (and helper functions like ``_attach_api_key_metadata``)
     rather than re-validating API keys themselves.
     """
@@ -592,25 +637,6 @@ def _is_catalog_admin_context(
     return any(str(role).lower() == "admin" for role in roles)
 
 
-async def require_user(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials = Security(security),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-) -> TokenData:
-    """Require authenticated user"""
-    if not credentials and not x_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    # Reuse get_current_user to resolve any auth form, including client IP / API-key metadata
-    user = await get_current_user(request=request, credentials=credentials, x_api_key=x_api_key)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-    return user
-
-
 # WebSocket endpoint
 
 @router.websocket("/ws")
@@ -685,7 +711,8 @@ async def mcp_request(
 
     # Process request
     # Attach org/team metadata when auth via API key. Prefer any metadata attached
-    # by get_current_user to avoid re-validating the same key and double-counting
+    # by the compatibility resolver to avoid re-validating the same key and
+    # double-counting usage/audit; fall back to a direct lookup when needed.
     # usage/audit; fall back to a direct lookup when needed.
     metadata = await _attach_api_key_metadata(auth, http_request)
 
@@ -773,7 +800,8 @@ async def mcp_request_batch(
         await server.initialize()
 
     # Attach org/team metadata when auth via API key. Prefer any metadata attached
-    # by get_current_user to avoid re-validating the same key and double-counting
+    # by the compatibility resolver to avoid re-validating the same key and
+    # double-counting usage/audit; fall back to a direct lookup when needed.
     # usage/audit; fall back to a direct lookup when needed.
     metadata = await _attach_api_key_metadata(
         auth,

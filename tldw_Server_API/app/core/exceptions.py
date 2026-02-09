@@ -145,33 +145,54 @@ class InvalidRetentionRangeError(AdminDataOpsError):
 class BundleError(AdminDataOpsError):
     """Base exception for backup bundle operations."""
 
+    error_code: str = "bundle_error"
+
+    def __init__(self, message: str = "", *, error_code: str | None = None):
+        super().__init__(message)
+        if error_code is not None:
+            self.error_code = error_code
+
 
 class BundleExportError(BundleError):
     """Raised when bundle export fails."""
+
+    error_code: str = "export_error"
 
 
 class BundleImportError(BundleError):
     """Raised when bundle import fails."""
 
+    error_code: str = "import_error"
+
 
 class BundleNotFoundError(BundleError):
     """Raised when a bundle ID cannot be resolved to a file."""
+
+    error_code: str = "bundle_not_found"
 
 
 class BundleSchemaIncompatibleError(BundleError):
     """Raised when a bundle's schema version is incompatible with the current app."""
 
+    error_code: str = "schema_incompatible"
+
 
 class BundleDiskSpaceError(BundleError):
     """Raised when insufficient disk space is available for a bundle operation."""
+
+    error_code: str = "insufficient_disk_space"
 
 
 class BundleRateLimitError(BundleError):
     """Raised when a bundle operation exceeds the rate limit."""
 
+    error_code: str = "rate_limit_exceeded"
+
 
 class BundleConcurrencyError(BundleError):
     """Raised when another bundle operation is already in progress."""
+
+    error_code: str = "bundle_operation_in_progress"
 
 
 class TemplateStoreError(Exception):
