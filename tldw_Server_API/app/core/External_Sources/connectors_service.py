@@ -6,7 +6,7 @@ from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.External_Sources.google_drive import GoogleDriveConnector
 from tldw_Server_API.app.core.External_Sources.notion import NotionConnector
 
@@ -30,6 +30,29 @@ _CONNECTORS_NONCRITICAL_EXCEPTIONS = (
 )
 
 
+def _is_db_pool_object(db: Any) -> bool:
+    return isinstance(db, DatabasePool)
+
+
+def _is_postgres_connection(db: Any) -> bool:
+    """Resolve backend mode from connection/adapter shape without global probes."""
+    if _is_db_pool_object(db):
+        return getattr(db, "pool", None) is not None
+
+    sqlite_hint = getattr(db, "_is_sqlite", None)
+    if isinstance(sqlite_hint, bool):
+        return not sqlite_hint
+
+    if getattr(db, "_c", None) is not None:
+        return False
+
+    module_name = getattr(type(db), "__module__", "")
+    if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+        return True
+
+    return callable(getattr(db, "fetchrow", None))
+
+
 def get_connector_by_name(name: str):
     n = name.lower()
     if n == "drive":
@@ -41,7 +64,7 @@ def get_connector_by_name(name: str):
 
 async def _ensure_tables(db) -> None:
     """Create connector tables if they don't exist in the AuthNZ DB."""
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     try:
         if is_pg:
             await db.execute(
@@ -212,7 +235,7 @@ async def _ensure_tables(db) -> None:
 
 async def upsert_policy(db, org_id: int, policy: dict[str, Any]) -> dict[str, Any]:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     fields = [
         "enabled_providers",
         "allowed_export_formats",
@@ -293,7 +316,7 @@ async def upsert_policy(db, org_id: int, policy: dict[str, Any]) -> dict[str, An
 
 async def get_policy(db, org_id: int) -> dict[str, Any]:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     if is_pg:
         row = await db.fetchrow("SELECT * FROM org_connector_policy WHERE org_id = $1", org_id)
         if not row:
@@ -342,7 +365,7 @@ def _oauth_state_cutoff(max_age_minutes: int) -> tuple[datetime, str]:
 
 async def create_oauth_state(db, user_id: int, provider: str, state: str) -> None:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     if is_pg:
         await db.execute(
             """
@@ -374,7 +397,7 @@ async def consume_oauth_state(
     max_age_minutes: int = 10,
 ) -> bool:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     cutoff_dt, cutoff_str = _oauth_state_cutoff(max_age_minutes)
     if is_pg:
         row = await db.fetchrow(
@@ -411,7 +434,7 @@ async def consume_oauth_state(
 
 async def create_account(db, user_id: int, provider: str, display_name: str, email: str | None, tokens: dict[str, Any]) -> dict[str, Any]:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     # Securely envelope tokens if crypto is configured; fallback to storing access token raw
     import json as _json
     try:
@@ -461,7 +484,7 @@ async def create_account(db, user_id: int, provider: str, display_name: str, ema
 
 async def _get_account_with_tokens(db, user_id: int, account_id: int) -> dict[str, Any] | None:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     if is_pg:
         row = await db.fetchrow("SELECT id, user_id, provider, display_name, email, access_token, refresh_token FROM external_accounts WHERE id = $1 AND user_id = $2", account_id, user_id)
         if not row:
@@ -510,7 +533,7 @@ async def get_account_email(db, user_id: int, account_id: int) -> str | None:
 
 async def get_account_for_user(db, user_id: int, account_id: int) -> dict[str, Any] | None:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     if is_pg:
         row = await db.fetchrow(
             """
@@ -551,7 +574,7 @@ async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: d
     new_tokens may include: access_token, refresh_token, expires_in/at, scope.
     """
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     import json as _json
     existing_refresh: str | None = None
     if not new_tokens.get("refresh_token"):
@@ -610,7 +633,7 @@ async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: d
 
 async def get_source_by_id(db, user_id: int, source_id: int) -> dict[str, Any] | None:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     if is_pg:
         row = await db.fetchrow(
             """
@@ -646,7 +669,7 @@ async def should_ingest_item(
     db, *, source_id: int, provider: str, external_id: str, version: str | None, modified_at: str | None, content_hash: str | None
 ) -> bool:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     if is_pg:
         row = await db.fetchrow("SELECT version, modified_at, hash FROM external_items WHERE source_id = $1 AND provider = $2 AND external_id = $3", source_id, provider, external_id)
         if not row:
@@ -673,7 +696,7 @@ async def record_ingested_item(
     db, *, source_id: int, provider: str, external_id: str, name: str | None, mime: str | None, size: int | None, version: str | None, modified_at: str | None, content_hash: str | None
 ) -> None:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     if is_pg:
         await db.execute(
             """
@@ -731,7 +754,7 @@ def count_connectors_jobs_today(user_id: int) -> int:
 
 async def list_accounts(db, user_id: int) -> list[dict[str, Any]]:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     if is_pg:
         rows = await db.fetch("SELECT id, provider, display_name, email, created_at FROM external_accounts WHERE user_id = $1 ORDER BY created_at DESC", user_id)
         return [dict(r) for r in rows]
@@ -742,7 +765,7 @@ async def list_accounts(db, user_id: int) -> list[dict[str, Any]]:
 
 async def delete_account(db, user_id: int, account_id: int) -> bool:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     if is_pg:
         await db.execute("DELETE FROM external_accounts WHERE id = $1 AND user_id = $2", account_id, user_id)
         return True
@@ -763,7 +786,7 @@ async def create_source(
     enabled: bool = True,
 ) -> dict[str, Any]:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     if is_pg:
         row = await db.fetchrow(
             """
@@ -809,7 +832,7 @@ async def create_source(
 async def list_sources(db, user_id: int) -> list[dict[str, Any]]:
     await _ensure_tables(db)
     # Join through accounts to enforce per-user scoping
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     if is_pg:
         rows = await db.fetch(
             """
@@ -858,7 +881,7 @@ async def list_sources(db, user_id: int) -> list[dict[str, Any]]:
 
 async def update_source(db, user_id: int, source_id: int, *, enabled: bool | None = None, options: dict[str, Any] | None = None) -> dict[str, Any] | None:
     await _ensure_tables(db)
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     # Ensure source belongs to user via join
     if is_pg:
         row = await db.fetchrow(

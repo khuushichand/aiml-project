@@ -12,7 +12,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     OrgBudgetListResponse,
     OrgBudgetUpdateRequest,
 )
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Billing.plan_limits import get_plan_limits
 
@@ -686,6 +686,27 @@ def _is_db_pool_object(db: Any) -> bool:
     return isinstance(db, DatabasePool)
 
 
+def _is_postgres_connection(db: Any) -> bool:
+    """Resolve backend mode from connection/adapter shape without global probing."""
+    if _is_db_pool_object(db):
+        return getattr(db, "pool", None) is not None
+
+    sqlite_hint = getattr(db, "_is_sqlite", None)
+    if isinstance(sqlite_hint, bool):
+        return not sqlite_hint
+
+    # SQLite shims in AuthNZ DatabasePool expose underlying aiosqlite connection as `_c`.
+    if getattr(db, "_c", None) is not None:
+        return False
+
+    module_name = getattr(type(db), "__module__", "")
+    if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+        return True
+
+    # Last-resort interface hint for test doubles and adapters.
+    return callable(getattr(db, "fetchrow", None))
+
+
 async def _fetchval(db, query: str, params: list[Any], *, pg: bool) -> Any:
     if pg:
         return await db.fetchval(query, *params)
@@ -729,7 +750,7 @@ async def list_org_budgets(
     limit: int,
 ) -> tuple[list[dict[str, Any]], int]:
     offset = (page - 1) * limit
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     if pg:
         try:
             from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import ensure_billing_tables_pg
@@ -791,7 +812,7 @@ async def upsert_org_budget(
     budget_updates: dict[str, Any] | None,
     clear_budgets: bool,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     if pg:
         try:
             from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import ensure_billing_tables_pg

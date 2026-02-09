@@ -302,7 +302,7 @@ class MediaDatabase:
     handling sync metadata and FTS updates internally via Python code.
     Requires client_id on initialization. Includes schema versioning.
     """
-    _CURRENT_SCHEMA_VERSION = 20  # Latest sqlite migrations (tts_history)
+    _CURRENT_SCHEMA_VERSION = 21  # Latest sqlite migrations (structure index + visual lookup indexes)
 
     # <<< Schema Definition (Version 1) >>>
 
@@ -606,6 +606,8 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_visualdocs_prev_version ON VisualDocuments(prev_version);
     CREATE INDEX IF NOT EXISTS idx_visualdocs_merge_parent_uuid ON VisualDocuments(merge_parent_uuid);
     CREATE INDEX IF NOT EXISTS idx_visualdocs_page_frame ON VisualDocuments(media_id, page_number, frame_index);
+    CREATE INDEX IF NOT EXISTS idx_visualdocs_caption ON VisualDocuments(caption);
+    CREATE INDEX IF NOT EXISTS idx_visualdocs_tags ON VisualDocuments(tags);
 
     CREATE INDEX IF NOT EXISTS idx_document_versions_media_id ON DocumentVersions(media_id);
     CREATE INDEX IF NOT EXISTS idx_document_versions_version_number ON DocumentVersions(version_number);
@@ -625,6 +627,7 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_dsi_media_kind ON DocumentStructureIndex(media_id, kind);
     CREATE INDEX IF NOT EXISTS idx_dsi_media_start ON DocumentStructureIndex(media_id, start_char);
     CREATE INDEX IF NOT EXISTS idx_dsi_media_parent ON DocumentStructureIndex(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_dsi_media_path ON DocumentStructureIndex(media_id, path);
 
     CREATE INDEX IF NOT EXISTS idx_sync_log_ts ON sync_log(timestamp);
     CREATE INDEX IF NOT EXISTS idx_sync_log_entity_uuid ON sync_log(entity_uuid);
@@ -3354,6 +3357,7 @@ class MediaDatabase:
             18: self._postgres_migrate_to_v18,
             19: self._postgres_migrate_to_v19,
             20: self._postgres_migrate_to_v20,
+            21: self._postgres_migrate_to_v21,
         }
 
     def _postgres_migrate_to_v5(self, conn) -> None:
@@ -3623,6 +3627,47 @@ class MediaDatabase:
         """Ensure tts_history tables exist (PostgreSQL)."""
 
         self._ensure_postgres_tts_history(conn)
+
+    def _postgres_migrate_to_v21(self, conn) -> None:
+        """Add structure/visual lookup indexes introduced in schema v21."""
+
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        structure_table: str | None = None
+        if backend.table_exists("documentstructureindex", connection=conn):
+            structure_table = "documentstructureindex"
+        elif backend.table_exists("DocumentStructureIndex", connection=conn):
+            structure_table = "DocumentStructureIndex"
+        if structure_table:
+            backend.execute(
+                (
+                    f"CREATE INDEX IF NOT EXISTS {ident('idx_dsi_media_path')} "
+                    f"ON {ident(structure_table)} ({ident('media_id')}, {ident('path')})"
+                ),
+                connection=conn,
+            )
+
+        visual_documents_table: str | None = None
+        if backend.table_exists("visualdocuments", connection=conn):
+            visual_documents_table = "visualdocuments"
+        elif backend.table_exists("VisualDocuments", connection=conn):
+            visual_documents_table = "VisualDocuments"
+        if visual_documents_table:
+            backend.execute(
+                (
+                    f"CREATE INDEX IF NOT EXISTS {ident('idx_visualdocs_caption')} "
+                    f"ON {ident(visual_documents_table)} ({ident('caption')})"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                (
+                    f"CREATE INDEX IF NOT EXISTS {ident('idx_visualdocs_tags')} "
+                    f"ON {ident(visual_documents_table)} ({ident('tags')})"
+                ),
+                connection=conn,
+            )
 
     def _update_schema_version_postgres(self, conn, version: int) -> None:
         """Ensure schema_version table reflects the supplied version."""
@@ -11420,54 +11465,135 @@ class MediaDatabase:
                         enable_si = True
                     if enable_si and chunks:
                         try:
-                            # Derive section ranges using chunk metadata 'section_path' or 'ancestry_titles'
+                            # Derive section ranges using chunk metadata
+                            # (`section_path` / `ancestry_titles`) and persist explicit
+                            # section hierarchy parent links.
+                            def _normalize_path(path_value: Any) -> list[str]:
+                                if path_value is None:
+                                    return []
+                                if isinstance(path_value, str):
+                                    raw = path_value.strip()
+                                    if not raw:
+                                        return []
+                                    if " > " in raw:
+                                        parts = [p.strip() for p in raw.split(" > ")]
+                                    elif "/" in raw:
+                                        parts = [p.strip() for p in raw.split("/")]
+                                    else:
+                                        parts = [raw]
+                                elif isinstance(path_value, (list, tuple)):
+                                    parts = [str(p).strip() for p in path_value if str(p).strip()]
+                                else:
+                                    parts = [str(path_value).strip()]
+                                return [p for p in parts if p]
+
+                            def _path_key(parts: list[str]) -> str:
+                                return " / ".join(parts)
+
+                            def _row_get(row: Any, key: str, default: Any = None) -> Any:
+                                if isinstance(row, dict):
+                                    return row.get(key, default)
+                                try:
+                                    return row[key]
+                                except _MEDIA_NONCRITICAL_EXCEPTIONS:
+                                    return default
+
                             sections_agg: dict[str, dict[str, Any]] = {}
                             order = 0
                             for ch in chunks:
-                                md = ch.get('metadata') or {}
-                                start = ch.get('start_char')
-                                end = ch.get('end_char')
+                                md = ch.get("metadata") or {}
+                                start = ch.get("start_char")
+                                end = ch.get("end_char")
                                 if start is None or end is None:
                                     continue
-                                path = md.get('section_path') or md.get('ancestry_titles') or []
-                                if isinstance(path, str):
-                                    # Some callers may store as CSV
-                                    path = [p.strip() for p in path.split('/') if p.strip()]
-                                if not isinstance(path, list) or not path:
+                                path_parts = _normalize_path(
+                                    md.get("section_path") or md.get("ancestry_titles")
+                                )
+                                if not path_parts:
                                     continue
-                                title = str(path[-1])
-                                key = ' / '.join([str(x) for x in path])
-                                rec = sections_agg.get(key)
-                                if not rec:
-                                    sections_agg[key] = {
-                                        'kind': 'section',
-                                        'level': len(path),
-                                        'title': title,
-                                        'start_char': int(start),
-                                        'end_char': int(end),
-                                        'order_index': order,
-                                        'path': key,
-                                    }
-                                    order += 1
-                                else:
-                                    # Expand section bounds
-                                    rec['start_char'] = min(int(start), int(rec['start_char']))
-                                    rec['end_char'] = max(int(end), int(rec['end_char']))
+
+                                # Build records for every hierarchy level so parent links
+                                # can be represented in DocumentStructureIndex.
+                                for depth in range(1, len(path_parts) + 1):
+                                    current_parts = path_parts[:depth]
+                                    key = _path_key(current_parts)
+                                    rec = sections_agg.get(key)
+                                    if rec is None:
+                                        parent_parts = current_parts[:-1]
+                                        sections_agg[key] = {
+                                            "kind": "section",
+                                            "level": depth,
+                                            "title": str(current_parts[-1]),
+                                            "start_char": int(start),
+                                            "end_char": int(end),
+                                            "order_index": order,
+                                            "path": key,
+                                            "parent_path": _path_key(parent_parts) if parent_parts else None,
+                                        }
+                                        order += 1
+                                    else:
+                                        rec["start_char"] = min(int(start), int(rec["start_char"]))
+                                        rec["end_char"] = max(int(end), int(rec["end_char"]))
 
                             section_ids_by_range: list[dict[str, Any]] = []
                             if sections_agg:
-                                # Insert sections first
-                                self._write_structure_index_records(conn, media_id, list(sections_agg.values()))
-                                # Preload section rows to speed up parent_id lookup
+                                section_records = sorted(
+                                    sections_agg.values(),
+                                    key=lambda r: (int(r.get("level") or 0), int(r.get("order_index") or 0)),
+                                )
+                                self._write_structure_index_records(conn, media_id, section_records)
+
+                                # Preload rows for fast section lookup + parent relinking.
+                                bool_false = False if self.backend_type == BackendType.POSTGRESQL else 0
                                 try:
-                                    cur = conn.execute(
-                                        "SELECT id, start_char, end_char FROM DocumentStructureIndex "
-                                        "WHERE media_id=? AND deleted=0 AND kind IN ('section','header')",
-                                        (media_id,),
+                                    cur = self._execute_with_connection(
+                                        conn,
+                                        "SELECT id, start_char, end_char, path FROM DocumentStructureIndex "
+                                        "WHERE media_id = ? AND deleted = ? AND kind IN ('section','header') "
+                                        "ORDER BY COALESCE(level, 0) DESC, start_char DESC",
+                                        (media_id, bool_false),
                                     )
-                                    section_ids_by_range = [dict(row) for row in cur.fetchall()]
+                                    fetched = cur.fetchall() or []
+                                    section_ids_by_range = [
+                                        {
+                                            "id": int(_row_get(row, "id", 0) or 0),
+                                            "start_char": int(_row_get(row, "start_char", 0) or 0),
+                                            "end_char": int(_row_get(row, "end_char", 0) or 0),
+                                            "path": str(_row_get(row, "path", "") or ""),
+                                        }
+                                        for row in fetched
+                                        if _row_get(row, "id") is not None
+                                    ]
                                 except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                     section_ids_by_range = []
+
+                                # Backfill parent_id now that section row ids are known.
+                                try:
+                                    now_ts = self._get_current_utc_timestamp_str()
+                                    path_to_id = {
+                                        str(r.get("path") or ""): int(r.get("id"))
+                                        for r in section_ids_by_range
+                                        if r.get("path")
+                                    }
+                                    for rec in section_records:
+                                        parent_path = rec.get("parent_path")
+                                        if not parent_path:
+                                            continue
+                                        child_id = path_to_id.get(str(rec.get("path") or ""))
+                                        parent_id = path_to_id.get(str(parent_path))
+                                        if not child_id or not parent_id or child_id == parent_id:
+                                            continue
+                                        self._execute_with_connection(
+                                            conn,
+                                            "UPDATE DocumentStructureIndex "
+                                            "SET parent_id = ?, last_modified = ?, client_id = ? "
+                                            "WHERE id = ?",
+                                            (int(parent_id), now_ts, client_id, int(child_id)),
+                                        )
+                                except _MEDIA_NONCRITICAL_EXCEPTIONS as _parent_err:
+                                    logging.warning(
+                                        f"Structure index parent-link population failed (non-fatal): {_parent_err}"
+                                    )
 
                             # Insert paragraph entries linked to their containing section
                             try:
@@ -11477,41 +11603,51 @@ class MediaDatabase:
                                 for ch in chunks:
                                     if not isinstance(ch, dict):
                                         continue
-                                    ctype = (ch.get('chunk_type') or '').lower()
+                                    ctype = (ch.get("chunk_type") or "").lower()
                                     # Treat text/list/code as paragraph-like; skip heading/table for this index
-                                    if ctype not in ('text', 'list', 'code'):
+                                    if ctype not in ("text", "list", "code"):
                                         continue
-                                    s = ch.get('start_char')
-                                    e = ch.get('end_char')
+                                    s = ch.get("start_char")
+                                    e = ch.get("end_char")
                                     if s is None or e is None:
                                         continue
                                     parent_id = None
                                     # Fast path: find containing section from preloaded ranges
                                     try:
                                         for row in section_ids_by_range:
-                                            if int(row.get('start_char')) <= int(s) < int(row.get('end_char')):
-                                                parent_id = int(row.get('id'))
+                                            if int(row.get("start_char") or 0) <= int(s) < int(row.get("end_char") or 0):
+                                                parent_id = int(row.get("id"))
                                                 break
                                     except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                         parent_id = None
                                     # Fallback DB lookup
                                     if parent_id is None:
                                         try:
-                                            cur2 = conn.execute(
-                                                "SELECT id FROM DocumentStructureIndex WHERE media_id=? AND deleted=0 AND kind IN ('section','header') AND start_char <= ? AND end_char > ? ORDER BY COALESCE(level,0) DESC, start_char DESC LIMIT 1",
-                                                (media_id, int(s), int(s)),
+                                            cur2 = self._execute_with_connection(
+                                                conn,
+                                                "SELECT id FROM DocumentStructureIndex "
+                                                "WHERE media_id = ? AND deleted = ? "
+                                                "AND kind IN ('section','header') "
+                                                "AND start_char <= ? AND end_char > ? "
+                                                "ORDER BY COALESCE(level, 0) DESC, start_char DESC LIMIT 1",
+                                                (media_id, bool_false, int(s), int(s)),
                                             )
                                             row2 = cur2.fetchone()
-                                            parent_id = int(row2['id']) if row2 else None
+                                            parent_id = int(_row_get(row2, "id", 0) or 0) if row2 else None
                                         except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                             parent_id = None
-                                    path = None
-                                    md = ch.get('metadata') or {}
-                                    if md.get('section_path'):
-                                        path = md.get('section_path') if isinstance(md.get('section_path'), str) else '/'.join(map(str, md.get('section_path')))
-                                    elif md.get('ancestry_titles'):
-                                        path = md.get('ancestry_titles') if isinstance(md.get('ancestry_titles'), str) else '/'.join(map(str, md.get('ancestry_titles')))
-                                    conn.execute(
+
+                                    md = ch.get("metadata") or {}
+                                    paragraph_path_parts = _normalize_path(
+                                        md.get("section_path") or md.get("ancestry_titles")
+                                    )
+                                    paragraph_path = (
+                                        _path_key(paragraph_path_parts)
+                                        if paragraph_path_parts
+                                        else None
+                                    )
+                                    self._execute_with_connection(
+                                        conn,
                                         """
                                         INSERT INTO DocumentStructureIndex (
                                             media_id, parent_id, kind, level, title, start_char, end_char,
@@ -11524,7 +11660,7 @@ class MediaDatabase:
                                             int(s),
                                             int(e),
                                             order,
-                                            path,
+                                            paragraph_path,
                                             created,
                                             created,
                                             client_id,
@@ -11558,7 +11694,11 @@ class MediaDatabase:
         """
         try:
             # Remove previous index (derived data)
-            conn.execute("DELETE FROM DocumentStructureIndex WHERE media_id = ?", (media_id,))
+            self._execute_with_connection(
+                conn,
+                "DELETE FROM DocumentStructureIndex WHERE media_id = ?",
+                (media_id,),
+            )
         except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logging.warning(f"Failed to clear old structure index for media_id={media_id}: {e}")
         if not records:
@@ -11568,7 +11708,8 @@ class MediaDatabase:
         inserted = 0
         for rec in records:
             try:
-                conn.execute(
+                self._execute_with_connection(
+                    conn,
                     """
                     INSERT INTO DocumentStructureIndex (
                         media_id, parent_id, kind, level, title, start_char, end_char,
@@ -11612,8 +11753,12 @@ class MediaDatabase:
         if not media_id:
             return 0
         with self.transaction() as conn:
-            cur = conn.execute("DELETE FROM DocumentStructureIndex WHERE media_id = ?", (media_id,))
-            return int(cur.rowcount or 0)
+            cur = self._execute_with_connection(
+                conn,
+                "DELETE FROM DocumentStructureIndex WHERE media_id = ?",
+                (media_id,),
+            )
+            return int(getattr(cur, "rowcount", 0) or 0)
 
     # =========================================================================
     # Chunking Templates Methods (moved earlier to ensure availability)
@@ -12060,14 +12205,19 @@ class MediaDatabase:
         """Return the most specific section covering char_offset for media_id."""
         if media_id is None or char_offset is None:
             return None
+        bool_false = False if self.backend_type == BackendType.POSTGRESQL else 0
         query = (
             "SELECT id, title, level, start_char, end_char FROM DocumentStructureIndex "
-            "WHERE media_id = ? AND deleted = 0 AND kind IN ('section','header') "
+            "WHERE media_id = ? AND deleted = ? AND kind IN ('section','header') "
             "AND start_char <= ? AND end_char > ? ORDER BY COALESCE(level, 0) DESC, start_char DESC LIMIT 1"
         )
         try:
             with self.transaction() as conn:
-                cur = conn.execute(query, (media_id, char_offset, char_offset))
+                cur = self._execute_with_connection(
+                    conn,
+                    query,
+                    (media_id, bool_false, char_offset, char_offset),
+                )
                 row = cur.fetchone()
         except _MEDIA_NONCRITICAL_EXCEPTIONS:
             return None
@@ -12082,13 +12232,15 @@ class MediaDatabase:
         if not media_id or not heading:
             return None
         try:
+            bool_false = False if self.backend_type == BackendType.POSTGRESQL else 0
             pattern = f"%{heading.strip()}%"
             with self.transaction() as conn:
-                cur = conn.execute(
+                cur = self._execute_with_connection(
+                    conn,
                     "SELECT start_char, end_char, title FROM DocumentStructureIndex "
-                    "WHERE media_id = ? AND deleted = 0 AND kind IN ('section','header') AND LOWER(title) LIKE LOWER(?) "
+                    "WHERE media_id = ? AND deleted = ? AND kind IN ('section','header') AND LOWER(title) LIKE LOWER(?) "
                     "ORDER BY COALESCE(level,0) DESC, (end_char - start_char) DESC LIMIT 1",
-                    (media_id, pattern),
+                    (media_id, bool_false, pattern),
                 )
                 row = cur.fetchone()
                 if not row:

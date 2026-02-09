@@ -121,16 +121,20 @@ async def update_user_api_key(
     key_id: int,
     request: APIKeyUpdateRequest,
     db,
+    *,
+    is_pg_fn: Callable[[], Awaitable[bool]],
 ) -> APIKeyMetadata:
     try:
         await admin_scope_service.enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         try:
+            is_pg = await is_pg_fn()
             row = await update_api_key_metadata(
                 db,
                 user_id=user_id,
                 key_id=key_id,
                 rate_limit=request.rate_limit,
                 allowed_ips=request.allowed_ips,
+                is_postgres=is_pg,
             )
         except ValueError:
             raise HTTPException(status_code=400, detail="No updates provided") from None

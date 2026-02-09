@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB, SemanticMemory
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
@@ -30,6 +31,16 @@ def _recv_until(client, predicate, timeout=2.0):
     raise AssertionError("Expected event not received in time")
 
 
+@pytest.fixture(autouse=True)
+def _mock_persona_auth(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    async def _fake_resolve(*args, **kwargs):
+        return "1", True, True
+
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+
+
 def _seed_personalization_db(tmp_path, monkeypatch, *, user_id: str, enabled: bool) -> PersonalizationDB:
     base = tmp_path / "user_db"
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
@@ -39,7 +50,20 @@ def _seed_personalization_db(tmp_path, monkeypatch, *, user_id: str, enabled: bo
     return db
 
 
-def test_persona_websocket_plan_and_confirm():
+def test_persona_websocket_plan_and_confirm(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            return SimpleNamespace(error=None, result={"ok": True, "tool": request.params.get("name")})
+
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: _FakeServer())
 
     with TestClient(fastapi_app) as c:
         with c.websocket_connect("/api/v1/persona/stream") as ws:
@@ -147,35 +171,23 @@ def test_persona_confirm_plan_rejects_session_mismatch():
             assert notice.get("level") == "error"
 
 
-def test_persona_anonymous_tool_execution_requires_auth():
+def test_persona_stream_rejects_missing_credentials(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    async def _unauthenticated(*args, **kwargs):
+        return None, False, False
+
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _unauthenticated)
 
     with TestClient(fastapi_app) as c:
-        with c.websocket_connect("/api/v1/persona/stream") as ws:
-            _ = json.loads(ws.receive_text())
-            session_id = "sess_anonymous"
-
-            ws.send_text(
-                json.dumps(
-                    {"type": "user_message", "session_id": session_id, "text": "https://example.com"}
-                )
-            )
-            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
-            plan_id = plan["plan_id"]
-            first_idx = int(plan["steps"][0]["idx"])
-
-            ws.send_text(
-                json.dumps(
-                    {
-                        "type": "confirm_plan",
-                        "session_id": session_id,
-                        "plan_id": plan_id,
-                        "approved_steps": [first_idx],
-                    }
-                )
-            )
-
-            result = _recv_until(ws, lambda d: d.get("event") == "tool_result")
-            assert "authentication required" in str(result.get("error", "")).lower()
+        try:
+            with c.websocket_connect("/api/v1/persona/stream") as ws:
+                with pytest.raises(WebSocketDisconnect):
+                    ws.receive_text()
+        except WebSocketDisconnect:
+            # Depending on server/client handshake timing, disconnect can happen
+            # during connect instead of first receive.
+            pass
 
 
 def test_persona_cancel_clears_pending_plan():

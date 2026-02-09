@@ -108,6 +108,70 @@ def _disable_collections_dual_write(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.unit
+def test_extract_analysis_extra_chunks_for_indexing_emits_table_and_media_chunks():
+    process_result = {
+        "analysis_details": {
+            "ocr": {
+                "structured": {
+                    "tables": [
+                        {"format": "markdown", "content": "| a | b |"},
+                    ],
+                    "pages": [
+                        {"page": 2, "tables": [{"format": "csv", "content": "x,y"}]},
+                    ],
+                }
+            },
+            "vlm": {
+                "by_page": [
+                    {
+                        "page": 4,
+                        "detections": [
+                            {"label": "table", "caption": "Revenue by quarter"},
+                            {"label": "chart", "description": "A line chart"},
+                        ],
+                    }
+                ]
+            },
+        }
+    }
+
+    chunks = ingestion_persistence._extract_analysis_extra_chunks_for_indexing(process_result)
+    assert chunks
+
+    table_chunks = [chunk for chunk in chunks if chunk.get("chunk_type") == "table"]
+    media_chunks = [chunk for chunk in chunks if chunk.get("chunk_type") == "media"]
+
+    assert any((chunk.get("metadata") or {}).get("source") == "ocr_structured_table" for chunk in table_chunks)
+    assert any((chunk.get("metadata") or {}).get("source") == "ocr_structured_page_table" for chunk in table_chunks)
+    assert any((chunk.get("metadata") or {}).get("source") == "vlm_detection" for chunk in table_chunks)
+    assert any((chunk.get("metadata") or {}).get("source") == "vlm_detection" for chunk in media_chunks)
+
+
+@pytest.mark.unit
+def test_extract_analysis_extra_chunks_for_indexing_dedupes_by_content_key():
+    process_result = {
+        "analysis_details": {
+            "vlm": {
+                "by_page": [
+                    {
+                        "page": 1,
+                        "detections": [
+                            {"label": "chart", "caption": "Duplicated caption"},
+                            {"label": "chart", "caption": "Duplicated caption"},
+                        ],
+                    }
+                ]
+            }
+        }
+    }
+
+    chunks = ingestion_persistence._extract_analysis_extra_chunks_for_indexing(process_result)
+    assert len(chunks) == 1
+    assert chunks[0]["chunk_type"] == "media"
+    assert "Duplicated caption" in str(chunks[0]["text"])
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_original_storage_uses_processing_source(monkeypatch, fake_db, fake_storage):
     storage = fake_storage

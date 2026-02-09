@@ -21,6 +21,7 @@ class _CursorStub:
 
 class _SQLiteTxConnWithPoolHelperTraps:
     def __init__(self) -> None:
+        self._is_sqlite = True
         self.execute_calls: list[tuple[str, Any]] = []
         self.fetchval_called = False
         self.fetchall_called = False
@@ -57,6 +58,7 @@ class _SQLiteTxConnWithPoolHelperTraps:
 
 class _SQLiteTxConnTopWithPoolHelperTraps:
     def __init__(self) -> None:
+        self._is_sqlite = True
         self.execute_calls: list[tuple[str, Any]] = []
         self.fetchall_called = False
 
@@ -83,14 +85,43 @@ class _SQLiteTxConnTopWithPoolHelperTraps:
         raise AssertionError(f"Unexpected query: {query!r}")
 
 
+class _PostgresTxConnWithSqliteTrap:
+    def __init__(self) -> None:
+        self._is_sqlite = False
+        self.execute_calls: list[tuple[str, Any]] = []
+        self.fetchval_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetch_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def execute(self, query: str, params: Any) -> _CursorStub:  # pragma: no cover - should never run
+        self.execute_calls.append((str(query), params))
+        raise AssertionError("postgres path should not use sqlite execute()")
+
+    async def fetchval(self, query: str, *args: Any) -> int:
+        self.fetchval_calls.append((str(query), tuple(args)))
+        if "?" in str(query):
+            raise AssertionError("postgres path should not use sqlite placeholders")
+        return 1
+
+    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        self.fetch_calls.append((str(query), tuple(args)))
+        if "?" in str(query):
+            raise AssertionError("postgres path should not use sqlite placeholders")
+        return [
+            {
+                "user_id": 11,
+                "day": "2026-02-09",
+                "requests": 5,
+                "errors": 0,
+                "bytes_total": 2048,
+                "bytes_in_total": 1024,
+                "latency_avg_ms": 10.1,
+            }
+        ]
+
+
 @pytest.mark.asyncio
 async def test_fetch_usage_daily_sqlite_tx_path_ignores_pool_helpers(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _fake_is_postgres_backend() -> bool:
-        return False
-
-    monkeypatch.setattr(admin_usage_service, "is_postgres_backend", _fake_is_postgres_backend)
     db = _SQLiteTxConnWithPoolHelperTraps()
 
     rows, total, has_in = await admin_usage_service.fetch_usage_daily(
@@ -114,12 +145,7 @@ async def test_fetch_usage_daily_sqlite_tx_path_ignores_pool_helpers(
 
 @pytest.mark.asyncio
 async def test_fetch_usage_top_sqlite_tx_path_ignores_pool_helpers(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _fake_is_postgres_backend() -> bool:
-        return False
-
-    monkeypatch.setattr(admin_usage_service, "is_postgres_backend", _fake_is_postgres_backend)
     db = _SQLiteTxConnTopWithPoolHelperTraps()
 
     rows = await admin_usage_service.fetch_usage_top(
@@ -135,3 +161,25 @@ async def test_fetch_usage_top_sqlite_tx_path_ignores_pool_helpers(
     assert rows[0]["requests"] == 21
     assert db.fetchall_called is False
     assert db.execute_calls, "sqlite transaction path should use execute()"
+
+
+@pytest.mark.asyncio
+async def test_fetch_usage_daily_postgres_tx_path_uses_fetch_helpers() -> None:
+    db = _PostgresTxConnWithSqliteTrap()
+
+    rows, total, has_in = await admin_usage_service.fetch_usage_daily(
+        db,
+        user_id=None,
+        org_ids=None,
+        start=None,
+        end=None,
+        page=1,
+        limit=10,
+    )
+
+    assert total == 1
+    assert has_in is True
+    assert rows and rows[0]["user_id"] == 11
+    assert db.fetchval_calls
+    assert db.fetch_calls
+    assert not db.execute_calls

@@ -23,7 +23,7 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     TeamMemberResponse,
     TeamResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateOrganizationError,
     DuplicateTeamError,
@@ -90,8 +90,31 @@ _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS = (
 )
 
 
+def _is_db_pool_object(db: Any) -> bool:
+    return isinstance(db, DatabasePool)
+
+
+def _is_postgres_connection(db: Any) -> bool:
+    """Resolve backend mode from connection shape without global probes."""
+    if _is_db_pool_object(db):
+        return getattr(db, "pool", None) is not None
+
+    sqlite_hint = getattr(db, "_is_sqlite", None)
+    if isinstance(sqlite_hint, bool):
+        return not sqlite_hint
+
+    if getattr(db, "_c", None) is not None:
+        return False
+
+    module_name = getattr(type(db), "__module__", "")
+    if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+        return True
+
+    return callable(getattr(db, "fetchrow", None))
+
+
 async def _list_teams_by_org_conn(db, org_id: int, limit: int, offset: int) -> list[dict[str, Any]]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     if pg:
         rows = await db.fetch(
             "SELECT id, org_id, name, slug, description, COALESCE(is_active,TRUE) as is_active, created_at, updated_at FROM teams WHERE org_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
@@ -329,7 +352,7 @@ async def update_org_watchlists_settings(
 ) -> OrganizationWatchlistsSettingsResponse:
     try:
         await admin_scope_service.enforce_admin_org_access(principal, org_id, require_admin=True)
-        is_pg = await is_postgres_backend()
+        is_pg = _is_postgres_connection(db)
         if is_pg:
             row = await db.fetchrow("SELECT metadata FROM organizations WHERE id = $1", org_id)
             meta_raw = row.get("metadata") if row else None
@@ -383,7 +406,7 @@ async def get_org_watchlists_settings(
 ) -> OrganizationWatchlistsSettingsResponse:
     try:
         await admin_scope_service.enforce_admin_org_access(principal, org_id, require_admin=True)
-        is_pg = await is_postgres_backend()
+        is_pg = _is_postgres_connection(db)
         if is_pg:
             row = await db.fetchrow("SELECT metadata FROM organizations WHERE id = $1", org_id)
             meta_raw = row.get("metadata") if row else None

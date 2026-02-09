@@ -16,11 +16,34 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     RegistrationSettingsResponse,
     RegistrationSettingsUpdateRequest,
 )
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import get_profile, get_settings, reset_settings
 from tldw_Server_API.app.core.Setup import setup_manager
 from tldw_Server_API.app.services.registration_service import reset_registration_service
+
+
+def _is_db_pool_object(db: Any) -> bool:
+    return isinstance(db, DatabasePool)
+
+
+def _is_postgres_connection(db: Any) -> bool:
+    """Resolve backend mode from connection/adapter shape without global probes."""
+    if _is_db_pool_object(db):
+        return getattr(db, "pool", None) is not None
+
+    sqlite_hint = getattr(db, "_is_sqlite", None)
+    if isinstance(sqlite_hint, bool):
+        return not sqlite_hint
+
+    if getattr(db, "_c", None) is not None:
+        return False
+
+    module_name = getattr(type(db), "__module__", "")
+    if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+        return True
+
+    return callable(getattr(db, "fetchrow", None))
 
 
 async def get_registration_settings() -> RegistrationSettingsResponse:
@@ -85,7 +108,7 @@ async def create_registration_code(
         # Calculate expiration
         expires_at = datetime.utcnow() + timedelta(days=request.expiry_days)
 
-        is_pg = await is_postgres_backend()
+        is_pg = _is_postgres_connection(db)
         creator_id = int(principal.user_id) if principal.user_id is not None else None
         org_id = request.org_id
         org_role = request.org_role or ("member" if org_id is not None else None)
@@ -292,7 +315,7 @@ async def list_registration_codes(
 ) -> RegistrationCodeListResponse:
     """List all registration codes."""
     try:
-        is_pg = await is_postgres_backend()
+        is_pg = _is_postgres_connection(db)
         if is_pg:
             # PostgreSQL
             if include_expired:
@@ -410,7 +433,7 @@ async def delete_registration_code(
 ):
     """Delete (revoke) a registration code."""
     try:
-        is_pg = await is_postgres_backend()
+        is_pg = _is_postgres_connection(db)
         if is_pg:
             # PostgreSQL
             await db.execute(

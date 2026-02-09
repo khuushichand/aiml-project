@@ -416,6 +416,25 @@ export interface MlxUnloadRequest {
   reason?: string
 }
 
+export interface MediaIngestionBudgetDiagnostics {
+  status: string
+  entity?: string | null
+  policy_id?: string | null
+  limits?: {
+    jobs_max_concurrent?: number | null
+    ingestion_bytes_daily_cap?: number | null
+  } | null
+  usage?: {
+    jobs_active?: number | null
+    jobs_remaining?: number | null
+    ingestion_bytes_daily_used?: number | null
+    ingestion_bytes_daily_remaining?: number | null
+  } | null
+  retry_after?: number | null
+  reason?: string | null
+  error?: string | null
+}
+
 export class TldwApiClient {
   private storage: Storage
   private config: TldwConfig | null = null
@@ -998,6 +1017,20 @@ export class TldwApiClient {
   async getSystemStats(): Promise<any> {
     return await bgRequest<any>({
       path: "/api/v1/admin/stats",
+      method: "GET"
+    })
+  }
+
+  async getMediaIngestionBudgetDiagnostics(params: {
+    userId: number
+    policyId?: string
+  }): Promise<MediaIngestionBudgetDiagnostics> {
+    const query = this.buildQuery({
+      user_id: params.userId,
+      policy_id: params.policyId || "media.default"
+    })
+    return await bgRequest<MediaIngestionBudgetDiagnostics>({
+      path: `/api/v1/resource-governor/diag/media-budget${query}`,
       method: "GET"
     })
   }

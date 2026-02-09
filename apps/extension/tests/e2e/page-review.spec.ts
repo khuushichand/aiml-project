@@ -123,6 +123,13 @@ test.describe("Extension page review", () => {
       .isVisible()
       .catch(() => false)
 
+    if (routePath === "/persona") {
+      await expect(
+        page.getByTestId("persona-route-root"),
+        "Persona route marker should render on /persona"
+      ).toBeVisible({ timeout: ELEMENT_TIMEOUT })
+    }
+
     if (CAPTURE) {
       const slug = slugify(routePath === "/" ? "root" : routePath)
       const fileName = `${label}-${slug || "root"}.png`

@@ -57,9 +57,6 @@ _BUNDLE_NONCRITICAL_EXCEPTIONS = (
     HTTPException,
 )
 
-_PER_USER_DATASETS = {"media", "chacha", "prompts", "evaluations", "audit"}
-
-
 async def _emit_admin_audit_event(
     request: Request,
     principal: AuthPrincipal,
@@ -130,13 +127,12 @@ def _handle_bundle_error(exc: BundleError) -> HTTPException:
     if isinstance(exc, BundleConcurrencyError):
         return HTTPException(status_code=409, detail="bundle_operation_in_progress")
     if isinstance(exc, BundleRateLimitError):
-        # Extract retry_after from message if present
-        retry_after = "3600"
-        if "retry_after=" in detail:
-            retry_after = detail.split("retry_after=")[-1]
-        resp = HTTPException(status_code=429, detail="rate_limit_exceeded")
-        resp.headers = {"Retry-After": retry_after}  # type: ignore[attr-defined]
-        return resp
+        retry_after = str(getattr(exc, "retry_after", 3600))
+        return HTTPException(
+            status_code=429,
+            detail="rate_limit_exceeded",
+            headers={"Retry-After": retry_after},
+        )
     if isinstance(exc, BundleDiskSpaceError):
         return HTTPException(status_code=507, detail="insufficient_disk_space")
     if isinstance(exc, BundleImportError):
@@ -229,7 +225,7 @@ async def list_bundles(
         if user_id is not None:
             await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
 
-        items, total = svc.list_bundles(user_id=user_id, limit=limit, offset=offset)
+        items, total = await asyncio.to_thread(svc.list_bundles, user_id=user_id, limit=limit, offset=offset)
         return BundleListResponse(
             items=[_metadata_to_item(m) for m in items],
             total=total,
@@ -262,12 +258,15 @@ async def import_bundle(
         if user_id is not None:
             await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
 
-        # Save upload to temp file
+        # Save upload to temp file using chunked streaming
         with tempfile.NamedTemporaryFile(
             delete=False, suffix=".zip", prefix="tldw_bundle_import_"
         ) as tmp:
-            content = await file.read()
-            tmp.write(content)
+            while True:
+                chunk = await file.read(65536)
+                if not chunk:
+                    break
+                tmp.write(chunk)
             tmp_path = tmp.name
 
         admin_uid = getattr(principal, "user_id", 0) or 0
@@ -288,7 +287,7 @@ async def import_bundle(
             await _emit_admin_audit_event(
                 request,
                 principal,
-                event_type="data.import",
+                event_type="data.write",
                 category="system",
                 resource_type="bundle",
                 resource_id=None,
@@ -333,7 +332,7 @@ async def get_bundle_metadata(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> BundleMetadataResponse:
     try:
-        meta = svc.get_bundle_metadata(bundle_id)
+        meta = await asyncio.to_thread(svc.get_bundle_metadata, bundle_id)
         return BundleMetadataResponse(item=_metadata_to_item(meta))
     except BundleError as exc:
         raise _handle_bundle_error(exc) from exc
@@ -354,7 +353,7 @@ async def download_bundle(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> FileResponse:
     try:
-        path = svc.get_bundle_path(bundle_id)
+        path = await asyncio.to_thread(svc.get_bundle_path, bundle_id)
 
         await _emit_admin_audit_event(
             request,
@@ -391,7 +390,7 @@ async def delete_bundle_endpoint(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> BundleDeleteResponse:
     try:
-        svc.delete_bundle(bundle_id)
+        await asyncio.to_thread(svc.delete_bundle, bundle_id)
 
         await _emit_admin_audit_event(
             request,

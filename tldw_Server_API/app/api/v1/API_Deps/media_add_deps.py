@@ -126,6 +126,38 @@ async def get_add_media_form(
         "pymupdf4llm",
         description="PDF parsing engine",
     ),
+    enable_ocr: bool = Form(
+        False,
+        description="Enable OCR for scanned/low-text PDFs",
+    ),
+    ocr_backend: str | None = Form(
+        None,
+        description="OCR backend name (e.g., tesseract, auto)",
+    ),
+    ocr_lang: str | None = Form(
+        "eng",
+        description="OCR language (Tesseract ISO 639-2 code)",
+    ),
+    ocr_dpi: int = Form(
+        300,
+        description="DPI for OCR page rendering",
+    ),
+    ocr_mode: str | None = Form(
+        "fallback",
+        description="OCR mode: always or fallback",
+    ),
+    ocr_min_page_text_chars: int = Form(
+        40,
+        description="Minimum extracted chars before OCR fallback is skipped",
+    ),
+    ocr_output_format: str | None = Form(
+        None,
+        description="OCR output format: text|markdown|json",
+    ),
+    ocr_prompt_preset: str | None = Form(
+        None,
+        description="OCR prompt preset (general|doc|table|spotting|json)",
+    ),
     perform_chunking: bool = Form(True, description="Enable chunking"),
     chunk_method: ChunkMethod | None = Form(
         None,
@@ -320,6 +352,14 @@ async def get_add_media_form(
                 perform_confabulation_check_of_analysis
             ),
             pdf_parsing_engine=pdf_parsing_engine,
+            enable_ocr=enable_ocr,
+            ocr_backend=ocr_backend,
+            ocr_lang=ocr_lang,
+            ocr_dpi=ocr_dpi,
+            ocr_mode=ocr_mode,
+            ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
             perform_chunking=perform_chunking,
             chunk_method=chunk_method,
             use_adaptive_chunking=use_adaptive_chunking,

@@ -10,7 +10,7 @@ import json
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Body, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from loguru import logger
 from starlette.requests import Request as StarletteRequest
 
@@ -20,10 +20,12 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaSessionResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.feature_flags import is_persona_enabled
 from tldw_Server_API.app.core.MCP_unified import MCPRequest, get_mcp_server
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
@@ -66,6 +68,20 @@ def _decode_audio_chunk(bytes_base64: str) -> bytes:
         return base64.b64decode(encoded, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise ValueError("Invalid base64 payload for audio chunk") from exc
+
+
+def _persona_catalog_items() -> list[PersonaInfo]:
+    return [
+        PersonaInfo(
+            id="research_assistant",
+            name="Research Assistant",
+            description="Helps ingest, search, and summarize content",
+            voice="default",
+            avatar_url=None,
+            capabilities=["ingest", "rag_search", "summarize"],
+            default_tools=["ingest_url", "rag_search", "summarize"],
+        )
+    ]
 
 
 async def _transcribe_audio_chunk(audio_bytes: bytes, audio_format: str) -> str:
@@ -112,6 +128,33 @@ def _is_authnz_access_token(token: str) -> bool:
         return False
     except Exception:
         return False
+
+
+def _looks_like_jwt(token: str | None) -> bool:
+    raw = str(token or "").strip()
+    if not raw:
+        return False
+    parts = raw.split(".")
+    return len(parts) == 3 and all(bool(part.strip()) for part in parts)
+
+
+def _should_treat_bearer_as_api_key(
+    token: str | None,
+    resolved_api_key: str | None,
+) -> bool:
+    """Mirror HTTP auth behavior for WS: single-user bearer or non-JWT bearer -> API key."""
+    if not token or resolved_api_key:
+        return False
+
+    try:
+        settings = get_settings()
+        if getattr(settings, "AUTH_MODE", None) == "single_user":
+            return True
+    except Exception:
+        # Fall through to token-shape heuristics when settings resolution fails.
+        pass
+
+    return not _looks_like_jwt(token)
 
 
 def _extract_auth_credentials(
@@ -181,6 +224,10 @@ async def _resolve_authenticated_user_id(
     Returns: (user_id, credentials_supplied, auth_ok)
     """
     auth_token, resolved_api_key = _extract_auth_credentials(ws, token, api_key)
+    if _should_treat_bearer_as_api_key(auth_token, resolved_api_key):
+        resolved_api_key = auth_token
+        auth_token = None
+
     credentials_supplied = bool(auth_token or resolved_api_key)
     user_id: str | None = None
 
@@ -231,37 +278,31 @@ async def _resolve_authenticated_user_id(
             logger.exception("persona stream: unexpected API key authentication error")
             return None, True, False
 
-    if credentials_supplied and not user_id:
+    if not credentials_supplied:
+        return None, False, False
+    if not user_id:
         return None, True, False
-    return user_id, credentials_supplied, True
+    return user_id, True, True
 
 
 @router.get("/catalog", response_model=list[PersonaInfo], tags=["persona"], status_code=status.HTTP_200_OK)
-async def persona_catalog() -> list[PersonaInfo]:
+async def persona_catalog(_current_user: User = Depends(get_request_user)) -> list[PersonaInfo]:
     """Return a placeholder persona catalog (scaffold)."""
     if not is_persona_enabled():
-        return []
-    return [
-        PersonaInfo(
-            id="research_assistant",
-            name="Research Assistant",
-            description="Helps ingest, search, and summarize content",
-            voice="default",
-            avatar_url=None,
-            capabilities=["ingest", "rag_search", "summarize"],
-            default_tools=["ingest_url", "rag_search", "summarize"],
-        )
-    ]
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    return _persona_catalog_items()
 
 
 @router.post("/session", response_model=PersonaSessionResponse, tags=["persona"], status_code=status.HTTP_200_OK)
-async def persona_session(req: PersonaSessionRequest = Body(...)) -> PersonaSessionResponse:
+async def persona_session(
+    req: PersonaSessionRequest = Body(...),
+    _current_user: User = Depends(get_request_user),
+) -> PersonaSessionResponse:
     """Create or resume a persona session (scaffold)."""
     if not is_persona_enabled():
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Persona disabled")
     session_id = req.resume_session_id or str(uuid.uuid4())
-    persona = (await persona_catalog())[0]
+    persona = _persona_catalog_items()[0]
     if req.persona_id and req.persona_id != persona.id:
         logger.info(f"Unknown persona_id requested in scaffold: {req.persona_id}; defaulting to {persona.id}")
     return PersonaSessionResponse(session_id=session_id, persona=persona, scopes=["read", "write:preview"])
@@ -283,38 +324,41 @@ async def persona_stream(
     - Feature-gated via PERSONA_ENABLED.
     - Supports token/api-key auth resolution similar to MCP.
     - Tool execution requires an authenticated user_id.
-    - Invalid credentials close the stream; no-credential sessions remain read-only.
+    - Connections must authenticate before the stream is accepted.
     """
-    # Wrap socket for lifecycle and metrics; keep domain payloads unchanged
-    stream = WebSocketStream(
-        ws,
-        heartbeat_interval_s=0.0,  # disable WS pings for this scaffold
-        idle_timeout_s=None,
-        close_on_done=False,
-        labels={"component": "persona", "endpoint": "persona_ws"},
-    )
-    await stream.start()
-
     if not is_persona_enabled():
-        await stream.send_json({"event": "notice", "level": "error", "message": "Persona disabled"})
-        try:
-            await stream.ws.close(code=1000)
-        except (RuntimeError, OSError) as exc:
-            logger.debug(f"Persona stream close failed after disable notice: {exc}")
+        with contextlib.suppress(RuntimeError, OSError):
+            await ws.accept()
+            await ws.send_json({"event": "notice", "level": "error", "message": "Persona disabled"})
+            await ws.close(code=1000)
         return
+
+    stream: WebSocketStream | None = None
     try:
         user_id, credentials_supplied, auth_ok = await _resolve_authenticated_user_id(ws, token=token, api_key=api_key)
-        if credentials_supplied and not auth_ok:
-            await stream.send_json({"event": "notice", "level": "error", "message": "Authentication failed"})
-            try:
-                await stream.ws.close(code=1008)
-            except (RuntimeError, OSError):
-                pass
+        if not auth_ok:
+            auth_message = "Authentication failed" if credentials_supplied else "Authentication required"
+            logger.info(f"persona stream rejected: {auth_message}")
+            with contextlib.suppress(RuntimeError, OSError):
+                await ws.close(code=1008)
             return
 
+        # Wrap socket for lifecycle and metrics; keep domain payloads unchanged
+        stream = WebSocketStream(
+            ws,
+            heartbeat_interval_s=0.0,  # disable WS pings for this scaffold
+            idle_timeout_s=None,
+            close_on_done=False,
+            labels={"component": "persona", "endpoint": "persona_ws"},
+        )
+        await stream.start()
         await stream.send_json({"event": "notice", "message": "persona stream connected (scaffold)"})
-        authenticated_user_id = user_id
-        connection_user_id = authenticated_user_id or f"anonymous:{uuid.uuid4().hex}"
+        authenticated_user_id = str(user_id or "").strip()
+        if not authenticated_user_id:
+            with contextlib.suppress(RuntimeError, OSError):
+                await stream.ws.close(code=1008)
+            return
+        connection_user_id = authenticated_user_id
         session_manager = get_session_manager()
         default_session_id = uuid.uuid4().hex
         persona_id = "research_assistant"
@@ -374,10 +418,10 @@ async def persona_stream(
             why: str | None = None,
             description: str | None = None,
         ) -> dict:
-            if authenticated_user_id is None:
-                return {"error": "Authentication required for tool execution"}
+            if not authenticated_user_id:
+                return {"ok": False, "output": None, "result": None, "error": "Authentication required for tool execution"}
             if not _tool_allowed(name):
-                return {"error": f"Tool '{name}' not permitted by policy"}
+                return {"ok": False, "output": None, "result": None, "error": f"Tool '{name}' not permitted by policy"}
             req = MCPRequest(method="tools/call", params={"name": name, "arguments": arguments})
             server = get_mcp_server()
             if not server.initialized:
@@ -395,8 +439,9 @@ async def persona_stream(
             }
             resp = await server.handle_http_request(req, user_id=authenticated_user_id, metadata=audit_metadata)
             if resp.error:
-                return {"error": resp.error.message}
-            return {"ok": True, "result": resp.result}
+                return {"ok": False, "output": None, "result": None, "error": resp.error.message}
+            # Canonical wire key is `output`; keep `result` as a temporary compatibility alias.
+            return {"ok": True, "output": resp.result, "result": resp.result}
 
         async def _propose_plan(text: str, memory_context: list[str] | None = None) -> dict:
             steps = []
@@ -683,5 +728,9 @@ async def persona_stream(
         logger.info("Persona stream disconnected")
     except Exception as e:
         logger.warning(f"Persona stream error: {e}")
-        with contextlib.suppress(Exception):
-            await stream.error("internal_error", "Internal error")
+        if stream is not None:
+            with contextlib.suppress(Exception):
+                await stream.error("internal_error", "Internal error")
+        else:
+            with contextlib.suppress(Exception):
+                await ws.close(code=1011)

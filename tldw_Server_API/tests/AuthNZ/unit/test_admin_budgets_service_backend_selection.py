@@ -43,6 +43,14 @@ class _SQLiteConnWithFetchrowTrap:
         return _CursorStub(row={"id": 9, "name": "acme"})
 
 
+class _SqliteBudgetAdapter:
+    _is_sqlite = True
+
+
+class _PostgresBudgetAdapter:
+    _is_sqlite = False
+
+
 @pytest.mark.asyncio
 async def test_fetchval_sqlite_backend_selection_uses_execute() -> None:
     conn = _SQLiteConnWithFetchvalTrap()
@@ -71,3 +79,63 @@ async def test_fetchrow_sqlite_backend_selection_uses_execute() -> None:
 
     assert row == {"id": 9, "name": "acme"}
     assert conn.execute_calls, "expected sqlite execute path"
+
+
+@pytest.mark.asyncio
+async def test_list_org_budgets_sqlite_backend_selection_uses_sqlite_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, bool] = {}
+
+    async def _fake_fetchval(db, query: str, params: list[Any], *, pg: bool) -> int:
+        captured["pg"] = pg
+        return 0
+
+    async def _fake_fetchrows(db, query: str, params: list[Any], *, pg: bool) -> list[Any]:
+        captured["rows_pg"] = pg
+        return []
+
+    monkeypatch.setattr(admin_budgets_service, "_fetchval", _fake_fetchval)
+    monkeypatch.setattr(admin_budgets_service, "_fetchrows", _fake_fetchrows)
+
+    items, total = await admin_budgets_service.list_org_budgets(
+        _SqliteBudgetAdapter(),
+        org_ids=None,
+        page=1,
+        limit=10,
+    )
+
+    assert items == []
+    assert total == 0
+    assert captured["pg"] is False
+    assert captured["rows_pg"] is False
+
+
+@pytest.mark.asyncio
+async def test_list_org_budgets_postgres_backend_selection_uses_postgres_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, bool] = {}
+
+    async def _fake_fetchval(db, query: str, params: list[Any], *, pg: bool) -> int:
+        captured["pg"] = pg
+        return 0
+
+    async def _fake_fetchrows(db, query: str, params: list[Any], *, pg: bool) -> list[Any]:
+        captured["rows_pg"] = pg
+        return []
+
+    monkeypatch.setattr(admin_budgets_service, "_fetchval", _fake_fetchval)
+    monkeypatch.setattr(admin_budgets_service, "_fetchrows", _fake_fetchrows)
+
+    items, total = await admin_budgets_service.list_org_budgets(
+        _PostgresBudgetAdapter(),
+        org_ids=None,
+        page=1,
+        limit=10,
+    )
+
+    assert items == []
+    assert total == 0
+    assert captured["pg"] is True
+    assert captured["rows_pg"] is True

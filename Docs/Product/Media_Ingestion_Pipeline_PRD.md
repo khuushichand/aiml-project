@@ -1,13 +1,13 @@
 # Media Ingestion Pipeline PRD
 
-Status: Foundations and Stage 1 hardening shipped (v0.2.x); Stage 2+ roadmap in progress
+Status: Foundations, Stage 1 hardening, and Stage 2 scaling/parity shipped (v0.2.x); Stage 3+ roadmap in progress
 Owner: Core Maintainers
 Audience: Backend & infrastructure contributors
 
 ## 1. Summary
 - **Problem:** tldw_server ingests heterogeneous media (audio/video/documents/web dumps) but the knowledge about validation, parsing, persistence, and downstream hooks is scattered across modules. Contributors struggle to evolve the pipeline safely, and cross-cutting features (watchlists, collections, RAG) depend on predictable ingestion guarantees.
 - **Solution:** Define a cohesive Media Ingestion Pipeline charter that documents current capabilities, required invariants, integration points, and the staged roadmap toward a unified, observable, and scalable ingestion layer.
-- **Status (2026-02-09):** Core processors live under `app/core/Ingestion_Media_Processing/`, FastAPI endpoints expose per-media workflows, and persistence flows through `Media_DB_v2`. Watchlists/reading services and `/api/v1/media/add` now dual-write successful items to collections. Async ingestion jobs (`/api/v1/media/ingest/jobs`) and MediaWiki checkpoints are implemented; validation parity, embeddings dispatch, metadata/chunk contracts, ingestion metrics, and sanitization/archive hardening defaults are standardized.
+- **Status (2026-02-09):** Core processors live under `app/core/Ingestion_Media_Processing/`, FastAPI endpoints expose per-media workflows, and persistence flows through `Media_DB_v2`. Watchlists/reading services and `/api/v1/media/add` now dual-write successful items to collections. Async ingestion jobs (`/api/v1/media/ingest/jobs`) and MediaWiki checkpoints are implemented; validation parity, embeddings dispatch, metadata/chunk contracts, ingestion metrics, and sanitization/archive hardening defaults are standardized. Stage 2 queue routing, Postgres parity migration updates, structure-index hierarchy writes, OCR/VLM chunk parity, and admin media-budget diagnostics are now in place.
 
 ## 2. Problem Statement
 Contributors must support new media types, improve processing fidelity, and connect ingestion outputs to Retrieval/RAG, watchlists, and collections. Without a shared plan, changes risk breaking DB invariants, duplicating validation logic, or bypassing downstream consumers (embeddings, claims, notifications). We need a PRD that articulates the ingestion contract and future stages so that the module evolves coherently.
@@ -135,13 +135,13 @@ Contributors must support new media types, improve processing fidelity, and conn
 - [Shipped] Tighten/document sanitization defaults for HTML/XML and archive-driven inputs (enabled by default with config controls, plus archive-member guardrails for email archive ingestion).
 
 ### Stage 2 - Backend Parity & Scaling
-- [In Progress] Remove SQLite-specific SQL; add migrations for Postgres parity.
+- [Shipped] Remove SQLite-specific SQL; add migrations for Postgres parity.
   - Runtime claim-clustering mutation paths now use explicit conflict-safe upserts (`ON CONFLICT DO NOTHING`) instead of SQLite-only `INSERT OR IGNORE`.
   - `/api/v1/media/add` now enforces per-user Resource Governor ingestion budgets (concurrent `jobs` + daily `ingestion_bytes`) and records accepted byte usage in the shared `ResourceDailyLedger`; admin diagnostics are surfaced via `/api/v1/resource-governor/diag/media-budget`.
-- Support distributed workers for heavy processing (audio transcription, OCR) with queue-based execution.
-- Implement resource budgeting per user (size limits, concurrency) with metrics + limits surfaced to admin UI.
-- Add structured structure-index writes (section hierarchy) per Ingest-Plan-1.
-- Expand FTS/embedding parity (image captioning, table extraction).
+- [Shipped] Support distributed workers for heavy processing (audio transcription, OCR) with queue-based execution.
+- [Shipped] Implement resource budgeting per user (size limits, concurrency) with metrics + limits surfaced to admin UI.
+- [Shipped] Add structured structure-index writes (section hierarchy) per Ingest-Plan-1.
+- [Shipped] Expand FTS/embedding parity (image captioning, table extraction).
 
 ### Stage 3 - Advanced Automation
 - Agentic ingestion workflows (auto-derive follow-up fetches, domain-specific pipelines).

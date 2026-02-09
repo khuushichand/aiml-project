@@ -6,7 +6,7 @@ import re
 import secrets
 import string
 import threading
-from typing import Optional
+from typing import Any, Optional
 
 #
 # 3rd-party imports
@@ -14,7 +14,6 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, VerifyMismatchError
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.exceptions import WeakPasswordError
 
 #
@@ -277,11 +276,38 @@ class PasswordService:
         alphabet = string.ascii_letters + string.digits
         return ''.join(secrets.choice(alphabet) for _ in range(length))
 
+    @staticmethod
+    def _resolve_postgres_backend(
+        db_connection: Any,
+        *,
+        is_postgres: Optional[bool] = None,
+    ) -> bool:
+        """Resolve backend mode from explicit caller input or known connection hints."""
+        if is_postgres is not None:
+            return bool(is_postgres)
+
+        sqlite_hint = getattr(db_connection, "_is_sqlite", None)
+        if isinstance(sqlite_hint, bool):
+            return not sqlite_hint
+
+        # SQLite shims in AuthNZ DatabasePool expose underlying connection as `_c`.
+        if getattr(db_connection, "_c", None) is not None:
+            return False
+
+        module_name = getattr(type(db_connection), "__module__", "")
+        if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+            return True
+
+        # Last-resort interface hint for legacy tests/callers.
+        return callable(getattr(db_connection, "fetch", None))
+
     async def check_password_history(
         self,
         user_id: int,
         new_password: str,
-        db_connection
+        db_connection,
+        *,
+        is_postgres: Optional[bool] = None,
     ) -> bool:
         """
         Check if password was recently used by the user
@@ -297,7 +323,10 @@ class PasswordService:
         try:
             # Get recent password hashes
             history_count = self.settings.PASSWORD_HISTORY_RETENTION_COUNT
-            postgres_backend = await is_postgres_backend()
+            postgres_backend = self._resolve_postgres_backend(
+                db_connection,
+                is_postgres=is_postgres,
+            )
             if postgres_backend:
                 # PostgreSQL
                 rows = await db_connection.fetch(
@@ -358,7 +387,9 @@ class PasswordService:
         self,
         user_id: int,
         password_hash: str,
-        db_connection
+        db_connection,
+        *,
+        is_postgres: Optional[bool] = None,
     ) -> None:
         """
         Add a password hash to user's password history
@@ -367,9 +398,13 @@ class PasswordService:
             user_id: User ID
             password_hash: Password hash to add to history
             db_connection: Database connection
+            is_postgres: Optional explicit backend mode override
         """
         try:
-            postgres_backend = await is_postgres_backend()
+            postgres_backend = self._resolve_postgres_backend(
+                db_connection,
+                is_postgres=is_postgres,
+            )
             if postgres_backend:
                 # PostgreSQL
                 await db_connection.execute(

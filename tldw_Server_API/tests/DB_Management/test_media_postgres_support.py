@@ -128,6 +128,12 @@ def test_postgres_migrations_include_v6() -> None:
     assert 6 in migrations
 
 
+def test_postgres_migrations_include_current_schema_version() -> None:
+
+    migrations = MediaDatabase._get_postgres_migrations(MediaDatabase.__new__(MediaDatabase))
+    assert MediaDatabase._CURRENT_SCHEMA_VERSION in migrations
+
+
 def test_postgres_migrate_to_v6_creates_identifier_table() -> None:
 
     db = MediaDatabase.__new__(MediaDatabase)

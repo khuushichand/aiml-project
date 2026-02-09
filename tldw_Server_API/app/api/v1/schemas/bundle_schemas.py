@@ -20,7 +20,6 @@ class BundleCreateRequest(BaseModel):
         description="Include vector store data (not yet supported).",
     )
     max_backups: int | None = Field(None, ge=1, le=1000)
-    retention_hours: int | None = Field(None, ge=1, le=8760)
     notes: str | None = Field(None, max_length=2000)
 
     model_config = ConfigDict(from_attributes=True)

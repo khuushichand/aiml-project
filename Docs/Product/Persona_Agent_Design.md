@@ -21,15 +21,15 @@ Introduce a first-class Persona agent (text + optional voice + avatar) that chat
   - Basic WS flow: `user_message -> tool_plan`, `confirm_plan -> tool_call/tool_result`.
   - Basic tests exist for catalog, WS smoke flow, and WS metrics.
 - Partially implemented:
-  - MCP tool execution integration exists, but plan confirmation currently trusts client-provided step payloads.
+  - MCP tool execution integration exists with server-stored plan validation keyed by `plan_id`.
   - RBAC-style export/delete string checks exist in persona WS, but full policy/scoping behavior depends on MCP user identity.
   - WebUI/extension persona surface is wired (`/persona`), capability-gated, and supports basic stream flow (connect/session/message/plan confirm-cancel) with route parity checks, component stream-flow tests, and Playwright route/workflow checks (including a live backend WS workflow test that runs when persona capability is enabled); deep backend tool-execution scenarios remain limited.
 - Not yet implemented:
   - Full voice protocol (`audio_chunk`, `partial_transcript`, `tts_audio` binary stream).
   - Persistent session/persona memory integration with personalization store.
-  - Robust plan-state validation (server-side stored plans keyed by `plan_id`).
+  - Per-tool policy scopes and explicit policy objects beyond string-based export/delete checks.
 - Important caveat:
-  - In full app mode, persona routes are treated as experimental and are not enabled by default route policy unless explicitly enabled by route toggles.
+  - Persona endpoints now require authentication; anonymous interaction is not allowed.
 
 ## Changelog
 
@@ -38,6 +38,9 @@ Introduce a first-class Persona agent (text + optional voice + avatar) that chat
   - Added scaffold persona endpoints (catalog, session) and WS stream with a naive plan → confirm → act loop.
   - Integrated scaffold MCP Unified tool execution path and basic RBAC-style export/delete checks.
   - Added minimal WS smoke and metrics tests for the scaffold flow.
+  - Hardened auth contract: persona HTTP endpoints require auth; WS stream rejects unauthenticated clients.
+  - Normalized disabled behavior: persona catalog/session return `404` when persona is disabled.
+  - Standardized WS tool result payload on `output` (with temporary `result` compatibility alias).
 - v0.1.0
   - Initial draft design with goals, architecture, and API outline.
 
@@ -91,13 +94,19 @@ Introduce a first-class Persona agent (text + optional voice + avatar) that chat
 Base path: `/api/v1/persona`
 
 - `GET /catalog`
+  - Auth: required (Bearer token or `X-API-KEY`)
+  - Disabled behavior: `404 { "detail": "Persona disabled" }`
   - Res: `[ { id, name, description, voice, avatar_url, capabilities, default_tools } ]`
 
 - `POST /session`
+  - Auth: required (Bearer token or `X-API-KEY`)
+  - Disabled behavior: `404 { "detail": "Persona disabled" }`
   - Req: `{ persona_id, project_id?, resume_session_id? }`
   - Res: `{ session_id, persona: {...}, scopes: [...] }`
 
 - `WS /stream` (bi-directional)
+  - Auth: required before interaction (`Authorization: Bearer ...`, `X-API-KEY`, or `token`/`api_key` query params)
+  - Missing/invalid auth: connection is closed (`1008` policy violation)
   - Client → Server messages (JSON):
     - `user_message`: `{ session_id, text }`
     - `audio_chunk`: `{ session_id, audio_format, bytes_base64 }`
@@ -109,6 +118,7 @@ Base path: `/api/v1/persona`
     - `tool_plan`: `{ session_id, plan_id, steps: [ { idx, tool, args, description } ] }`
     - `tool_call`: `{ session_id, step_idx, tool, args }`
     - `tool_result`: `{ session_id, step_idx, ok, output, error? }`
+      - Compatibility: `result` may also be present temporarily as an alias for `output`.
     - `tts_audio`: `{ session_id, audio_format, chunk_id }` (binary follows)
     - `notice`: `{ session_id, level, message }`
 
@@ -117,7 +127,8 @@ Base path: `/api/v1/persona`
 Schemas live under: `tldw_Server_API/app/api/v1/schemas/persona.py`
 
 Implementation notes:
-- WS accepts `token`/`api_key` similar to MCP; resolves single-user id when applicable.
+- WS accepts auth via headers and query params, and requires successful auth before stream interaction.
+- For compatibility with HTTP auth behavior, single-user/non-JWT bearer values are treated as API keys.
 - Tool name → module mapping is minimal; error messages returned for unknown/forbidden tools.
 - Client is responsible for rendering plan steps and sending back approvals.
 
@@ -171,6 +182,7 @@ Runtime capability surface:
 ## Security & Permissions
 
 - AuthNZ: Sessions tied to `user_id`; RBAC governs tool access and scope.
+- WS persona interactions require authentication; anonymous sessions are not permitted.
 - Confirmations required for destructive actions; audit log entries for all tool calls.
 - Rate limiting on WS messages and tool executions; backpressure handling on TTS.
 

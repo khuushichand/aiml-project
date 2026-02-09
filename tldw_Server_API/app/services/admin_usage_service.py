@@ -17,7 +17,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     UsageTopResponse,
     UsageTopRow,
 )
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.services import admin_scope_service
@@ -47,6 +47,25 @@ def _is_db_pool_object(db: Any) -> bool:
     return isinstance(db, DatabasePool)
 
 
+def _is_postgres_connection(db: Any) -> bool:
+    """Resolve backend mode from connection/adapter shape without global probes."""
+    if _is_db_pool_object(db):
+        return getattr(db, "pool", None) is not None
+
+    sqlite_hint = getattr(db, "_is_sqlite", None)
+    if isinstance(sqlite_hint, bool):
+        return not sqlite_hint
+
+    if getattr(db, "_c", None) is not None:
+        return False
+
+    module_name = getattr(type(db), "__module__", "")
+    if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+        return True
+
+    return callable(getattr(db, "fetchrow", None))
+
+
 def _fmt_csv_value(x: Any) -> str:
     if x is None:
         return ""
@@ -70,7 +89,7 @@ async def fetch_usage_daily(
     offset = (page - 1) * limit
     conditions: list[str] = []
     params: list[Any] = []
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     if org_ids is not None and len(org_ids) == 0:
         return [], 0, True
 
@@ -245,7 +264,7 @@ async def fetch_usage_top(
     metric: str,
     org_ids: list[int] | None,
 ) -> list[dict[str, Any]]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     conditions: list[str] = []
     params: list[Any] = []
     if org_ids is not None and len(org_ids) == 0:
@@ -403,7 +422,7 @@ async def fetch_llm_usage(
     org_ids: list[int] | None,
 ) -> tuple[list[dict[str, Any]], int]:
     offset = (page - 1) * limit
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     conditions: list[str] = []
     params: list[Any] = []
     if org_ids is not None and len(org_ids) == 0:
@@ -484,7 +503,7 @@ async def fetch_llm_usage_summary(
 
     group_by: one of user|operation|day|endpoint|provider|model|status
     """
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     params: list[Any] = []
     where: list[str] = []
     if org_ids is not None and len(org_ids) == 0:
@@ -581,7 +600,7 @@ async def fetch_llm_top_spenders(
     limit: int,
     org_ids: list[int] | None,
 ) -> list[dict[str, Any]]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     params: list[Any] = []
     where: list[str] = []
     if org_ids is not None and len(org_ids) == 0:
@@ -887,7 +906,7 @@ async def export_llm_usage_csv(
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
             org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
-        is_pg = await is_postgres_backend()
+        is_pg = _is_postgres_connection(db)
         conditions: list[str] = []
         params: list[Any] = []
 

@@ -17,7 +17,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     SystemStatsResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Logging.system_log_buffer import query_system_logs
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
@@ -29,6 +29,29 @@ from tldw_Server_API.app.services.admin_data_ops_service import (
 from tldw_Server_API.app.services.admin_data_ops_service import (
     build_audit_log_json as svc_build_audit_log_json,
 )
+
+
+def _is_db_pool_object(db: Any) -> bool:
+    return isinstance(db, DatabasePool)
+
+
+def _is_postgres_connection(db: Any) -> bool:
+    """Resolve backend mode from connection/adapter shape without global probes."""
+    if _is_db_pool_object(db):
+        return getattr(db, "pool", None) is not None
+
+    sqlite_hint = getattr(db, "_is_sqlite", None)
+    if isinstance(sqlite_hint, bool):
+        return not sqlite_hint
+
+    if getattr(db, "_c", None) is not None:
+        return False
+
+    module_name = getattr(type(db), "__module__", "")
+    if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+        return True
+
+    return callable(getattr(db, "fetchrow", None))
 
 
 def _parse_date_param(value: str | None, label: str, end_of_day: bool = False) -> datetime | None:
@@ -116,7 +139,7 @@ async def get_system_stats(db) -> SystemStatsResponse:
                 return {key: row[key] for key in row}
             return {key: row[idx] if idx < len(row) else None for idx, key in enumerate(keys)}
 
-        is_pg = await is_postgres_backend()
+        is_pg = _is_postgres_connection(db)
         if is_pg:
             # PostgreSQL
             user_stats = await db.fetchrow(
@@ -273,7 +296,7 @@ async def get_dashboard_activity(
 
     try:
         start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
-        is_pg = await is_postgres_backend()
+        is_pg = _is_postgres_connection(db)
         if is_pg:
             rows = await db.fetch(
                 """
@@ -337,7 +360,7 @@ async def get_audit_log(
     db,
 ) -> AuditLogResponse:
     try:
-        is_pg = await is_postgres_backend()
+        is_pg = _is_postgres_connection(db)
         conditions: list[str] = []
         params: list[Any] = []
         param_count = 0

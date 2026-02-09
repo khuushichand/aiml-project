@@ -4,11 +4,26 @@ from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+def _is_postgres_connection(db: Any) -> bool:
+    """Resolve backend mode from connection/adapter shape without global probing."""
+    sqlite_hint = getattr(db, "_is_sqlite", None)
+    if isinstance(sqlite_hint, bool):
+        return not sqlite_hint
+
+    # SQLite shims in AuthNZ DatabasePool expose underlying aiosqlite connection as `_c`.
+    if getattr(db, "_c", None) is not None:
+        return False
+
+    module_name = getattr(type(db), "__module__", "")
+    if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+        return True
+
+    # Last-resort interface hint for test doubles and adapters.
+    return callable(getattr(db, "fetchrow", None))
 
 
 async def list_roles(db) -> list[dict[str, Any]]:
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     try:
         if is_pg:
             rows = await db.fetch("SELECT id, name, description, COALESCE(is_system, FALSE) as is_system FROM roles ORDER BY name")
@@ -22,7 +37,7 @@ async def list_roles(db) -> list[dict[str, Any]]:
 
 async def create_role(db, name: str, description: str | None = None, is_system: bool = False) -> dict[str, Any]:
     from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateRoleError
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     try:
         if is_pg:
             # Pre-check case-insensitive
@@ -53,7 +68,7 @@ async def create_role(db, name: str, description: str | None = None, is_system: 
 
 
 async def delete_role(db, role_id: int) -> bool:
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     try:
         if is_pg:
             await db.execute("DELETE FROM roles WHERE id = $1 AND COALESCE(is_system, FALSE) = FALSE", role_id)
@@ -69,7 +84,7 @@ async def delete_role(db, role_id: int) -> bool:
 
 
 async def list_role_permissions(db, role_id: int) -> list[dict[str, Any]]:
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     try:
         if is_pg:
             rows = await db.fetch(
@@ -100,7 +115,7 @@ async def list_role_permissions(db, role_id: int) -> list[dict[str, Any]]:
 
 
 async def list_tool_permissions(db) -> list[dict[str, Any]]:
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     try:
         if is_pg:
             rows = await db.fetch("SELECT name, description, category FROM permissions WHERE name LIKE 'tools.execute:%' ORDER BY name")
@@ -113,7 +128,7 @@ async def list_tool_permissions(db) -> list[dict[str, Any]]:
 
 
 async def delete_tool_permission(db, full_name: str) -> bool:
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     try:
         if is_pg:
             await db.execute("DELETE FROM permissions WHERE name = $1", full_name)
@@ -130,7 +145,7 @@ async def delete_tool_permission(db, full_name: str) -> bool:
 
 async def ensure_permission(db, name: str, description: str, category: str = 'tools') -> dict[str, Any]:
     """Idempotently create a permission and return its row."""
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     if is_pg:
         await db.execute(
             "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING",
@@ -154,7 +169,7 @@ async def ensure_permission(db, name: str, description: str, category: str = 'to
 
 async def grant_tool_permission_to_role(db, role_id: int, permission_name: str, description: str) -> dict[str, Any]:
     perm = await ensure_permission(db, permission_name, description, category='tools')
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     try:
         if is_pg:
             await db.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", role_id, perm['id'])
@@ -177,7 +192,7 @@ async def grant_tool_permission_to_role(db, role_id: int, permission_name: str, 
 
 
 async def revoke_tool_permission_from_role(db, role_id: int, permission_name: str) -> bool:
-    is_pg = await is_postgres_backend()
+    is_pg = _is_postgres_connection(db)
     try:
         if is_pg:
             row = await db.fetchrow("SELECT id FROM permissions WHERE name = $1", permission_name)

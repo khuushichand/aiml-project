@@ -21,7 +21,8 @@ import {
   type TldwConfig,
   type AdminUserListResponse,
   type AdminUserSummary,
-  type AdminRole
+  type AdminRole,
+  type MediaIngestionBudgetDiagnostics
 } from "@/services/tldw/TldwApiClient"
 import { PageShell } from "@/components/Common/PageShell"
 
@@ -40,6 +41,11 @@ export const ServerAdminPage: React.FC = () => {
   const [roles, setRoles] = React.useState<AdminRole[]>([])
   const [rolesLoading, setRolesLoading] = React.useState(false)
   const [rolesError, setRolesError] = React.useState<string | null>(null)
+  const [mediaBudget, setMediaBudget] = React.useState<MediaIngestionBudgetDiagnostics | null>(null)
+  const [mediaBudgetLoading, setMediaBudgetLoading] = React.useState(false)
+  const [mediaBudgetError, setMediaBudgetError] = React.useState<string | null>(null)
+  const [mediaBudgetUserId, setMediaBudgetUserId] = React.useState<number | null>(null)
+  const [mediaBudgetPolicyId, setMediaBudgetPolicyId] = React.useState("media.default")
   const [userRoleFilter, setUserRoleFilter] = React.useState<string | undefined>(undefined)
   const [userActiveFilter, setUserActiveFilter] = React.useState<string | undefined>(undefined)
   const [usersPage, setUsersPage] = React.useState(1)
@@ -50,14 +56,14 @@ export const ServerAdminPage: React.FC = () => {
   const [roleForm] = Form.useForm()
   const initialLoadRef = React.useRef(false)
 
-  const markAdminGuardFromError = (err: any) => {
+  const markAdminGuardFromError = React.useCallback((err: any) => {
     const msg = String(err?.message || "")
     if (msg.includes("Request failed: 403")) {
       setAdminGuard("forbidden")
     } else if (msg.includes("Request failed: 404")) {
       setAdminGuard("notFound")
     }
-  }
+  }, [])
 
   const loadUsers = React.useCallback(
     async (
@@ -85,7 +91,7 @@ export const ServerAdminPage: React.FC = () => {
         setUsersLoading(false)
       }
     },
-    []
+    [markAdminGuardFromError]
   )
 
   const loadRoles = React.useCallback(async () => {
@@ -100,7 +106,27 @@ export const ServerAdminPage: React.FC = () => {
     } finally {
       setRolesLoading(false)
     }
-  }, [])
+  }, [markAdminGuardFromError])
+
+  const loadMediaBudget = React.useCallback(
+    async (userId: number, policyId: string = "media.default") => {
+      try {
+        setMediaBudgetLoading(true)
+        const data = await tldwClient.getMediaIngestionBudgetDiagnostics({
+          userId,
+          policyId: policyId || "media.default"
+        })
+        setMediaBudget(data)
+        setMediaBudgetError(null)
+      } catch (e: any) {
+        setMediaBudgetError(e?.message || "Failed to load media ingestion budget diagnostics.")
+        markAdminGuardFromError(e)
+      } finally {
+        setMediaBudgetLoading(false)
+      }
+    },
+    [markAdminGuardFromError]
+  )
 
   React.useEffect(() => {
     if (initialLoadRef.current) return
@@ -155,11 +181,33 @@ export const ServerAdminPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
+    if (mediaBudgetUserId !== null && !adminGuard) {
+      void loadMediaBudget(mediaBudgetUserId, mediaBudgetPolicyId)
+    }
   }
 
   const users = stats?.users || {}
   const storage = stats?.storage || {}
   const sessions = stats?.sessions || {}
+  const mediaBudgetLimits = mediaBudget?.limits || {}
+  const mediaBudgetUsage = mediaBudget?.usage || {}
+
+  React.useEffect(() => {
+    if (mediaBudgetUserId !== null) {
+      return
+    }
+    const firstUser = usersData?.users?.[0]
+    if (firstUser && typeof firstUser.id === "number" && firstUser.id > 0) {
+      setMediaBudgetUserId(firstUser.id)
+    }
+  }, [mediaBudgetUserId, usersData])
+
+  React.useEffect(() => {
+    if (adminGuard || mediaBudgetUserId === null) {
+      return
+    }
+    void loadMediaBudget(mediaBudgetUserId, mediaBudgetPolicyId)
+  }, [adminGuard, loadMediaBudget, mediaBudgetPolicyId, mediaBudgetUserId])
 
   const handleUserTableChange = (pagination: any) => {
     const page = pagination.current || 1
@@ -669,6 +717,104 @@ export const ServerAdminPage: React.FC = () => {
                     </Form.Item>
                   </Form>
                 </Space>
+              </Space>
+            </Card>
+
+            <Card
+              title={t("settings:admin.mediaBudget.title", "Media ingestion budget")}
+              loading={mediaBudgetLoading}
+              extra={
+                <Space size="small">
+                  <Button
+                    size="small"
+                    onClick={() =>
+                      mediaBudgetUserId !== null
+                        ? loadMediaBudget(mediaBudgetUserId, mediaBudgetPolicyId)
+                        : undefined
+                    }
+                    disabled={mediaBudgetUserId === null || mediaBudgetLoading}>
+                    {t("common:refresh", "Refresh")}
+                  </Button>
+                </Space>
+              }>
+              <Space direction="vertical" size="middle" className="w-full">
+                <Space wrap align="center">
+                  <Select
+                    size="small"
+                    style={{ minWidth: 220 }}
+                    value={mediaBudgetUserId ?? undefined}
+                    placeholder={t("settings:admin.mediaBudget.user", "User")}
+                    onChange={(value) => setMediaBudgetUserId(value)}
+                    options={(usersData?.users || []).map((user) => ({
+                      label: `${user.username} (#${user.id})`,
+                      value: user.id
+                    }))}
+                  />
+                  <Input
+                    size="small"
+                    style={{ width: 180 }}
+                    value={mediaBudgetPolicyId}
+                    onChange={(event) => setMediaBudgetPolicyId(event.target.value || "media.default")}
+                    placeholder={t("settings:admin.mediaBudget.policy", "Policy ID")}
+                  />
+                </Space>
+
+                {mediaBudgetError && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    message={t(
+                      "settings:admin.mediaBudget.errorTitle",
+                      "Unable to load media ingestion budget diagnostics"
+                    )}
+                    description={mediaBudgetError}
+                  />
+                )}
+
+                {mediaBudget ? (
+                  <Descriptions
+                    size="small"
+                    column={2}
+                    title={t("settings:admin.mediaBudget.current", "Current diagnostics")}>
+                    <Descriptions.Item label={t("settings:admin.mediaBudget.status", "Status")}>
+                      {mediaBudget.status || "–"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label={t("settings:admin.mediaBudget.entity", "Entity")}>
+                      {mediaBudget.entity || "–"}
+                    </Descriptions.Item>
+                    <Descriptions.Item
+                      label={t("settings:admin.mediaBudget.jobsLimit", "Jobs max concurrent")}>
+                      {mediaBudgetLimits.jobs_max_concurrent ?? "–"}
+                    </Descriptions.Item>
+                    <Descriptions.Item
+                      label={t("settings:admin.mediaBudget.jobsActive", "Jobs active")}>
+                      {mediaBudgetUsage.jobs_active ?? "–"}
+                    </Descriptions.Item>
+                    <Descriptions.Item
+                      label={t("settings:admin.mediaBudget.bytesCap", "Daily ingestion bytes cap")}>
+                      {mediaBudgetLimits.ingestion_bytes_daily_cap ?? "–"}
+                    </Descriptions.Item>
+                    <Descriptions.Item
+                      label={t("settings:admin.mediaBudget.bytesUsed", "Daily ingestion bytes used")}>
+                      {mediaBudgetUsage.ingestion_bytes_daily_used ?? "–"}
+                    </Descriptions.Item>
+                    <Descriptions.Item
+                      label={t("settings:admin.mediaBudget.bytesRemaining", "Daily ingestion bytes remaining")}>
+                      {mediaBudgetUsage.ingestion_bytes_daily_remaining ?? "–"}
+                    </Descriptions.Item>
+                    <Descriptions.Item
+                      label={t("settings:admin.mediaBudget.retryAfter", "Retry after (seconds)")}>
+                      {mediaBudget.retry_after ?? "–"}
+                    </Descriptions.Item>
+                  </Descriptions>
+                ) : (
+                  <Text type="secondary">
+                    {t(
+                      "settings:admin.mediaBudget.empty",
+                      "Select a user to inspect media ingestion limits and usage."
+                    )}
+                  </Text>
+                )}
               </Space>
             </Card>
           </>

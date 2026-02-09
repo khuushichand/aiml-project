@@ -111,9 +111,9 @@ def _check_rate_limit(user_id: int, op_type: str) -> None:
     if len(window) >= _RATE_LIMIT_MAX:
         oldest = min(window)
         retry_after = int(_RATE_LIMIT_WINDOW_SECONDS - (now - oldest)) + 1
-        raise BundleRateLimitError(
-            f"rate_limit_exceeded:retry_after={retry_after}"
-        )
+        exc = BundleRateLimitError("rate_limit_exceeded")
+        exc.retry_after = retry_after  # type: ignore[attr-defined]
+        raise exc
     window.append(now)
     _rate_limit_windows[key] = window
 
@@ -536,6 +536,13 @@ def import_bundle(
                 tmp.write(zf.read(filename))
                 tmp_path = tmp.name
             try:
+                actual_size = os.path.getsize(tmp_path)
+                expected_size = meta.get("size_bytes")
+                if expected_size is not None and actual_size != int(expected_size):
+                    raise BundleImportError(
+                        f"size_verification_failed: {filename} "
+                        f"(expected {expected_size}, got {actual_size})"
+                    )
                 actual_hash = _compute_sha256(tmp_path)
                 expected_hash = meta.get("sha256", "")
                 if actual_hash != expected_hash:
@@ -560,9 +567,18 @@ def import_bundle(
     datasets_restored: list[str] = []
 
     try:
-        # Extract all files
+        # Extract files with path traversal protection
         with zipfile.ZipFile(file_path, "r") as zf:
-            zf.extractall(staging_dir)
+            for member in zf.infolist():
+                # Reject any member whose resolved path escapes staging_dir
+                target = os.path.realpath(
+                    os.path.join(staging_dir, member.filename)
+                )
+                if not target.startswith(os.path.realpath(staging_dir) + os.sep) and target != os.path.realpath(staging_dir):
+                    raise BundleImportError(
+                        f"path_traversal_detected: {member.filename}"
+                    )
+                zf.extract(member, staging_dir)
 
         for ds in datasets:
             ds_user_id = None if ds == "authnz" else user_id

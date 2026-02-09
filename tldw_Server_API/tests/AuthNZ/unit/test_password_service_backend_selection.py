@@ -4,7 +4,6 @@ from typing import Any
 
 import pytest
 
-import tldw_Server_API.app.core.AuthNZ.password_service as password_service_module
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
 
@@ -21,6 +20,7 @@ class _SQLiteConnWithPgTraps:
     def __init__(self) -> None:
         self.fetch_called = False
         self.execute_calls: list[tuple[str, Any]] = []
+        self._is_sqlite = True
 
     async def fetch(self, *args: Any, **kwargs: Any) -> list[Any]:  # pragma: no cover - should never run
         self.fetch_called = True
@@ -38,6 +38,7 @@ class _PostgresConnWithSqliteTraps:
     def __init__(self) -> None:
         self.fetch_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self._is_sqlite = False
 
     async def fetch(self, query: str, *args: Any) -> list[Any]:
         self.fetch_calls.append((str(query), tuple(args)))
@@ -54,18 +55,37 @@ class _PostgresConnWithSqliteTraps:
 
 @pytest.mark.asyncio
 async def test_check_password_history_sqlite_path_uses_execute(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _fake_is_postgres_backend() -> bool:
-        return False
-
     reset_settings()
     service = PasswordService(settings=get_settings())
-    monkeypatch.setattr(password_service_module, "is_postgres_backend", _fake_is_postgres_backend)
-    monkeypatch.setattr(service, "verify_password", lambda *_: (False, False))
+    service.verify_password = lambda *_: (False, False)  # type: ignore[method-assign]
     conn = _SQLiteConnWithPgTraps()
 
-    ok = await service.check_password_history(user_id=1, new_password="N3w$trongPass", db_connection=conn)
+    ok = await service.check_password_history(
+        user_id=1,
+        new_password="N3w$trongPass",
+        db_connection=conn,
+        is_postgres=False,
+    )
+
+    assert ok is True
+    assert conn.fetch_called is False
+    assert conn.execute_calls
+    assert "?" in conn.execute_calls[0][0]
+
+
+@pytest.mark.asyncio
+async def test_check_password_history_infers_sqlite_from_connection_hint() -> None:
+    reset_settings()
+    service = PasswordService(settings=get_settings())
+    service.verify_password = lambda *_: (False, False)  # type: ignore[method-assign]
+    conn = _SQLiteConnWithPgTraps()
+
+    ok = await service.check_password_history(
+        user_id=1,
+        new_password="N3w$trongPass",
+        db_connection=conn,
+    )
 
     assert ok is True
     assert conn.fetch_called is False
@@ -75,18 +95,18 @@ async def test_check_password_history_sqlite_path_uses_execute(
 
 @pytest.mark.asyncio
 async def test_check_password_history_postgres_path_uses_fetch(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _fake_is_postgres_backend() -> bool:
-        return True
-
     reset_settings()
     service = PasswordService(settings=get_settings())
-    monkeypatch.setattr(password_service_module, "is_postgres_backend", _fake_is_postgres_backend)
-    monkeypatch.setattr(service, "verify_password", lambda *_: (False, False))
+    service.verify_password = lambda *_: (False, False)  # type: ignore[method-assign]
     conn = _PostgresConnWithSqliteTraps()
 
-    ok = await service.check_password_history(user_id=1, new_password="N3w$trongPass", db_connection=conn)
+    ok = await service.check_password_history(
+        user_id=1,
+        new_password="N3w$trongPass",
+        db_connection=conn,
+        is_postgres=True,
+    )
 
     assert ok is True
     assert conn.fetch_calls
@@ -96,17 +116,17 @@ async def test_check_password_history_postgres_path_uses_fetch(
 
 @pytest.mark.asyncio
 async def test_add_to_password_history_sqlite_path_uses_qmark_queries(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _fake_is_postgres_backend() -> bool:
-        return False
-
     reset_settings()
     service = PasswordService(settings=get_settings())
-    monkeypatch.setattr(password_service_module, "is_postgres_backend", _fake_is_postgres_backend)
     conn = _SQLiteConnWithPgTraps()
 
-    await service.add_to_password_history(user_id=1, password_hash="hash-1", db_connection=conn)
+    await service.add_to_password_history(
+        user_id=1,
+        password_hash="hash-1",
+        db_connection=conn,
+        is_postgres=False,
+    )
 
     assert len(conn.execute_calls) == 2
     assert all("?" in query for query, _ in conn.execute_calls)
@@ -114,17 +134,17 @@ async def test_add_to_password_history_sqlite_path_uses_qmark_queries(
 
 @pytest.mark.asyncio
 async def test_add_to_password_history_postgres_path_uses_dollar_queries(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _fake_is_postgres_backend() -> bool:
-        return True
-
     reset_settings()
     service = PasswordService(settings=get_settings())
-    monkeypatch.setattr(password_service_module, "is_postgres_backend", _fake_is_postgres_backend)
     conn = _PostgresConnWithSqliteTraps()
 
-    await service.add_to_password_history(user_id=1, password_hash="hash-1", db_connection=conn)
+    await service.add_to_password_history(
+        user_id=1,
+        password_hash="hash-1",
+        db_connection=conn,
+        is_postgres=True,
+    )
 
     assert len(conn.execute_calls) == 2
     assert all("$1" in query for query, _ in conn.execute_calls)

@@ -20,6 +20,7 @@ class _CursorStub:
 
 class _SQLiteTxConnWithFetchrowTrap:
     def __init__(self, *, metadata_json: str | None) -> None:
+        self._is_sqlite = True
         self.metadata_json = metadata_json
         self.execute_calls: list[tuple[str, Any]] = []
         self.fetchrow_called = False
@@ -38,6 +39,27 @@ class _SQLiteTxConnWithFetchrowTrap:
         raise AssertionError(f"Unexpected query: {query!r}")
 
 
+class _PostgresTxConnWithSqliteTrap:
+    def __init__(self, *, metadata_json: str | None) -> None:
+        self._is_sqlite = False
+        self.metadata_json = metadata_json
+        self.fetchrow_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.execute_calls: list[tuple[str, Any]] = []
+
+    async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
+        self.fetchrow_calls.append((str(query), tuple(args)))
+        q = str(query).lower()
+        if "select metadata from organizations" in q:
+            return {"metadata": self.metadata_json}
+        return None
+
+    async def execute(self, query: str, *args: Any) -> Any:
+        self.execute_calls.append((str(query), args))
+        if "?" in str(query):
+            raise AssertionError("postgres path should not use sqlite placeholders")
+        return "OK"
+
+
 def _admin_principal() -> AuthPrincipal:
     return AuthPrincipal(
         kind="user",
@@ -54,13 +76,9 @@ def _admin_principal() -> AuthPrincipal:
 async def test_update_org_watchlists_settings_sqlite_path_ignores_fetchrow_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _fake_is_postgres_backend() -> bool:
-        return False
-
     async def _allow_org_access(*args, **kwargs) -> None:
         return None
 
-    monkeypatch.setattr(admin_orgs_service, "is_postgres_backend", _fake_is_postgres_backend)
     monkeypatch.setattr(admin_orgs_service.admin_scope_service, "enforce_admin_org_access", _allow_org_access)
 
     db = _SQLiteTxConnWithFetchrowTrap(metadata_json="{}")
@@ -88,13 +106,9 @@ async def test_update_org_watchlists_settings_sqlite_path_ignores_fetchrow_probe
 async def test_get_org_watchlists_settings_sqlite_path_ignores_fetchrow_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _fake_is_postgres_backend() -> bool:
-        return False
-
     async def _allow_org_access(*args, **kwargs) -> None:
         return None
 
-    monkeypatch.setattr(admin_orgs_service, "is_postgres_backend", _fake_is_postgres_backend)
     monkeypatch.setattr(admin_orgs_service.admin_scope_service, "enforce_admin_org_access", _allow_org_access)
 
     db = _SQLiteTxConnWithFetchrowTrap(
@@ -111,3 +125,54 @@ async def test_get_org_watchlists_settings_sqlite_path_ignores_fetchrow_probe(
     assert response.require_include_default is True
     assert db.fetchrow_called is False
     assert db.execute_calls and "select metadata from organizations" in db.execute_calls[0][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_update_org_watchlists_settings_postgres_path_uses_fetchrow_and_pg_placeholders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _allow_org_access(*args, **kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(admin_orgs_service.admin_scope_service, "enforce_admin_org_access", _allow_org_access)
+
+    db = _PostgresTxConnWithSqliteTrap(metadata_json="{}")
+    payload = OrganizationWatchlistsSettingsUpdate(require_include_default=True)
+
+    response = await admin_orgs_service.update_org_watchlists_settings(
+        org_id=77,
+        payload=payload,
+        principal=_admin_principal(),
+        db=db,
+    )
+
+    assert response.org_id == 77
+    assert response.require_include_default is True
+    assert db.fetchrow_calls and "$1" in db.fetchrow_calls[0][0]
+    assert db.execute_calls and "$1" in db.execute_calls[0][0]
+    assert all("?" not in q for q, _ in db.fetchrow_calls)
+
+
+@pytest.mark.asyncio
+async def test_get_org_watchlists_settings_postgres_path_uses_fetchrow_and_pg_placeholders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _allow_org_access(*args, **kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(admin_orgs_service.admin_scope_service, "enforce_admin_org_access", _allow_org_access)
+
+    db = _PostgresTxConnWithSqliteTrap(
+        metadata_json=json.dumps({"watchlists": {"require_include_default": True}})
+    )
+
+    response = await admin_orgs_service.get_org_watchlists_settings(
+        org_id=88,
+        principal=_admin_principal(),
+        db=db,
+    )
+
+    assert response.org_id == 88
+    assert response.require_include_default is True
+    assert db.fetchrow_calls and "$1" in db.fetchrow_calls[0][0]
+    assert not db.execute_calls

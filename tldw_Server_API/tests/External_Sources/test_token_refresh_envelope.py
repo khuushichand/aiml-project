@@ -1,18 +1,12 @@
 import os
 import json
 import pytest
-import asyncio
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_update_account_tokens_encrypted_env(monkeypatch, tmp_path):
-    # Force SQLite path
     from tldw_Server_API.app.core.External_Sources import connectors_service as svc
-    monkeypatch.setattr(svc, "is_postgres_backend", lambda: asyncio.Future())
-    # is_postgres_backend is awaited; return a future resolved to False
-    f = asyncio.Future(); f.set_result(False)
-    monkeypatch.setattr(svc, "is_postgres_backend", lambda: f)
 
     # Enable encryption
     # Valid base64-encoded 32-byte key (AES-256)
@@ -57,10 +51,7 @@ async def test_update_account_tokens_encrypted_env(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_update_account_tokens_plaintext_without_env(monkeypatch, tmp_path):
-    # Force SQLite path
     from tldw_Server_API.app.core.External_Sources import connectors_service as svc
-    f = asyncio.Future(); f.set_result(False)
-    monkeypatch.setattr(svc, "is_postgres_backend", lambda: f)
     # Ensure encryption disabled
     monkeypatch.delenv("WORKFLOWS_ARTIFACT_ENC_KEY", raising=False)
 

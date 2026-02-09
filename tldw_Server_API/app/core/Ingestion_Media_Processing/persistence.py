@@ -225,6 +225,181 @@ def _ensure_warnings_list(result: dict[str, Any]) -> list[str]:
     return warnings
 
 
+def _normalize_analysis_text_chunk(
+    value: Any,
+    *,
+    max_chars: int = 4000,
+) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+    elif isinstance(value, (dict, list)):
+        try:
+            text = json.dumps(value, ensure_ascii=False).strip()
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+            text = str(value).strip()
+    else:
+        text = str(value).strip()
+    if not text:
+        return None
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip()
+    return text
+
+
+def _extract_analysis_extra_chunks_for_indexing(
+    process_result: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Build retrieval/embedding chunks from structured analysis outputs.
+
+    Stage-2 parity path:
+    - OCR table extraction -> `chunk_type=table`
+    - VLM/image detections/captions -> `chunk_type=media` (or `table` for table labels)
+    """
+    if not isinstance(process_result, dict):
+        return []
+    details = process_result.get("analysis_details")
+    if not isinstance(details, dict):
+        return []
+
+    out: list[dict[str, Any]] = []
+
+    # OCR structured tables
+    ocr_details = details.get("ocr")
+    if isinstance(ocr_details, dict):
+        structured = ocr_details.get("structured")
+        if isinstance(structured, dict):
+            tables_any = structured.get("tables")
+            if isinstance(tables_any, list):
+                for idx, table_entry in enumerate(tables_any):
+                    table_format = "unknown"
+                    content_any = table_entry
+                    if isinstance(table_entry, dict):
+                        table_format = str(table_entry.get("format") or "unknown")
+                        content_any = table_entry.get("content")
+                    table_text = _normalize_analysis_text_chunk(content_any)
+                    if not table_text:
+                        continue
+                    out.append(
+                        {
+                            "text": f"OCR table ({table_format}): {table_text}",
+                            "start_char": None,
+                            "end_char": None,
+                            "chunk_type": "table",
+                            "metadata": {
+                                "source": "ocr_structured_table",
+                                "table_format": table_format,
+                                "table_index": idx,
+                            },
+                        }
+                    )
+
+            pages_any = structured.get("pages")
+            if isinstance(pages_any, list):
+                for page_entry in pages_any:
+                    if not isinstance(page_entry, dict):
+                        continue
+                    page_no = page_entry.get("page")
+                    page_tables = page_entry.get("tables")
+                    if not isinstance(page_tables, list):
+                        continue
+                    for idx, table_entry in enumerate(page_tables):
+                        table_format = "unknown"
+                        content_any = table_entry
+                        if isinstance(table_entry, dict):
+                            table_format = str(table_entry.get("format") or "unknown")
+                            content_any = table_entry.get("content")
+                        table_text = _normalize_analysis_text_chunk(content_any)
+                        if not table_text:
+                            continue
+                        out.append(
+                            {
+                                "text": f"OCR table (page {page_no}, {table_format}): {table_text}",
+                                "start_char": None,
+                                "end_char": None,
+                                "chunk_type": "table",
+                                "metadata": {
+                                    "source": "ocr_structured_page_table",
+                                    "page": page_no,
+                                    "table_format": table_format,
+                                    "table_index": idx,
+                                },
+                            }
+                        )
+
+    # VLM/image detections and captions
+    vlm_details = details.get("vlm")
+    if isinstance(vlm_details, dict):
+        by_page = vlm_details.get("by_page")
+        if isinstance(by_page, list):
+            for page_entry in by_page:
+                if not isinstance(page_entry, dict):
+                    continue
+                page_no = page_entry.get("page")
+                detections = page_entry.get("detections")
+                if not isinstance(detections, list):
+                    continue
+                for det_idx, det in enumerate(detections):
+                    if not isinstance(det, dict):
+                        continue
+                    label = str(det.get("label") or "").strip()
+                    score = det.get("score")
+                    bbox = det.get("bbox")
+                    caption_text = _normalize_analysis_text_chunk(
+                        det.get("caption")
+                        or det.get("description")
+                        or det.get("summary"),
+                        max_chars=1200,
+                    )
+                    if caption_text:
+                        text = f"Image caption: {caption_text}"
+                    elif label:
+                        if page_no is not None:
+                            text = f"Detected {label} visual element on page {page_no}"
+                        else:
+                            text = f"Detected {label} visual element"
+                    else:
+                        continue
+                    chunk_type = "table" if label.lower() == "table" else "media"
+                    out.append(
+                        {
+                            "text": text,
+                            "start_char": None,
+                            "end_char": None,
+                            "chunk_type": chunk_type,
+                            "metadata": {
+                                "source": "vlm_detection",
+                                "page": page_no,
+                                "label": label or None,
+                                "score": score,
+                                "bbox": bbox,
+                                "detection_index": det_idx,
+                            },
+                        }
+                    )
+
+    # Stable dedupe by content + core metadata keys.
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for chunk in out:
+        md = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+        key = (
+            str(chunk.get("chunk_type") or ""),
+            str(chunk.get("text") or ""),
+            md.get("source"),
+            md.get("page"),
+            md.get("label"),
+            md.get("table_format"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(chunk)
+
+    return deduped
+
+
 def _is_httpx_request_error(exc: Exception) -> bool:
     module = getattr(exc.__class__, "__module__", "")
     if not module.startswith("httpx"):
@@ -2763,15 +2938,36 @@ async def persist_primary_av_item(
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             chunks_for_sql = None
 
-        # Merge VLM extra chunks even if chunking was disabled or failed.
+        # Merge processor-provided and analysis-derived extra chunks (VLM/OCR)
+        # even if chunking was disabled or failed.
         try:
             extra_chunks_any = (process_result or {}).get("extra_chunks")
+            derived_extra_chunks = _extract_analysis_extra_chunks_for_indexing(process_result)
+            combined_extra_chunks: list[dict[str, Any]] = []
             if isinstance(extra_chunks_any, list) and extra_chunks_any:
+                combined_extra_chunks.extend(extra_chunks_any)
+            if derived_extra_chunks:
+                combined_extra_chunks.extend(derived_extra_chunks)
+
+            if combined_extra_chunks:
                 if chunks_for_sql is None:
                     chunks_for_sql = []
-                for ec in extra_chunks_any:
+                seen_extra_keys: set[tuple[Any, ...]] = set()
+                for ec in combined_extra_chunks:
                     if not isinstance(ec, dict) or "text" not in ec:
                         continue
+                    ec_md = ec.get("metadata") if isinstance(ec.get("metadata"), dict) else {}
+                    dedupe_key = (
+                        str(ec.get("chunk_type") or ""),
+                        str(ec.get("text") or ""),
+                        ec_md.get("source"),
+                        ec_md.get("page"),
+                        ec_md.get("label"),
+                        ec_md.get("table_format"),
+                    )
+                    if dedupe_key in seen_extra_keys:
+                        continue
+                    seen_extra_keys.add(dedupe_key)
                     raw_chunk_type = ec.get("chunk_type") or "vlm"
                     try:
                         normalized_chunk_type = _ck.normalize_chunk_type(raw_chunk_type)  # type: ignore[name-defined]
@@ -2789,9 +2985,7 @@ async def persist_primary_av_item(
                             "start_char": ec.get("start_char"),
                             "end_char": ec.get("end_char"),
                             "chunk_type": normalized_chunk_type or raw_chunk_type,
-                            "metadata": ec.get("metadata")
-                            if isinstance(ec.get("metadata"), dict)
-                            else {},
+                            "metadata": ec_md,
                         }
                     )
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:

@@ -150,6 +150,33 @@ def _parse_job_created_at(value: Any) -> datetime | None:
     return None
 
 
+def _is_truthy(value: str | None) -> bool:
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _is_heavy_media_ingest_request(form_data: AddMediaForm) -> bool:
+    media_type = str(getattr(form_data, "media_type", "") or "").strip().lower()
+    if media_type in {"audio", "video"}:
+        return True
+    if bool(getattr(form_data, "enable_ocr", False)):
+        return True
+    return False
+
+
+def _resolve_media_ingest_queue(form_data: AddMediaForm) -> str:
+    default_queue = (os.getenv("MEDIA_INGEST_JOBS_DEFAULT_QUEUE") or "default").strip() or "default"
+    route_heavy = _is_truthy(os.getenv("MEDIA_INGEST_JOBS_ROUTE_HEAVY", "true"))
+    if not route_heavy:
+        return default_queue
+    if not _is_heavy_media_ingest_request(form_data):
+        return default_queue
+    # Keep fallback within JobManager standard queue names unless explicitly overridden.
+    heavy_queue = (os.getenv("MEDIA_INGEST_JOBS_HEAVY_QUEUE") or "low").strip() or "low"
+    return heavy_queue
+
+
 def _job_to_status(job: dict[str, Any]) -> MediaIngestJobStatus:
     payload = _normalize_payload(job.get("payload"))
     id_value = job.get("id")
@@ -210,6 +237,7 @@ async def submit_media_ingest_jobs(
     options = form_data.model_dump(mode="json")
     options.pop("urls", None)
     options.pop("keywords", None)
+    selected_queue = _resolve_media_ingest_queue(form_data)
 
     batch_id = str(uuid4())
     jobs: list[MediaIngestJobItem] = []
@@ -229,7 +257,7 @@ async def submit_media_ingest_jobs(
         }
         row = jm.create_job(
             domain="media_ingest",
-            queue="default",
+            queue=selected_queue,
             job_type="media_ingest_item",
             payload=payload,
             owner_user_id=str(current_user.id),
@@ -294,7 +322,7 @@ async def submit_media_ingest_jobs(
                 }
                 row = jm.create_job(
                     domain="media_ingest",
-                    queue="default",
+                    queue=selected_queue,
                     job_type="media_ingest_item",
                     payload=payload,
                     owner_user_id=str(current_user.id),

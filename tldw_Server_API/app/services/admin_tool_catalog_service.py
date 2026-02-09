@@ -7,13 +7,30 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import (
     build_postgres_in_clause,
     build_sqlite_in_clause,
-    is_postgres_backend,
 )
 from tldw_Server_API.app.core.exceptions import ToolCatalogConflictError
 
 
+def _is_postgres_connection(db: Any) -> bool:
+    """Resolve backend mode from connection/adapter shape without global probing."""
+    sqlite_hint = getattr(db, "_is_sqlite", None)
+    if isinstance(sqlite_hint, bool):
+        return not sqlite_hint
+
+    # SQLite shims in AuthNZ DatabasePool expose underlying aiosqlite connection as `_c`.
+    if getattr(db, "_c", None) is not None:
+        return False
+
+    module_name = getattr(type(db), "__module__", "")
+    if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+        return True
+
+    # Last-resort interface hint for test doubles and adapters.
+    return callable(getattr(db, "fetchrow", None))
+
+
 async def list_tool_catalogs(db, *, org_id: int | None, team_id: int | None, limit: int, offset: int) -> list[dict[str, Any]]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     where: list[str] = []
     params: list[Any] = []
     if org_id is not None:
@@ -61,7 +78,7 @@ async def list_visible_tool_catalogs(
     This encapsulates backend-specific SQL for global/org/team scope listing
     so API endpoints do not branch on backend details.
     """
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     visible_rows: list[dict[str, Any]] = []
     org_ids = org_ids or set()
     team_ids = team_ids or set()
@@ -186,7 +203,7 @@ async def list_visible_tool_catalogs(
 
 
 async def create_tool_catalog(db, *, name: str, description: str | None, org_id: int | None, team_id: int | None, is_active: bool) -> dict[str, Any]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     try:
         if pg:
             # Pre-check case-insensitive existence within scope
@@ -228,7 +245,7 @@ async def create_tool_catalog(db, *, name: str, description: str | None, org_id:
 
 
 async def get_tool_catalog(db, catalog_id: int) -> dict[str, Any] | None:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     try:
         if pg:
             row = await db.fetchrow(
@@ -259,7 +276,7 @@ async def get_tool_catalog(db, catalog_id: int) -> dict[str, Any] | None:
 
 
 async def delete_tool_catalog(db, catalog_id: int) -> None:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     try:
         if pg:
             await db.execute("DELETE FROM tool_catalogs WHERE id = $1", catalog_id)
@@ -279,7 +296,7 @@ async def list_tool_catalog_entries(
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     try:
         if pg:
             rows = await db.fetch(
@@ -301,7 +318,7 @@ async def list_tool_catalog_entries(
 
 
 async def add_tool_catalog_entry(db, catalog_id: int, tool_name: str, module_id: str | None) -> dict[str, Any]:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     try:
         if pg:
             await db.execute("INSERT INTO tool_catalog_entries (catalog_id, tool_name, module_id) VALUES ($1,$2,$3) ON CONFLICT (catalog_id, tool_name) DO NOTHING", catalog_id, tool_name, module_id)
@@ -323,7 +340,7 @@ async def add_tool_catalog_entry(db, catalog_id: int, tool_name: str, module_id:
 
 
 async def delete_tool_catalog_entry(db, catalog_id: int, tool_name: str) -> None:
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db)
     try:
         if pg:
             await db.execute("DELETE FROM tool_catalog_entries WHERE catalog_id = $1 AND tool_name = $2", catalog_id, tool_name)

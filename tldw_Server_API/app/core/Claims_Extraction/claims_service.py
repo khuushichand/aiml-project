@@ -20,7 +20,7 @@ from uuid import uuid4
 from fastapi import HTTPException, status
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     CLAIMS_ADMIN,
     CLAIMS_REVIEW,
@@ -91,6 +91,29 @@ _REVIEW_TRANSITIONS = {
     "rejected": {"pending"},
     "approved": {"pending"},
 }
+
+
+def _is_db_pool_object(db: Any) -> bool:
+    return isinstance(db, DatabasePool)
+
+
+def _is_postgres_connection(db: Any) -> bool:
+    """Resolve backend mode from connection/pool shape without global probes."""
+    if _is_db_pool_object(db):
+        return getattr(db, "pool", None) is not None
+
+    sqlite_hint = getattr(db, "_is_sqlite", None)
+    if isinstance(sqlite_hint, bool):
+        return not sqlite_hint
+
+    if getattr(db, "_c", None) is not None:
+        return False
+
+    module_name = getattr(type(db), "__module__", "")
+    if isinstance(module_name, str) and module_name.startswith("asyncpg"):
+        return True
+
+    return callable(getattr(db, "fetchrow", None))
 
 
 def _role_at_least(user_role: str, required_role: str) -> bool:
@@ -1130,7 +1153,7 @@ async def _fetch_claims_provider_usage_async(
     owner_user_id: str | None,
 ) -> list[dict[str, Any]]:
     db_pool = await get_db_pool()
-    pg = await is_postgres_backend()
+    pg = _is_postgres_connection(db_pool)
     operations = ["claims_extract", "claims_verify", "claims_ingestion"]
     user_id_val = None
     if owner_user_id:

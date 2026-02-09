@@ -3,9 +3,6 @@ from __future__ import annotations
 import json as _json
 from typing import Any
 
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
-
-
 async def update_api_key_metadata(
     db,
     *,
@@ -13,27 +10,27 @@ async def update_api_key_metadata(
     key_id: int,
     rate_limit: int | None = None,
     allowed_ips: list[str] | None = None,
+    is_postgres: bool,
 ) -> dict[str, Any]:
     """Update per-key limits/metadata for an API key and return normalized row.
 
     Handles Postgres and SQLite parameterization and returns a dict suitable for
     APIKeyMetadata construction.
     """
-    is_pg = await is_postgres_backend()
     fields: list[str] = []
     params: list[Any] = []
 
     if rate_limit is not None:
-        fields.append("rate_limit = ${}" if is_pg else "rate_limit = ?")
+        fields.append("rate_limit = ${}" if is_postgres else "rate_limit = ?")
         params.append(rate_limit)
     if allowed_ips is not None:
-        fields.append("allowed_ips = ${}" if is_pg else "allowed_ips = ?")
+        fields.append("allowed_ips = ${}" if is_postgres else "allowed_ips = ?")
         params.append(_json.dumps(allowed_ips))
 
     if not fields:
         raise ValueError("No updates provided")
 
-    if is_pg:
+    if is_postgres:
         set_clause = ", ".join(fields[i].format(i + 1) for i in range(len(fields)))
         query = f"UPDATE api_keys SET {set_clause} WHERE id = $ {len(fields) + 1} AND user_id = $ {len(fields) + 2}"
         query = query.replace('$ ', '$')

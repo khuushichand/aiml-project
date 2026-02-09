@@ -2021,6 +2021,7 @@ async def lifespan(app: FastAPI):
     privilege_snapshot_task = None
     audio_jobs_task = None
     media_ingest_jobs_task = None
+    media_ingest_heavy_jobs_task = None
     reading_digest_jobs_task = None
     chatbooks_cleanup_stop_event = None
     files_jobs_stop_event = None
@@ -2028,6 +2029,7 @@ async def lifespan(app: FastAPI):
     prompt_studio_jobs_stop_event = None
     privilege_snapshot_stop_event = None
     media_ingest_jobs_stop_event = None
+    media_ingest_heavy_jobs_stop_event = None
     reading_digest_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
@@ -2337,6 +2339,7 @@ async def lifespan(app: FastAPI):
         import os as _os
 
         from tldw_Server_API.app.services.media_ingest_jobs_worker import (
+            run_media_ingest_heavy_jobs_worker as _run_media_heavy_jobs,
             run_media_ingest_jobs_worker as _run_media_jobs,
         )
 
@@ -2347,6 +2350,22 @@ async def lifespan(app: FastAPI):
             logger.info("Media Ingest Jobs worker started with explicit stop_event signal")
         else:
             logger.info("Media Ingest Jobs worker disabled by flag (MEDIA_INGEST_JOBS_WORKER_ENABLED)")
+
+        _heavy_enabled = _should_start_worker(
+            "MEDIA_INGEST_HEAVY_JOBS_WORKER_ENABLED",
+            "media-ingest-heavy-jobs",
+            default_enabled=False,
+        )
+        if _heavy_enabled:
+            media_ingest_heavy_jobs_stop_event = _asyncio.Event()
+            media_ingest_heavy_jobs_task = _asyncio.create_task(
+                _run_media_heavy_jobs(media_ingest_heavy_jobs_stop_event)
+            )
+            logger.info("Media Ingest Heavy Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info(
+                "Media Ingest Heavy Jobs worker disabled by flag (MEDIA_INGEST_HEAVY_JOBS_WORKER_ENABLED)"
+            )
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Media Ingest Jobs worker: {e}")
 
@@ -3140,6 +3159,19 @@ async def lifespan(app: FastAPI):
                     media_ingest_jobs_task.cancel()
             else:
                 media_ingest_jobs_task.cancel()
+        if "media_ingest_heavy_jobs_task" in locals() and media_ingest_heavy_jobs_task:
+            if (
+                "media_ingest_heavy_jobs_stop_event" in locals()
+                and media_ingest_heavy_jobs_stop_event
+            ):
+                try:
+                    media_ingest_heavy_jobs_stop_event.set()
+                    await _asyncio.wait_for(media_ingest_heavy_jobs_task, timeout=5.0)
+                    logger.info("Media Ingest Heavy Jobs worker stopped via stop_event")
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    media_ingest_heavy_jobs_task.cancel()
+            else:
+                media_ingest_heavy_jobs_task.cancel()
         if "reading_digest_jobs_task" in locals() and reading_digest_jobs_task:
             if "reading_digest_jobs_stop_event" in locals() and reading_digest_jobs_stop_event:
                 try:

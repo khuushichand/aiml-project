@@ -106,3 +106,32 @@ async def test_media_ingest_worker_updates_progress_fields(monkeypatch, tmp_path
     assert updated is not None
     assert updated.get("progress_message") == "completed"
     assert float(updated.get("progress_percent") or 0.0) >= 100.0
+
+
+@pytest.mark.asyncio
+async def test_media_ingest_heavy_worker_uses_configured_queue(monkeypatch):
+    import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
+
+    monkeypatch.setenv("MEDIA_INGEST_JOBS_HEAVY_QUEUE", "media-heavy-q")
+    called = {}
+
+    async def _fake_run_media_ingest_jobs_worker(
+        stop_event,
+        *,
+        queue=None,
+        worker_id=None,
+    ):
+        called["stop_event"] = stop_event
+        called["queue"] = queue
+        called["worker_id"] = worker_id
+
+    monkeypatch.setattr(
+        worker,
+        "run_media_ingest_jobs_worker",
+        _fake_run_media_ingest_jobs_worker,
+        raising=True,
+    )
+
+    await worker.run_media_ingest_heavy_jobs_worker(None)
+    assert called["queue"] == "media-heavy-q"
+    assert called["worker_id"] == "media-ingest-worker-media-heavy-q"

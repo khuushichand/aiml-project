@@ -142,7 +142,7 @@ const SidepanelPersona = () => {
       }
 
       if (eventType === "tool_result") {
-        const output = payload?.output
+        const output = payload?.output ?? payload?.result
         const message =
           output == null
             ? JSON.stringify(payload)
@@ -330,7 +330,10 @@ const SidepanelPersona = () => {
 
   if (!isOnline) {
     return (
-      <div className="flex bg-neutral-50 dark:bg-surface flex-col min-h-screen mx-auto max-w-7xl">
+      <div
+        data-testid="persona-route-root"
+        className="flex bg-neutral-50 dark:bg-surface flex-col min-h-screen mx-auto max-w-7xl"
+      >
         <div className="sticky bg-white dark:bg-surface top-0 z-10">
           <SidepanelHeaderSimple activeTitle="Persona" />
         </div>
@@ -351,7 +354,10 @@ const SidepanelPersona = () => {
 
   if (personaUnsupported) {
     return (
-      <div className="flex bg-neutral-50 dark:bg-surface flex-col min-h-screen mx-auto max-w-7xl">
+      <div
+        data-testid="persona-route-root"
+        className="flex bg-neutral-50 dark:bg-surface flex-col min-h-screen mx-auto max-w-7xl"
+      >
         <div className="sticky bg-white dark:bg-surface top-0 z-10">
           <SidepanelHeaderSimple activeTitle="Persona" />
         </div>
@@ -371,7 +377,10 @@ const SidepanelPersona = () => {
   }
 
   return (
-    <div className="flex bg-neutral-50 dark:bg-surface flex-col min-h-screen mx-auto max-w-7xl">
+    <div
+      data-testid="persona-route-root"
+      className="flex bg-neutral-50 dark:bg-surface flex-col min-h-screen mx-auto max-w-7xl"
+    >
       <div className="sticky bg-white dark:bg-surface top-0 z-10">
         <SidepanelHeaderSimple activeTitle={t("sidepanel:persona.title", "Persona")} />
       </div>
@@ -511,4 +520,3 @@ const SidepanelPersona = () => {
 }
 
 export default SidepanelPersona
-

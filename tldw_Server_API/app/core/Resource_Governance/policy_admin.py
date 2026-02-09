@@ -6,7 +6,7 @@ from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 
 
 class PolicyVersionConflictError(Exception):
@@ -36,12 +36,27 @@ class AuthNZPolicyAdmin:
         self.db_pool = db_pool
         self._initialized = False
 
+    def _is_postgres_backend(self) -> bool:
+        """Resolve backend mode from pool/adapter shape without global probes."""
+        db_pool = self.db_pool
+        if db_pool is None:
+            return False
+
+        if isinstance(db_pool, DatabasePool):
+            return getattr(db_pool, "pool", None) is not None
+
+        sqlite_hint = getattr(db_pool, "_is_sqlite", None)
+        if isinstance(sqlite_hint, bool):
+            return not sqlite_hint
+
+        return getattr(db_pool, "pool", None) is not None
+
     async def initialize(self) -> None:
         if self._initialized:
             return
         if not self.db_pool:
             self.db_pool = await get_db_pool()
-        is_pg = await is_postgres_backend()
+        is_pg = self._is_postgres_backend()
         try:
             async with self.db_pool.transaction() as conn:
                 if is_pg:
@@ -74,7 +89,7 @@ class AuthNZPolicyAdmin:
     async def upsert_policy(self, policy_id: str, payload: dict[str, Any], version: int | None = None) -> None:
         if not self._initialized:
             await self.initialize()
-        is_pg = await is_postgres_backend()
+        is_pg = self._is_postgres_backend()
         now = datetime.now(timezone.utc)
         try:
             # When version is provided, enforce optimistic concurrency:
