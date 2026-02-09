@@ -69,10 +69,12 @@ class CircuitBreaker:
     ):
         from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
             CircuitBreaker as _UnifiedCB,
+        )
+        from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
             CircuitBreakerConfig as _Cfg,
         )
         self._cb = _UnifiedCB(
-            name=f"chat_provider",
+            name="chat_provider",
             config=_Cfg(
                 failure_threshold=failure_threshold,
                 recovery_timeout=float(timeout),
@@ -88,8 +90,7 @@ class CircuitBreaker:
 
     @property
     def last_failure_time(self) -> Optional[float]:
-        with self._cb._lock:
-            return self._cb._last_failure_time
+        return self._cb.last_failure_time
 
     @property
     def state(self) -> str:
@@ -97,8 +98,7 @@ class CircuitBreaker:
 
     @property
     def half_open_count(self) -> int:
-        with self._cb._lock:
-            return self._cb._success_count
+        return self._cb.success_count
 
     def call_succeeded(self):
         self._cb.record_success()

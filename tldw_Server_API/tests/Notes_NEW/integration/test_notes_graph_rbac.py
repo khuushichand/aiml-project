@@ -55,6 +55,28 @@ def test_app(monkeypatch) -> FastAPI:
                 "created_by": created_by,
             }
 
+        # Graph query stubs needed by NoteGraphService
+        def count_user_notes(self, include_deleted=True):
+            return 0
+
+        def get_all_note_ids_for_graph(self, include_deleted=True, limit=500):
+            return []
+
+        def get_notes_batch(self, note_ids, include_deleted=True):
+            return []
+
+        def get_manual_edges_for_notes(self, user_id, note_ids):
+            return []
+
+        def get_note_tag_edges(self, note_ids):
+            return []
+
+        def count_notes_per_tag(self):
+            return {}
+
+        def get_note_source_info(self, note_ids):
+            return []
+
     async def override_user():
         # Provide a benign user object; auth is enforced by token scope and claims
         return User(

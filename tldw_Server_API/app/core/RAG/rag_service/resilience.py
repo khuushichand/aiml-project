@@ -154,23 +154,19 @@ class CircuitBreaker:
 
     @property
     def failure_count(self) -> int:
-        with self._cb._lock:
-            return self._cb._failure_count
+        return self._cb.failure_count
 
     @property
     def success_count(self) -> int:
-        with self._cb._lock:
-            return self._cb._success_count
+        return self._cb.success_count
 
     @property
     def last_failure_time(self) -> Optional[float]:
-        with self._cb._lock:
-            return self._cb._last_failure_time
+        return self._cb.last_failure_time
 
     @property
     def last_state_change(self) -> float:
-        with self._cb._lock:
-            return self._cb._last_failure_time or time.time()
+        return self._cb.last_state_change_time
 
     # -- callback dispatch ---------------------------------------------------
 
@@ -198,9 +194,14 @@ class CircuitBreaker:
     # -- core API ------------------------------------------------------------
 
     async def call(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
-        """Call function through circuit breaker."""
+        """Call function through circuit breaker (handles both sync and async)."""
         try:
-            return await self._cb.call_async(func, *args, **kwargs)
+            if asyncio.iscoroutinefunction(func):
+                return await self._cb.call_async(func, *args, **kwargs)
+            else:
+                async def _wrap():
+                    return await asyncio.to_thread(func, *args, **kwargs)
+                return await self._cb.call_async(_wrap)
         except CircuitBreakerOpenError as e:
             raise CircuitOpenError(f"Circuit breaker '{self.name}' is open") from e
 
@@ -220,7 +221,7 @@ class CircuitBreaker:
             "call_history": status.get("window", []),
             "failure_rate": status.get("failure_rate", 0.0),
             "last_failure_time": status.get("last_failure_time"),
-            "last_state_change": status.get("last_failure_time") or time.time(),
+            "last_state_change": self._cb.last_state_change_time,
         }
 
 

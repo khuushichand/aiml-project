@@ -916,6 +916,16 @@ else:
         logger.warning(f"Collections feeds endpoints unavailable; skipping import: {_cf_err}")
         _HAS_COLLECTIONS_FEEDS = False
     try:
+        from tldw_Server_API.app.api.v1.endpoints.collections_websub import (
+            callback_router as websub_callback_router,
+            router as collections_websub_router,
+        )
+
+        _HAS_COLLECTIONS_WEBSUB = True
+    except _IMPORT_EXCEPTIONS as _cw_err:
+        logger.warning(f"Collections WebSub endpoints unavailable; skipping import: {_cw_err}")
+        _HAS_COLLECTIONS_WEBSUB = False
+    try:
         from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
 
         _HAS_FILES = True
@@ -2267,6 +2277,24 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Embeddings Vector Compactor: {e}")
 
+    # WebSub lease renewal worker
+    try:
+        import asyncio as _asyncio
+        import os as _os
+
+        _websub_enabled = _os.getenv("WEBSUB_CALLBACK_BASE_URL", "").strip() and _should_start_worker(
+            "WEBSUB_RENEWAL_WORKER_ENABLED", "collections-websub"
+        )
+        if _websub_enabled:
+            from tldw_Server_API.app.core.Watchlists.websub import websub_renewal_loop
+
+            websub_renewal_task = _asyncio.create_task(websub_renewal_loop())
+            logger.info("WebSub lease renewal worker started")
+        else:
+            logger.info("WebSub renewal worker disabled (no WEBSUB_CALLBACK_BASE_URL or flag off)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start WebSub renewal worker: {e}")
+
     # Audio Jobs worker (MVP)
     try:
         import asyncio as _asyncio
@@ -3148,6 +3176,9 @@ async def lifespan(app: FastAPI):
                     embeddings_compactor_task.cancel()
             else:
                 embeddings_compactor_task.cancel()
+        if "websub_renewal_task" in locals() and websub_renewal_task:
+            websub_renewal_task.cancel()
+            logger.info("WebSub renewal worker cancelled")
         # Stop usage aggregators gracefully
         try:
             if "usage_task" in locals() and usage_task:
@@ -4761,6 +4792,16 @@ elif _MINIMAL_TEST_APP:
     except _IMPORT_EXCEPTIONS as _feeds_min_err:
         logger.debug(f"Skipping collections_feeds router in minimal test app: {_feeds_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.collections_websub import (
+            callback_router as websub_callback_router,
+            router as collections_websub_router,
+        )
+
+        app.include_router(collections_websub_router, prefix=f"{API_V1_PREFIX}", tags=["collections-websub"])
+        app.include_router(websub_callback_router, prefix=f"{API_V1_PREFIX}", tags=["collections-websub"])
+    except _IMPORT_EXCEPTIONS as _websub_min_err:
+        logger.debug(f"Skipping collections_websub router in minimal test app: {_websub_min_err}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
 
         app.include_router(files_router, prefix=f"{API_V1_PREFIX}", tags=["files"])
@@ -5252,6 +5293,14 @@ else:
         _include_if_enabled(
             "collections-feeds", collections_feeds_router, prefix=f"{API_V1_PREFIX}", tags=["collections-feeds"]
         )
+    if _HAS_COLLECTIONS_WEBSUB and "collections_websub_router" in locals():
+        _include_if_enabled(
+            "collections-websub", collections_websub_router, prefix=f"{API_V1_PREFIX}", tags=["collections-websub"]
+        )
+    if _HAS_COLLECTIONS_WEBSUB and "websub_callback_router" in locals():
+        _include_if_enabled(
+            "collections-websub", websub_callback_router, prefix=f"{API_V1_PREFIX}", tags=["collections-websub"]
+        )
     try:
         # Optional outputs artifacts endpoint
         from tldw_Server_API.app.api.v1.endpoints.outputs import router as _outputs_router
@@ -5548,7 +5597,7 @@ else:
         app.include_router(persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"])
     else:
         _include_if_enabled(
-            "persona", persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"], default_stable=False
+            "persona", persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"], default_stable=True
         )
     _include_if_enabled("mcp-unified", mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
     _include_if_enabled("chatbooks", chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])

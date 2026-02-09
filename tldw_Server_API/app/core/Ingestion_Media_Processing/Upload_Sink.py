@@ -169,14 +169,14 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
         "allowed_extensions": {'.html', '.htm'},
         "allowed_mimetypes": {'text/html'},
         "max_size_mb": 5,
-        "sanitize": True,  # Flag to indicate sanitization should be applied
+        "sanitize": bool(media_config.get('sanitize_html_uploads', True)),
     },
     "xml": {
         # Include SVG as XML for safer handling
         "allowed_extensions": {'.xml', '.opml', '.svg'},
         "allowed_mimetypes": {'text/xml', 'application/xml', 'image/svg+xml'},
         "max_size_mb": 10,
-        "sanitize": True,  # Flag to indicate sanitization should be applied
+        "sanitize": bool(media_config.get('sanitize_xml_uploads', True)),
     },
     "archive": {
         "allowed_extensions": {'.zip', '.tar', '.tgz', '.tar.gz', '.tbz2', '.tar.bz2', '.txz', '.tar.xz'},

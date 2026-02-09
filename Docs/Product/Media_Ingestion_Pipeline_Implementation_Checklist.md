@@ -1,6 +1,6 @@
 # Media Ingestion Pipeline Implementation Checklist
 
-Status: Drafted from PRD/code alignment review on 2026-02-09
+Status: Complete as of 2026-02-09 (items 1-8 shipped)
 Owner: Core Maintainers
 Scope: Gap closure between `/api/v1/media/add`, watchlists/reading ingestion, collections bridge, embeddings, and observability
 
@@ -73,7 +73,7 @@ Scope: Gap closure between `/api/v1/media/add`, watchlists/reading ingestion, co
 
 ### 4) Metadata Contract Enforcement per Media Type
 - Priority: P2
-- Status: Not Started
+- Status: Complete (`persistence.py` now enforces a per-media metadata contract matrix (`audio`, `video`, `document`, `json`, `pdf`, `ebook`, `email`) with policy-driven behavior (`MEDIA_METADATA_CONTRACT_POLICY` / `metadata_contract_policy`: `off|warn|error`) before persistence in both batch AV and document-like flows. Violations are logged, surfaced as warnings or hard errors per policy, and emitted via `ingestion_validation_failures_total{reason=\"metadata_contract\",path_kind=...}`)
 - Goal: Make metadata keys deterministic and testable.
 - Current behavior:
   - Metadata population varies by processor; no strict contract enforcement matrix.
@@ -86,11 +86,11 @@ Scope: Gap closure between `/api/v1/media/add`, watchlists/reading ingestion, co
 - Acceptance criteria:
   - Contract violations are logged and surfaced as warnings or errors per policy.
 - Test requirements:
-  - Parametrized unit tests by processor/media type.
+  - Parametrized unit tests by processor/media type (`tldw_Server_API/tests/MediaIngestion_NEW/unit/test_persistence_metadata_contract.py`), plus regression coverage in existing ingestion unit suites.
 
 ### 5) Chunk Consistency Assertions
 - Priority: P2
-- Status: Not Started
+- Status: Complete (`persistence.py` now enforces post-persist chunk parity checks with policy-driven behavior (`MEDIA_CHUNK_CONSISTENCY_POLICY` / `chunk_consistency_policy`: `off|warn|error`) across AV/document/email-child persistence paths. It compares expected chunk counts against active `UnvectorizedMediaChunks` rows, skips intentional non-write outcomes (`already exists`/`url canonicalized`), emits `ingestion_validation_failures_total{reason=\"chunk_consistency\",path_kind=...}` on mismatches, and surfaces warnings/errors in result payloads. `Media_DB_v2.get_unvectorized_chunk_count` provides the DB abstraction used by the check.)
 - Goal: Prevent silent mismatch between computed chunks and persisted chunk rows.
 - Current behavior:
   - Chunking is re-derived before persistence in several flows; no explicit parity assertion.
@@ -102,11 +102,11 @@ Scope: Gap closure between `/api/v1/media/add`, watchlists/reading ingestion, co
 - Acceptance criteria:
   - Chunk count mismatch is detectable and observable.
 - Test requirements:
-  - Unit tests for mismatch handling branches.
+  - Unit tests for mismatch handling branches (`tldw_Server_API/tests/MediaIngestion_NEW/unit/test_persistence_chunk_consistency.py`) and DB chunk-count helper coverage (`tldw_Server_API/tests/MediaDB2/test_unvectorized_chunk_count.py`).
 
 ### 6) Dedupe Normalization Clarification
 - Priority: P2
-- Status: Not Started
+- Status: Complete (`normalize_media_dedupe_url` + `media_dedupe_url_candidates` now enforce canonical HTTP(S) dedupe URL normalization (via `normalize_for_crawl`) across `/media/add` pre-check and `Media_DB_v2.add_media_with_keywords` URL/hash dedupe paths; URL scheme matching is now case-insensitive in pre-check routing)
 - Goal: Define and enforce dedupe keys consistently (normalized URL + content/source hash policy).
 - Current behavior:
   - Mixed dedupe behavior across URL/content hash with media-type-specific pre-checks.
@@ -118,11 +118,11 @@ Scope: Gap closure between `/api/v1/media/add`, watchlists/reading ingestion, co
 - Acceptance criteria:
   - Repeat ingest scenarios yield consistent update/touch semantics across paths.
 - Test requirements:
-  - Integration tests for duplicate URL variants and identical content with differing URL forms.
+  - Unit/integration coverage for duplicate URL variants and identical content with differing URL forms (`tldw_Server_API/tests/MediaDB2/test_dedupe_url_normalization.py`, `tldw_Server_API/tests/MediaIngestion_NEW/unit/test_process_batch_media_url_dedupe_normalization.py`).
 
 ### 7) Metrics Taxonomy Standardization
 - Priority: P2
-- Status: Not Started
+- Status: Complete (`ingestion_requests_total`, `ingestion_processing_seconds`, `ingestion_validation_failures_total`, `ingestion_chunks_total`, and `ingestion_embeddings_enqueue_total` now registered and emitted across `/media/add`, URL/upload validation failures, chunk persistence, and embeddings dispatch outcomes while preserving existing upload/security counters; unit coverage added in `tldw_Server_API/tests/MediaIngestion_NEW/unit/test_persistence_ingestion_metrics.py`, `tldw_Server_API/tests/MediaIngestion_NEW/unit/test_persistence_embeddings_dispatch.py`, and `tldw_Server_API/tests/MediaIngestion_NEW/unit/test_process_document_like_item_url_limits.py`)
 - Goal: Add unified `ingestion_*` metrics while preserving existing counters during migration.
 - Current behavior:
   - Mix of upload counters and processor-specific metrics.
@@ -138,7 +138,7 @@ Scope: Gap closure between `/api/v1/media/add`, watchlists/reading ingestion, co
 
 ### 8) API Surface and Docs Consistency
 - Priority: P3
-- Status: In Progress
+- Status: Complete (route audit completed against `tldw_Server_API/app/api/v1/endpoints/media/*` and PRD API surface updated to match implemented endpoints: `/process-{audios|videos|documents|pdfs|ebooks|emails}`, `/process-web-scraping`, `/ingest-web-content`, and `/mediawiki/{process-dump|ingest-dump}` while preserving `/api/v1/media/ingest/jobs*` as the implemented async jobs route family)
 - Goal: Keep docs aligned with implemented ingestion job routes.
 - Current behavior:
   - Jobs endpoint exists as `/api/v1/media/ingest/jobs*`.
@@ -150,7 +150,7 @@ Scope: Gap closure between `/api/v1/media/add`, watchlists/reading ingestion, co
 - Acceptance criteria:
   - No stale route names in product/design docs.
 - Test requirements:
-  - Docs review in PR checklist.
+  - Docs review in PR checklist plus route-name grep audit over `Docs/Product`.
 
 ## Suggested Delivery Order
 1. URL validation parity (Item 1)

@@ -1691,6 +1691,61 @@ async def fetch_rss_feed(
         return {"status": 500, "items": []}
 
 
+def discover_hub_url(
+    xml_text: str,
+    response_headers: dict[str, str] | None = None,
+) -> tuple[str | None, str | None]:
+    """Return (hub_url, self_url) from feed XML and/or HTTP Link headers.
+
+    Parses both:
+    - HTTP ``Link`` header: ``<https://hub.example.com>; rel="hub"``
+    - Atom/RSS XML: ``<link rel="hub" href="..." />`` and ``<link rel="self" href="..." />``
+    """
+    hub_url: str | None = None
+    self_url: str | None = None
+
+    # Phase 1: Check HTTP Link headers
+    if response_headers:
+        link_header = response_headers.get("Link") or response_headers.get("link") or ""
+        for part in link_header.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                url_part, *attrs = part.split(";")
+                url_val = url_part.strip().strip("<>").strip()
+                rel_val = ""
+                for attr in attrs:
+                    attr = attr.strip()
+                    if attr.lower().startswith("rel="):
+                        rel_val = attr.split("=", 1)[1].strip().strip('"').strip("'").lower()
+                if rel_val == "hub" and not hub_url:
+                    hub_url = url_val
+                elif rel_val == "self" and not self_url:
+                    self_url = url_val
+            except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
+                continue
+
+    # Phase 2: Parse XML for <link rel="hub"> and <link rel="self">
+    try:
+        root = ET.fromstring(xml_text)
+        atom_link_tag = "{http://www.w3.org/2005/Atom}link"
+        # Search both direct children and descendants (RSS puts atom:link inside <channel>)
+        for ln in list(root.findall(atom_link_tag)) + list(root.findall(".//" + atom_link_tag)) + list(root.findall("link")) + list(root.findall(".//link")):
+            href = (ln.get("href") or (ln.text or "")).strip()
+            if not href:
+                continue
+            rel = (ln.get("rel") or "").strip().lower()
+            if rel == "hub" and not hub_url:
+                hub_url = href
+            elif rel == "self" and not self_url:
+                self_url = href
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    return hub_url, self_url
+
+
 async def fetch_rss_feed_history(
     url: str,
     *,

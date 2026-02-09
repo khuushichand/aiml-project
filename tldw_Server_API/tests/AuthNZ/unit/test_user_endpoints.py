@@ -115,10 +115,14 @@ class TestUserEndpoints:
         async def mock_get_current_active_user():
             return test_user_copy
 
-        async def _fake_is_postgres_backend() -> bool:
-            return True
+        fake_repo = AsyncMock()
+        fake_repo.get_user_by_id = AsyncMock(return_value=test_user_copy)
 
-        monkeypatch.setattr(users_endpoint, "is_postgres_backend", _fake_is_postgres_backend)
+        monkeypatch.setattr(
+            users_endpoint.AuthnzUsersRepo,
+            "from_pool",
+            AsyncMock(return_value=fake_repo),
+        )
         app.dependency_overrides[get_current_active_user] = mock_get_current_active_user
         async def mock_get_db_transaction():
             yield mock_conn
@@ -169,10 +173,14 @@ class TestUserEndpoints:
         async def mock_get_current_active_user():
             return test_user_copy
 
-        async def _fake_is_postgres_backend() -> bool:
-            return True
+        fake_repo = AsyncMock()
+        fake_repo.get_user_by_id = AsyncMock(return_value=test_user_copy)
 
-        monkeypatch.setattr(users_endpoint, "is_postgres_backend", _fake_is_postgres_backend)
+        monkeypatch.setattr(
+            users_endpoint.AuthnzUsersRepo,
+            "from_pool",
+            AsyncMock(return_value=fake_repo),
+        )
         app.dependency_overrides[get_current_active_user] = mock_get_current_active_user
         async def mock_get_db_transaction():
             yield mock_conn

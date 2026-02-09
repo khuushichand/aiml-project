@@ -1131,6 +1131,48 @@ class MetricsRegistry:
                 labels=["user_id", "media_type"]
             )
         )
+        self.register_metric(
+            MetricDefinition(
+                name="ingestion_requests_total",
+                type=MetricType.COUNTER,
+                description="Total ingestion requests by media type and outcome",
+                labels=["media_type", "outcome"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="ingestion_processing_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Ingestion processing duration in seconds",
+                unit="s",
+                labels=["media_type", "processor"],
+                buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="ingestion_validation_failures_total",
+                type=MetricType.COUNTER,
+                description="Validation failures observed during ingestion",
+                labels=["reason", "path_kind"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="ingestion_chunks_total",
+                type=MetricType.COUNTER,
+                description="Total persisted chunks across ingestion flows",
+                labels=["media_type", "chunk_method"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="ingestion_embeddings_enqueue_total",
+                type=MetricType.COUNTER,
+                description="Embeddings enqueue attempts/outcomes for ingestion flows",
+                labels=["path_kind", "outcome"],
+            )
+        )
 
         self.register_metric(
             MetricDefinition(

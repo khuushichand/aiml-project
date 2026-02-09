@@ -1,3 +1,4 @@
+import pytest
 from starlette.requests import Request
 
 from tldw_Server_API.app.api.v1.endpoints import mcp_unified_endpoint as mcp_mod
@@ -73,3 +74,93 @@ def test_catalog_admin_context_prefers_explicit_principal_argument():
     token = _make_token_data(roles=["admin"])
     principal = _make_principal(is_admin=False, roles=["user"])
     assert mcp_mod._is_catalog_admin_context(request, token, principal=principal) is False
+
+
+@pytest.mark.asyncio
+async def test_list_tool_catalogs_uses_membership_repo_for_team_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_attach_api_key_metadata(*_args, **_kwargs) -> dict:
+        return {}
+
+    org_lookup_calls: list[int] = []
+    team_lookup_calls: list[int] = []
+    service_calls: list[dict] = []
+
+    async def _fake_list_org_memberships_for_user(user_id: int):
+        org_lookup_calls.append(user_id)
+        return []
+
+    async def _fake_list_active_team_memberships_for_user(user_id: int):
+        team_lookup_calls.append(user_id)
+        return [{"team_id": 99, "org_id": 1, "role": "member"}]
+
+    async def _fake_list_visible_tool_catalogs(
+        _db,
+        *,
+        scope_norm: str,
+        admin_all: bool,
+        org_ids: set[int] | None = None,
+        team_ids: set[int] | None = None,
+    ):
+        service_calls.append(
+            {
+                "scope_norm": scope_norm,
+                "admin_all": admin_all,
+                "org_ids": set(org_ids or set()),
+                "team_ids": set(team_ids or set()),
+            }
+        )
+        return [
+            {
+                "id": 7,
+                "name": "team-cat",
+                "description": "team scoped catalog",
+                "org_id": 1,
+                "team_id": 99,
+                "is_active": True,
+                "created_at": "2026-02-09T00:00:00Z",
+                "updated_at": "2026-02-09T00:00:00Z",
+            }
+        ]
+
+    monkeypatch.setattr(mcp_mod, "_attach_api_key_metadata", _fake_attach_api_key_metadata)
+    monkeypatch.setattr(mcp_mod, "list_org_memberships_for_user", _fake_list_org_memberships_for_user)
+    monkeypatch.setattr(
+        mcp_mod,
+        "list_active_team_memberships_for_user",
+        _fake_list_active_team_memberships_for_user,
+    )
+    monkeypatch.setattr(
+        mcp_mod.admin_tool_catalog_service,
+        "list_visible_tool_catalogs",
+        _fake_list_visible_tool_catalogs,
+    )
+
+    request = _make_request_with_principal(None)
+    auth = mcp_mod.McpAuthContext(
+        user=_make_token_data(roles=["user"]),
+        principal=None,
+        api_key_info=None,
+        raw_api_key=None,
+    )
+    rows = await mcp_mod.list_tool_catalogs(
+        http_request=request,
+        scope="team",
+        auth=auth,
+        _guard=None,
+        db=object(),
+    )
+
+    assert len(rows) == 1
+    assert rows[0].id == 7
+    assert org_lookup_calls == [1]
+    assert team_lookup_calls == [1]
+    assert service_calls == [
+        {
+            "scope_norm": "team",
+            "admin_all": False,
+            "org_ids": set(),
+            "team_ids": {99},
+        }
+    ]

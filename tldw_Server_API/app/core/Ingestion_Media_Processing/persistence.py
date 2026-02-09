@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sqlite3
+import time
 from pathlib import Path as FilePath
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -140,6 +141,581 @@ def _classify_upload_error(file_save_errors: list[dict[str, Any]]) -> tuple[int,
         if priority.get(candidate[0], 0) > priority.get(chosen_status, 0):
             chosen_status, chosen_detail = candidate
     return chosen_status, chosen_detail
+
+
+def _coerce_ingestion_label(value: Any, *, default: str = "unknown") -> str:
+    raw = str(value or "").strip().lower()
+    return raw or default
+
+
+def _classify_ingestion_validation_failure_reason(message: str | None) -> str:
+    lower = str(message or "").strip().lower()
+    if not lower:
+        return "unknown"
+    if "empty" in lower:
+        return "empty_file"
+    if "security policy" in lower or "url blocked" in lower or "ssrf" in lower:
+        return "security_policy"
+    if (
+        "maximum allowed size" in lower
+        or "exceeds maximum" in lower
+        or "too large" in lower
+        or "quota exceeded" in lower
+    ):
+        return "size_limit"
+    if (
+        "not allowed" in lower
+        or "unsupported media type" in lower
+        or "mime" in lower
+        or "extension" in lower
+    ):
+        return "file_type"
+    if "validation" in lower or "validator" in lower:
+        return "validator_rejected"
+    return "other"
+
+
+def _emit_ingestion_metric_increment(
+    metric_name: str,
+    value: float = 1,
+    *,
+    labels: dict[str, Any] | None = None,
+) -> None:
+    try:
+        get_metrics_registry().increment(metric_name, value, labels=labels)
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        # Metrics must never break ingestion execution paths.
+        pass
+
+
+def _emit_ingestion_metric_observe(
+    metric_name: str,
+    value: float,
+    *,
+    labels: dict[str, Any] | None = None,
+) -> None:
+    try:
+        get_metrics_registry().observe(metric_name, value, labels=labels)
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        # Metrics must never break ingestion execution paths.
+        pass
+
+
+def _emit_ingestion_request_metric(*, media_type: Any, outcome: str) -> None:
+    _emit_ingestion_metric_increment(
+        "ingestion_requests_total",
+        1,
+        labels={
+            "media_type": _coerce_ingestion_label(media_type),
+            "outcome": _coerce_ingestion_label(outcome),
+        },
+    )
+
+
+def _emit_ingestion_processing_duration_metric(
+    *,
+    media_type: Any,
+    processor: str,
+    duration_seconds: float,
+) -> None:
+    safe_duration = float(duration_seconds) if duration_seconds > 0 else 0.0
+    _emit_ingestion_metric_observe(
+        "ingestion_processing_seconds",
+        safe_duration,
+        labels={
+            "media_type": _coerce_ingestion_label(media_type),
+            "processor": _coerce_ingestion_label(processor),
+        },
+    )
+
+
+def _emit_ingestion_validation_failure_metric(*, reason: str, path_kind: str) -> None:
+    _emit_ingestion_metric_increment(
+        "ingestion_validation_failures_total",
+        1,
+        labels={
+            "reason": _coerce_ingestion_label(reason),
+            "path_kind": _coerce_ingestion_label(path_kind),
+        },
+    )
+
+
+def _emit_ingestion_chunks_metric(
+    *,
+    media_type: Any,
+    chunk_method: Any,
+    chunk_count: int,
+) -> None:
+    if chunk_count <= 0:
+        return
+    _emit_ingestion_metric_increment(
+        "ingestion_chunks_total",
+        float(chunk_count),
+        labels={
+            "media_type": _coerce_ingestion_label(media_type),
+            "chunk_method": _coerce_ingestion_label(chunk_method, default="none"),
+        },
+    )
+
+
+def _emit_ingestion_embeddings_enqueue_metric(*, path_kind: str, outcome: str) -> None:
+    _emit_ingestion_metric_increment(
+        "ingestion_embeddings_enqueue_total",
+        1,
+        labels={
+            "path_kind": _coerce_ingestion_label(path_kind),
+            "outcome": _coerce_ingestion_label(outcome),
+        },
+    )
+
+
+def _ingestion_request_outcome_from_status(status_code: int) -> str:
+    if status_code == status.HTTP_200_OK:
+        return "success"
+    if status_code == status.HTTP_207_MULTI_STATUS:
+        return "partial"
+    return "error"
+
+
+_METADATA_CONTRACT_POLICIES = {"off", "warn", "error"}
+_CHUNK_CONSISTENCY_POLICIES = {"off", "warn", "error"}
+_CHUNK_CONSISTENCY_SKIP_DB_MESSAGE_MARKERS = (
+    "already exists",
+    "url canonicalized",
+)
+
+_METADATA_COMMON_TYPED_KEYS: dict[str, tuple[type, ...]] = {
+    "title": (str,),
+    "author": (str,),
+    "source_url": (str,),
+    "url": (str,),
+    "duration": (int, float),
+    "page_count": (int,),
+    "word_count": (int,),
+    "parser_used": (str,),
+    "model": (str,),
+    "provider": (str,),
+    "language": (str,),
+    "source_format": (str,),
+    "source_hash": (str,),
+    "keywords": (list,),
+    "tags": (list,),
+    "email": (dict,),
+}
+
+_METADATA_CONTRACTS: dict[str, dict[str, Any]] = {
+    "default": {
+        "required_any": (("title", "source_url", "url"),),
+        "optional": (
+            "title",
+            "author",
+            "source_url",
+            "url",
+            "source_format",
+            "keywords",
+            "tags",
+            "source_hash",
+        ),
+        "typed": _METADATA_COMMON_TYPED_KEYS,
+    },
+    "audio": {
+        "required_any": (("title", "source_url", "url", "model", "provider"),),
+        "optional": (
+            "title",
+            "author",
+            "source_url",
+            "url",
+            "duration",
+            "language",
+            "model",
+            "provider",
+            "source_format",
+            "keywords",
+            "tags",
+            "source_hash",
+        ),
+        "typed": _METADATA_COMMON_TYPED_KEYS,
+    },
+    "video": {
+        "required_any": (("title", "source_url", "url", "model", "provider"),),
+        "optional": (
+            "title",
+            "author",
+            "source_url",
+            "url",
+            "duration",
+            "language",
+            "model",
+            "provider",
+            "source_format",
+            "keywords",
+            "tags",
+            "source_hash",
+        ),
+        "typed": _METADATA_COMMON_TYPED_KEYS,
+    },
+    "document": {
+        "required_any": (("title", "source_url", "url", "parser_used"),),
+        "optional": (
+            "title",
+            "author",
+            "source_url",
+            "url",
+            "parser_used",
+            "word_count",
+            "language",
+            "source_format",
+            "keywords",
+            "tags",
+            "source_hash",
+        ),
+        "typed": _METADATA_COMMON_TYPED_KEYS,
+    },
+    "json": {
+        "required_any": (("title", "source_url", "url", "parser_used"),),
+        "optional": (
+            "title",
+            "author",
+            "source_url",
+            "url",
+            "parser_used",
+            "word_count",
+            "source_format",
+            "keywords",
+            "tags",
+            "source_hash",
+        ),
+        "typed": _METADATA_COMMON_TYPED_KEYS,
+    },
+    "pdf": {
+        "required_any": (("title", "source_url", "url", "parser_used"),),
+        "optional": (
+            "title",
+            "author",
+            "source_url",
+            "url",
+            "page_count",
+            "word_count",
+            "parser_used",
+            "source_format",
+            "keywords",
+            "tags",
+            "source_hash",
+        ),
+        "typed": _METADATA_COMMON_TYPED_KEYS,
+    },
+    "ebook": {
+        "required_any": (("title", "source_url", "url", "parser_used"),),
+        "optional": (
+            "title",
+            "author",
+            "source_url",
+            "url",
+            "page_count",
+            "word_count",
+            "parser_used",
+            "source_format",
+            "keywords",
+            "tags",
+            "source_hash",
+        ),
+        "typed": _METADATA_COMMON_TYPED_KEYS,
+    },
+    "email": {
+        "required_any": (("title", "source_url", "url", "email"),),
+        "optional": (
+            "title",
+            "author",
+            "source_url",
+            "url",
+            "email",
+            "parser_used",
+            "source_format",
+            "keywords",
+            "tags",
+            "source_hash",
+        ),
+        "typed": _METADATA_COMMON_TYPED_KEYS,
+    },
+}
+
+
+def _resolve_metadata_contract_policy(form_data: Any | None = None) -> str:
+    candidates: list[Any] = []
+    if form_data is not None:
+        with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+            candidates.append(getattr(form_data, "metadata_contract_policy", None))
+    candidates.append(os.getenv("MEDIA_METADATA_CONTRACT_POLICY"))
+    try:
+        media_cfg = loaded_config_data.get("media_processing", {}) if loaded_config_data else {}
+        if isinstance(media_cfg, dict):
+            candidates.append(media_cfg.get("metadata_contract_policy"))
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    for raw in candidates:
+        normalized = str(raw or "").strip().lower()
+        if normalized in _METADATA_CONTRACT_POLICIES:
+            return normalized
+    return "warn"
+
+
+def _resolve_metadata_contract_for_media_type(media_type: Any) -> dict[str, Any]:
+    media_key = _coerce_ingestion_label(media_type)
+    return _METADATA_CONTRACTS.get(media_key, _METADATA_CONTRACTS["default"])
+
+
+def _metadata_value_is_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
+def _describe_expected_types(expected: tuple[type, ...]) -> str:
+    names = [tp.__name__ for tp in expected]
+    return "|".join(names)
+
+
+def _evaluate_metadata_contract_issues(
+    *,
+    media_type: Any,
+    metadata: Any,
+) -> list[str]:
+    if not isinstance(metadata, dict):
+        return [f"metadata must be an object/dict (got {type(metadata).__name__})"]
+
+    contract = _resolve_metadata_contract_for_media_type(media_type)
+    issues: list[str] = []
+
+    required_any = contract.get("required_any", ()) or ()
+    for group in required_any:
+        candidate_keys = [str(key).strip() for key in group if str(key).strip()]
+        if not candidate_keys:
+            continue
+        if not any(_metadata_value_is_present(metadata.get(key)) for key in candidate_keys):
+            issues.append(
+                "missing one of required metadata keys: " + ", ".join(candidate_keys),
+            )
+
+    typed_keys = contract.get("typed", {}) or {}
+    if isinstance(typed_keys, dict):
+        for key, expected_types in typed_keys.items():
+            if key not in metadata:
+                continue
+            value = metadata.get(key)
+            if value is None:
+                continue
+            if not isinstance(expected_types, tuple):
+                continue
+            if not isinstance(value, expected_types):
+                issues.append(
+                    f"metadata.{key} expected {_describe_expected_types(expected_types)} "
+                    f"(got {type(value).__name__})",
+                )
+
+    return issues
+
+
+def _enforce_metadata_contract_on_result(
+    *,
+    result: dict[str, Any],
+    media_type: Any,
+    form_data: Any,
+    path_kind: str,
+    processor: str,
+) -> None:
+    policy = _resolve_metadata_contract_policy(form_data)
+    if policy == "off":
+        return
+
+    status_value = _coerce_ingestion_label(result.get("status"), default="")
+    if status_value not in {"success", "warning"}:
+        return
+
+    issues = _evaluate_metadata_contract_issues(
+        media_type=media_type,
+        metadata=result.get("metadata"),
+    )
+    if not issues:
+        return
+
+    issue_text = "; ".join(issues)
+    input_ref = result.get("input_ref") or result.get("processing_source") or "unknown"
+    logger.warning(
+        "Metadata contract violations (policy={}) for {} item {} via {}: {}",
+        policy,
+        _coerce_ingestion_label(media_type),
+        input_ref,
+        processor,
+        issue_text,
+    )
+    _emit_ingestion_validation_failure_metric(
+        reason="metadata_contract",
+        path_kind=path_kind,
+    )
+
+    warning_message = f"Metadata contract warning: {issue_text}"
+    if policy == "error":
+        error_message = f"Metadata contract validation failed: {issue_text}"
+        existing_error = str(result.get("error", "") or "").strip()
+        result["status"] = "Error"
+        result["error"] = (
+            f"{existing_error} | {error_message}" if existing_error else error_message
+        )
+        result["db_message"] = "DB operation skipped (metadata contract failure)."
+        result["db_id"] = None
+        result["media_uuid"] = None
+        _ensure_warnings_list(result).append(error_message)
+        return
+
+    _ensure_warnings_list(result).append(warning_message)
+
+
+def _resolve_chunk_consistency_policy(form_data: Any | None = None) -> str:
+    candidates: list[Any] = []
+    if form_data is not None:
+        with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+            candidates.append(getattr(form_data, "chunk_consistency_policy", None))
+    candidates.append(os.getenv("MEDIA_CHUNK_CONSISTENCY_POLICY"))
+    try:
+        media_cfg = loaded_config_data.get("media_processing", {}) if loaded_config_data else {}
+        if isinstance(media_cfg, dict):
+            candidates.append(media_cfg.get("chunk_consistency_policy"))
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    for raw in candidates:
+        normalized = str(raw or "").strip().lower()
+        if normalized in _CHUNK_CONSISTENCY_POLICIES:
+            return normalized
+    return "warn"
+
+
+def _skip_chunk_consistency_for_db_message(db_message: Any) -> bool:
+    normalized = str(db_message or "").strip().lower()
+    if not normalized:
+        return False
+    return any(
+        marker in normalized for marker in _CHUNK_CONSISTENCY_SKIP_DB_MESSAGE_MARKERS
+    )
+
+
+async def _fetch_unvectorized_chunk_count(
+    *,
+    db_path: str,
+    client_id: str,
+    media_id: int,
+    loop: Any,
+) -> int | None:
+    media_id_int = _coerce_positive_int(media_id, 0)
+    if media_id_int <= 0:
+        return None
+
+    def _count_worker() -> int | None:
+        worker_db: MediaDatabase | None = None
+        try:
+            worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
+            return worker_db.get_unvectorized_chunk_count(media_id_int)
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+            return None
+        finally:
+            if worker_db is not None:
+                worker_db.close_connection()
+
+    try:
+        return await loop.run_in_executor(None, _count_worker)
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        return None
+
+
+async def _enforce_chunk_consistency_after_persist(
+    *,
+    result: dict[str, Any],
+    form_data: Any,
+    media_type: Any,
+    path_kind: str,
+    processor: str,
+    expected_chunk_count: int | None,
+    db_message: Any,
+    media_id: Any,
+    db_path: str,
+    client_id: str,
+    loop: Any,
+) -> None:
+    policy = _resolve_chunk_consistency_policy(form_data)
+    if policy == "off":
+        return
+
+    status_value = _coerce_ingestion_label(result.get("status"), default="")
+    if status_value not in {"success", "warning"}:
+        return
+
+    if expected_chunk_count is None:
+        return
+    expected = _coerce_positive_int(expected_chunk_count, 0)
+
+    media_id_int = _coerce_positive_int(media_id, 0)
+    if media_id_int <= 0:
+        return
+
+    if _skip_chunk_consistency_for_db_message(db_message):
+        return
+
+    persisted_chunk_count = await _fetch_unvectorized_chunk_count(
+        db_path=db_path,
+        client_id=client_id,
+        media_id=media_id_int,
+        loop=loop,
+    )
+    if persisted_chunk_count is None:
+        logger.warning(
+            "Chunk consistency count unavailable for media_id={} via {}",
+            media_id_int,
+            processor,
+        )
+        return
+    if persisted_chunk_count == expected:
+        return
+
+    issue_text = (
+        f"expected {expected} chunk rows but found {persisted_chunk_count} "
+        f"(media_id={media_id_int})"
+    )
+    logger.warning(
+        "Chunk consistency mismatch (policy={}) for {} via {} [{}]: {}",
+        policy,
+        _coerce_ingestion_label(media_type),
+        processor,
+        path_kind,
+        issue_text,
+    )
+    _emit_ingestion_validation_failure_metric(
+        reason="chunk_consistency",
+        path_kind=path_kind,
+    )
+
+    if policy == "error":
+        error_message = f"Chunk consistency validation failed: {issue_text}"
+        existing_error = str(result.get("error", "") or "").strip()
+        result["status"] = "Error"
+        result["error"] = (
+            f"{existing_error} | {error_message}" if existing_error else error_message
+        )
+        _ensure_warnings_list(result).append(error_message)
+        existing_db_message = str(result.get("db_message", "") or "").strip()
+        result["db_message"] = (
+            f"{existing_db_message} | {error_message}"
+            if existing_db_message
+            else error_message
+        )
+        return
+
+    warning_message = f"Chunk consistency warning: {issue_text}"
+    _ensure_warnings_list(result).append(warning_message)
 
 
 def _compute_source_hash_safe(
@@ -315,9 +891,25 @@ def _validate_downloaded_url_file(
         ".txz",
         ".tar.xz",
     }
+    validate_email_archive_contents = True
+    try:
+        media_cfg = (
+            loaded_config_data.get("media_processing", {})
+            if loaded_config_data
+            else {}
+        )
+        if isinstance(media_cfg, dict):
+            validate_email_archive_contents = bool(
+                media_cfg.get("validate_email_archive_contents", True),
+            )
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        validate_email_archive_contents = True
+
     skip_archive_scanning = (
         str(media_type).lower() == "email"
         and bool(getattr(form_data, "accept_archives", False))
+        and file_extension in archive_exts
+        and not validate_email_archive_contents
     )
     is_pst_ost = file_extension in {".pst", ".ost"}
     pst_accepted = normalized_allowed_extensions is not None and (
@@ -325,7 +917,7 @@ def _validate_downloaded_url_file(
     )
 
     try:
-        if skip_archive_scanning and file_extension in archive_exts:
+        if skip_archive_scanning:
             validation_result = validator.validate_file(
                 downloaded_path,
                 original_filename=processing_filename,
@@ -356,11 +948,19 @@ def _validate_downloaded_url_file(
     except FileValidationError as validation_err:
         issues = getattr(validation_err, "issues", None) or [str(validation_err)]
         issue_msg = "; ".join(str(issue) for issue in issues)
+        _emit_ingestion_validation_failure_metric(
+            reason=_classify_ingestion_validation_failure_reason(issue_msg),
+            path_kind="url",
+        )
         raise ValueError(f"Downloaded file failed validation: {issue_msg}") from validation_err
 
     if not validation_result:
         issues = getattr(validation_result, "issues", None) or ["Unknown validation failure"]
         issue_msg = "; ".join(str(issue) for issue in issues)
+        _emit_ingestion_validation_failure_metric(
+            reason=_classify_ingestion_validation_failure_reason(issue_msg),
+            path_kind="url",
+        )
         raise ValueError(f"Downloaded file failed validation: {issue_msg}")
 
 
@@ -455,7 +1055,12 @@ def sync_media_add_results_to_collections(
             if len(summary_text) > 600:
                 summary_text = summary_text[:600]
 
-            source_url = input_ref if input_ref.startswith(("http://", "https://")) else None
+            source_url = (
+                input_ref
+                if isinstance(input_ref, str)
+                and input_ref.lower().startswith(("http://", "https://"))
+                else None
+            )
             url_value = source_url or input_ref or f"media://{media_id}"
             canonical_url = f"media://{media_id}"
             domain = None
@@ -651,7 +1256,12 @@ def _build_media_add_embeddings_provenance(
     media_type = str(result.get("media_type") or getattr(form_data, "media_type", "")).strip()
     input_ref = str(result.get("input_ref") or "")
     processing_source = str(result.get("processing_source") or "")
-    source_url = input_ref if input_ref.startswith(("http://", "https://")) else None
+    source_url = (
+        input_ref
+        if isinstance(input_ref, str)
+        and input_ref.lower().startswith(("http://", "https://"))
+        else None
+    )
 
     collections_item_id = result.get("collections_item_id")
     try:
@@ -762,12 +1372,20 @@ async def schedule_media_add_embeddings(
                 result["embeddings_dispatch"] = "jobs"
                 if job_id:
                     result["embeddings_job_id"] = job_id
+                _emit_ingestion_embeddings_enqueue_metric(
+                    path_kind="jobs",
+                    outcome="success",
+                )
                 dispatched = True
             except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as jobs_err:
                 logger.warning(
                     "Failed to enqueue embeddings job for media {}: {}",
                     media_id,
                     jobs_err,
+                )
+                _emit_ingestion_embeddings_enqueue_metric(
+                    path_kind="jobs",
+                    outcome="failure",
                 )
                 _ensure_warnings_list(result).append(
                     f"Embeddings jobs enqueue failed: {jobs_err}",
@@ -826,6 +1444,10 @@ async def schedule_media_add_embeddings(
             )
             result["embeddings_scheduled"] = True
             result["embeddings_dispatch"] = "background"
+            _emit_ingestion_embeddings_enqueue_metric(
+                path_kind="background",
+                outcome="success",
+            )
 
 
 def validate_add_media_inputs(
@@ -841,6 +1463,12 @@ def validate_add_media_inputs(
     """
     if not urls and not files:
         logger.warning("No URLs or files provided in add_media request")
+        _emit_ingestion_request_metric(media_type=media_type, outcome="error")
+        _emit_ingestion_processing_duration_metric(
+            media_type=media_type,
+            processor="media_add_orchestrate",
+            duration_seconds=0.0,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -955,6 +1583,9 @@ async def add_media_orchestrate(
         # resolver logic simple.
         _process_doc_item_fn = process_document_like_item  # type: ignore[assignment]
 
+    request_started_at = time.monotonic()
+    request_outcome = "error"
+
     # --- 1. Validation (form parsing handled by get_add_media_form) ---
     _validate_inputs(form_data.media_type, form_data.urls, files)
 
@@ -1059,6 +1690,12 @@ async def add_media_orchestrate(
 
             # Adapt file saving errors to the standard result format
             for err_info in file_save_errors:
+                _emit_ingestion_validation_failure_metric(
+                    reason=_classify_ingestion_validation_failure_reason(
+                        str(err_info.get("error", "")),
+                    ),
+                    path_kind="upload",
+                )
                 results.append(
                     {
                         "status": "Error",
@@ -1532,6 +2169,7 @@ async def add_media_orchestrate(
 
         # --- 8. Determine Final Status Code and Return Response ---
         final_status_code = _determine_final_status(results)
+        request_outcome = _ingestion_request_outcome_from_status(final_status_code)
 
         # Special-case: Email container parent with children should return 200
         # even when some children include guardrail errors.
@@ -1591,6 +2229,7 @@ async def add_media_orchestrate(
         )
 
     except HTTPException as exc:
+        request_outcome = "error"
         logger.warning(
             "HTTP Exception encountered in /media/add: Status={}, Detail={}",
             exc.status_code,
@@ -1598,6 +2237,7 @@ async def add_media_orchestrate(
         )
         raise
     except OSError as os_err:
+        request_outcome = "error"
         logger.error(
             "OSError during /media/add setup: {}", os_err, exc_info=True
         )
@@ -1606,6 +2246,7 @@ async def add_media_orchestrate(
             detail=f"OS error during setup: {os_err}",
         ) from os_err
     except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as unexpected:
+        request_outcome = "error"
         logger.error(
             "Unhandled exception in /media/add endpoint: {} - {}",
             type(unexpected).__name__,
@@ -1616,6 +2257,16 @@ async def add_media_orchestrate(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected internal error: {type(unexpected).__name__}",
         ) from unexpected
+    finally:
+        _emit_ingestion_request_metric(
+            media_type=getattr(form_data, "media_type", None),
+            outcome=request_outcome,
+        )
+        _emit_ingestion_processing_duration_metric(
+            media_type=getattr(form_data, "media_type", None),
+            processor="media_add_orchestrate",
+            duration_seconds=time.monotonic() - request_started_at,
+        )
 
 
 async def add_media_persist(
@@ -1652,6 +2303,7 @@ async def persist_primary_av_item(
     media_type: Any,
     original_input_ref: str,
     chunk_options: dict[str, Any] | None,
+    path_kind: str,
     db_path: str,
     client_id: str,
     loop: Any,
@@ -1889,6 +2541,26 @@ async def persist_primary_av_item(
         process_result["db_id"] = media_id_result
         process_result["db_message"] = db_message_result
         process_result["media_uuid"] = media_uuid_result
+        await _enforce_chunk_consistency_after_persist(
+            result=process_result,
+            form_data=form_data,
+            media_type=media_type,
+            path_kind=path_kind,
+            processor=f"{_coerce_ingestion_label(media_type)}_primary_persist",
+            expected_chunk_count=(
+                len(chunks_for_sql) if isinstance(chunks_for_sql, list) else None
+            ),
+            db_message=db_message_result,
+            media_id=media_id_result,
+            db_path=db_path,
+            client_id=client_id,
+            loop=loop,
+        )
+        _emit_ingestion_chunks_metric(
+            media_type=media_type,
+            chunk_method=(chunk_options or {}).get("method"),
+            chunk_count=len(chunks_for_sql) if isinstance(chunks_for_sql, list) else 0,
+        )
 
         # Optionally persist a normalized STT transcript into the Transcripts table
         # for audio/video items when a transcription model is known.
@@ -2106,7 +2778,7 @@ async def process_batch_media(
         reason = "Ready for processing."
         pre_check_warning: str | None = None
         source_hash: str | None = None
-        is_url = isinstance(source_path_or_url, str) and source_path_or_url.startswith(
+        is_url = isinstance(source_path_or_url, str) and source_path_or_url.lower().startswith(
             ("http://", "https://")
         )
         if is_url:
@@ -2142,6 +2814,10 @@ async def process_batch_media(
                             "security_ssrf_block_total",
                             1,
                         )
+                    _emit_ingestion_validation_failure_metric(
+                        reason="security_policy",
+                        path_kind="url",
+                    )
                     combined_results.append(
                         {
                             "status": "Error",
@@ -2689,6 +3365,20 @@ async def process_batch_media(
             metadata.setdefault("source_hash", source_hash)
             process_result["metadata"] = metadata
 
+        path_kind = (
+            "url"
+            if isinstance(original_input_ref, str)
+            and original_input_ref.lower().startswith(("http://", "https://"))
+            else "upload"
+        )
+        _enforce_metadata_contract_on_result(
+            result=process_result,
+            media_type=media_type,
+            form_data=form_data,
+            path_kind=path_kind,
+            processor=f"{_coerce_ingestion_label(media_type)}_batch_processor",
+        )
+
         if _is_cancelled():
             process_result["status"] = "Cancelled"
             process_result["error"] = "Cancelled by user"
@@ -2719,6 +3409,7 @@ async def process_batch_media(
             media_type=media_type,
             original_input_ref=str(original_input_ref) if original_input_ref else "",
             chunk_options=chunk_options,
+            path_kind=path_kind,
             db_path=db_path,
             client_id=client_id,
             loop=loop,
@@ -2858,6 +3549,10 @@ async def process_document_like_item(
                     get_metrics_registry().increment(
                         "security_ssrf_block_total",
                         1,
+                    )
+                    _emit_ingestion_validation_failure_metric(
+                        reason="security_policy",
+                        path_kind="url",
                     )
                     raise
 
@@ -3051,6 +3746,12 @@ async def process_document_like_item(
             processing_filepath_exists,
             processing_filename,
         )
+        validation_reason = _classify_ingestion_validation_failure_reason(error_detail)
+        if validation_reason != "other":
+            _emit_ingestion_validation_failure_metric(
+                reason=validation_reason,
+                path_kind="url" if is_url else "upload",
+            )
         final_result.update(
             {
                 "status": "Error",
@@ -3466,6 +4167,14 @@ async def process_document_like_item(
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             pass
 
+    _enforce_metadata_contract_on_result(
+        result=final_result,
+        media_type=media_type,
+        form_data=form_data,
+        path_kind="url" if is_url else "upload",
+        processor=f"{_coerce_ingestion_label(media_type)}_document_like_processor",
+    )
+
     if final_result.get("status") in ["Success", "Warning"]:
         try:
             claims_context = await extract_claims_if_requested(
@@ -3490,6 +4199,7 @@ async def process_document_like_item(
             item_input_ref=item_input_ref,
             processing_filename=processing_filename,
             chunk_options=chunk_options,
+            path_kind="url" if is_url else "upload",
             db_path=db_path,
             client_id=client_id,
             loop=loop,
@@ -3524,6 +4234,7 @@ async def persist_doc_item_and_children(
     item_input_ref: str,
     processing_filename: str | None,
     chunk_options: dict[str, Any] | None,
+    path_kind: str,
     db_path: str,
     client_id: str,
     loop: Any,
@@ -3768,6 +4479,26 @@ async def persist_doc_item_and_children(
             final_result["db_id"] = media_id_result
             final_result["db_message"] = db_message_result
             final_result["media_uuid"] = media_uuid_result
+            await _enforce_chunk_consistency_after_persist(
+                result=final_result,
+                form_data=form_data,
+                media_type=media_type,
+                path_kind=path_kind,
+                processor=f"{_coerce_ingestion_label(media_type)}_document_persist",
+                expected_chunk_count=(
+                    len(chunks_for_sql) if isinstance(chunks_for_sql, list) else None
+                ),
+                db_message=db_message_result,
+                media_id=media_id_result,
+                db_path=db_path,
+                client_id=client_id,
+                loop=loop,
+            )
+            _emit_ingestion_chunks_metric(
+                media_type=media_type,
+                chunk_method=(chunk_options or {}).get("method"),
+                chunk_count=len(chunks_for_sql) if isinstance(chunks_for_sql, list) else 0,
+            )
             logger.info(
                 "DB persistence result for {}: ID={}, UUID={}, Msg='{}'",
                 item_input_ref,
@@ -3958,6 +4689,32 @@ async def persist_doc_item_and_children(
                                     ) = await loop.run_in_executor(  # type: ignore[arg-type]
                                         None,
                                         _db_child_worker,
+                                    )
+                                    await _enforce_chunk_consistency_after_persist(
+                                        result=final_result,
+                                        form_data=form_data,
+                                        media_type=media_type,
+                                        path_kind=path_kind,
+                                        processor="email_child_attachment_persist",
+                                        expected_chunk_count=(
+                                            len(child_chunks_for_sql)
+                                            if isinstance(child_chunks_for_sql, list)
+                                            else None
+                                        ),
+                                        db_message=child_msg,
+                                        media_id=child_id,
+                                        db_path=db_path,
+                                        client_id=client_id,
+                                        loop=loop,
+                                    )
+                                    _emit_ingestion_chunks_metric(
+                                        media_type=media_type,
+                                        chunk_method=(chunk_options or {}).get("method"),
+                                        chunk_count=(
+                                            len(child_chunks_for_sql)
+                                            if isinstance(child_chunks_for_sql, list)
+                                            else 0
+                                        ),
                                     )
                                     child_db_results.append(
                                         {
@@ -4189,6 +4946,32 @@ async def persist_doc_item_and_children(
                                 ) = await loop.run_in_executor(  # type: ignore[arg-type]
                                     None,
                                     _db_child_arch_worker,
+                                )
+                                await _enforce_chunk_consistency_after_persist(
+                                    result=final_result,
+                                    form_data=form_data,
+                                    media_type=media_type,
+                                    path_kind=path_kind,
+                                    processor="email_child_archive_persist",
+                                    expected_chunk_count=(
+                                        len(child_chunks_for_sql)
+                                        if isinstance(child_chunks_for_sql, list)
+                                        else None
+                                    ),
+                                    db_message=child_msg,
+                                    media_id=child_id,
+                                    db_path=db_path,
+                                    client_id=client_id,
+                                    loop=loop,
+                                )
+                                _emit_ingestion_chunks_metric(
+                                    media_type=media_type,
+                                    chunk_method=(chunk_options or {}).get("method"),
+                                    chunk_count=(
+                                        len(child_chunks_for_sql)
+                                        if isinstance(child_chunks_for_sql, list)
+                                        else 0
+                                    ),
                                 )
                                 child_db_results.append(
                                     {

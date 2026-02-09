@@ -1654,6 +1654,34 @@ class ChromaDBManager:
                 # Depending on severity, either return 0 or raise
                 raise RuntimeError(f"Failed to count items in collection: {e}") from e
 
+    def get_collection(self, collection_name: str) -> Collection:
+        """
+        Gets an existing ChromaDB collection without creating one.
+
+        Args:
+            collection_name: Name of the collection to retrieve.
+
+        Returns:
+            Collection: The ChromaDB collection object.
+
+        Raises:
+            KeyError: If the collection does not exist.
+            RuntimeError: If the lookup fails for other reasons.
+        """
+        if not collection_name:
+            raise ValueError("collection_name must be provided.")
+        with self._lock:
+            try:
+                return self.client.get_collection(name=collection_name)
+            except (KeyError, ValueError) as e:
+                raise KeyError(f"Collection '{collection_name}' does not exist") from e
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
+                logger.error(
+                    f"User '{self.user_id}': Failed to get collection '{collection_name}': {e}",
+                    exc_info=True,
+                )
+                raise RuntimeError(f"Failed to get collection '{collection_name}': {e}") from e
+
     def list_collections(self) -> Sequence[Collection]:
         """Lists all collections for the current user's client."""
         with self._lock:

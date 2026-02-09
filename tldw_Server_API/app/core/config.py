@@ -2601,7 +2601,6 @@ def _route_toggle_policy() -> dict:
         "workflows",
         "scheduler",
         "personalization",
-        "persona",
         "jobs",  # jobs admin
         "benchmarks",
         "guardian",
@@ -3245,6 +3244,41 @@ def load_and_log_configs():
         max_archive_internal_files = int(config_parser_object.get('Media-Processing', 'max_archive_internal_files', fallback='100'))
         max_archive_uncompressed_size_mb = int(config_parser_object.get('Media-Processing', 'max_archive_uncompressed_size_mb', fallback='200'))
         max_archive_nesting_depth = int(config_parser_object.get('Media-Processing', 'max_archive_nesting_depth', fallback='2'))
+        max_archive_member_uncompressed_size_mb = int(
+            config_parser_object.get(
+                'Media-Processing',
+                'max_archive_member_uncompressed_size_mb',
+                fallback='100',
+            )
+        )
+        sanitize_html_uploads = is_truthy(
+            config_parser_object.get(
+                'Media-Processing',
+                'sanitize_html_uploads',
+                fallback='true',
+            )
+        )
+        sanitize_xml_uploads = is_truthy(
+            config_parser_object.get(
+                'Media-Processing',
+                'sanitize_xml_uploads',
+                fallback='true',
+            )
+        )
+        sanitize_email_html_bodies = is_truthy(
+            config_parser_object.get(
+                'Media-Processing',
+                'sanitize_email_html_bodies',
+                fallback='true',
+            )
+        )
+        validate_email_archive_contents = is_truthy(
+            config_parser_object.get(
+                'Media-Processing',
+                'validate_email_archive_contents',
+                fallback='true',
+            )
+        )
         # Transcription settings
         audio_transcription_buffer_size_mb = int(config_parser_object.get('Media-Processing', 'audio_transcription_buffer_size_mb', fallback='10'))
         # General settings
@@ -3934,6 +3968,11 @@ def load_and_log_configs():
                 'max_archive_internal_files': max_archive_internal_files,
                 'max_archive_uncompressed_size_mb': max_archive_uncompressed_size_mb,
                 'max_archive_nesting_depth': max_archive_nesting_depth,
+                'max_archive_member_uncompressed_size_mb': max_archive_member_uncompressed_size_mb,
+                'sanitize_html_uploads': sanitize_html_uploads,
+                'sanitize_xml_uploads': sanitize_xml_uploads,
+                'sanitize_email_html_bodies': sanitize_email_html_bodies,
+                'validate_email_archive_contents': validate_email_archive_contents,
                 'audio_transcription_buffer_size_mb': audio_transcription_buffer_size_mb,
                 'uuid_generation_length': uuid_generation_length,
                 'kept_video_max_files': kept_video_max_files,

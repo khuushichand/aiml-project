@@ -53,7 +53,10 @@ tldw_Server_API/app/core/Ingestion_Media_Processing/
   - `validate_file(path, original_filename, media_type_key, ...) -> ValidationResult`: existence, size, allowed extension (by claimed filename), MIME (if available), Yara results.
   - `validate_archive_contents(path) -> ValidationResult`: safe ZIP extraction in a temp dir with path-traversal checks, total member count/size limits, and per-member validation via `validate_file`.
   - `process_and_validate_file(path, validator, original_filename=None, media_type_key_override=None) -> ValidationResult`: dispatch by extension to proper media_type, archive scanning when configured.
-- Sanitization placeholders: `sanitize_html_content` and `sanitize_xml_content` currently log a warning and return content unchanged (no sanitization).
+- Sanitization is active by default:
+  - `sanitize_html_content` removes dangerous blocks (`script`/`style`/`noscript`), cleans tags/attributes/protocols, and strips unsafe content.
+  - `sanitize_xml_content` uses guarded parsing (`defusedxml`) and strips comments/processing instructions by default.
+  - Upload sanitization defaults are controlled by `media_processing.sanitize_html_uploads` and `media_processing.sanitize_xml_uploads`.
 
 Upload flow in endpoints
 - Endpoints use `file_validator_instance` (see `api/v1/API_Deps/validations_deps.py`) which optionally configures `python-magic` via `MAGIC_FILE_PATH` and enables Yara via `YARA_RULES_PATH`.
@@ -197,6 +200,11 @@ From `app/api/v1/endpoints/media.py`:
     - `max_archive_uncompressed_size_mb`: aggregate uncompressed size of all members (enforced in `validate_archive_contents`).
     - `max_archive_member_uncompressed_size_mb`: optional per-member uncompressed size cap (enforced in `validate_archive_contents`).
     - `max_archive_file_size_mb` (aka `archive_file_size_mb` default): compressed archive file size limit (applies to the uploaded `.zip`/`.tar*` file, enforced in `validate_file`).
+    - `validate_email_archive_contents`: when true (default), URL-based email ZIP ingestion runs full archive-content validation parity.
+  - Sanitization defaults:
+    - `sanitize_html_uploads`: sanitize uploaded/downloaded HTML before processor execution (default: true).
+    - `sanitize_xml_uploads`: sanitize uploaded/downloaded XML/SVG before processor execution (default: true).
+    - `sanitize_email_html_bodies`: sanitize email `text/html` bodies before HTML-to-text conversion (default: true).
   - PDF conversion: `pdf_conversion_timeout_seconds`.
 - External tooling: `ffmpeg` and `yt-dlp` required for A/V; optional `yara`, `puremagic` (MIME detection), `docling` (PDF), `pypandoc` (RTF), and system `tesseract` for OCR.
 

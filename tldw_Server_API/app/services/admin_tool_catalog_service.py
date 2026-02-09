@@ -4,7 +4,11 @@ from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import (
+    build_postgres_in_clause,
+    build_sqlite_in_clause,
+    is_postgres_backend,
+)
 from tldw_Server_API.app.core.exceptions import ToolCatalogConflictError
 
 
@@ -40,6 +44,144 @@ async def list_tool_catalogs(db, *, org_id: int | None, team_id: int | None, lim
         ]
     except Exception as e:
         logger.error(f"admin_tool_catalog_service.list_tool_catalogs failed: {e}")
+        raise
+
+
+async def list_visible_tool_catalogs(
+    db,
+    *,
+    scope_norm: str,
+    admin_all: bool,
+    org_ids: set[int] | None = None,
+    team_ids: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    List catalogs visible to the caller scope for MCP unified discovery.
+
+    This encapsulates backend-specific SQL for global/org/team scope listing
+    so API endpoints do not branch on backend details.
+    """
+    pg = await is_postgres_backend()
+    visible_rows: list[dict[str, Any]] = []
+    org_ids = org_ids or set()
+    team_ids = team_ids or set()
+
+    async def _extend_rows(rows: list[Any]) -> None:
+        for row in rows or []:
+            if isinstance(row, dict) or hasattr(row, "keys"):
+                data = dict(row)
+                data["is_active"] = bool(data.get("is_active", True))
+            else:
+                data = {
+                    "id": row[0],
+                    "name": row[1],
+                    "description": row[2],
+                    "org_id": row[3],
+                    "team_id": row[4],
+                    "is_active": bool(row[5]),
+                    "created_at": row[6],
+                    "updated_at": row[7],
+                }
+            visible_rows.append(data)
+
+    try:
+        if admin_all:
+            if scope_norm in {"all", "global"}:
+                if pg:
+                    rows = await db.fetch(
+                        "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                        "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
+                    )
+                else:
+                    cur = await db.execute(
+                        "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                        "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
+                    )
+                    rows = await cur.fetchall()
+                await _extend_rows(rows)
+
+            if scope_norm in {"all", "org"}:
+                if pg:
+                    rows = await db.fetch(
+                        "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                        "FROM tool_catalogs WHERE org_id IS NOT NULL AND team_id IS NULL ORDER BY created_at DESC"
+                    )
+                else:
+                    cur = await db.execute(
+                        "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                        "FROM tool_catalogs WHERE org_id IS NOT NULL AND team_id IS NULL ORDER BY created_at DESC"
+                    )
+                    rows = await cur.fetchall()
+                await _extend_rows(rows)
+
+            if scope_norm in {"all", "team"}:
+                if pg:
+                    rows = await db.fetch(
+                        "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                        "FROM tool_catalogs WHERE team_id IS NOT NULL ORDER BY created_at DESC"
+                    )
+                else:
+                    cur = await db.execute(
+                        "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                        "FROM tool_catalogs WHERE team_id IS NOT NULL ORDER BY created_at DESC"
+                    )
+                    rows = await cur.fetchall()
+                await _extend_rows(rows)
+            return visible_rows
+
+        if scope_norm in {"all", "global"}:
+            if pg:
+                rows = await db.fetch(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                    "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
+                )
+            else:
+                cur = await db.execute(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                    "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
+                )
+                rows = await cur.fetchall()
+            await _extend_rows(rows)
+
+        if scope_norm in {"all", "org"} and org_ids:
+            if pg:
+                placeholders, params = build_postgres_in_clause(sorted(org_ids))
+                rows = await db.fetch(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                    f"FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC",
+                    *params,
+                )
+            else:
+                placeholders, params = build_sqlite_in_clause(sorted(org_ids))
+                cur = await db.execute(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                    f"FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC",
+                    params,
+                )
+                rows = await cur.fetchall()
+            await _extend_rows(rows)
+
+        if scope_norm in {"all", "team"} and team_ids:
+            if pg:
+                placeholders, params = build_postgres_in_clause(sorted(team_ids))
+                rows = await db.fetch(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                    f"FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC",
+                    *params,
+                )
+            else:
+                placeholders, params = build_sqlite_in_clause(sorted(team_ids))
+                cur = await db.execute(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                    f"FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC",
+                    params,
+                )
+                rows = await cur.fetchall()
+            await _extend_rows(rows)
+
+        return visible_rows
+    except Exception as e:
+        logger.error(f"admin_tool_catalog_service.list_visible_tool_catalogs failed: {e}")
         raise
 
 

@@ -422,3 +422,137 @@ class TestPruningOrder:
         types = [e.type for e in resp.edges]
         # Manual should survive; tag_membership should be pruned first
         assert EdgeType.manual in types
+
+
+class TestTimeRangeFilter:
+    def test_excludes_old_notes(self):
+        """Notes before start are excluded from the graph."""
+        n1 = _uid()
+        n2 = _uid()
+        notes = [
+            {
+                "id": n1, "title": "Old", "content": "old",
+                "created_at": "2024-01-01T00:00:00", "last_modified": "2024-01-01T00:00:00",
+                "deleted": 0, "conversation_id": None,
+            },
+            {
+                "id": n2, "title": "New", "content": "new",
+                "created_at": "2025-06-01T00:00:00", "last_modified": "2025-06-01T00:00:00",
+                "deleted": 0, "conversation_id": None,
+            },
+        ]
+        db = _mock_db(notes=notes, note_count=2, all_ids=[n1, n2])
+        svc = NoteGraphService(user_id="u1", db=db)
+        req = NoteGraphRequest(
+            radius=1,
+            time_range=TimeRange(start="2025-01-01T00:00:00"),
+        )
+        resp = svc.generate_graph(req)
+        note_ids = {n.id for n in resp.nodes if n.type == "note"}
+        assert n2 in note_ids
+        assert n1 not in note_ids
+
+    def test_includes_boundary_note(self):
+        """Notes at exact start are included (inclusive)."""
+        n1 = _uid()
+        notes = [
+            {
+                "id": n1, "title": "Boundary", "content": "body",
+                "created_at": "2025-03-15T12:00:00", "last_modified": "2025-03-15T12:00:00",
+                "deleted": 0, "conversation_id": None,
+            },
+        ]
+        db = _mock_db(notes=notes, note_count=1, all_ids=[n1])
+        svc = NoteGraphService(user_id="u1", db=db)
+        req = NoteGraphRequest(
+            radius=1,
+            time_range=TimeRange(start="2025-03-15T12:00:00"),
+        )
+        resp = svc.generate_graph(req)
+        note_ids = {n.id for n in resp.nodes if n.type == "note"}
+        assert n1 in note_ids
+
+    def test_created_at_field_default(self):
+        """Default time_range_field is created_at, which maps to the created_at DB column."""
+        n1 = _uid()
+        notes = [
+            {
+                "id": n1, "title": "X", "content": "x",
+                "created_at": "2024-06-01T00:00:00", "last_modified": "2025-06-01T00:00:00",
+                "deleted": 0, "conversation_id": None,
+            },
+        ]
+        db = _mock_db(notes=notes, note_count=1, all_ids=[n1])
+        svc = NoteGraphService(user_id="u1", db=db)
+        # Filter by created_at — note was created in 2024, filter requires 2025+
+        req = NoteGraphRequest(
+            radius=1,
+            time_range=TimeRange(start="2025-01-01T00:00:00"),
+            time_range_field="created_at",
+        )
+        resp = svc.generate_graph(req)
+        note_ids = {n.id for n in resp.nodes if n.type == "note"}
+        assert n1 not in note_ids
+
+    def test_updated_at_maps_to_last_modified(self):
+        """time_range_field=updated_at maps to the last_modified DB column."""
+        n1 = _uid()
+        notes = [
+            {
+                "id": n1, "title": "X", "content": "x",
+                "created_at": "2024-01-01T00:00:00", "last_modified": "2025-06-01T00:00:00",
+                "deleted": 0, "conversation_id": None,
+            },
+        ]
+        db = _mock_db(notes=notes, note_count=1, all_ids=[n1])
+        svc = NoteGraphService(user_id="u1", db=db)
+        # Filter by updated_at — last_modified is 2025-06, filter requires 2025-01+
+        req = NoteGraphRequest(
+            radius=1,
+            time_range=TimeRange(start="2025-01-01T00:00:00"),
+            time_range_field="updated_at",
+        )
+        resp = svc.generate_graph(req)
+        note_ids = {n.id for n in resp.nodes if n.type == "note"}
+        assert n1 in note_ids
+
+
+class TestAllowHeavy:
+    def test_allow_heavy_returns_graph(self):
+        """When allow_heavy=True and note count exceeds max_nodes, return capped graph."""
+        ids = [_uid() for _ in range(10)]
+        notes = [_note(i) for i in ids]
+        db = _mock_db(notes=notes, note_count=500, all_ids=ids)
+        svc = NoteGraphService(user_id="u1", db=db)
+        req = NoteGraphRequest(radius=1, allow_heavy=True)
+        resp = svc.generate_graph(req)
+        # Should not raise; returns notes up to max_nodes
+        assert len([n for n in resp.nodes if n.type == "note"]) > 0
+
+
+class TestCenterNoteNotFound:
+    def test_raises_input_error(self):
+        """When center_note_id doesn't exist, raise InputError."""
+        bogus = _uid()
+        db = _mock_db(notes=[], note_count=0)
+        svc = NoteGraphService(user_id="u1", db=db)
+        req = NoteGraphRequest(center_note_id=bogus, radius=1)
+        with pytest.raises(InputError, match="not found"):
+            svc.generate_graph(req)
+
+
+class TestCursorIgnoredForRadius2:
+    def test_cursor_ignored_with_warning(self):
+        """Cursor is ignored when radius > 1 to avoid broken BFS resume."""
+        c = _uid()
+        n1 = _uid()
+        notes = [_note(c), _note(n1)]
+        edges = [_manual_edge(c, n1)]
+        db = _mock_db(notes=notes, edges=edges, note_count=2)
+        svc = NoteGraphService(user_id="u1", db=db)
+        cursor = _encode_cursor(0, 1, c)
+        req = NoteGraphRequest(center_note_id=c, radius=2, cursor=cursor)
+        resp = svc.generate_graph(req)
+        # Should still return a valid graph (cursor ignored, BFS runs fresh)
+        note_ids = {n.id for n in resp.nodes if n.type == "note"}
+        assert c in note_ids

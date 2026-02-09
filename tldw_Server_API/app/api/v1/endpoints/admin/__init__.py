@@ -24,6 +24,7 @@ from . import admin_budgets as admin_budgets_endpoints
 from . import admin_byok as admin_byok_endpoints
 from . import admin_data_ops as admin_data_ops_endpoints
 from . import admin_llm_providers as admin_llm_providers_endpoints
+from . import admin_bundle_ops as admin_bundle_ops_endpoints
 from . import admin_network as admin_network_endpoints
 from . import admin_ops as admin_ops_endpoints
 from . import admin_orgs as admin_orgs_endpoints
@@ -105,6 +106,7 @@ router.include_router(admin_user_endpoints.router)
 router.include_router(admin_api_keys_endpoints.router)
 router.include_router(admin_tools_endpoints.router)
 router.include_router(admin_personalization_endpoints.router)
+router.include_router(admin_bundle_ops_endpoints.router)
 router.include_router(admin_network_endpoints.router)
 
 

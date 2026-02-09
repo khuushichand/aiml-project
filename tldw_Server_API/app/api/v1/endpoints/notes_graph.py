@@ -1,6 +1,7 @@
+import uuid as _uuid_mod
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
@@ -10,16 +11,10 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.notes_graph import (
+    EdgeType,
     GraphFormat,
-    GraphLimits,
     NoteGraphRequest,
-    NoteGraphResponse,
     NoteLinkCreate,
-)
-from tldw_Server_API.app.core.Notes_Graph.formatters import to_cytoscape
-from tldw_Server_API.app.core.Notes_Graph.graph_service import (
-    NOTES_GRAPH_ENABLED,
-    NoteGraphService,
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import NOTES_GRAPH_READ, NOTES_GRAPH_WRITE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -28,6 +23,11 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDBError,
     ConflictError,
     InputError,
+)
+from tldw_Server_API.app.core.Notes_Graph.formatters import to_cytoscape
+from tldw_Server_API.app.core.Notes_Graph.graph_service import (
+    NOTES_GRAPH_ENABLED,
+    NoteGraphService,
 )
 
 router = APIRouter()
@@ -43,6 +43,10 @@ def _normalize_note_id(raw_id: Optional[str]) -> str:
         prefix, value = text.split(":", 1)
         if prefix != "note" or not value:
             raise HTTPException(status_code=400, detail="note_id must be a raw UUID or note:<uuid>")
+        try:
+            _uuid_mod.UUID(value)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid UUID format: {value}") from None
         return value
     return text
 
@@ -57,6 +61,10 @@ def _normalize_edge_id(raw_id: Optional[str]) -> str:
         prefix, value = text.split(":", 1)
         if prefix not in {"e", "edge"} or not value:
             raise HTTPException(status_code=400, detail="edge_id must be a raw UUID or e:<uuid>")
+        try:
+            _uuid_mod.UUID(value)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid UUID format: {value}") from None
         return value
     return text
 
@@ -88,6 +96,7 @@ def _normalize_edge_id(raw_id: Optional[str]) -> str:
     },
 )
 async def get_notes_graph(
+    request: Request,
     req: NoteGraphRequest = Depends(),
     current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
@@ -99,6 +108,22 @@ async def get_notes_graph(
     if not NOTES_GRAPH_ENABLED():
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Notes graph is disabled")
     try:
+        # FastAPI Depends() may not propagate edge_types correctly; re-parse from query
+        raw_et = request.query_params.getlist("edge_types")
+        if raw_et:
+            parsed = []
+            for val in raw_et:
+                for part in val.split(","):
+                    part = part.strip()
+                    if part:
+                        try:
+                            parsed.append(EdgeType(part))
+                        except ValueError:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Invalid edge_type: '{part}'. Valid: {[e.value for e in EdgeType]}",
+                            ) from None
+            req.edge_types = parsed or None
         if getattr(req, "center_note_id", None):
             req.center_note_id = _normalize_note_id(req.center_note_id)
         service = NoteGraphService(user_id=str(current_user.id_str), db=db)
@@ -138,6 +163,7 @@ async def get_notes_graph(
 )
 async def get_note_neighbors(
     note_id: str,
+    request: Request,
     req: NoteGraphRequest = Depends(),
     current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
@@ -149,6 +175,22 @@ async def get_note_neighbors(
     if not NOTES_GRAPH_ENABLED():
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Notes graph is disabled")
     try:
+        # Re-parse edge_types from query params (FastAPI Depends may not handle list[Enum] well)
+        raw_et = request.query_params.getlist("edge_types")
+        if raw_et:
+            parsed = []
+            for val in raw_et:
+                for part in val.split(","):
+                    part = part.strip()
+                    if part:
+                        try:
+                            parsed.append(EdgeType(part))
+                        except ValueError:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Invalid edge_type: '{part}'. Valid: {[e.value for e in EdgeType]}",
+                            ) from None
+            req.edge_types = parsed or None
         normalized_note_id = _normalize_note_id(note_id)
         req.center_note_id = normalized_note_id
         req.radius = 1
@@ -179,14 +221,12 @@ async def get_note_neighbors(
     tags=["notes", "notes-graph"],
     responses={
         200: {
-            "description": "Creation result (stub)",
+            "description": "Creation result",
             "content": {
                 "application/json": {
                     "example": {
-                        "status": "stub",
-                        "edge": None,
-                        "from": "note:123",
-                        "to": "note:456",
+                        "status": "created",
+                        "edge": {"edge_id": "...", "from_note_id": "123", "to_note_id": "456"},
                     }
                 }
             },
@@ -244,16 +284,16 @@ async def create_manual_link(
     "/links/{edge_id}",
     summary="Delete a manual link",
     description=(
-        "Deletes a manual link by id. Stub returns a placeholder payload.\n"
+        "Deletes a manual link by id.\n"
         "See Docs/Design/Graphing-Notes-PRD.md (§9)."
     ),
     tags=["notes", "notes-graph"],
     responses={
         200: {
-            "description": "Deletion result (stub)",
+            "description": "Deletion result",
             "content": {
                 "application/json": {
-                    "example": {"deleted": False, "edge_id": "e:1", "status": "stub"}
+                    "example": {"deleted": True, "edge_id": "e:1"}
                 }
             },
         }

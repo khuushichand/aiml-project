@@ -2,7 +2,7 @@ import type { ServerCapabilities } from "@/services/tldw/server-capabilities"
 
 export const GUARDIAN_SETTINGS_PATH = "/settings/guardian"
 export const SKILLS_PATH = "/skills"
-export const PERSONA_DOCK_PATH = "/agent"
+export const PERSONA_DOCK_PATH = "/persona"
 
 export const isGuardianSettingsAvailable = (
   capabilities: ServerCapabilities | null | undefined

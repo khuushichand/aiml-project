@@ -120,14 +120,16 @@ def _get_llm_timeouts() -> dict[str, float]:
     return {"llm": llm_to, "scrape": scrape_to}
 
 
-def _make_simple_circuit_breaker(fail_threshold: int = 3, reset_after_s: float = 30.0):
-    """Create a unified CircuitBreaker configured for WebSearch usage."""
+def _get_websearch_circuit_breaker(fail_threshold: int = 3, reset_after_s: float = 30.0):
+    """Return the shared WebSearch circuit breaker (singleton via registry)."""
     from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
-        CircuitBreaker as _CB,
         CircuitBreakerConfig as _Cfg,
     )
-    return _CB(
-        name="websearch_llm",
+    from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+        registry as _cb_registry,
+    )
+    return _cb_registry.get_or_create(
+        "websearch_llm",
         config=_Cfg(
             failure_threshold=int(fail_threshold),
             recovery_timeout=float(reset_after_s),
@@ -136,6 +138,17 @@ def _make_simple_circuit_breaker(fail_threshold: int = 3, reset_after_s: float =
             category="websearch",
         ),
     )
+
+
+def _make_simple_circuit_breaker(fail_threshold: int = 3, reset_after_s: float = 30.0):
+    """Deprecated: use _get_websearch_circuit_breaker instead."""
+    import warnings
+    warnings.warn(
+        "_make_simple_circuit_breaker is deprecated, use _get_websearch_circuit_breaker",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _get_websearch_circuit_breaker(fail_threshold, reset_after_s)
 
 
 def _close_response(resp: Any) -> None:
@@ -638,7 +651,7 @@ async def search_result_relevance(
     # Simple circuit breaker for LLM provider
     cfg = get_loaded_config()
     ws_section = cfg.get('Web-Scraping', {}) or {}
-    breaker = _make_simple_circuit_breaker(
+    breaker = _get_websearch_circuit_breaker(
         fail_threshold=int(ws_section.get('llm_cb_fail_threshold', 3) or 3),
         reset_after_s=float(ws_section.get('llm_cb_reset_after_s', 30) or 30.0),
     )

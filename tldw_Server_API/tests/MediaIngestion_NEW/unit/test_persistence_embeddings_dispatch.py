@@ -20,10 +20,27 @@ class _FakeBackgroundTasks:
         self.calls.append((func, args, kwargs))
 
 
+class _MetricsCapture:
+    def __init__(self) -> None:
+        self.increment_calls: list[tuple[str, float, dict[str, Any] | None]] = []
+
+    def increment(
+        self,
+        metric_name: str,
+        value: float = 1,
+        labels: dict[str, Any] | None = None,
+    ) -> None:
+        self.increment_calls.append((metric_name, value, labels))
+
+    def observe(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
 @pytest.mark.asyncio
 async def test_schedule_media_add_embeddings_jobs_mode_passes_provenance(monkeypatch):
     monkeypatch.setenv("MEDIA_ADD_EMBEDDINGS_MODE", "jobs")
     captured: dict[str, Any] = {}
+    metrics = _MetricsCapture()
 
     class _FakeAdapter:
         def create_job(self, **kwargs: Any) -> dict[str, Any]:
@@ -35,6 +52,7 @@ async def test_schedule_media_add_embeddings_jobs_mode_passes_provenance(monkeyp
         "EmbeddingsJobsAdapter",
         _FakeAdapter,
     )
+    monkeypatch.setattr(persistence, "get_metrics_registry", lambda: metrics)
 
     results = [
         {
@@ -85,6 +103,11 @@ async def test_schedule_media_add_embeddings_jobs_mode_passes_provenance(monkeyp
     assert provenance["job_id"] is None
     assert provenance["collections_item_id"] == 999
     assert provenance["entrypoint"] == "/api/v1/media/add"
+    assert (
+        "ingestion_embeddings_enqueue_total",
+        1,
+        {"path_kind": "jobs", "outcome": "success"},
+    ) in metrics.increment_calls
 
 
 @pytest.mark.asyncio
@@ -134,6 +157,7 @@ async def test_schedule_media_add_embeddings_background_mode_adds_task(monkeypat
 async def test_schedule_media_add_embeddings_auto_falls_back_to_background(monkeypatch):
     monkeypatch.setenv("MEDIA_ADD_EMBEDDINGS_MODE", "auto")
     tasks = _FakeBackgroundTasks()
+    metrics = _MetricsCapture()
 
     class _FailingAdapter:
         def create_job(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ARG002 - exercised by call
@@ -144,6 +168,7 @@ async def test_schedule_media_add_embeddings_auto_falls_back_to_background(monke
         "EmbeddingsJobsAdapter",
         _FailingAdapter,
     )
+    monkeypatch.setattr(persistence, "get_metrics_registry", lambda: metrics)
 
     results = [
         {
@@ -175,3 +200,13 @@ async def test_schedule_media_add_embeddings_auto_falls_back_to_background(monke
     assert results[0]["embeddings_dispatch"] == "background"
     warnings = results[0].get("warnings") or []
     assert any("Embeddings jobs enqueue failed" in warning for warning in warnings)
+    assert (
+        "ingestion_embeddings_enqueue_total",
+        1,
+        {"path_kind": "jobs", "outcome": "failure"},
+    ) in metrics.increment_calls
+    assert (
+        "ingestion_embeddings_enqueue_total",
+        1,
+        {"path_kind": "background", "outcome": "success"},
+    ) in metrics.increment_calls

@@ -108,7 +108,7 @@ def load_safe_config() -> dict:
             "personalization": bool(_settings.get("PERSONALIZATION_ENABLED", True))
             and bool(route_enabled("personalization", default_stable=False)),
             "persona": bool(_settings.get("PERSONA_ENABLED", True))
-            and bool(route_enabled("persona", default_stable=False)),
+            and bool(route_enabled("persona", default_stable=True)),
         }
         # expose both for backward-compat and forward-looking UI
         safe_config["supported_features"] = caps

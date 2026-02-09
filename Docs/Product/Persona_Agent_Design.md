@@ -23,11 +23,11 @@ Introduce a first-class Persona agent (text + optional voice + avatar) that chat
 - Partially implemented:
   - MCP tool execution integration exists, but plan confirmation currently trusts client-provided step payloads.
   - RBAC-style export/delete string checks exist in persona WS, but full policy/scoping behavior depends on MCP user identity.
+  - WebUI/extension persona surface is wired (`/persona`), capability-gated, and supports basic stream flow (connect/session/message/plan confirm-cancel) with route parity checks, component stream-flow tests, and Playwright route/workflow checks (including a live backend WS workflow test that runs when persona capability is enabled); deep backend tool-execution scenarios remain limited.
 - Not yet implemented:
   - Full voice protocol (`audio_chunk`, `partial_transcript`, `tts_audio` binary stream).
   - Persistent session/persona memory integration with personalization store.
   - Robust plan-state validation (server-side stored plans keyed by `plan_id`).
-  - WebUI persona dock/tab integration for `/api/v1/persona/*` and stream events.
 - Important caveat:
   - In full app mode, persona routes are treated as experimental and are not enabled by default route policy unless explicitly enabled by route toggles.
 

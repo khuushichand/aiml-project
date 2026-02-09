@@ -313,7 +313,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
 
     if use_adapter:
         # Keep a single connection open for the request lifetime so cursors remain valid
-        is_postgres_backend = bool(isinstance(db_pool, DatabasePool) and getattr(db_pool, "pool", None) is not None)
+        is_postgres_backend = bool(getattr(db_pool, "pool", None) is not None)
         conn_cm = db_pool.acquire()
         conn = await conn_cm.__aenter__()
 

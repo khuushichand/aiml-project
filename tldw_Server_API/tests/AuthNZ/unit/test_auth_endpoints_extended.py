@@ -12,6 +12,33 @@ from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
 @pytest.mark.asyncio
+async def test_is_mfa_backend_supported_prefers_mfa_service_capability(monkeypatch):
+    reset_settings()
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    class _Svc:
+        def __init__(self):
+            self.init_calls = 0
+
+        async def initialize(self):
+            self.init_calls += 1
+
+        def supports_backend(self):
+            return True
+
+    svc = _Svc()
+
+    async def _should_not_be_called():
+        raise AssertionError("is_postgres_backend fallback should not be used when service supports_backend exists")
+
+    monkeypatch.setattr(auth, "_get_mfa_service", lambda: svc)
+    monkeypatch.setattr(auth, "is_postgres_backend", _should_not_be_called)
+
+    assert await auth._is_mfa_backend_supported() is True
+    assert svc.init_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_reset_password_weak_and_success(monkeypatch):
     reset_settings()
     # Stub DB adapter expected by endpoint (fetchval/execute/commit)
@@ -57,7 +84,12 @@ async def test_reset_password_weak_and_success(monkeypatch):
     async def _fake_is_pg() -> bool:
         return False
 
+    class _StubBlacklist:
+        async def revoke_all_user_tokens(self, *_args, **_kwargs):
+            return 0
+
     monkeypatch.setattr(_auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(_auth, "get_token_blacklist", lambda: _StubBlacklist())
 
     scope = {
         "type": "http",

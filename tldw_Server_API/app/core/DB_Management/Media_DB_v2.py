@@ -13493,6 +13493,35 @@ class MediaDatabase:
             logger.exception(f"Error checking unvectorized chunks for media {media_id}")
             return False
 
+    def get_unvectorized_chunk_count(self, media_id: int) -> int | None:
+        """Return active UnvectorizedMediaChunks count for a media item, or None on query failure."""
+        try:
+            media_id_int = int(media_id)
+        except (TypeError, ValueError):
+            logger.warning(f"Invalid media_id for chunk count lookup: {media_id}")
+            return None
+
+        try:
+            cur = self.execute_query(
+                "SELECT COUNT(*) AS chunk_count FROM UnvectorizedMediaChunks "
+                "WHERE media_id = ? AND deleted = 0",
+                (media_id_int,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return 0
+
+            if isinstance(row, dict):
+                return int(row.get("chunk_count", 0) or 0)
+            with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+                return int(row["chunk_count"] or 0)
+            with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
+                return int(row[0] or 0)
+            return 0
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
+            logger.exception(f"Error fetching unvectorized chunk count for media {media_id_int}")
+            return None
+
     def get_unvectorized_anchor_index_for_offset(self, media_id: int, approx_offset: int) -> int | None:
         """
         Best-effort mapping from an approximate character offset in the full

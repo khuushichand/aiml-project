@@ -162,6 +162,24 @@ class ScrapedItemRow:
         return []
 
 
+@dataclass
+class WebSubRow:
+    id: int
+    user_id: str
+    source_id: int
+    hub_url: str
+    topic_url: str
+    callback_token: str
+    secret: str
+    state: str
+    lease_seconds: int | None
+    verified_at: str | None
+    expires_at: str | None
+    last_push_at: str | None
+    created_at: str
+    updated_at: str
+
+
 class WatchlistsDatabase:
     # Keep track of schema initialization per DB path to avoid redundant ALTER checks/noise
     _schema_init_keys: set[str] = set()
@@ -376,6 +394,26 @@ class WatchlistsDatabase:
             );
             CREATE INDEX IF NOT EXISTS idx_watchlist_clusters_job ON watchlist_clusters(job_id);
             CREATE INDEX IF NOT EXISTS idx_watchlist_clusters_cluster ON watchlist_clusters(cluster_id);
+
+            CREATE TABLE IF NOT EXISTS feed_websub_subscriptions (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                source_id BIGINT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                hub_url TEXT NOT NULL,
+                topic_url TEXT NOT NULL,
+                callback_token TEXT NOT NULL UNIQUE,
+                secret TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'pending',
+                lease_seconds INTEGER,
+                verified_at TEXT,
+                expires_at TEXT,
+                last_push_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_websub_source ON feed_websub_subscriptions(source_id);
+            CREATE INDEX IF NOT EXISTS idx_websub_state ON feed_websub_subscriptions(state);
+            CREATE INDEX IF NOT EXISTS idx_websub_expires ON feed_websub_subscriptions(expires_at);
             """
         else:
             ddl = """
@@ -510,6 +548,26 @@ class WatchlistsDatabase:
             );
             CREATE INDEX IF NOT EXISTS idx_watchlist_clusters_job ON watchlist_clusters(job_id);
             CREATE INDEX IF NOT EXISTS idx_watchlist_clusters_cluster ON watchlist_clusters(cluster_id);
+
+            CREATE TABLE IF NOT EXISTS feed_websub_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                hub_url TEXT NOT NULL,
+                topic_url TEXT NOT NULL,
+                callback_token TEXT NOT NULL UNIQUE,
+                secret TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'pending',
+                lease_seconds INTEGER,
+                verified_at TEXT,
+                expires_at TEXT,
+                last_push_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_websub_source ON feed_websub_subscriptions(source_id);
+            CREATE INDEX IF NOT EXISTS idx_websub_state ON feed_websub_subscriptions(state);
+            CREATE INDEX IF NOT EXISTS idx_websub_expires ON feed_websub_subscriptions(expires_at);
             """
         self.backend.create_tables(ddl)
         # Backfill columns in case tables existed (guarded to avoid noisy duplicate-column errors)
@@ -1637,3 +1695,107 @@ class WatchlistsDatabase:
             except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 continue
         return counts
+
+    # ------------------------
+    # WebSub subscriptions
+    # ------------------------
+    def _row_to_websub(self, row: dict[str, Any]) -> WebSubRow:
+        return WebSubRow(
+            id=int(row["id"]),
+            user_id=str(row["user_id"]),
+            source_id=int(row["source_id"]),
+            hub_url=str(row["hub_url"]),
+            topic_url=str(row["topic_url"]),
+            callback_token=str(row["callback_token"]),
+            secret=str(row["secret"]),
+            state=str(row.get("state") or "pending"),
+            lease_seconds=int(row["lease_seconds"]) if row.get("lease_seconds") is not None else None,
+            verified_at=row.get("verified_at"),
+            expires_at=row.get("expires_at"),
+            last_push_at=row.get("last_push_at"),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )
+
+    def create_websub_subscription(
+        self,
+        *,
+        source_id: int,
+        hub_url: str,
+        topic_url: str,
+        callback_token: str,
+        secret: str,
+        lease_seconds: int | None = None,
+    ) -> WebSubRow:
+        now = _utcnow_iso()
+        res = self._execute_insert(
+            "INSERT INTO feed_websub_subscriptions "
+            "(user_id, source_id, hub_url, topic_url, callback_token, secret, state, lease_seconds, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (self.user_id, source_id, hub_url, topic_url, callback_token, secret, "pending", lease_seconds, now, now),
+        )
+        sid = self._extract_lastrowid(res)
+        if sid is None:
+            raise RuntimeError("failed_to_create_websub_subscription")
+        return self.get_websub_subscription(sid)
+
+    def get_websub_subscription(self, sub_id: int) -> WebSubRow:
+        row = self.backend.execute(
+            "SELECT * FROM feed_websub_subscriptions WHERE id = ? AND user_id = ?",
+            (sub_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("websub_subscription_not_found")
+        return self._row_to_websub(row)
+
+    def get_websub_subscription_by_token(self, callback_token: str) -> WebSubRow | None:
+        row = self.backend.execute(
+            "SELECT * FROM feed_websub_subscriptions WHERE callback_token = ?",
+            (callback_token,),
+        ).first
+        if not row:
+            return None
+        return self._row_to_websub(row)
+
+    def get_websub_subscription_for_source(self, source_id: int) -> WebSubRow | None:
+        row = self.backend.execute(
+            "SELECT * FROM feed_websub_subscriptions WHERE source_id = ? AND user_id = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (source_id, self.user_id),
+        ).first
+        if not row:
+            return None
+        return self._row_to_websub(row)
+
+    def update_websub_subscription(self, sub_id: int, patch: dict[str, Any]) -> WebSubRow:
+        allowed = {"state", "lease_seconds", "verified_at", "expires_at", "last_push_at"}
+        fields: list[str] = []
+        params: list[Any] = []
+        for key in allowed:
+            if key in patch:
+                fields.append(f"{key} = ?")
+                params.append(patch[key])
+        if not fields:
+            return self.get_websub_subscription(sub_id)
+        fields.append("updated_at = ?")
+        params.append(_utcnow_iso())
+        params.extend([sub_id, self.user_id])
+        self.backend.execute(
+            f"UPDATE feed_websub_subscriptions SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+            tuple(params),
+        )
+        return self.get_websub_subscription(sub_id)
+
+    def delete_websub_subscription(self, sub_id: int) -> None:
+        self.backend.execute(
+            "DELETE FROM feed_websub_subscriptions WHERE id = ? AND user_id = ?",
+            (sub_id, self.user_id),
+        )
+
+    def list_expiring_websub_subscriptions(self, before_iso: str) -> list[WebSubRow]:
+        rows = self.backend.execute(
+            "SELECT * FROM feed_websub_subscriptions "
+            "WHERE user_id = ? AND state = 'verified' AND expires_at IS NOT NULL AND expires_at <= ?",
+            (self.user_id, before_iso),
+        ).rows
+        return [self._row_to_websub(r) for r in (rows or [])]

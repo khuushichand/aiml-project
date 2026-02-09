@@ -15,6 +15,22 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
 )
 
 
+class _MetricsCapture:
+    def __init__(self) -> None:
+        self.increment_calls: list[tuple[str, float, dict[str, Any] | None]] = []
+
+    def increment(
+        self,
+        metric_name: str,
+        value: float = 1,
+        labels: dict[str, Any] | None = None,
+    ) -> None:
+        self.increment_calls.append((metric_name, value, labels))
+
+    def observe(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
 @pytest.mark.asyncio
 async def test_process_document_like_item_url_oversize_rejected(tmp_path, monkeypatch):
     url = "http://example.com/file.pdf"
@@ -84,6 +100,7 @@ async def test_process_document_like_item_url_post_download_validation_rejected(
     url = "https://example.com/file.txt"
     downloaded_file = tmp_path / "downloaded.txt"
     downloaded_file.write_text("hello from url", encoding="utf-8")
+    metrics = _MetricsCapture()
 
     async def _fake_download_url_async(**_kwargs: Any):
         return downloaded_file
@@ -103,6 +120,7 @@ async def test_process_document_like_item_url_post_download_validation_rejected(
         "tldw_Server_API.app.core.Security.url_validation.assert_url_safe",
         lambda _url: None,
     )
+    monkeypatch.setattr(persistence, "get_metrics_registry", lambda: metrics)
     monkeypatch.setattr(upload_sink, "process_and_validate_file", _fake_process_and_validate_file, raising=True)
     monkeypatch.setattr(media_endpoints, "process_document_content", _should_not_process, raising=True)
 
@@ -135,6 +153,11 @@ async def test_process_document_like_item_url_post_download_validation_rejected(
     assert result.get("status") == "Error"
     assert "downloaded file failed validation" in str(result.get("error", "")).lower()
     assert "blocked by validator" in str(result.get("error", "")).lower()
+    assert (
+        "ingestion_validation_failures_total",
+        1,
+        {"reason": "validator_rejected", "path_kind": "url"},
+    ) in metrics.increment_calls
 
 
 @pytest.mark.asyncio
@@ -213,3 +236,86 @@ async def test_process_document_like_item_url_post_download_validation_success_p
     assert captured.get("validated_path") == downloaded_file
     assert result.get("status") == "Success"
     assert result.get("processing_source") == str(downloaded_file)
+
+
+@pytest.mark.asyncio
+async def test_process_document_like_item_email_archive_url_uses_archive_content_validation(
+    tmp_path,
+    monkeypatch,
+):
+    from tldw_Server_API.app.api.v1.endpoints import media as media_endpoints
+
+    url = "https://example.com/emails.zip"
+    downloaded_file = tmp_path / "emails.zip"
+    downloaded_file.write_bytes(b"fake zip bytes")
+    called: dict[str, Any] = {"validator_dispatch": False}
+
+    async def _fake_download_url_async(**_kwargs: Any):
+        return downloaded_file
+
+    def _fake_process_and_validate_file(*_args: Any, **_kwargs: Any) -> ValidationResult:
+        called["validator_dispatch"] = True
+        return ValidationResult(
+            False,
+            issues=["archive content rejected"],
+            file_path=downloaded_file,
+        )
+
+    monkeypatch.setattr(
+        media_endpoints,
+        "_download_url_async",
+        _fake_download_url_async,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Security.url_validation.assert_url_safe",
+        lambda _url: None,
+    )
+    monkeypatch.setattr(
+        upload_sink,
+        "process_and_validate_file",
+        _fake_process_and_validate_file,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        persistence,
+        "loaded_config_data",
+        {"media_processing": {"validate_email_archive_contents": True}},
+        raising=False,
+    )
+
+    form_data = SimpleNamespace(
+        title=None,
+        author=None,
+        keywords=None,
+        perform_chunking=False,
+        perform_analysis=False,
+        api_name=None,
+        custom_prompt=None,
+        system_prompt=None,
+        summarize_recursively=False,
+        accept_archives=True,
+        accept_mbox=False,
+        accept_pst=False,
+        ingest_attachments=False,
+        max_depth=1,
+    )
+
+    result = await persistence.process_document_like_item(
+        item_input_ref=url,
+        processing_source=url,
+        media_type="email",
+        is_url=True,
+        form_data=form_data,
+        chunk_options=None,
+        temp_dir=tmp_path,
+        loop=asyncio.get_running_loop(),
+        db_path=":memory:",
+        client_id="test-client",
+        user_id=None,
+    )
+
+    assert called["validator_dispatch"] is True
+    assert result.get("status") == "Error"
+    assert "downloaded file failed validation" in str(result.get("error", "")).lower()
+    assert "archive content rejected" in str(result.get("error", "")).lower()

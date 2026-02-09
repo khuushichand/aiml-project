@@ -199,18 +199,17 @@ def test_edge_type_filter(client_and_db):
     kw_id = db.add_keyword("filter_test")
     db.link_note_to_keyword(n1, kw_id)
 
-    # Only request manual edges — test both CSV and repeated param formats
-    for params in [
-        f"center_note_id={n1}&edge_types=manual",
-        f"center_note_id={n1}&edge_types=manual",
-    ]:
-        resp = client.get(f"/api/v1/notes/graph?{params}", headers=h)
-        assert resp.status_code == 200
-        data = resp.json()
-        types = {e["type"] for e in data["edges"]}
-        # tag_membership should NOT appear when only 'manual' requested
-        if types:
-            assert types <= {"manual"}, f"Unexpected edge types: {types}"
+    # Only request manual edges
+    resp = client.get(
+        f"/api/v1/notes/graph",
+        params={"center_note_id": n1, "edge_types": ["manual"]},
+        headers=h,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    types = {e["type"] for e in data["edges"]}
+    if types:
+        assert types <= {"manual"}, f"Unexpected edge types: {types}"
 
 
 def test_empty_graph(client_and_db):
@@ -222,3 +221,40 @@ def test_empty_graph(client_and_db):
     assert data["nodes"] == []
     assert data["edges"] == []
     assert data["truncated"] is False
+
+
+def test_cursor_pagination_returns_more(client_and_db):
+    """When max_nodes truncates, response has has_more=True and a cursor string."""
+    client, db = client_and_db
+    h = _headers()
+    center = _create_note(client, "Center", "center content")
+    # Create enough neighbors to trigger truncation at max_nodes=3
+    neighbors = []
+    for i in range(5):
+        nid = _create_note(client, f"N{i}", f"content {i}")
+        neighbors.append(nid)
+        client.post(f"/api/v1/notes/{center}/links", json={"to_note_id": nid}, headers=h)
+
+    resp = client.get(
+        f"/api/v1/notes/graph?center_note_id={center}&radius=1&max_nodes=3",
+        headers=h,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["truncated"] is True
+    assert data["has_more"] is True
+    assert data["cursor"] is not None
+    assert len(data["cursor"]) > 0
+
+
+def test_invalid_edge_type_returns_400(client_and_db):
+    """Invalid edge_types CSV value should return 400, not 500."""
+    client, db = client_and_db
+    h = _headers()
+    n1 = _create_note(client, "A")
+    resp = client.get(
+        f"/api/v1/notes/graph?center_note_id={n1}&edge_types=bogus_type",
+        headers=h,
+    )
+    assert resp.status_code == 400
+    assert "Invalid edge_type" in resp.json()["detail"]

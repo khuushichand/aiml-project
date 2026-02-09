@@ -168,6 +168,15 @@ async def list_memberships_for_user(user_id: int) -> list[dict[str, Any]]:
     return await repo.list_memberships_for_user(user_id)
 
 
+async def list_active_team_memberships_for_user(user_id: int) -> list[dict[str, Any]]:
+    """List active team memberships (and org_id) for a given user.
+
+    Returns: list of {team_id, org_id, role}
+    """
+    repo = await _get_orgs_teams_repo()
+    return await repo.list_active_team_memberships_for_user(user_id)
+
+
 # ============================
 # Organization membership APIs
 # ============================

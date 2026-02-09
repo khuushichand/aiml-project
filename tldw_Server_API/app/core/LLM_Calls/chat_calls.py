@@ -9,7 +9,6 @@ This module retains:
 - Legacy OpenAI embeddings functions (``get_openai_embeddings``,
   ``get_openai_embeddings_batch``) used until the embeddings adapter native
   HTTP flags are flipped on.
-- Backward-compat re-exports for utilities relocated to ``adapter_utils.py``.
 - ``create_session_with_retries`` / ``_SessionShim`` used by embeddings code.
 
 Notes
@@ -19,7 +18,6 @@ Notes
 """
 #########################################
 # Import necessary libraries
-import os
 from typing import Any, Optional
 
 #
@@ -29,6 +27,14 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 #
 # Import 3rd-Party Libraries
 from tldw_Server_API.app.core.http_client import RetryPolicy, fetch
+
+# ---------------------------------------------------------------------------
+# Utilities from adapter_utils used by the embeddings functions below.
+# ---------------------------------------------------------------------------
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    _resolve_openai_api_base,
+    _safe_cast,
+)
 from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     get_http_error_text,
     get_http_status_from_exception,
@@ -39,16 +45,6 @@ from tldw_Server_API.app.core.LLM_Calls.http_helpers import (
     create_session_with_retries as _legacy_create_session_with_retries,
 )
 from tldw_Server_API.app.core.Utils.Utils import logging
-
-# ---------------------------------------------------------------------------
-# Backward-compat re-exports: utilities relocated to adapter_utils.py
-# These are kept so any external callers that haven't updated yet still work.
-# ---------------------------------------------------------------------------
-from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (  # noqa: F401
-    _parse_data_url_for_multimodal,
-    _resolve_openai_api_base,
-    _safe_cast,
-)
 
 # -----------------------------------------------------------------------------
 # Session shim for non-streaming POST calls
@@ -164,26 +160,6 @@ def _resolve_openai_embeddings_api_key(
     except Exception:
         return None
     return None
-
-
-def extract_text_from_segments(segments):
-    logging.debug(f"Segments received: {segments}")
-    logging.debug(f"Type of segments: {type(segments)}")
-
-    text = ""
-
-    if isinstance(segments, list):
-        for segment in segments:
-            logging.debug(f"Current segment: {segment}")
-            logging.debug(f"Type of segment: {type(segment)}")
-            if 'Text' in segment:
-                text += segment['Text'] + " "
-            else:
-                logging.warning(f"Skipping segment due to missing 'Text' key: {segment}")
-    else:
-        logging.warning(f"Unexpected type of 'segments': {type(segments)}")
-
-    return text.strip()
 
 
 # ---------------------------------------------------------------------------

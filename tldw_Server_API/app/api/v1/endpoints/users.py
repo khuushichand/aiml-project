@@ -54,7 +54,7 @@ from tldw_Server_API.app.api.v1.utils.profile_errors import (
     classify_profile_update_skips,
 )
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
     StorageError,
@@ -96,33 +96,6 @@ _USERS_ENDPOINT_EXCEPTIONS = (
 )
 _USERS_HEADER_EXCEPTIONS = (AttributeError, TypeError, ValueError)
 _DEPRECATION_SUNSET_EXCEPTIONS = (TypeError, ValueError, OverflowError)
-
-
-async def _fetch_password_hash_for_user(db: Any, user_id: int) -> str | None:
-    """Fetch password hash with explicit backend routing."""
-    is_pg = await is_postgres_backend()
-    if is_pg:
-        value = await db.fetchval(
-            "SELECT password_hash FROM users WHERE id = $1",
-            user_id,
-        )
-        return str(value) if value is not None else None
-
-    cursor = await db.execute(
-        "SELECT password_hash FROM users WHERE id = ?",
-        (user_id,),
-    )
-    row = await cursor.fetchone()
-    if row is None:
-        return None
-    if isinstance(row, dict):
-        value = row.get("password_hash")
-    else:
-        try:
-            value = row["password_hash"]  # sqlite3.Row / aiosqlite.Row mapping access
-        except (TypeError, KeyError, IndexError):
-            value = row[0]
-    return str(value) if value is not None else None
 
 
 def _build_deprecation_headers(successor: str) -> dict[str, str]:
@@ -543,8 +516,10 @@ async def change_password(
         HTTPException: 401 if current password is incorrect, 400 if new password is weak
     """
     try:
-        # Fetch user's password hash from database
-        password_hash = await _fetch_password_hash_for_user(db, int(current_user["id"]))
+        # Fetch password hash through repository to keep backend SQL out of endpoint code.
+        users_repo = await AuthnzUsersRepo.from_pool()
+        user_row = await users_repo.get_user_by_id(int(current_user["id"]))
+        password_hash = str(user_row.get("password_hash")) if user_row and user_row.get("password_hash") else None
 
         if not password_hash:
             raise HTTPException(

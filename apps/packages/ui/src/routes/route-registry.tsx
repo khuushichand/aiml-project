@@ -102,6 +102,7 @@ const OptionChatbooks = createSettingsRoute(
 const SidepanelChat = lazy(() => import("./sidepanel-chat"))
 const SidepanelSettings = lazy(() => import("./sidepanel-settings"))
 const SidepanelAgent = lazy(() => import("./sidepanel-agent"))
+const SidepanelPersona = lazy(() => import("./sidepanel-persona"))
 const SidepanelErrorBoundaryTest = lazy(() => import("./sidepanel-error-boundary-test"))
 const OptionRagSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/rag"),
@@ -711,6 +712,12 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     kind: "sidepanel",
     path: "/agent",
     element: <SidepanelAgent />,
+    targets: ALL_TARGETS
+  },
+  {
+    kind: "sidepanel",
+    path: "/persona",
+    element: <SidepanelPersona />,
     targets: ALL_TARGETS
   },
   { kind: "sidepanel", path: "/settings", element: <SidepanelSettings /> },

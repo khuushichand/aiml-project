@@ -8,7 +8,6 @@ import json
 import os
 import time
 from collections import deque
-from typing import Any
 
 from loguru import logger
 
@@ -26,7 +25,6 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.Notes_Graph.graph_cache import GraphCache
 from tldw_Server_API.app.core.Notes_Graph.wikilink_parser import extract_wikilinks
-
 
 # ---------------------------------------------------------------------------
 # Config constants (env-overridable, matching PRD §11)
@@ -77,10 +75,10 @@ _SOURCE_CAP = 50
 # Metrics helpers (best-effort, no crash on import failure)
 # ---------------------------------------------------------------------------
 
-def _metrics_increment(name: str, labels: dict[str, str] | None = None) -> None:
+def _metrics_increment(name: str, labels: dict[str, str] | None = None, value: int = 1) -> None:
     try:
         from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
-        increment_counter(name, 1, labels)
+        increment_counter(name, value, labels)
     except Exception:
         pass
 
@@ -224,6 +222,10 @@ class NoteGraphService:
         # Prune IDs that don't actually exist
         note_ids = set(note_map.keys())
 
+        # 5b. Validate center note exists
+        if req.center_note_id and req.center_note_id not in note_map:
+            raise InputError(f"Note {req.center_note_id} not found")
+
         # 6. Apply time-range filter
         if req.time_range:
             note_ids = self._apply_time_range(note_ids, note_map, req)
@@ -352,9 +354,12 @@ class NoteGraphService:
         note_count = sum(1 for n in all_nodes if n.type == "note")
         tag_count = sum(1 for n in all_nodes if n.type == "tag")
         source_count = sum(1 for n in all_nodes if n.type == "source")
-        _metrics_increment("notes_graph_nodes_total", {"type": "note"})
-        _metrics_increment("notes_graph_nodes_total", {"type": "tag"})
-        _metrics_increment("notes_graph_nodes_total", {"type": "source"})
+        if note_count:
+            _metrics_increment("notes_graph_nodes_total", {"type": "note"}, value=note_count)
+        if tag_count:
+            _metrics_increment("notes_graph_nodes_total", {"type": "tag"}, value=tag_count)
+        if source_count:
+            _metrics_increment("notes_graph_nodes_total", {"type": "source"}, value=source_count)
         for reason in truncated_by:
             _metrics_increment("notes_graph_truncation_total", {"reason": reason})
 
@@ -405,6 +410,9 @@ class NoteGraphService:
         if total <= max_nodes:
             return self._db.get_all_note_ids_for_graph(include_deleted=True, limit=max_nodes)
 
+        if req.allow_heavy:
+            return self._db.get_all_note_ids_for_graph(include_deleted=True, limit=max_nodes)
+
         raise InputError(  # noqa: TRY003
             f"Too many notes ({total}) for seedless graph. "
             f"Provide center_note_id, tag, or source filter, or set allow_heavy=true."
@@ -432,6 +440,9 @@ class NoteGraphService:
 
         # Parse cursor for resume
         cur = _decode_cursor(req.cursor)
+        if cur and radius > 1:
+            logger.warning("Cursor pagination only reliable for radius=1; ignoring cursor")
+            cur = None
         start_layer = cur["layer"] if cur else 0
         start_pos = cur["pos"] if cur else 0
 

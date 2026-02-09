@@ -1684,22 +1684,6 @@ class ONNXEmbedder:
 
 
 
-_LIMITER_CACHE: dict[tuple[int, int], TokenBucketLimiter] = {}
-_LIMITER_CACHE_LOCK = threading.Lock()
-
-
-def _get_token_bucket_limiter(capacity: int, period: int) -> TokenBucketLimiter:
-    """Return a cached TokenBucketLimiter (Phase 2 shim: no internal state)."""
-    cap = max(1, int(capacity))
-    per = max(1, int(period))
-    key = (cap, per)
-    with _LIMITER_CACHE_LOCK:
-        limiter = _LIMITER_CACHE.get(key)
-        if limiter is None:
-            limiter = TokenBucketLimiter(capacity=cap, period=per)
-            _LIMITER_CACHE[key] = limiter
-        return limiter
-
 
 # Exponential backoff decorator with fixed parameters.
 # To make this dynamic per model_config, apply similarly to limiter.
@@ -1790,16 +1774,7 @@ def create_embeddings_batch(
 
     provider = model_spec.provider
 
-    # Apply per-config rate limiter (fallback to defaults if unset).
-    try:
-        limiter_cfg = embedding_service_config.rate_limiter
-        limiter = _get_token_bucket_limiter(
-            getattr(limiter_cfg, "max_calls", 20),
-            getattr(limiter_cfg, "period", 60),
-        )
-        limiter.acquire()
-    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
-        logger.debug(f"Rate limiter acquisition failed or skipped: {e}")
+    # Phase 2: RG middleware handles ingress rate limiting
 
     # Ensure model_storage_base_dir exists and stays under the allowlist root
     base_dir = _normalize_model_storage_base_dir(embedding_service_config.model_storage_base_dir)

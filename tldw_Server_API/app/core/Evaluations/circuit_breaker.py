@@ -105,16 +105,15 @@ class CircuitBreaker:
             config=self.config._to_unified(),
         )
         self.stats = CircuitBreakerStats()
+        self._local_state_changed_at: float = 0.0
 
     @property
     def _state_changed_at(self) -> float:
-        with self._cb._lock:
-            return self._cb._last_failure_time or 0.0
+        return self._local_state_changed_at
 
     @_state_changed_at.setter
     def _state_changed_at(self, value: float) -> None:
-        with self._cb._lock:
-            self._cb._last_failure_time = value
+        self._local_state_changed_at = value
 
     # -- expose state as string for backward compat -------------------------
 
@@ -164,10 +163,10 @@ class CircuitBreaker:
     def _should_attempt_reset(self) -> bool:
         """Check if recovery timeout has elapsed (for tests)."""
         import time as _time
-        with self._cb._lock:
-            if self._cb._last_failure_time is None:
-                return True
-            return _time.time() - self._cb._last_failure_time >= self.config.recovery_timeout
+        lft = self._cb.last_failure_time
+        if lft is None:
+            return True
+        return _time.time() - lft >= self.config.recovery_timeout
 
     def _transition_to_half_open(self) -> None:
         """Manually transition to HALF_OPEN (for tests)."""
@@ -184,14 +183,6 @@ class CircuitBreaker:
         from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
             CircuitBreakerOpenError as _CBOpen,
         )
-
-        # Check if circuit is open before doing anything
-        with self._cb._lock:
-            self._cb._maybe_transition_to_half_open()
-            if self._cb._state == _UnifiedState.OPEN:
-                self.stats.total_calls += 1
-                self.stats.rejected_calls += 1
-                raise CircuitOpenError(f"Circuit breaker {self.name} is OPEN")
 
         self.stats.total_calls += 1
 
@@ -327,7 +318,10 @@ llm_circuit_breaker = LLMCircuitBreaker()
 
 def with_circuit_breaker(provider: str = "default"):
     """Decorator to add circuit breaker protection to a function."""
+    from functools import wraps
+
     def decorator(func: Callable) -> Callable:
+        @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             return await llm_circuit_breaker.call_with_breaker(
                 provider, func, *args, **kwargs,

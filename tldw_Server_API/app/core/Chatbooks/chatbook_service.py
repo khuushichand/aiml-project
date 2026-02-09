@@ -1416,14 +1416,15 @@ class ChatbookService:
             work_dir = self.temp_dir / f"continue_{timestamp}_{uuid4().hex[:8]}"
             work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
-            # Determine sequence number from export_id
+            # Determine sequence number from export_id, keeping the base stable
+            base_id = export_id.split("_cont_")[0]
             seq = 1
             if "_cont_" in export_id:
                 try:
                     seq = int(export_id.rsplit("_cont_", 1)[-1]) + 1
                 except (TypeError, ValueError):
                     seq = 1
-            cont_export_id = f"{export_id}_cont_{seq}"
+            cont_export_id = f"{base_id}_cont_{seq}"
 
             cont_name = name or f"Continuation of {export_id}"
             manifest = ChatbookManifest(
@@ -2954,28 +2955,28 @@ class ChatbookService:
                             title=f"Embedding for media {normalized.get('title', media_id)}",
                             metadata={"bundled": False, "size_bytes": len(vector_blob)}
                         ))
-                        continue
-                    embeddings_dir = embeddings_dir or (work_dir / "content" / "embeddings")
-                    embeddings_dir.mkdir(parents=True, exist_ok=True)
-                    vector_payload = {
-                        "id": embedding_id,
-                        "source": {
-                            "media_id": media_id,
-                            "media_uuid": normalized.get("uuid")
-                        },
-                        "encoding": "base64",
-                        "vector": base64.b64encode(vector_blob).decode("ascii")
-                    }
-                    embed_file = embeddings_dir / f"embedding_media_{media_id}.json"
-                    with open(embed_file, "w", encoding="utf-8") as ef:
-                        json.dump(vector_payload, ef, indent=2, ensure_ascii=False)
-                    content.embeddings[embedding_id] = vector_payload
-                    manifest.content_items.append(ContentItem(
-                        id=embedding_id,
-                        type=ContentType.EMBEDDING,
-                        title=f"Embedding for media {normalized.get('title', media_id)}",
-                        file_path=f"content/embeddings/{embed_file.name}"
-                    ))
+                    else:
+                        embeddings_dir = embeddings_dir or (work_dir / "content" / "embeddings")
+                        embeddings_dir.mkdir(parents=True, exist_ok=True)
+                        vector_payload = {
+                            "id": embedding_id,
+                            "source": {
+                                "media_id": media_id,
+                                "media_uuid": normalized.get("uuid")
+                            },
+                            "encoding": "base64",
+                            "vector": base64.b64encode(vector_blob).decode("ascii")
+                        }
+                        embed_file = embeddings_dir / f"embedding_media_{media_id}.json"
+                        with open(embed_file, "w", encoding="utf-8") as ef:
+                            json.dump(vector_payload, ef, indent=2, ensure_ascii=False)
+                        content.embeddings[embedding_id] = vector_payload
+                        manifest.content_items.append(ContentItem(
+                            id=embedding_id,
+                            type=ContentType.EMBEDDING,
+                            title=f"Embedding for media {normalized.get('title', media_id)}",
+                            file_path=f"content/embeddings/{embed_file.name}"
+                        ))
                 else:
                     self._note_todo("Encountered non-binary media vector embedding; skipping serialization.")
 
@@ -3026,9 +3027,9 @@ class ChatbookService:
                 collections = []
                 for name in embedding_ids:
                     try:
-                        col = chroma.get_or_create_collection(collection_name=name)
+                        col = chroma.get_collection(collection_name=name)
                         collections.append(col)
-                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
+                    except (KeyError, RuntimeError):
                         logger.debug(f"Collection '{name}' not found; skipping.")
             else:
                 collections = list(chroma.list_collections())
@@ -3091,22 +3092,29 @@ class ChatbookService:
 
                 # Check binary limit on serialized size
                 serialized = json.dumps(collection_data, ensure_ascii=False)
-                if emb_limit is not None and len(serialized.encode("utf-8")) > emb_limit:
+                serialized_size = len(serialized.encode("utf-8"))
+                if emb_limit is not None and serialized_size > emb_limit:
                     stub = {
                         "embedding_set_id": col_name,
                         "source_hash": source_hash,
                         "collection_metadata": col_metadata,
                         "item_count": total_count,
                         "bundled": False,
-                        "size_bytes": len(serialized.encode("utf-8"))
+                        "size_bytes": serialized_size
                     }
                     content.embeddings[f"collection:{col_name}"] = stub
                     manifest.content_items.append(ContentItem(
                         id=f"collection:{col_name}",
                         type=ContentType.EMBEDDING,
                         title=f"Embedding collection {col_name}",
-                        metadata={"bundled": False, "size_bytes": len(serialized.encode("utf-8"))}
+                        metadata={"bundled": False, "size_bytes": serialized_size}
                     ))
+                    trunc = manifest.truncation.setdefault("embeddings", {})
+                    trunc["truncated"] = True
+                    trunc.setdefault("binary_limited_collections", [])
+                    if col_name not in trunc["binary_limited_collections"]:
+                        trunc["binary_limited_collections"].append(col_name)
+                    trunc["total_count"] = trunc.get("total_count", 0) + total_count
                     continue
 
                 safe_name = col_name.replace("/", "_").replace("\\", "_")

@@ -1479,8 +1479,10 @@ class TestBinaryLimitsExtension:
         }
         mock_media_db = MagicMock()
         service._media_db = mock_media_db
+        # The real normalizer strips binary fields; mock should return JSON-serializable data
+        normalized = {k: v for k, v in media_record.items() if k != "vector_embedding"}
         with patch.object(service, '_fetch_media_record', return_value=media_record), \
-             patch.object(service, '_normalize_media_record', return_value=dict(media_record)):
+             patch.object(service, '_normalize_media_record', return_value=normalized):
             service._collect_media_items(
                 media_ids=["42"],
                 work_dir=work_dir,
@@ -1499,6 +1501,10 @@ class TestBinaryLimitsExtension:
         emb_dir = work_dir / "content" / "embeddings"
         if emb_dir.exists():
             assert not list(emb_dir.glob("embedding_media_42.json"))
+        # Bug 1 regression: media metadata must still be exported even when embedding exceeds limit
+        assert "42" in content.media
+        media_items = [ci for ci in manifest.content_items if ci.type == ContentType.MEDIA]
+        assert any(ci.id == "42" for ci in media_items)
 
     def test_embedding_bundled_when_under_limit(self, service, tmp_path):
         """Normal embeddings under the limit should still be bundled."""
@@ -1811,13 +1817,14 @@ class TestChromaDBEmbeddingExport:
         ])
 
         mock_chroma = MagicMock()
-        mock_chroma.get_or_create_collection.return_value = col
+        mock_chroma.get_collection.return_value = col
         service._chroma_manager = mock_chroma
 
         service._collect_embeddings(["target_col"], work_dir, manifest, content)
 
         assert "collection:target_col" in content.embeddings
         mock_chroma.list_collections.assert_not_called()
+        mock_chroma.get_or_create_collection.assert_not_called()
 
 
 class TestEvalContinuation:
@@ -1951,3 +1958,188 @@ class TestTruncationMetadataConsistency:
         assert "conversations" in manifest.truncation
         trunc = manifest.truncation["conversations"]
         assert trunc["exported_count"] == 2
+
+
+class TestBug2NonexistentCollection:
+    """Tests for read-only collection lookup during export (Bug 2 fix)."""
+
+    def _make_mock_collection(self, name, metadata=None, chunks=None):
+        """Create a mock ChromaDB collection."""
+        col = MagicMock()
+        col.name = name
+        col.metadata = metadata or {"model": "test-model", "dimensions": 384}
+        if chunks is None:
+            chunks = []
+
+        def mock_count():
+            return len(chunks)
+        col.count = mock_count
+
+        def mock_get(limit=None, offset=None, include=None):
+            start = offset or 0
+            end = start + (limit or len(chunks))
+            page = chunks[start:end]
+            result = {"ids": [c["id"] for c in page]}
+            if include and "documents" in include:
+                result["documents"] = [c.get("document", "") for c in page]
+            if include and "metadatas" in include:
+                result["metadatas"] = [c.get("metadata", {}) for c in page]
+            if include and "embeddings" in include:
+                result["embeddings"] = [c.get("embedding", []) for c in page]
+            return result
+        col.get = mock_get
+        return col
+
+    def test_nonexistent_collection_skipped_without_side_effect(self, service, tmp_path):
+        """A nonexistent collection name should be skipped, not created."""
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="ghost-test",
+            description="test",
+        )
+        content = ChatbookContent()
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+
+        mock_chroma = MagicMock()
+        mock_chroma.get_collection.side_effect = KeyError("Collection 'ghost' does not exist")
+        service._chroma_manager = mock_chroma
+
+        service._collect_embeddings(["ghost"], work_dir, manifest, content)
+
+        # No collections should be exported
+        assert len(content.embeddings) == 0
+        # get_or_create_collection should NOT have been called
+        mock_chroma.get_or_create_collection.assert_not_called()
+
+    def test_existing_collection_still_exported(self, service, tmp_path):
+        """An existing collection should be exported normally via get_collection."""
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="exists-test",
+            description="test",
+        )
+        content = ChatbookContent()
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+
+        col = self._make_mock_collection("real_col", chunks=[
+            {"id": "c1", "document": "data", "metadata": {}, "embedding": [1.0]},
+        ])
+        mock_chroma = MagicMock()
+        mock_chroma.get_collection.return_value = col
+        service._chroma_manager = mock_chroma
+
+        service._collect_embeddings(["real_col"], work_dir, manifest, content)
+
+        assert "collection:real_col" in content.embeddings
+
+
+class TestBug3ContinuationIdStability:
+    """Tests for stable continuation IDs (Bug 3 fix)."""
+
+    @pytest.mark.asyncio
+    async def test_continuation_of_continuation_uses_base_id(self, service, tmp_path):
+        """Continuing a continuation should produce base_cont_2, not base_cont_1_cont_2."""
+        mock_evals_db = MagicMock()
+        mock_evals_db.list_runs.return_value = (
+            [{"id": "run_10", "eval_id": "eval_1", "status": "completed"}],
+            False,
+        )
+        service._evaluations_db = mock_evals_db
+
+        success, message, path = await service.continue_chatbook_export(
+            export_id="base_cont_1",
+            continuations=[{
+                "evaluation_id": "eval_1",
+                "continuation_token": "run_9",
+            }],
+        )
+
+        assert success is True
+        assert path is not None
+        with zipfile.ZipFile(path, 'r') as zf:
+            manifest_data = json.loads(zf.read("manifest.json"))
+            # Should be base_cont_2, NOT base_cont_1_cont_2
+            assert manifest_data["export_id"] == "base_cont_2"
+
+    @pytest.mark.asyncio
+    async def test_first_continuation_uses_base_cont_1(self, service, tmp_path):
+        """First continuation of a base export should produce base_cont_1."""
+        mock_evals_db = MagicMock()
+        mock_evals_db.list_runs.return_value = (
+            [{"id": "run_5", "eval_id": "eval_1", "status": "completed"}],
+            False,
+        )
+        service._evaluations_db = mock_evals_db
+
+        success, message, path = await service.continue_chatbook_export(
+            export_id="my-export",
+            continuations=[{
+                "evaluation_id": "eval_1",
+                "continuation_token": "run_4",
+            }],
+        )
+
+        assert success is True
+        with zipfile.ZipFile(path, 'r') as zf:
+            manifest_data = json.loads(zf.read("manifest.json"))
+            assert manifest_data["export_id"] == "my-export_cont_1"
+
+
+class TestGap6BinaryLimitTruncationMetadata:
+    """Tests for truncation metadata on binary-limited collections (Gap 6 fix)."""
+
+    def _make_mock_collection(self, name, metadata=None, chunks=None):
+        col = MagicMock()
+        col.name = name
+        col.metadata = metadata or {}
+        if chunks is None:
+            chunks = []
+        col.count = MagicMock(return_value=len(chunks))
+
+        def mock_get(limit=None, offset=None, include=None):
+            start = offset or 0
+            end = start + (limit or len(chunks))
+            page = chunks[start:end]
+            result = {"ids": [c["id"] for c in page]}
+            if include and "documents" in include:
+                result["documents"] = [c.get("document", "") for c in page]
+            if include and "metadatas" in include:
+                result["metadatas"] = [c.get("metadata", {}) for c in page]
+            if include and "embeddings" in include:
+                result["embeddings"] = [c.get("embedding", []) for c in page]
+            return result
+        col.get = mock_get
+        return col
+
+    def test_binary_limited_collection_records_truncation(self, service, tmp_path):
+        """When a collection exceeds the binary limit, truncation metadata should be recorded."""
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="trunc-meta-test",
+            description="test",
+            binary_limits={"collection_embeddings": 10},  # 10 bytes = everything will exceed
+        )
+        content = ChatbookContent()
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+
+        col = self._make_mock_collection("big_col", chunks=[
+            {"id": "c1", "document": "x" * 100, "metadata": {}, "embedding": [1.0] * 50},
+        ])
+        mock_chroma = MagicMock()
+        mock_chroma.list_collections.return_value = [col]
+        service._chroma_manager = mock_chroma
+
+        service._collect_embeddings([], work_dir, manifest, content)
+
+        # The collection should be a stub
+        assert "collection:big_col" in content.embeddings
+        assert content.embeddings["collection:big_col"]["bundled"] is False
+
+        # Truncation metadata should be recorded
+        assert "embeddings" in manifest.truncation
+        trunc = manifest.truncation["embeddings"]
+        assert trunc["truncated"] is True
+        assert "big_col" in trunc.get("binary_limited_collections", [])

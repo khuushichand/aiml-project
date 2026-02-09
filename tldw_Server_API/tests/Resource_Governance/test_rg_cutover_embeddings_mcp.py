@@ -1,16 +1,13 @@
-import asyncio
-import os
-import time
-from collections import deque
+import warnings
 
 import pytest
 
-from tldw_Server_API.app.core.MCP_unified.auth.rate_limiter import (
-    RateLimitExceeded,
-    RateLimiter,
-)
 from tldw_Server_API.app.core.Embeddings import rate_limiter as emb_rl
 from tldw_Server_API.app.core.MCP_unified.auth import rate_limiter as mcp_rl
+from tldw_Server_API.app.core.MCP_unified.auth.rate_limiter import (
+    RateLimiter,
+    RateLimitExceeded,
+)
 
 
 class _FakeDecision:
@@ -54,11 +51,9 @@ async def test_embeddings_rg_enforced_and_commits(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_embeddings_shadow_does_not_mutate_legacy_enforcement_state(monkeypatch):
+async def test_embeddings_phase2_no_legacy_state(monkeypatch):
+    """Phase 2: UserRateLimiter has no internal counters (deques removed)."""
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_SHADOW_EMBEDDINGS", "1")
-    # Ensure the legacy shadow check uses request-cost semantics (cost=1).
-    monkeypatch.setenv("EMBEDDINGS_RATE_LIMIT_MODE", "requests")
     fake = _FakeGovernor(allowed=True)
     monkeypatch.setattr(emb_rl, "_rg_embeddings_governor", fake)
     monkeypatch.setattr(emb_rl, "_rg_embeddings_loader", None)
@@ -66,22 +61,21 @@ async def test_embeddings_shadow_does_not_mutate_legacy_enforcement_state(monkey
     legacy = emb_rl.UserRateLimiter(default_limit=2, window_seconds=60)
     limiter = emb_rl.AsyncRateLimiter(rate_limiter=legacy)
 
-    assert len(legacy.user_requests.get("u123", deque())) == 0
+    # No user_requests attribute in Phase 2
+    assert not hasattr(legacy, "user_requests")
 
     allowed, retry_after = await limiter.check_rate_limit_async("u123", tokens_units=7)
     assert allowed is True
     assert retry_after is None
-
-    # RG-first means the legacy enforcement queue should not be consumed.
-    assert len(legacy.user_requests.get("u123", deque())) == 0
-    # Shadow comparisons should track their own queue for drift metrics.
-    shadow_store = getattr(legacy, "_shadow_user_requests", {})
-    assert len(shadow_store.get("u123", deque())) == 1
+    assert fake.reserved and fake.commits
 
 
 @pytest.mark.asyncio
-async def test_embeddings_rg_unavailable_uses_diagnostics_only_shim(monkeypatch):
+async def test_embeddings_rg_unavailable_fail_open(monkeypatch):
+    """Phase 2: RG returns None → fail-open with deprecation warning."""
     monkeypatch.setenv("RG_ENABLED", "1")
+    monkeypatch.setattr(emb_rl, "_rg_embeddings_fallback_logged", False)
+    monkeypatch.setattr(emb_rl, "_EMBEDDINGS_DEPRECATION_WARNED", False)
 
     async def _fake_rg_none(**_: object) -> None:
         return None
@@ -89,24 +83,18 @@ async def test_embeddings_rg_unavailable_uses_diagnostics_only_shim(monkeypatch)
     monkeypatch.setattr(emb_rl, "_maybe_enforce_with_rg", _fake_rg_none)
 
     legacy = emb_rl.UserRateLimiter(default_limit=1, window_seconds=60)
-    legacy.user_requests["u123"].append((time.time(), 1))
     limiter = emb_rl.AsyncRateLimiter(rate_limiter=legacy)
 
-    def _legacy_should_not_run(*args, **kwargs):  # pragma: no cover
-        raise AssertionError("legacy limiter enforcement should be bypassed when RG is enabled")
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
 
-    monkeypatch.setattr(limiter.rate_limiter, "check_rate_limit", _legacy_should_not_run, raising=True)
-    before_len = len(legacy.user_requests.get("u123", deque()))
-    before_total_requests = legacy.total_requests
-    before_total_blocked = legacy.total_blocked
+        allowed, retry_after = await limiter.check_rate_limit_async("u123", cost=1)
 
-    allowed, retry_after = await limiter.check_rate_limit_async("u123", cost=1)
+        assert allowed is True
+        assert retry_after is None
 
-    assert allowed is True
-    assert retry_after is None
-    assert len(legacy.user_requests.get("u123", deque())) == before_len
-    assert legacy.total_requests == before_total_requests
-    assert legacy.total_blocked == before_total_blocked
+        deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+        assert len(deprecation_warnings) >= 1
 
 
 @pytest.mark.asyncio

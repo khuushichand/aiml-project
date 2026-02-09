@@ -142,6 +142,38 @@ class InvalidRetentionRangeError(AdminDataOpsError):
     """Raised when a retention policy update is out of range."""
 
 
+class BundleError(AdminDataOpsError):
+    """Base exception for backup bundle operations."""
+
+
+class BundleExportError(BundleError):
+    """Raised when bundle export fails."""
+
+
+class BundleImportError(BundleError):
+    """Raised when bundle import fails."""
+
+
+class BundleNotFoundError(BundleError):
+    """Raised when a bundle ID cannot be resolved to a file."""
+
+
+class BundleSchemaIncompatibleError(BundleError):
+    """Raised when a bundle's schema version is incompatible with the current app."""
+
+
+class BundleDiskSpaceError(BundleError):
+    """Raised when insufficient disk space is available for a bundle operation."""
+
+
+class BundleRateLimitError(BundleError):
+    """Raised when a bundle operation exceeds the rate limit."""
+
+
+class BundleConcurrencyError(BundleError):
+    """Raised when another bundle operation is already in progress."""
+
+
 class TemplateStoreError(Exception):
     """Base exception for watchlist template store errors."""
 

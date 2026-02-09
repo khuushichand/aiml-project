@@ -110,6 +110,8 @@ class BaseModule(ABC):
         # Circuit breaker (unified)
         from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
             CircuitBreaker as _UnifiedCB,
+        )
+        from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
             CircuitBreakerConfig as _CBCfg,
         )
         self._circuit_breaker = _UnifiedCB(

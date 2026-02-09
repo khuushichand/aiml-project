@@ -358,9 +358,13 @@ class TestCircuitBreakerRecovery:
         config = CircuitBreakerConfig(failure_threshold=2, recovery_timeout=0.1)
         cb = CircuitBreaker("test", config)
 
-        # Open circuit and set past recovery timeout
-        cb.state = CircuitState.OPEN
-        cb._state_changed_at = time.time() - 1  # Past recovery timeout
+        # Open circuit by recording failures
+        await cb._on_failure()
+        await cb._on_failure()
+        assert cb.state == CircuitState.OPEN
+
+        # Wait for recovery timeout to elapse
+        time.sleep(0.15)
 
         call_count = 0
 

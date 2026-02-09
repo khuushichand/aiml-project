@@ -15,8 +15,6 @@ Design decisions
 - **Always starts CLOSED.**
 - **Original exceptions re-raised as-is** -- the breaker records failures
   internally but never wraps the original error.
-- **No timeout wrapping** -- callers handle their own
-  ``asyncio.wait_for()``.
 - **State-change callbacks** for modules that need them (TTS health
   monitoring, RAG coordinator).
 """
@@ -30,7 +28,7 @@ from collections import deque
 from dataclasses import dataclass
 from enum import IntEnum
 from functools import wraps
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, TypeVar
 
 from loguru import logger
 
@@ -48,11 +46,42 @@ try:
         set_gauge as _set_gauge,
     )
 except Exception:  # noqa: BLE001
-    def _increment_counter(metric_name: str, value: float = 1, labels: Optional[dict[str, str]] = None) -> None:  # type: ignore[misc]
+    def _increment_counter(metric_name: str, value: float = 1, labels: dict[str, str] | None = None) -> None:  # type: ignore[misc]
         pass
 
-    def _set_gauge(metric_name: str, value: float = 0, labels: Optional[dict[str, str]] = None) -> None:  # type: ignore[misc]
+    def _set_gauge(metric_name: str, value: float = 0, labels: dict[str, str] | None = None) -> None:  # type: ignore[misc]
         pass
+
+
+# ---------------------------------------------------------------------------
+# Metrics configuration
+# ---------------------------------------------------------------------------
+
+# When True, emit metrics with legacy ``service="{category}:{name}"`` labels
+# in addition to the standard labels.
+_EMIT_LEGACY_ALIASES: bool = True
+
+# Label validation allow-lists (unknown labels normalised to ``"other"``)
+_VALID_CATEGORIES: set[str] = {
+    "", "embeddings", "evaluations", "tts", "rag", "chat", "mcp",
+    "websearch", "test_cat", "test", "my_cat",
+}
+_VALID_REASONS: set[str] = {
+    "", "unknown", "threshold", "half_open_failure", "timeout",
+}
+
+_warned_labels: set[str] = set()
+
+
+def _validate_label(value: str, valid_set: set[str], kind: str) -> str:
+    """Return *value* if known, else ``"other"`` with a one-shot warning."""
+    if value in valid_set:
+        return value
+    key = f"{kind}:{value}"
+    if key not in _warned_labels:
+        _warned_labels.add(key)
+        logger.warning("Unknown circuit-breaker {} label {!r}, normalising to 'other'", kind, value)
+    return "other"
 
 
 # ---------------------------------------------------------------------------
@@ -66,9 +95,13 @@ class CircuitState(IntEnum):
     HALF_OPEN = 2
 
 
-@dataclass
+@dataclass(frozen=True)
 class CircuitBreakerConfig:
-    """Configuration for a :class:`CircuitBreaker` instance."""
+    """Configuration for a :class:`CircuitBreaker` instance.
+
+    This dataclass is frozen (immutable).  Use :meth:`CircuitBreaker.update_config`
+    to replace the config at runtime.
+    """
 
     failure_threshold: int = 5
     """Consecutive failures (counter mode) before tripping to OPEN."""
@@ -93,6 +126,15 @@ class CircuitBreakerConfig:
     failure_rate_threshold: float = 0.5
     """Failure rate (0..1) at which the breaker trips in rolling-window mode."""
 
+    # Minimum calls before tripping
+    min_calls: int = 0
+    """Minimum number of calls in the rolling window before the breaker can
+    trip.  ``0`` means use *window_size* as minimum (backward-compat)."""
+
+    # Call timeout (async only)
+    call_timeout: float | None = None
+    """If set, wraps ``call_async`` in ``asyncio.wait_for()`` with this timeout."""
+
     # Exponential backoff on recovery timeout
     backoff_factor: float = 1.0
     """Multiplier applied to *recovery_timeout* after each HALF_OPEN → OPEN
@@ -111,6 +153,10 @@ class CircuitBreakerConfig:
     operation: str = "call"
     """Operation label for success/failure counters."""
 
+    # Metrics opt-out
+    emit_metrics: bool = True
+    """Set to ``False`` to suppress all metric emissions for this breaker."""
+
 
 class CircuitBreakerOpenError(Exception):
     """Raised when a call is rejected because the circuit is OPEN.
@@ -128,6 +174,7 @@ class CircuitBreakerOpenError(Exception):
         service: str = "",
         recovery_timeout: float = 0.0,
         failure_count: int = 0,
+        recovery_at: float | None = None,
     ):
         super().__init__(message)
         self.breaker_name = breaker_name
@@ -135,6 +182,7 @@ class CircuitBreakerOpenError(Exception):
         self.service = service
         self.recovery_timeout = recovery_timeout
         self.failure_count = failure_count
+        self.recovery_at = recovery_at
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +274,9 @@ class CircuitBreaker:
         if config.window_size > 0:
             self._window = deque(maxlen=config.window_size)
 
+        # State-change tracking
+        self._last_state_change_time: float = time.time()
+
         # Exponential backoff state
         self._current_recovery_timeout: float = config.recovery_timeout
 
@@ -261,6 +312,11 @@ class CircuitBreaker:
             return self._failure_count
 
     @property
+    def success_count(self) -> int:
+        with self._lock:
+            return self._success_count
+
+    @property
     def is_closed(self) -> bool:
         return self.state == CircuitState.CLOSED
 
@@ -271,6 +327,30 @@ class CircuitBreaker:
     @property
     def is_half_open(self) -> bool:
         return self.state == CircuitState.HALF_OPEN
+
+    @property
+    def last_state_change_time(self) -> float:
+        """Timestamp of the most recent state transition."""
+        with self._lock:
+            return self._last_state_change_time
+
+    @property
+    def last_failure_time(self) -> float | None:
+        """Timestamp of the most recent recorded failure."""
+        with self._lock:
+            return self._last_failure_time
+
+    @property
+    def current_recovery_timeout(self) -> float:
+        """Current recovery timeout (may differ from config if backoff active)."""
+        with self._lock:
+            return self._current_recovery_timeout
+
+    @property
+    def half_open_calls(self) -> int:
+        """Number of currently active half-open probe calls."""
+        with self._lock:
+            return self._half_open_calls
 
     # -- check-pattern API (for Chat, WebSearch) ----------------------------
 
@@ -336,6 +416,8 @@ class CircuitBreaker:
         """Execute *func* through the circuit breaker (async).
 
         Works identically to :meth:`call` but awaits the wrapped function.
+        If ``config.call_timeout`` is set, wraps the call in
+        ``asyncio.wait_for()``.
         """
         # Use threading lock for state checks (fast, no I/O).
         with self._lock:
@@ -344,7 +426,18 @@ class CircuitBreaker:
             acquired_slot = self._acquire_half_open_slot()
 
         try:
-            result = await func(*args, **kwargs)
+            if self.config.call_timeout is not None:
+                result = await asyncio.wait_for(
+                    func(*args, **kwargs),
+                    timeout=self.config.call_timeout,
+                )
+            else:
+                result = await func(*args, **kwargs)
+        except asyncio.TimeoutError:
+            with self._lock:
+                self._on_failure(None)
+                self._emit_timeout()
+            raise
         except BaseException as exc:
             if isinstance(exc, self.config.expected_exception):
                 with self._lock:
@@ -371,6 +464,7 @@ class CircuitBreaker:
             self._success_count = 0
             self._half_open_calls = 0
             self._last_failure_time = None
+            self._last_state_change_time = time.time()
             self._current_recovery_timeout = self.config.recovery_timeout
             if self._window is not None:
                 self._window.clear()
@@ -378,6 +472,35 @@ class CircuitBreaker:
             if old != CircuitState.CLOSED:
                 self._fire_callbacks(old, CircuitState.CLOSED)
             logger.info("Circuit breaker '{}' manually reset", self.name)
+
+    def update_config(self, new_config: CircuitBreakerConfig) -> None:
+        """Replace the breaker's config with *new_config* under lock.
+
+        Since ``CircuitBreakerConfig`` is frozen, this replaces the entire
+        object.  Re-derives metrics labels and adjusts the rolling window
+        if ``window_size`` changed.
+        """
+        with self._lock:
+            old_config = self.config
+            self.config = new_config
+            self._category = new_config.category or ""
+            self._service = new_config.service or self.name
+            self._operation = new_config.operation or "call"
+            self._current_recovery_timeout = new_config.recovery_timeout
+
+            # Adjust window if window_size changed
+            if new_config.window_size > 0:
+                if self._window is None or self._window.maxlen != new_config.window_size:
+                    self._window = deque(maxlen=new_config.window_size)
+            elif new_config.window_size == 0:
+                self._window = None
+
+            logger.info(
+                "Circuit breaker '{}' config updated: {} -> {}",
+                self.name,
+                old_config,
+                new_config,
+            )
 
     def get_status(self) -> dict[str, Any]:
         """Return a JSON-serialisable snapshot of the breaker's state."""
@@ -389,6 +512,7 @@ class CircuitBreaker:
                 "failure_count": self._failure_count,
                 "success_count": self._success_count,
                 "last_failure_time": self._last_failure_time,
+                "last_state_change_time": self._last_state_change_time,
                 "half_open_calls": self._half_open_calls,
                 "current_recovery_timeout": self._current_recovery_timeout,
                 "settings": {
@@ -400,6 +524,9 @@ class CircuitBreaker:
                     "failure_rate_threshold": self.config.failure_rate_threshold,
                     "backoff_factor": self.config.backoff_factor,
                     "max_recovery_timeout": self.config.max_recovery_timeout,
+                    "min_calls": self.config.min_calls,
+                    "call_timeout": self.config.call_timeout,
+                    "emit_metrics": self.config.emit_metrics,
                 },
             }
             if self._window is not None:
@@ -432,6 +559,10 @@ class CircuitBreaker:
         """
         if self._state == CircuitState.OPEN:
             self._emit_rejection()
+            recovery_at = (
+                self._last_failure_time + self._current_recovery_timeout
+                if self._last_failure_time else None
+            )
             raise CircuitBreakerOpenError(
                 f"Circuit breaker '{self.name}' is OPEN",
                 breaker_name=self.name,
@@ -439,6 +570,7 @@ class CircuitBreaker:
                 service=self._service,
                 recovery_timeout=self._current_recovery_timeout,
                 failure_count=self._failure_count,
+                recovery_at=recovery_at,
             )
         if self._state == CircuitState.HALF_OPEN:
             if self._half_open_calls >= self.config.half_open_max_calls:
@@ -502,7 +634,8 @@ class CircuitBreaker:
         """
         if self._window is not None:
             # Rolling-window mode
-            if len(self._window) >= self.config.window_size:
+            effective_min = self.config.min_calls or self.config.window_size
+            if len(self._window) >= effective_min:
                 rate = sum(1 for r in self._window if not r) / len(self._window)
                 return rate >= self.config.failure_rate_threshold
             return False
@@ -516,6 +649,7 @@ class CircuitBreaker:
             return
 
         self._state = new_state
+        self._last_state_change_time = time.time()
 
         if new_state == CircuitState.CLOSED:
             self._failure_count = 0
@@ -573,6 +707,8 @@ class CircuitBreaker:
         }
 
     def _emit_state_gauge(self) -> None:
+        if not self.config.emit_metrics:
+            return
         _set_gauge(
             "circuit_breaker_state",
             float(self._state.value),
@@ -580,28 +716,40 @@ class CircuitBreaker:
         )
 
     def _emit_trip(self, reason: str) -> None:
-        _increment_counter(
-            "circuit_breaker_trips_total",
-            labels={
-                "category": self._category,
-                "service": self._service,
-                "reason": reason or "unknown",
-            },
-        )
+        if not self.config.emit_metrics:
+            return
+        validated_reason = _validate_label(reason or "unknown", _VALID_REASONS, "reason")
+        labels = {
+            "category": self._category,
+            "service": self._service,
+            "reason": validated_reason,
+        }
+        _increment_counter("circuit_breaker_trips_total", labels=labels)
+        if _EMIT_LEGACY_ALIASES and self._category:
+            _increment_counter(
+                "circuit_breaker_trips_total",
+                labels={**labels, "service": f"{self._category}:{self._service}"},
+            )
 
     def _emit_rejection(self) -> None:
+        if not self.config.emit_metrics:
+            return
         _increment_counter(
             "circuit_breaker_rejections_total",
             labels=self._metric_labels(self._operation),
         )
 
     def _emit_success(self) -> None:
+        if not self.config.emit_metrics:
+            return
         _increment_counter(
             "circuit_breaker_successes_total",
             labels=self._metric_labels(self._operation),
         )
 
     def _emit_failure(self, error: Exception | None = None) -> None:
+        if not self.config.emit_metrics:
+            return
         outcome = type(error).__name__ if error else "error"
         _increment_counter(
             "circuit_breaker_failures_total",
@@ -611,6 +759,15 @@ class CircuitBreaker:
                 "operation": self._operation,
                 "outcome": outcome,
             },
+        )
+
+    def _emit_timeout(self) -> None:
+        """Emit the ``circuit_breaker_timeouts_total`` counter."""
+        if not self.config.emit_metrics:
+            return
+        _increment_counter(
+            "circuit_breaker_timeouts_total",
+            labels=self._metric_labels(self._operation),
         )
 
     # -- repr ---------------------------------------------------------------
@@ -639,10 +796,21 @@ class CircuitBreakerRegistry:
         config: CircuitBreakerConfig | None = None,
         **kwargs: Any,
     ) -> CircuitBreaker:
-        """Return an existing breaker or create and register a new one."""
+        """Return an existing breaker or create and register a new one.
+
+        If a breaker with *name* already exists and *config* is provided,
+        a warning is logged if the configs differ.
+        """
         with self._lock:
             if name in self._breakers:
-                return self._breakers[name]
+                existing = self._breakers[name]
+                if config is not None and config != existing.config:
+                    logger.warning(
+                        "get_or_create('{}') called with different config; "
+                        "returning existing breaker. Old: {}, New: {}",
+                        name, existing.config, config,
+                    )
+                return existing
             breaker = CircuitBreaker(name, config=config, **kwargs)
             self._breakers[name] = breaker
             return breaker
@@ -655,6 +823,11 @@ class CircuitBreakerRegistry:
     def get(self, name: str) -> CircuitBreaker | None:
         """Look up a breaker by *name* (or ``None``)."""
         return self._breakers.get(name)
+
+    def remove(self, name: str) -> bool:
+        """Remove a breaker by *name*.  Returns ``True`` if it was found."""
+        with self._lock:
+            return self._breakers.pop(name, None) is not None
 
     def get_all_status(self) -> dict[str, dict[str, Any]]:
         """Return ``{name: status_dict}`` for every registered breaker."""

@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from tldw_Server_API.app.api.v1.endpoints import mcp_catalogs_manage
+from tldw_Server_API.app.core.exceptions import ToolCatalogConflictError
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 
@@ -81,3 +82,53 @@ async def test_require_team_manager_denies_non_manager_member(
         )
     assert exc.value.status_code == 403
     assert exc.value.detail == "Team manager role required"
+
+
+@pytest.mark.asyncio
+async def test_get_scoped_catalog_rejects_wrong_org_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_get_tool_catalog(_db, catalog_id: int):
+        assert catalog_id == 5
+        return {"id": 5, "org_id": 99, "team_id": None}
+
+    monkeypatch.setattr(
+        mcp_catalogs_manage.admin_tool_catalog_service,
+        "get_tool_catalog",
+        _fake_get_tool_catalog,
+    )
+
+    result = await mcp_catalogs_manage._get_scoped_catalog(
+        db=object(),
+        catalog_id=5,
+        org_id=7,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_create_org_tool_catalog_maps_service_conflict_to_409(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _allow_manager(*_args, **_kwargs):
+        return None
+
+    async def _raise_conflict(*_args, **_kwargs):
+        raise ToolCatalogConflictError("exists")
+
+    monkeypatch.setattr(mcp_catalogs_manage, "_require_org_manager", _allow_manager)
+    monkeypatch.setattr(
+        mcp_catalogs_manage.admin_tool_catalog_service,
+        "create_tool_catalog",
+        _raise_conflict,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await mcp_catalogs_manage.create_org_tool_catalog(
+            org_id=7,
+            payload=mcp_catalogs_manage.ToolCatalogCreateRequest(name="dup-cat"),
+            principal=_principal(user_id=42, roles=["lead"], is_admin=False),
+            db=object(),
+        )
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "Catalog already exists"
