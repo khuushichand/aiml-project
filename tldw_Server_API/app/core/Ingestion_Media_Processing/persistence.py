@@ -9,11 +9,12 @@ import logging
 import os
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path as FilePath
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from fastapi import BackgroundTasks, HTTPException, UploadFile, status
+from fastapi import BackgroundTasks, HTTPException, Request, UploadFile, status
 from loguru import logger
 from starlette.responses import JSONResponse
 
@@ -49,6 +50,11 @@ from tldw_Server_API.app.core.testing import (
     is_test_mode,
 )
 
+try:
+    from tldw_Server_API.app.core.Resource_Governance import RGRequest
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - optional in minimal profiles
+    RGRequest = None  # type: ignore[assignment]
+
 try:  # Align HTTP 413 compatibility with legacy endpoint module
     HTTP_413_TOO_LARGE = status.HTTP_413_CONTENT_TOO_LARGE
 except AttributeError:  # Starlette < 0.27
@@ -77,6 +83,138 @@ _PERSISTENCE_NONCRITICAL_EXCEPTIONS = (
     DatabaseError,
     InputError,
 )
+
+_MEDIA_INGESTION_POLICY_ID = "media.default"
+_MEDIA_INGESTION_BYTES_CATEGORY = "ingestion_bytes"
+
+_media_ingestion_daily_ledger = None
+_media_ingestion_daily_ledger_lock = asyncio.Lock()
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        return int(default)
+
+
+def _build_ingestion_budget_headers(
+    *,
+    category_details: dict[str, Any] | None,
+    retry_after: int | None,
+) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if retry_after is not None and int(retry_after) > 0:
+        headers["Retry-After"] = str(int(retry_after))
+    cat = category_details or {}
+    limit_raw = cat.get("daily_cap")
+    if limit_raw is None:
+        limit_raw = cat.get("limit")
+    remaining_raw = cat.get("daily_remaining")
+    if remaining_raw is None:
+        remaining_raw = cat.get("remaining")
+    if limit_raw is not None:
+        headers["X-RateLimit-Limit"] = str(max(0, _safe_int(limit_raw, 0)))
+    if remaining_raw is not None:
+        headers["X-RateLimit-Remaining"] = str(max(0, _safe_int(remaining_raw, 0)))
+    return headers
+
+
+def _resolve_media_budget_context(
+    *,
+    request: Request | None,
+    current_user: Any,
+) -> tuple[Any | None, str, dict[str, Any], str]:
+    """Return (governor, policy_id, policy, entity) for media budget checks."""
+    if request is None:
+        return None, _MEDIA_INGESTION_POLICY_ID, {}, ""
+    try:
+        app_state = getattr(request.app, "state", None)
+        gov = getattr(app_state, "rg_governor", None)
+        loader = getattr(app_state, "rg_policy_loader", None)
+        policy_id = str(
+            getattr(request.state, "rg_policy_id", None) or _MEDIA_INGESTION_POLICY_ID
+        )
+        policy: dict[str, Any] = {}
+        if loader is not None:
+            try:
+                policy = dict(loader.get_policy(policy_id) or {})
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+                policy = {}
+        if hasattr(current_user, "id") and getattr(current_user, "id") is not None:
+            entity = f"user:{int(current_user.id)}"
+        else:
+            entity = ""
+        return gov, policy_id, policy, entity
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        return None, _MEDIA_INGESTION_POLICY_ID, {}, ""
+
+
+async def _get_media_ingestion_daily_ledger():
+    global _media_ingestion_daily_ledger
+    if _media_ingestion_daily_ledger is not None:
+        return _media_ingestion_daily_ledger
+    async with _media_ingestion_daily_ledger_lock:
+        if _media_ingestion_daily_ledger is not None:
+            return _media_ingestion_daily_ledger
+        try:
+            from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (
+                ResourceDailyLedger,
+            )
+        except (ImportError, ModuleNotFoundError):
+            return None
+        try:
+            ledger = ResourceDailyLedger()
+            await ledger.initialize()
+            _media_ingestion_daily_ledger = ledger
+            return ledger
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(
+                "Media ingestion budget: failed to initialize ResourceDailyLedger: {}",
+                exc,
+            )
+            return None
+
+
+async def _record_media_ingestion_bytes_ledger_entry(
+    *,
+    entity_scope: str,
+    entity_value: str,
+    units: int,
+    op_id: str,
+) -> bool:
+    if units <= 0:
+        return False
+    ledger = await _get_media_ingestion_daily_ledger()
+    if ledger is None:
+        return False
+    try:
+        from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (
+            LedgerEntry,
+        )
+    except (ImportError, ModuleNotFoundError):
+        return False
+    try:
+        inserted = await ledger.add(
+            LedgerEntry(
+                entity_scope=str(entity_scope),
+                entity_value=str(entity_value),
+                category=_MEDIA_INGESTION_BYTES_CATEGORY,
+                units=max(0, int(units)),
+                op_id=str(op_id),
+                occurred_at=datetime.now(timezone.utc),
+            )
+        )
+        return bool(inserted)
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(
+            "Media ingestion budget: ledger write failed for {}:{} units={}: {}",
+            entity_scope,
+            entity_value,
+            units,
+            exc,
+        )
+        return False
 
 
 def _ensure_warnings_list(result: dict[str, Any]) -> list[str]:
@@ -1509,6 +1647,7 @@ async def add_media_orchestrate(
     current_user: Any,
     usage_log: Any,
     response: Any = None,
+    request: Request | None = None,
 ) -> Any:
     """
     Orchestration helper for the `/media/add` endpoint.
@@ -1585,6 +1724,17 @@ async def add_media_orchestrate(
 
     request_started_at = time.monotonic()
     request_outcome = "error"
+    total_uploaded_bytes = 0
+    rg_media_handle_id: str | None = None
+    rg_governor, rg_policy_id, rg_policy, rg_entity = _resolve_media_budget_context(
+        request=request,
+        current_user=current_user,
+    )
+    rg_jobs_limit = _safe_int((rg_policy.get("jobs") or {}).get("max_concurrent"), 0)
+    rg_daily_bytes_cap = _safe_int(
+        (rg_policy.get(_MEDIA_INGESTION_BYTES_CATEGORY) or {}).get("daily_cap"),
+        0,
+    )
 
     # --- 1. Validation (form parsing handled by get_add_media_form) ---
     _validate_inputs(form_data.media_type, form_data.urls, files)
@@ -1615,6 +1765,55 @@ async def add_media_orchestrate(
     except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
         # Usage logging must never break the endpoint path.
         pass
+
+    # --- 1b. Resource Governor per-user concurrency budget ---
+    if (
+        rg_governor is not None
+        and RGRequest is not None
+        and rg_entity
+        and rg_jobs_limit > 0
+    ):
+        try:
+            rg_decision, rg_handle = await rg_governor.reserve(
+                RGRequest(
+                    entity=rg_entity,
+                    categories={"jobs": {"units": 1}},
+                    tags={
+                        "policy_id": rg_policy_id,
+                        "endpoint": request.url.path if request is not None else "/api/v1/media/add",
+                    },
+                ),
+                op_id=f"media-add-jobs:{rg_entity}:{time.time_ns()}",
+            )
+            if not bool(getattr(rg_decision, "allowed", False)) or not rg_handle:
+                cat_details = (
+                    ((getattr(rg_decision, "details", {}) or {}).get("categories", {}) or {}).get("jobs")
+                    or {}
+                )
+                retry_after = _safe_int(
+                    getattr(rg_decision, "retry_after", None)
+                    or cat_details.get("retry_after"),
+                    1,
+                )
+                headers = _build_ingestion_budget_headers(
+                    category_details=cat_details,
+                    retry_after=retry_after,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Media ingestion concurrency limit reached.",
+                    headers=headers or None,
+                )
+            rg_media_handle_id = str(rg_handle)
+        except HTTPException:
+            raise
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as rg_exc:
+            logger.debug(
+                "Media ingestion RG concurrency reserve skipped for entity={} policy_id={}: {}",
+                rg_entity,
+                rg_policy_id,
+                rg_exc,
+            )
 
     # --- 2. Database dependency / client_id guard ---
     if not hasattr(db, "client_id") or not db.client_id:
@@ -1778,6 +1977,86 @@ async def add_media_orchestrate(
                 raise
             except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as quota_err:
                 logger.warning("Quota check failed (non-fatal): {}", quota_err)
+
+            # --- Resource Governor per-user upload-bytes budget ---
+            if (
+                rg_governor is not None
+                and RGRequest is not None
+                and rg_entity
+                and rg_daily_bytes_cap > 0
+                and total_uploaded_bytes > 0
+            ):
+                try:
+                    rg_decision = await rg_governor.check(
+                        RGRequest(
+                            entity=rg_entity,
+                            categories={
+                                _MEDIA_INGESTION_BYTES_CATEGORY: {
+                                    "units": int(total_uploaded_bytes),
+                                }
+                            },
+                            tags={
+                                "policy_id": rg_policy_id,
+                                "endpoint": request.url.path if request is not None else "/api/v1/media/add",
+                            },
+                        )
+                    )
+                    if not bool(getattr(rg_decision, "allowed", False)):
+                        cat_details = (
+                            (
+                                (getattr(rg_decision, "details", {}) or {}).get(
+                                    "categories",
+                                    {},
+                                )
+                                or {}
+                            ).get(_MEDIA_INGESTION_BYTES_CATEGORY)
+                            or {}
+                        )
+                        retry_after = _safe_int(
+                            getattr(rg_decision, "retry_after", None)
+                            or cat_details.get("retry_after"),
+                            1,
+                        )
+                        headers = _build_ingestion_budget_headers(
+                            category_details=cat_details,
+                            retry_after=retry_after,
+                        )
+                        raise HTTPException(
+                            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                            detail="Daily ingestion size budget exceeded.",
+                            headers=headers or None,
+                        )
+
+                    if ":" in rg_entity:
+                        entity_scope, entity_value = rg_entity.split(":", 1)
+                    else:
+                        entity_scope, entity_value = "entity", rg_entity
+                    request_id_part = (
+                        request.headers.get("X-Request-ID", "")
+                        if request is not None
+                        else ""
+                    )
+                    if not request_id_part:
+                        request_id_part = str(time.time_ns())
+                    await _record_media_ingestion_bytes_ledger_entry(
+                        entity_scope=entity_scope,
+                        entity_value=entity_value,
+                        units=int(total_uploaded_bytes),
+                        op_id=(
+                            f"media-ingestion-bytes:{entity_scope}:{entity_value}:"
+                            f"{request_id_part}:{int(total_uploaded_bytes)}"
+                        ),
+                    )
+                except HTTPException:
+                    raise
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as rg_exc:
+                    logger.debug(
+                        "Media ingestion RG bytes check skipped for entity={} policy_id={} bytes={}: {}",
+                        rg_entity,
+                        rg_policy_id,
+                        total_uploaded_bytes,
+                        rg_exc,
+                    )
 
             # --- 5. Prepare Inputs and Options ---
             uploaded_file_paths = [str(pf["path"]) for pf in saved_files_info]
@@ -2258,6 +2537,15 @@ async def add_media_orchestrate(
             detail=f"Unexpected internal error: {type(unexpected).__name__}",
         ) from unexpected
     finally:
+        if rg_media_handle_id and rg_governor is not None:
+            try:
+                await rg_governor.release(rg_media_handle_id)
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as rg_release_err:
+                logger.debug(
+                    "Media ingestion RG release failed for handle_id={}: {}",
+                    rg_media_handle_id,
+                    rg_release_err,
+                )
         _emit_ingestion_request_metric(
             media_type=getattr(form_data, "media_type", None),
             outcome=request_outcome,
@@ -2277,6 +2565,7 @@ async def add_media_persist(
     current_user: Any,
     usage_log: Any,
     response: Any = None,
+    request: Request | None = None,
 ) -> Any:
     """
     Persistence entry point used by the modular `media/add` endpoint.
@@ -2293,6 +2582,7 @@ async def add_media_persist(
         current_user=current_user,
         usage_log=usage_log,
         response=response,
+        request=request,
     )
 
 

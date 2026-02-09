@@ -219,6 +219,8 @@ policies:
   # concurrent ingestion workflows in development.
   media.default:
     requests: { rpm: 600, burst: 1.2 }
+    jobs: { max_concurrent: 2, ttl_sec: 1800 }
+    ingestion_bytes: { daily_cap: 2147483648 }
     scopes: [user, api_key]
 
   # Media access endpoints (listing, item retrieval, file download).

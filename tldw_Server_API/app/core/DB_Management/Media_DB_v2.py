@@ -7242,9 +7242,9 @@ class MediaDatabase:
         now = self._get_current_utc_timestamp_str()
         self.execute_query(
             (
-                "INSERT OR IGNORE INTO claim_cluster_links "
+                "INSERT INTO claim_cluster_links "
                 "(parent_cluster_id, child_cluster_id, relation_type, created_at) "
-                "VALUES (?, ?, ?, ?)"
+                "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
             ),
             (
                 int(parent_cluster_id),
@@ -7399,9 +7399,9 @@ class MediaDatabase:
             self._execute_with_connection(
                 conn,
                 (
-                    "INSERT OR IGNORE INTO claim_cluster_membership "
+                    "INSERT INTO claim_cluster_membership "
                     "(cluster_id, claim_id, similarity_score, cluster_joined_at) "
-                    "VALUES (?, ?, ?, ?)"
+                    "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
                 ),
                 (int(cluster_id), int(claim_id), similarity_score, now),
             )
@@ -7515,9 +7515,9 @@ class MediaDatabase:
                     self._execute_with_connection(
                         conn,
                         (
-                            "INSERT OR IGNORE INTO claim_cluster_membership "
+                            "INSERT INTO claim_cluster_membership "
                             "(cluster_id, claim_id, similarity_score, cluster_joined_at) "
-                            "VALUES (?, ?, ?, ?)"
+                            "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
                         ),
                         (int(cluster_id), int(item["id"]), 1.0, now),
                     )
@@ -7591,16 +7591,10 @@ class MediaDatabase:
             )
 
             membership_sql = (
-                "INSERT OR IGNORE INTO claim_cluster_membership "
+                "INSERT INTO claim_cluster_membership "
                 "(cluster_id, claim_id, similarity_score, cluster_joined_at) "
-                "VALUES (?, ?, ?, ?)"
+                "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
             )
-            if self.backend_type == BackendType.POSTGRESQL:
-                membership_sql = (
-                    "INSERT INTO claim_cluster_membership "
-                    "(cluster_id, claim_id, similarity_score, cluster_joined_at) "
-                    "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
-                )
 
             for cluster in clusters:
                 canonical_text = str(cluster.get("canonical_claim_text") or "")

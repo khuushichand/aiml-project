@@ -6,7 +6,7 @@ from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     decrypt_byok_payload,
@@ -35,6 +35,11 @@ class RotationSummary:
     tables: dict[str, RotationStats]
     total: RotationStats
     dry_run: bool = False
+
+
+def _is_postgres_pool(pool: DatabasePool) -> bool:
+    """Return backend type from DatabasePool state."""
+    return getattr(pool, "pool", None) is not None
 
 
 def _extract_row_fields(row: Any) -> tuple[int, str | None]:
@@ -172,7 +177,7 @@ async def rotate_byok_secrets(
         )
 
     db_pool = pool or await get_db_pool()
-    is_postgres = await is_postgres_backend()
+    is_postgres = _is_postgres_pool(db_pool)
 
     tables = {}
     total = RotationStats()

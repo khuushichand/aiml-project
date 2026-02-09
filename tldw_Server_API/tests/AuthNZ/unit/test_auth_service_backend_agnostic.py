@@ -75,7 +75,7 @@ async def test_update_user_password_hash_commits_sqlite_like_connection() -> Non
 
     await auth_service.update_user_password_hash(db, 42, "new-hash")
 
-    assert db.calls == [("UPDATE users SET password_hash = $1 WHERE id = $2", ("new-hash", 42))]
+    assert db.calls == [("UPDATE users SET password_hash = ? WHERE id = ?", ("new-hash", 42))]
     assert db.commits == 1
 
 
@@ -127,3 +127,82 @@ async def test_update_user_last_login_uses_adapter_query_shape() -> None:
         now,
         17,
     )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_store_password_reset_token_sqlite_fallback_normalizes_placeholders() -> None:
+    class _SqliteLikeConn:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[Any, ...]]] = []
+            self.commits = 0
+
+        async def execute(self, query: str, params: tuple[Any, ...]) -> None:
+            self.calls.append((query, params))
+
+        async def commit(self) -> None:
+            self.commits += 1
+
+    db = _SqliteLikeConn()
+    expires = datetime(2026, 2, 9, 12, 30, 0)
+
+    await auth_service.store_password_reset_token(
+        db,
+        user_id=7,
+        token_hash="tok-hash",
+        expires_at=expires,
+        ip_address="203.0.113.9",
+    )
+
+    assert len(db.calls) == 1
+    query, params = db.calls[0]
+    assert "INSERT INTO password_reset_tokens" in query
+    assert "VALUES (?, ?, ?, ?)" in query
+    assert params == (7, "tok-hash", expires, "203.0.113.9")
+    assert db.commits == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_password_reset_token_record_sqlite_fallback_dynamic_in_clause() -> None:
+    class _SqliteLikeConn:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+        async def execute(self, query: str, params: tuple[Any, ...]) -> _Cursor:
+            self.calls.append((query, params))
+            return _Cursor((55, None))
+
+    db = _SqliteLikeConn()
+    token_id, used_at = await auth_service.fetch_password_reset_token_record(
+        db,
+        user_id=4,
+        hash_candidates=["h1", "h2"],
+    )
+
+    assert token_id == 55
+    assert used_at is None
+    assert len(db.calls) == 1
+    query, params = db.calls[0]
+    assert "FROM password_reset_tokens" in query
+    assert "token_hash IN (?, ?)" in query
+    assert params == (4, "h1", "h2")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_verify_user_email_once_uses_postgres_update_count_when_available() -> None:
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value="UPDATE 1")
+    db.fetchrow = AsyncMock()
+    db.commit = AsyncMock()
+
+    updated = await auth_service.verify_user_email_once(
+        db,
+        user_id=9,
+        email="User@Example.com",
+        now_utc=datetime(2026, 2, 9, 13, 0, 0),
+    )
+
+    assert updated == 1
+    db.fetchrow.assert_not_awaited()

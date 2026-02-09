@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List
 
 import pytest
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 from fastapi import status
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing import (
@@ -74,6 +74,17 @@ class _FakeQuotaService:
         return True, {"current_usage_mb": 0, "new_size_mb": 0, "quota_mb": 1, "available_mb": 1}
 
 
+class _FakeUploadQuotaService:
+    async def check_quota(
+        self,
+        user_id: int,
+        new_bytes: int,
+        raise_on_exceed: bool = False,
+    ) -> tuple[bool, Dict[str, Any]]:
+        _ = (user_id, new_bytes, raise_on_exceed)
+        return True, {"current_usage_mb": 0, "new_size_mb": 0, "quota_mb": 1024, "available_mb": 1024}
+
+
 @pytest.fixture
 def fake_storage() -> _FakeStorage:
     return _FakeStorage()
@@ -82,6 +93,18 @@ def fake_storage() -> _FakeStorage:
 @pytest.fixture
 def fake_db() -> _FakeDB:
     return _FakeDB()
+
+
+@pytest.fixture(autouse=True)
+def _disable_collections_dual_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _noop(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "sync_media_add_results_to_collections",
+        _noop,
+    )
 
 
 @pytest.mark.unit
@@ -365,6 +388,295 @@ async def test_add_media_orchestrate_document_concurrency_limit(monkeypatch, fak
 
     assert response.status_code == status.HTTP_200_OK
     assert state["max"] <= 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_add_media_orchestrate_enforces_rg_media_jobs_limit(monkeypatch, fake_db):
+    save_called = {"value": False}
+
+    async def fake_save_uploaded_files(_files, temp_dir, **_kwargs):
+        save_called["value"] = True
+        path = Path(temp_dir) / "doc.txt"
+        path.write_text("ok")
+        return [{"path": path, "original_filename": "doc.txt"}], []
+
+    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
+    monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
+
+    class _DenyJobsGov:
+        async def reserve(self, _req, op_id=None):
+            _ = op_id
+            decision = SimpleNamespace(
+                allowed=False,
+                retry_after=7,
+                details={"categories": {"jobs": {"limit": 1, "remaining": 0, "retry_after": 7}}},
+            )
+            return decision, None
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                rg_governor=_DenyJobsGov(),
+                rg_policy_loader=SimpleNamespace(get_policy=lambda _pid: {"jobs": {"max_concurrent": 1}}),
+            )
+        ),
+        state=SimpleNamespace(rg_policy_id="media.default"),
+        url=SimpleNamespace(path="/api/v1/media/add"),
+        headers={},
+    )
+
+    form_data = SimpleNamespace(
+        media_type="document",
+        urls=[],
+        keep_original_file=False,
+        perform_chunking=False,
+        perform_analysis=False,
+        generate_embeddings=False,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await ingestion_persistence.add_media_orchestrate(
+            background_tasks=BackgroundTasks(),
+            form_data=form_data,
+            files=[object()],
+            db=fake_db,
+            current_user=SimpleNamespace(id=1),
+            usage_log=SimpleNamespace(log_event=lambda *_args, **_kwargs: None),
+            request=request,
+        )
+
+    assert exc.value.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert "concurrency limit" in str(exc.value.detail).lower()
+    assert save_called["value"] is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_add_media_orchestrate_enforces_rg_ingestion_bytes_limit_and_releases_slot(
+    monkeypatch,
+    fake_db,
+):
+    async def fake_save_uploaded_files(_files, temp_dir, **_kwargs):
+        path = Path(temp_dir) / "doc.txt"
+        path.write_bytes(b"0123456789ABCDEF")
+        return [{"path": path, "original_filename": "doc.txt"}], []
+
+    async def fake_process_doc_item_fn(**_kwargs: Any) -> Dict[str, Any]:
+        return {
+            "status": "Success",
+            "input_ref": "doc.txt",
+            "processing_source": "doc.txt",
+            "media_type": "document",
+            "metadata": {},
+            "content": "content",
+            "analysis": None,
+            "summary": None,
+            "analysis_details": None,
+            "db_id": 1,
+            "db_message": "ok",
+        }
+
+    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
+    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
+    monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
+    monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
+    monkeypatch.setattr(storage_quota_service, "get_storage_quota_service", lambda: _FakeUploadQuotaService())
+
+    class _Gov:
+        def __init__(self) -> None:
+            self.released: list[str] = []
+            self.checked_units: int | None = None
+
+        async def reserve(self, _req, op_id=None):
+            _ = op_id
+            decision = SimpleNamespace(allowed=True, retry_after=None, details={"categories": {"jobs": {"limit": 2, "remaining": 1}}})
+            return decision, "media-handle-1"
+
+        async def check(self, req):
+            self.checked_units = int(req.categories.get("ingestion_bytes", {}).get("units") or 0)
+            return SimpleNamespace(
+                allowed=False,
+                retry_after=30,
+                details={
+                    "categories": {
+                        "ingestion_bytes": {
+                            "daily_cap": 10,
+                            "daily_used": 10,
+                            "daily_remaining": 0,
+                            "retry_after": 30,
+                        }
+                    }
+                },
+            )
+
+        async def release(self, handle_id):
+            self.released.append(str(handle_id))
+
+    gov = _Gov()
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                rg_governor=gov,
+                rg_policy_loader=SimpleNamespace(
+                    get_policy=lambda _pid: {
+                        "jobs": {"max_concurrent": 2},
+                        "ingestion_bytes": {"daily_cap": 10},
+                    }
+                ),
+            )
+        ),
+        state=SimpleNamespace(rg_policy_id="media.default"),
+        url=SimpleNamespace(path="/api/v1/media/add"),
+        headers={},
+    )
+
+    form_data = SimpleNamespace(
+        media_type="document",
+        urls=[],
+        keep_original_file=False,
+        perform_chunking=False,
+        perform_analysis=False,
+        generate_embeddings=False,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await ingestion_persistence.add_media_orchestrate(
+            background_tasks=BackgroundTasks(),
+            form_data=form_data,
+            files=[object()],
+            db=fake_db,
+            current_user=SimpleNamespace(id=1),
+            usage_log=SimpleNamespace(log_event=lambda *_args, **_kwargs: None),
+            request=request,
+        )
+
+    assert exc.value.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert "size budget" in str(exc.value.detail).lower()
+    assert gov.checked_units == 16
+    assert gov.released == ["media-handle-1"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_add_media_orchestrate_records_ingestion_bytes_in_shared_ledger(monkeypatch, fake_db):
+    async def fake_save_uploaded_files(_files, temp_dir, **_kwargs):
+        path = Path(temp_dir) / "doc.txt"
+        path.write_bytes(b"hello-world")
+        return [{"path": path, "original_filename": "doc.txt"}], []
+
+    async def fake_process_doc_item_fn(
+        *,
+        item_input_ref: str,
+        processing_source: str,
+        media_type: Any,
+        **_kwargs: Any,
+    ) -> Dict[str, Any]:
+        return {
+            "status": "Success",
+            "input_ref": item_input_ref,
+            "processing_source": str(processing_source),
+            "media_type": media_type,
+            "metadata": {},
+            "content": "content",
+            "analysis": None,
+            "summary": None,
+            "analysis_details": None,
+            "db_id": 1,
+            "db_message": "ok",
+        }
+
+    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
+    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
+    monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
+    monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
+    monkeypatch.setattr(storage_quota_service, "get_storage_quota_service", lambda: _FakeUploadQuotaService())
+
+    class _AllowGov:
+        async def reserve(self, _req, op_id=None):
+            _ = op_id
+            return SimpleNamespace(allowed=True, retry_after=None, details={}), "media-handle-2"
+
+        async def check(self, _req):
+            return SimpleNamespace(
+                allowed=True,
+                retry_after=None,
+                details={
+                    "categories": {
+                        "ingestion_bytes": {
+                            "daily_cap": 1000000,
+                            "daily_used": 0,
+                            "daily_remaining": 1000000,
+                        }
+                    }
+                },
+            )
+
+        async def release(self, _handle_id):
+            return None
+
+    recorded: dict[str, Any] = {}
+
+    async def _fake_record(
+        *,
+        entity_scope: str,
+        entity_value: str,
+        units: int,
+        op_id: str,
+    ) -> bool:
+        recorded["entity_scope"] = entity_scope
+        recorded["entity_value"] = entity_value
+        recorded["units"] = units
+        recorded["op_id"] = op_id
+        return True
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "_record_media_ingestion_bytes_ledger_entry",
+        _fake_record,
+    )
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                rg_governor=_AllowGov(),
+                rg_policy_loader=SimpleNamespace(
+                    get_policy=lambda _pid: {
+                        "jobs": {"max_concurrent": 2},
+                        "ingestion_bytes": {"daily_cap": 1000000},
+                    }
+                ),
+            )
+        ),
+        state=SimpleNamespace(rg_policy_id="media.default"),
+        url=SimpleNamespace(path="/api/v1/media/add"),
+        headers={"X-Request-ID": "req-abc"},
+    )
+
+    form_data = SimpleNamespace(
+        media_type="document",
+        urls=[],
+        keep_original_file=False,
+        perform_chunking=False,
+        perform_analysis=False,
+        generate_embeddings=False,
+    )
+
+    response = await ingestion_persistence.add_media_orchestrate(
+        background_tasks=BackgroundTasks(),
+        form_data=form_data,
+        files=[object()],
+        db=fake_db,
+        current_user=SimpleNamespace(id=42),
+        usage_log=SimpleNamespace(log_event=lambda *_args, **_kwargs: None),
+        request=request,
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert recorded["entity_scope"] == "user"
+    assert recorded["entity_value"] == "42"
+    assert recorded["units"] == len(b"hello-world")
+    assert "req-abc" in recorded["op_id"]
 
 
 @pytest.mark.unit

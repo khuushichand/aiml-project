@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 from datetime import datetime
+import re
 from typing import Any
 
 from loguru import logger
@@ -23,6 +24,9 @@ _USER_ROW_FALLBACK_COLUMNS = (
 )
 
 
+_SQL_PARAM_RE = re.compile(r"\$\d+")
+
+
 def _normalize_user_row(row: Any) -> dict[str, Any] | None:
     if not row:
         return None
@@ -38,20 +42,24 @@ def _normalize_user_row(row: Any) -> dict[str, Any] | None:
     }
 
 
+def _normalize_sqlite_placeholders(query: str) -> str:
+    return _SQL_PARAM_RE.sub("?", query)
+
+
 async def _execute_compat(db: Any, query: str, *params: Any) -> Any:
     execute = getattr(db, "execute")
     try:
         return await execute(query, *params)
     except TypeError:
         # Compatibility for sqlite-like execute(query, tuple(params))
-        return await execute(query, tuple(params))
+        return await execute(_normalize_sqlite_placeholders(query), tuple(params))
 
 
 async def _fetchrow_compat(db: Any, query: str, *params: Any) -> Any:
     fetchrow = getattr(db, "fetchrow", None)
     if callable(fetchrow):
         return await fetchrow(query, *params)
-    cursor = await _execute_compat(db, query.replace("$1", "?").replace("$2", "?"), *params)
+    cursor = await _execute_compat(db, query, *params)
     return await cursor.fetchone()
 
 
@@ -60,6 +68,31 @@ async def _maybe_commit(db: Any) -> None:
     if callable(commit):
         with contextlib.suppress(Exception):
             await commit()
+
+
+def _extract_update_count(result: Any) -> int:
+    if isinstance(result, str):
+        parts = result.split()
+        if parts and parts[-1].isdigit():
+            return int(parts[-1])
+        return 0
+    rowcount = getattr(result, "rowcount", None)
+    with contextlib.suppress(TypeError, ValueError):
+        if rowcount is not None:
+            return int(rowcount)
+    return 0
+
+
+def _extract_row_value(row: Any, key: str, index: int) -> Any:
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row.get(key)
+    with contextlib.suppress(Exception):
+        return row[key]
+    with contextlib.suppress(Exception):
+        return row[index]
+    return None
 
 
 async def fetch_user_by_login_identifier(db, identifier: str) -> dict[str, Any] | None:
@@ -124,4 +157,179 @@ async def fetch_active_user_by_id(db, user_id: int) -> dict[str, Any] | None:
         return user
     except Exception as e:
         logger.error(f"auth_service.fetch_active_user_by_id failed: {e}")
+        raise
+
+
+async def fetch_user_by_email_for_password_reset(db: Any, email: str) -> dict[str, Any] | None:
+    """Fetch reset-eligible user fields by email, case-insensitive."""
+    email_l = str(email or "").strip().lower()
+    try:
+        row = await _fetchrow_compat(
+            db,
+            "SELECT id, username, email, is_active FROM users WHERE lower(email) = $1",
+            email_l,
+        )
+        user = _normalize_user_row(row)
+        if user and "is_active" in user:
+            user["is_active"] = bool(user.get("is_active"))
+        return user
+    except Exception as exc:
+        logger.error(f"auth_service.fetch_user_by_email_for_password_reset failed: {exc}")
+        raise
+
+
+async def store_password_reset_token(
+    db: Any,
+    *,
+    user_id: int,
+    token_hash: str,
+    expires_at: datetime,
+    ip_address: str,
+) -> None:
+    """Insert a password reset token record."""
+    try:
+        await _execute_compat(
+            db,
+            """
+            INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, ip_address)
+            VALUES ($1, $2, $3, $4)
+            """,
+            user_id,
+            token_hash,
+            expires_at,
+            ip_address,
+        )
+        await _maybe_commit(db)
+    except Exception as exc:
+        logger.error(f"auth_service.store_password_reset_token failed for user {user_id}: {exc}")
+        raise
+
+
+async def fetch_password_reset_token_record(
+    db: Any,
+    *,
+    user_id: int,
+    hash_candidates: list[str],
+) -> tuple[int | None, Any | None]:
+    """Fetch latest password-reset token record matching one of the token hash candidates."""
+    if not hash_candidates:
+        return None, None
+    try:
+        placeholders = ", ".join(f"${idx}" for idx in range(2, len(hash_candidates) + 2))
+        query = f"""
+            SELECT id, used_at
+            FROM password_reset_tokens
+            WHERE user_id = $1 AND token_hash IN ({placeholders})
+            ORDER BY expires_at DESC
+            LIMIT 1
+        """
+        row = await _fetchrow_compat(db, query, user_id, *hash_candidates)
+        if not row:
+            return None, None
+        token_record_id = _extract_row_value(row, "id", 0)
+        used_at = _extract_row_value(row, "used_at", 1)
+        return int(token_record_id) if token_record_id is not None else None, used_at
+    except Exception as exc:
+        logger.error(f"auth_service.fetch_password_reset_token_record failed for user {user_id}: {exc}")
+        raise
+
+
+async def apply_password_reset(
+    db: Any,
+    *,
+    user_id: int,
+    new_password_hash: str,
+    token_record_id: int,
+    now_utc: datetime,
+) -> None:
+    """Apply password reset and mark reset token as used."""
+    try:
+        await _execute_compat(
+            db,
+            "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
+            new_password_hash,
+            now_utc,
+            user_id,
+        )
+        await _execute_compat(
+            db,
+            "UPDATE password_reset_tokens SET used_at = $1 WHERE id = $2",
+            now_utc,
+            token_record_id,
+        )
+        await _maybe_commit(db)
+    except Exception as exc:
+        logger.error(f"auth_service.apply_password_reset failed for user {user_id}: {exc}")
+        raise
+
+
+async def verify_user_email_once(
+    db: Any,
+    *,
+    user_id: int,
+    email: str,
+    now_utc: datetime,
+) -> int:
+    """Mark user email as verified once; return number of updated rows."""
+    try:
+        result = await _execute_compat(
+            db,
+            """
+            UPDATE users
+               SET is_verified = $1, updated_at = $2
+             WHERE id = $3
+               AND lower(email) = lower($4)
+               AND COALESCE(is_verified, $5) != $6
+            """,
+            True,
+            now_utc,
+            user_id,
+            email,
+            False,
+            True,
+        )
+        updated_rows = _extract_update_count(result)
+        if updated_rows <= 0 and not isinstance(result, str):
+            row = await _fetchrow_compat(db, "SELECT changes() AS changed")
+            changed = _extract_row_value(row, "changed", 0)
+            with contextlib.suppress(TypeError, ValueError):
+                updated_rows = int(changed)
+        await _maybe_commit(db)
+        return max(updated_rows, 0)
+    except Exception as exc:
+        logger.error(f"auth_service.verify_user_email_once failed for user {user_id}: {exc}")
+        raise
+
+
+async def fetch_user_by_email_for_verification(db: Any, email: str) -> dict[str, Any] | None:
+    """Fetch email-verification fields by email, case-insensitive."""
+    email_l = str(email or "").strip().lower()
+    try:
+        row = await _fetchrow_compat(
+            db,
+            "SELECT id, username, email, is_verified FROM users WHERE lower(email) = $1",
+            email_l,
+        )
+        user = _normalize_user_row(row)
+        if user and "is_verified" in user:
+            user["is_verified"] = bool(user.get("is_verified"))
+        return user
+    except Exception as exc:
+        logger.error(f"auth_service.fetch_user_by_email_for_verification failed: {exc}")
+        raise
+
+
+async def mark_user_verified(db: Any, user_id: int, now_utc: datetime) -> None:
+    """Mark user email as verified."""
+    try:
+        await _execute_compat(
+            db,
+            "UPDATE users SET is_verified = $1, updated_at = $2 WHERE id = $3",
+            True,
+            now_utc,
+            user_id,
+        )
+        await _maybe_commit(db)
+    except Exception as exc:
+        logger.error(f"auth_service.mark_user_verified failed for user {user_id}: {exc}")
         raise

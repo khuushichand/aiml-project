@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -180,3 +181,72 @@ async def test_policy_admin_upsert_and_delete_sqlite(monkeypatch, tmp_path):
         assert lst.status_code == 200
         items = lst.json().get("items")
         assert isinstance(items, list)
+
+
+@pytest.mark.asyncio
+async def test_rg_diag_media_budget_exposes_limits_and_usage(monkeypatch, tmp_path):
+    db_path = tmp_path / "authnz_rg_media_budget.db"
+    await _init_authnz_sqlite(db_path, monkeypatch)
+    api_key = await _create_admin_user_and_key(
+        username="rg-media-budget-admin",
+        email="rg-media-budget-admin@example.com",
+    )
+
+    monkeypatch.setenv("RG_POLICY_STORE", "db")
+    monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (
+        LedgerEntry,
+        ResourceDailyLedger,
+    )
+    from tldw_Server_API.app.main import app
+
+    ledger = ResourceDailyLedger()
+    await ledger.initialize()
+    await ledger.add(
+        LedgerEntry(
+            entity_scope="user",
+            entity_value="777",
+            category="ingestion_bytes",
+            units=256,
+            op_id="seed-media-budget-usage",
+            occurred_at=datetime.now(timezone.utc),
+        )
+    )
+
+    _reset_rg_state(app)
+    headers = {"X-API-KEY": api_key}
+    with TestClient(app) as client:
+        up = client.put(
+            "/api/v1/resource-governor/policy/media.default",
+            headers=headers,
+            json={
+                "payload": {
+                    "requests": {"rpm": 600, "burst": 1.2},
+                    "jobs": {"max_concurrent": 3, "ttl_sec": 1800},
+                    "ingestion_bytes": {"daily_cap": 1024},
+                    "scopes": ["user", "api_key"],
+                },
+                "version": 1,
+            },
+        )
+        assert up.status_code == 200
+
+        r = client.get(
+            "/api/v1/resource-governor/diag/media-budget",
+            headers=headers,
+            params={"user_id": 777, "policy_id": "media.default"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+
+    assert body["status"] == "ok"
+    assert body["entity"] == "user:777"
+    assert body["policy_id"] == "media.default"
+    assert body["limits"]["jobs_max_concurrent"] == 3
+    assert body["limits"]["ingestion_bytes_daily_cap"] == 1024
+    assert body["usage"]["jobs_active"] == 0
+    assert body["usage"]["jobs_remaining"] == 3
+    assert body["usage"]["ingestion_bytes_daily_used"] == 256
+    assert body["usage"]["ingestion_bytes_daily_remaining"] == 768

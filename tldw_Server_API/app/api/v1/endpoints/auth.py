@@ -86,8 +86,15 @@ from tldw_Server_API.app.core.Resource_Governance.policy_loader import default_p
 from tldw_Server_API.app.core.Resource_Governance.tenant import hash_entity
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.services.auth_service import (
+    apply_password_reset as _svc_apply_password_reset,
     fetch_active_user_by_id,
+    fetch_password_reset_token_record as _svc_fetch_password_reset_token_record,
+    fetch_user_by_email_for_password_reset as _svc_fetch_user_by_email_for_password_reset,
+    fetch_user_by_email_for_verification as _svc_fetch_user_by_email_for_verification,
     fetch_user_by_login_identifier,
+    mark_user_verified as _svc_mark_user_verified,
+    store_password_reset_token as _svc_store_password_reset_token,
+    verify_user_email_once as _svc_verify_user_email_once,
     update_user_last_login,
     update_user_password_hash,
 )
@@ -197,15 +204,10 @@ async def _is_mfa_backend_supported() -> bool:
         supports_backend = getattr(mfa_service, "supports_backend", None)
         if callable(supports_backend):
             return bool(supports_backend())
+        logger.debug("MFA service missing supports_backend(); treating MFA backend as unsupported")
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         logger.debug("Failed to resolve MFA service backend support flag", exc_info=True)
-
-    # Compatibility fallback for tests or older MFA service stubs.
-    try:
-        return bool(await is_postgres_backend())
-    except _AUTH_NONCRITICAL_EXCEPTIONS:
-        logger.debug("Failed to determine database backend for MFA check", exc_info=True)
-        return False
+    return False
 
 
 async def _ensure_mfa_available():
@@ -267,39 +269,8 @@ def _current_user_id(user: Any) -> Optional[int]:
         return None
 
 
-def _row_to_dict(row: Any, keys: tuple[str, ...]) -> dict[str, Any]:
-    """Normalize backend row objects to a dict using known key order as fallback."""
-    if row is None:
-        return {}
-    if isinstance(row, dict):
-        return dict(row)
-    with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
-        return {key: row[key] for key in row.keys()}  # sqlite Row mapping
-    with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
-        return dict(row)
-    return {
-        key: row[idx]
-        for idx, key in enumerate(keys)
-        if idx < len(row)
-    }
-
-
 async def _fetch_user_by_email_for_password_reset(db: Any, email: str) -> dict[str, Any] | None:
-    email_l = str(email or "").strip().lower()
-    is_pg = await is_postgres_backend()
-    if is_pg:
-        row = await db.fetchrow(
-            "SELECT id, username, email, is_active FROM users WHERE lower(email) = $1",
-            email_l,
-        )
-        return _row_to_dict(row, ("id", "username", "email", "is_active")) if row else None
-
-    cursor = await db.execute(
-        "SELECT id, username, email, is_active FROM users WHERE lower(email) = ?",
-        (email_l,),
-    )
-    row = await cursor.fetchone()
-    return _row_to_dict(row, ("id", "username", "email", "is_active")) if row else None
+    return await _svc_fetch_user_by_email_for_password_reset(db, email)
 
 
 async def _store_password_reset_token(
@@ -310,33 +281,13 @@ async def _store_password_reset_token(
     expires_at: datetime,
     ip_address: str,
 ) -> None:
-    is_pg = await is_postgres_backend()
-    if is_pg:
-        await db.execute(
-            """
-            INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, ip_address)
-            VALUES ($1, $2, $3, $4)
-            """,
-            user_id,
-            token_hash,
-            expires_at,
-            ip_address,
-        )
-        return
-
-    await db.execute(
-        """
-        INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, ip_address)
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            user_id,
-            token_hash,
-            expires_at.isoformat(),
-            ip_address,
-        ),
+    await _svc_store_password_reset_token(
+        db,
+        user_id=user_id,
+        token_hash=token_hash,
+        expires_at=expires_at,
+        ip_address=ip_address,
     )
-    await db.commit()
 
 
 async def _fetch_password_reset_token_record(
@@ -345,41 +296,11 @@ async def _fetch_password_reset_token_record(
     user_id: int,
     hash_candidates: list[str],
 ) -> tuple[Optional[int], Optional[Any]]:
-    is_pg = await is_postgres_backend()
-    if is_pg:
-        record = await db.fetchrow(
-            """
-            SELECT id, used_at
-            FROM password_reset_tokens
-            WHERE user_id = $1 AND token_hash = ANY($2::text[])
-            ORDER BY expires_at DESC
-            LIMIT 1
-            """,
-            user_id,
-            hash_candidates,
-        )
-        if not record:
-            return None, None
-        as_dict = _row_to_dict(record, ("id", "used_at"))
-        return as_dict.get("id"), as_dict.get("used_at")
-
-    placeholders = ",".join("?" for _ in hash_candidates)
-    params = [user_id, *hash_candidates]
-    cursor = await db.execute(
-        f"""
-        SELECT id, used_at
-        FROM password_reset_tokens
-        WHERE user_id = ? AND token_hash IN ({placeholders})
-        ORDER BY expires_at DESC
-        LIMIT 1
-        """,
-        tuple(params),
+    return await _svc_fetch_password_reset_token_record(
+        db,
+        user_id=user_id,
+        hash_candidates=hash_candidates,
     )
-    row = await cursor.fetchone()
-    if not row:
-        return None, None
-    as_dict = _row_to_dict(row, ("id", "used_at"))
-    return as_dict.get("id"), as_dict.get("used_at")
 
 
 async def _apply_password_reset(
@@ -390,30 +311,13 @@ async def _apply_password_reset(
     token_record_id: int,
     now_utc: datetime,
 ) -> None:
-    is_pg = await is_postgres_backend()
-    if is_pg:
-        await db.execute(
-            "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
-            new_password_hash,
-            now_utc,
-            user_id,
-        )
-        await db.execute(
-            "UPDATE password_reset_tokens SET used_at = $1 WHERE id = $2",
-            now_utc,
-            token_record_id,
-        )
-        return
-
-    await db.execute(
-        "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
-        (new_password_hash, now_utc.isoformat(), user_id),
+    await _svc_apply_password_reset(
+        db,
+        user_id=user_id,
+        new_password_hash=new_password_hash,
+        token_record_id=token_record_id,
+        now_utc=now_utc,
     )
-    await db.execute(
-        "UPDATE password_reset_tokens SET used_at = ? WHERE id = ?",
-        (now_utc.isoformat(), token_record_id),
-    )
-    await db.commit()
 
 
 async def _verify_user_email_once(
@@ -423,80 +327,20 @@ async def _verify_user_email_once(
     email: str,
     now_utc: datetime,
 ) -> int:
-    is_pg = await is_postgres_backend()
-    if is_pg:
-        updated = await db.fetchrow(
-            """
-            UPDATE users
-               SET is_verified = true, updated_at = $1
-             WHERE id = $2
-               AND lower(email) = lower($3)
-               AND COALESCE(is_verified, false) = false
-             RETURNING id
-            """,
-            now_utc,
-            user_id,
-            email,
-        )
-        return 1 if updated else 0
-
-    update_cursor = await db.execute(
-        """
-        UPDATE users
-           SET is_verified = 1, updated_at = ?
-         WHERE id = ?
-           AND lower(email) = lower(?)
-           AND COALESCE(is_verified, 0) != 1
-        """,
-        (now_utc.isoformat(), user_id, email),
+    return await _svc_verify_user_email_once(
+        db,
+        user_id=user_id,
+        email=email,
+        now_utc=now_utc,
     )
-    rowcount = getattr(update_cursor, "rowcount", None)
-    try:
-        if rowcount is not None and int(rowcount) >= 0:
-            updated_rows = int(rowcount)
-        else:
-            raise ValueError("sqlite rowcount unavailable")
-    except _AUTH_NONCRITICAL_EXCEPTIONS:
-        changes_cursor = await db.execute("SELECT changes()")
-        changes_row = await changes_cursor.fetchone()
-        updated_rows = int(changes_row[0]) if changes_row else 0
-    await db.commit()
-    return updated_rows
 
 
 async def _fetch_user_by_email_for_verification(db: Any, email: str) -> dict[str, Any] | None:
-    email_l = str(email or "").strip().lower()
-    is_pg = await is_postgres_backend()
-    if is_pg:
-        row = await db.fetchrow(
-            "SELECT id, username, email, is_verified FROM users WHERE lower(email) = $1",
-            email_l,
-        )
-        return _row_to_dict(row, ("id", "username", "email", "is_verified")) if row else None
-
-    cursor = await db.execute(
-        "SELECT id, username, email, is_verified FROM users WHERE lower(email) = ?",
-        (email_l,),
-    )
-    row = await cursor.fetchone()
-    return _row_to_dict(row, ("id", "username", "email", "is_verified")) if row else None
+    return await _svc_fetch_user_by_email_for_verification(db, email)
 
 
 async def _mark_user_verified(db: Any, user_id: int, now_utc: datetime) -> None:
-    is_pg = await is_postgres_backend()
-    if is_pg:
-        await db.execute(
-            "UPDATE users SET is_verified = true, updated_at = $1 WHERE id = $2",
-            now_utc,
-            user_id,
-        )
-        return
-
-    await db.execute(
-        "UPDATE users SET is_verified = 1, updated_at = ? WHERE id = ?",
-        (now_utc.isoformat(), user_id),
-    )
-    await db.commit()
+    await _svc_mark_user_verified(db, user_id, now_utc)
 
 
 def _current_user_username(user: Any) -> str:

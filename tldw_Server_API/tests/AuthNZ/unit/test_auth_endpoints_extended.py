@@ -516,7 +516,7 @@ async def test_login_returns_mfa_challenge_when_enabled(monkeypatch):
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
-    async def _fake_is_pg() -> bool:
+    async def _fake_mfa_supported() -> bool:
         return True
 
     class _StubMFA:
@@ -569,7 +569,7 @@ async def test_login_returns_mfa_challenge_when_enabled(monkeypatch):
     async def _fake_get_auth_governor():
         return _StubGov()
 
-    monkeypatch.setattr(auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(auth, "_is_mfa_backend_supported", _fake_mfa_supported)
     monkeypatch.setattr(auth, "_get_mfa_service", lambda: _StubMFA())
     monkeypatch.setattr(auth, "fetch_user_by_login_identifier", _fake_fetch_user)
     monkeypatch.setattr(auth, "get_auth_governor", _fake_get_auth_governor)
@@ -624,7 +624,7 @@ async def test_mfa_login_completes_tokens(monkeypatch):
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
-    async def _fake_is_pg() -> bool:
+    async def _fake_mfa_supported() -> bool:
         return True
 
     async def _fake_fetch_active_user(db, user_id: int):
@@ -681,7 +681,7 @@ async def test_mfa_login_completes_tokens(monkeypatch):
         def create_refresh_token(self, **kwargs):
             return "REFRESH"
 
-    monkeypatch.setattr(auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(auth, "_is_mfa_backend_supported", _fake_mfa_supported)
     monkeypatch.setattr(auth, "fetch_active_user_by_id", _fake_fetch_active_user)
     monkeypatch.setattr(auth, "_get_mfa_service", lambda: _StubMFA())
     async def _noop_async(*args, **kwargs):
@@ -748,7 +748,7 @@ async def test_setup_mfa_accepts_dict_current_user(monkeypatch):
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
-    async def _fake_is_pg() -> bool:
+    async def _fake_mfa_supported() -> bool:
         return True
 
     class _StubMFA:
@@ -778,7 +778,7 @@ async def test_setup_mfa_accepts_dict_current_user(monkeypatch):
         async def store_ephemeral_value(self, key: str, value: str, ttl_seconds: int):
             self.cached[key] = (value, ttl_seconds)
 
-    monkeypatch.setattr(auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(auth, "_is_mfa_backend_supported", _fake_mfa_supported)
     monkeypatch.setattr(auth, "_get_mfa_service", lambda: _StubMFA())
     sm = _StubSessionManager()
 
@@ -808,7 +808,7 @@ async def test_verify_mfa_setup_succeeds_when_email_send_fails(monkeypatch):
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
-    async def _fake_is_pg() -> bool:
+    async def _fake_mfa_supported() -> bool:
         return True
 
     class _StubMFA:
@@ -841,7 +841,7 @@ async def test_verify_mfa_setup_succeeds_when_email_send_fails(monkeypatch):
         async def send_mfa_enabled_email(self, **kwargs):
             raise RuntimeError("mail provider unavailable")
 
-    monkeypatch.setattr(auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(auth, "_is_mfa_backend_supported", _fake_mfa_supported)
     monkeypatch.setattr(auth, "_get_mfa_service", lambda: _StubMFA())
     monkeypatch.setattr(auth, "_get_email_service", lambda: _FailingEmail())
 
@@ -883,7 +883,7 @@ async def test_verify_mfa_setup_rate_limited_returns_429(monkeypatch):
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
-    async def _fake_is_pg() -> bool:
+    async def _fake_mfa_supported() -> bool:
         return True
 
     class _StubSessionManager:
@@ -904,7 +904,7 @@ async def test_verify_mfa_setup_rate_limited_returns_429(monkeypatch):
     async def _deny_rg(*args, **kwargs):
         return False, 3
 
-    monkeypatch.setattr(auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(auth, "_is_mfa_backend_supported", _fake_mfa_supported)
     monkeypatch.setattr(auth, "_get_mfa_service", lambda: _StubMFA())
     monkeypatch.setattr(auth, "_reserve_auth_rg_requests", _deny_rg)
 
@@ -940,7 +940,7 @@ async def test_mfa_login_rate_limited_returns_429(monkeypatch):
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
-    async def _fake_is_pg() -> bool:
+    async def _fake_mfa_supported() -> bool:
         return True
 
     class _StubSessionManager:
@@ -963,7 +963,7 @@ async def test_mfa_login_rate_limited_returns_429(monkeypatch):
     async def _deny_rg(*args, **kwargs):
         return False, 9
 
-    monkeypatch.setattr(auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(auth, "_is_mfa_backend_supported", _fake_mfa_supported)
     monkeypatch.setattr(auth, "_reserve_auth_rg_requests", _deny_rg)
 
     scope = {

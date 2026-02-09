@@ -30,6 +30,7 @@ _JSON_CRYPTO_DECRYPT_EXCEPTIONS = (
     UnicodeDecodeError,
     ValueError,
 )
+_JSON_CRYPTO_WITH_B64_EXCEPTIONS = _B64_DECODE_EXCEPTIONS + _JSON_CRYPTO_DECRYPT_EXCEPTIONS
 
 
 def _get_key_from_env() -> bytes | None:
@@ -171,5 +172,5 @@ def decrypt_json_blob_with_key(envelope: dict[str, Any], key_b64: str) -> dict[s
         cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
         pt = cipher.decrypt_and_verify(ct, tag)
         return json.loads(pt.decode("utf-8"))
-    except (_B64_DECODE_EXCEPTIONS, *_JSON_CRYPTO_DECRYPT_EXCEPTIONS):
+    except _JSON_CRYPTO_WITH_B64_EXCEPTIONS:
         return None

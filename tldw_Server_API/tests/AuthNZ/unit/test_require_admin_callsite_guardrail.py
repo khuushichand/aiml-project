@@ -19,14 +19,18 @@ def test_api_endpoints_do_not_depend_on_legacy_require_admin() -> None:
     endpoints_root = project_root / "app" / "api" / "v1" / "endpoints"
     assert endpoints_root.exists(), f"Expected endpoints path not found: {endpoints_root}"
 
-    pattern = re.compile(r"Depends\(\s*require_admin\s*\)")
+    depends_pattern = re.compile(r"Depends\(\s*(?:auth_deps\.)?require_admin\s*\)")
+    import_pattern = re.compile(r"from\s+.*auth_deps\s+import\s+.*\brequire_admin\b")
     offending: list[str] = []
 
     for path in endpoints_root.rglob("*.py"):
         rel = path.relative_to(project_root).as_posix()
         lines = path.read_text(encoding="utf-8").splitlines()
         for lineno, line in enumerate(lines, start=1):
-            if pattern.search(line):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if depends_pattern.search(line) or import_pattern.search(line):
                 offending.append(f"{rel}:{lineno}:{line.strip()}")
 
     assert offending == [], (

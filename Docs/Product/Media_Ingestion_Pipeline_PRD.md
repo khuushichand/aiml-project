@@ -135,7 +135,9 @@ Contributors must support new media types, improve processing fidelity, and conn
 - [Shipped] Tighten/document sanitization defaults for HTML/XML and archive-driven inputs (enabled by default with config controls, plus archive-member guardrails for email archive ingestion).
 
 ### Stage 2 - Backend Parity & Scaling
-- Remove SQLite-specific SQL; add migrations for Postgres parity.
+- [In Progress] Remove SQLite-specific SQL; add migrations for Postgres parity.
+  - Runtime claim-clustering mutation paths now use explicit conflict-safe upserts (`ON CONFLICT DO NOTHING`) instead of SQLite-only `INSERT OR IGNORE`.
+  - `/api/v1/media/add` now enforces per-user Resource Governor ingestion budgets (concurrent `jobs` + daily `ingestion_bytes`) and records accepted byte usage in the shared `ResourceDailyLedger`; admin diagnostics are surfaced via `/api/v1/resource-governor/diag/media-budget`.
 - Support distributed workers for heavy processing (audio transcription, OCR) with queue-based execution.
 - Implement resource budgeting per user (size limits, concurrency) with metrics + limits surfaced to admin UI.
 - Add structured structure-index writes (section hierarchy) per Ingest-Plan-1.
