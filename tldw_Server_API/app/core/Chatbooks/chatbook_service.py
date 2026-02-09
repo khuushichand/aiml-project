@@ -121,6 +121,11 @@ try:
 except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
     EvaluationsDatabase = None  # type: ignore
 
+try:
+    from ..Embeddings.ChromaDB_Library import ChromaDBManager  # type: ignore
+except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
+    ChromaDBManager = None  # type: ignore
+
 
 class ChatbookService:
     """Service for creating and importing chatbooks with user isolation."""
@@ -448,6 +453,7 @@ class ChatbookService:
         self._prompts_db: PromptsDatabase | None = None
         self._media_db: MediaDatabase | None = None
         self._evaluations_db: EvaluationsDatabase | None = None
+        self._chroma_manager: ChromaDBManager | None = None
 
         # Secure user-specific directory under the configured user DB base.
         user_id_value = self.user_id_int if self.user_id_int is not None else self.user_id
@@ -630,6 +636,24 @@ class ChatbookService:
             self._note_todo("Evaluations export/import initialization failed; inspect logs for details.")
             self._evaluations_db = None
         return self._evaluations_db
+
+    def _get_chroma_manager(self) -> ChromaDBManager | None:
+        """Lazily initialize and cache the ChromaDB manager for embedding export."""
+        if ChromaDBManager is None:
+            self._note_todo("Embedding export requires ChromaDBManager; skipping.")
+            return None
+        if self._chroma_manager is not None:
+            return self._chroma_manager
+        try:
+            cfg = core_settings.get("EMBEDDING_CONFIG", {}).copy()
+            cfg["USER_DB_BASE_DIR"] = str(DatabasePaths.get_user_db_base_dir())
+            self._chroma_manager = ChromaDBManager(
+                user_id=self.user_id, user_embedding_config=cfg
+            )
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"ChromaDB init failed for chatbooks: {exc}")
+            self._chroma_manager = None
+        return self._chroma_manager
 
     @staticmethod
     def _normalize_datetime(value: Any) -> Any:
@@ -1461,8 +1485,9 @@ class ChatbookService:
                 )
 
             if ContentType.EMBEDDING in content_selections:
-                self._note_todo(
-                    "Explicit embedding exports are pending; embeddings are currently derived from media when include_embeddings=true."
+                self._collect_embeddings(
+                    content_selections[ContentType.EMBEDDING],
+                    work_dir, manifest, content
                 )
 
             if include_generated_content and ContentType.GENERATED_DOCUMENT in content_selections:
@@ -2696,9 +2721,27 @@ class ChatbookService:
         if media_db is None:
             logger.debug("Skipping media export because media DB is unavailable.")
             return
+
+        # Apply media item cap if configured
+        raw_max_items = os.getenv("CHATBOOKS_MEDIA_EXPORT_MAX_ITEMS", "0")
+        try:
+            max_media_items = int(raw_max_items)
+        except (TypeError, ValueError):
+            max_media_items = 0
+        total_media_count = len(media_ids)
+        if max_media_items > 0 and total_media_count > max_media_items:
+            media_ids = media_ids[:max_media_items]
+            truncation = manifest.truncation.setdefault("media", {})
+            truncation["truncated"] = True
+            truncation["max_items"] = max_media_items
+            truncation["exported_count"] = max_media_items
+            truncation["total_count"] = total_media_count
+
         media_dir = work_dir / "content" / "media"
         media_dir.mkdir(parents=True, exist_ok=True)
         embeddings_dir: Path | None = None
+        binary_limits = manifest.binary_limits or {}
+        emb_limit = self._resolve_binary_limit(binary_limits, "embeddings", "media_embeddings")
 
         if include_media:
             self._note_todo("Binary media asset export is not yet implemented; exporting metadata only.")
@@ -2742,9 +2785,28 @@ class ChatbookService:
                 elif isinstance(vector_blob, bytearray):
                     vector_blob = bytes(vector_blob)
                 if isinstance(vector_blob, (bytes, bytearray)):
+                    embedding_id = f"media:{media_id}"
+                    # Check binary limit before bundling
+                    if emb_limit is not None and len(vector_blob) > emb_limit:
+                        stub = {
+                            "id": embedding_id,
+                            "source": {
+                                "media_id": media_id,
+                                "media_uuid": normalized.get("uuid")
+                            },
+                            "bundled": False,
+                            "size_bytes": len(vector_blob)
+                        }
+                        content.embeddings[embedding_id] = stub
+                        manifest.content_items.append(ContentItem(
+                            id=embedding_id,
+                            type=ContentType.EMBEDDING,
+                            title=f"Embedding for media {normalized.get('title', media_id)}",
+                            metadata={"bundled": False, "size_bytes": len(vector_blob)}
+                        ))
+                        continue
                     embeddings_dir = embeddings_dir or (work_dir / "content" / "embeddings")
                     embeddings_dir.mkdir(parents=True, exist_ok=True)
-                    embedding_id = f"media:{media_id}"
                     vector_payload = {
                         "id": embedding_id,
                         "source": {
@@ -2782,6 +2844,148 @@ class ChatbookService:
 
         if include_embeddings and not content.embeddings:
             self._note_todo("Embeddings export requested but no vector data found in media records.")
+
+    def _collect_embeddings(
+        self,
+        embedding_ids: list[str],
+        work_dir: Path,
+        manifest: ChatbookManifest,
+        content: ChatbookContent
+    ) -> None:
+        """Collect ChromaDB collection-level embeddings for export."""
+        chroma = self._get_chroma_manager()
+        if chroma is None:
+            logger.debug("Skipping embedding export because ChromaDB is unavailable.")
+            return
+
+        embeddings_dir = work_dir / "content" / "embeddings"
+        embeddings_dir.mkdir(parents=True, exist_ok=True)
+
+        raw_max_chunks = os.getenv("CHATBOOKS_EMBEDDING_EXPORT_MAX_CHUNKS", "10000")
+        try:
+            max_chunks_per_collection = int(raw_max_chunks)
+        except (TypeError, ValueError):
+            max_chunks_per_collection = 10000
+
+        binary_limits = manifest.binary_limits or {}
+        emb_limit = self._resolve_binary_limit(binary_limits, "embeddings", "collection_embeddings")
+
+        # Determine which collections to export
+        try:
+            if embedding_ids:
+                collections = []
+                for name in embedding_ids:
+                    try:
+                        col = chroma.get_or_create_collection(collection_name=name)
+                        collections.append(col)
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
+                        logger.debug(f"Collection '{name}' not found; skipping.")
+            else:
+                collections = list(chroma.list_collections())
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"Failed to list ChromaDB collections for export: {exc}")
+            self._note_todo("ChromaDB collection listing failed; inspect logs.")
+            return
+
+        for collection in collections:
+            try:
+                col_name = collection.name
+                col_metadata = collection.metadata or {}
+                source_hash = hashlib.sha256(
+                    json.dumps(col_metadata, sort_keys=True).encode("utf-8")
+                ).hexdigest()
+
+                total_count = collection.count()
+                chunks: list[dict[str, Any]] = []
+                offset = 0
+                page_size = 1000
+                truncated = False
+
+                while True:
+                    result = collection.get(
+                        limit=page_size, offset=offset,
+                        include=["documents", "metadatas", "embeddings"]
+                    )
+                    ids = result.get("ids", [])
+                    if not ids:
+                        break
+                    documents = result.get("documents", [])
+                    metadatas = result.get("metadatas", [])
+                    embeddings_data = result.get("embeddings", [])
+
+                    for i, chunk_id in enumerate(ids):
+                        if max_chunks_per_collection > 0 and len(chunks) >= max_chunks_per_collection:
+                            truncated = True
+                            break
+                        chunk: dict[str, Any] = {"id": chunk_id}
+                        if documents and i < len(documents):
+                            chunk["document"] = documents[i]
+                        if metadatas and i < len(metadatas):
+                            chunk["metadata"] = metadatas[i]
+                        if embeddings_data and i < len(embeddings_data):
+                            chunk["embedding"] = embeddings_data[i]
+                        chunks.append(chunk)
+
+                    if truncated or len(ids) < page_size:
+                        break
+                    offset += len(ids)
+
+                collection_data = {
+                    "embedding_set_id": col_name,
+                    "source_hash": source_hash,
+                    "collection_metadata": col_metadata,
+                    "item_count": total_count,
+                    "truncated": truncated,
+                    "chunks": chunks
+                }
+
+                # Check binary limit on serialized size
+                serialized = json.dumps(collection_data, ensure_ascii=False)
+                if emb_limit is not None and len(serialized.encode("utf-8")) > emb_limit:
+                    stub = {
+                        "embedding_set_id": col_name,
+                        "source_hash": source_hash,
+                        "collection_metadata": col_metadata,
+                        "item_count": total_count,
+                        "bundled": False,
+                        "size_bytes": len(serialized.encode("utf-8"))
+                    }
+                    content.embeddings[f"collection:{col_name}"] = stub
+                    manifest.content_items.append(ContentItem(
+                        id=f"collection:{col_name}",
+                        type=ContentType.EMBEDDING,
+                        title=f"Embedding collection {col_name}",
+                        metadata={"bundled": False, "size_bytes": len(serialized.encode("utf-8"))}
+                    ))
+                    continue
+
+                safe_name = col_name.replace("/", "_").replace("\\", "_")
+                embed_file = embeddings_dir / f"collection_{safe_name}.json"
+                with open(embed_file, "w", encoding="utf-8") as ef:
+                    ef.write(serialized)
+
+                content.embeddings[f"collection:{col_name}"] = collection_data
+                manifest.content_items.append(ContentItem(
+                    id=f"collection:{col_name}",
+                    type=ContentType.EMBEDDING,
+                    title=f"Embedding collection {col_name}",
+                    file_path=f"content/embeddings/{embed_file.name}",
+                    metadata={"source_hash": source_hash, "item_count": total_count}
+                ))
+
+                if truncated:
+                    trunc = manifest.truncation.setdefault("embeddings", {})
+                    trunc["truncated"] = True
+                    trunc["max_chunks_per_collection"] = max_chunks_per_collection
+                    col_ids = trunc.setdefault("collection_ids", [])
+                    if col_name not in col_ids:
+                        col_ids.append(col_name)
+                    trunc["exported_count"] = trunc.get("exported_count", 0) + len(chunks)
+                    trunc["total_count"] = trunc.get("total_count", 0) + total_count
+
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"Failed to export collection '{collection.name}': {exc}")
+                self._note_todo(f"Embedding collection export failed for '{collection.name}'; inspect logs.")
 
     def _collect_evaluations(
         self,
@@ -2826,6 +3030,8 @@ class ChatbookService:
                     truncation = manifest.truncation.setdefault("evaluations", {})
                     truncation["truncated"] = True
                     truncation["max_rows"] = max_rows
+                    truncation["exported_count"] = truncation.get("exported_count", 0) + len(runs_payload)
+                    # total_count not knowable without a separate count query; omit
                     if runs_payload:
                         last_run_id = runs_payload[-1].get("id")
                         if last_run_id:
@@ -2884,6 +3090,7 @@ class ChatbookService:
                     truncation = manifest.truncation.setdefault("conversations", {})
                     truncation["truncated"] = True
                     truncation["max_messages"] = max_messages
+                    truncation["exported_count"] = truncation.get("exported_count", 0) + len(messages or [])
                     conv_ids = truncation.setdefault("conversation_ids", [])
                     if str(conv_id) not in conv_ids:
                         conv_ids.append(str(conv_id))

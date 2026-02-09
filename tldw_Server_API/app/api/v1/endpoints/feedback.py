@@ -123,17 +123,21 @@ async def _reserve_idempotency_record(
 async def _finalize_idempotency_record(
     key: str,
     feedback_id: str | None,
-    issues: list[str],
-    user_notes: str | None,
-) -> None:
+    fallback_issues: list[str],
+    fallback_user_notes: str | None,
+) -> tuple[list[str], str | None, bool]:
     async with _idempotency_lock:
         record = _idempotency_store.get(key)
         if not record:
-            return
+            return fallback_issues, fallback_user_notes, False
+        merged_issues = _merge_issues(fallback_issues, record.issues)
+        merged_user_notes = record.user_notes if record.user_notes is not None else fallback_user_notes
+        has_pending_merge = merged_issues != fallback_issues or merged_user_notes != fallback_user_notes
         record.feedback_id = feedback_id
-        record.issues = issues
-        record.user_notes = user_notes
+        record.issues = merged_issues
+        record.user_notes = merged_user_notes
         record.pending = False
+        return merged_issues, merged_user_notes, has_pending_merge
 
 
 async def _clear_idempotency_record(key: str) -> None:
@@ -318,7 +322,33 @@ async def submit_explicit_feedback(
         await _clear_idempotency_record(dedupe_key)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not record feedback")
 
-    await _finalize_idempotency_record(dedupe_key, feedback_id, issues, payload.user_notes)
+    final_issues, final_user_notes, has_pending_merge = await _finalize_idempotency_record(
+        dedupe_key,
+        feedback_id,
+        issues,
+        payload.user_notes,
+    )
+
+    # If duplicates arrived while the record was pending, merge those updates now
+    # so the persisted row reflects the final idempotent payload.
+    if feedback_id and has_pending_merge and collector.user_feedback:
+        try:
+            await collector.user_feedback.merge_feedback_update(
+                feedback_id,
+                issues=final_issues or None,
+                user_notes=final_user_notes,
+            )
+        except (CharactersRAGDBError, HTTPException, ValueError) as e:
+            logger.exception(
+                "Failed to finalize idempotency merge for feedback_id={} dedupe_key={}: {}",
+                feedback_id,
+                dedupe_key,
+                e,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="merge_feedback_update_failed",
+            ) from e
 
     return ExplicitFeedbackResponse(ok=True, feedback_id=feedback_id)
 

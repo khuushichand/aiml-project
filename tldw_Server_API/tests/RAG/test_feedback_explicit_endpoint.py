@@ -7,7 +7,9 @@ from fastapi import status
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.api.v1.endpoints import feedback as feedback_endpoint
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFeedbackSystem
 
 
 def _row_to_dict(row, cursor):
@@ -309,3 +311,56 @@ def test_patch_feedback_not_found(feedback_setup):
         json={"user_notes": "Won't work"},
     )
     assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.integration
+def test_explicit_feedback_finalizes_pending_idempotency_merges(feedback_setup, monkeypatch):
+    client, db, conversation_id, message_id = feedback_setup
+
+    captured_dedupe_key: dict[str, str] = {}
+    original_reserve = feedback_endpoint._reserve_idempotency_record
+
+    async def _capture_reserve(key: str, issues: list[str], user_notes: str | None):
+        reserved, record = await original_reserve(key, issues, user_notes)
+        if reserved:
+            captured_dedupe_key["value"] = key
+        return reserved, record
+
+    original_submit = UnifiedFeedbackSystem.submit_feedback
+
+    async def _submit_with_pending_merge(self, **kwargs):
+        dedupe_key = captured_dedupe_key.get("value")
+        if dedupe_key:
+            await feedback_endpoint._update_idempotency_record(
+                dedupe_key,
+                ["missing_details", "incorrect_information"],
+                "Merged while pending",
+            )
+        return await original_submit(self, **kwargs)
+
+    monkeypatch.setattr(feedback_endpoint, "_reserve_idempotency_record", _capture_reserve)
+    monkeypatch.setattr(UnifiedFeedbackSystem, "submit_feedback", _submit_with_pending_merge)
+
+    payload = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "feedback_type": "helpful",
+        "helpful": False,
+        "issues": ["missing_details"],
+        "user_notes": "Original notes",
+    }
+
+    resp = client.post("/api/v1/feedback/explicit", json=payload)
+    assert resp.status_code == status.HTTP_200_OK
+    feedback_id = resp.json()["feedback_id"]
+
+    cursor = db.execute_query(
+        "SELECT issues, user_notes FROM conversation_feedback WHERE id = ?",
+        (feedback_id,),
+    )
+    row = cursor.fetchone()
+    assert row is not None
+    record = _row_to_dict(row, cursor)
+    issues = json.loads(record["issues"]) if record.get("issues") else []
+    assert set(issues) == {"missing_details", "incorrect_information"}
+    assert record["user_notes"] == "Merged while pending"

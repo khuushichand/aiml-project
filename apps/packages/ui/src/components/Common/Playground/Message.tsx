@@ -187,6 +187,7 @@ export const PlaygroundMessage = (props: Props) => {
   const [savingKnowledge, setSavingKnowledge] = React.useState<
     "note" | "flashcard" | null
   >(null)
+  const responseDwellSentKeyRef = useRef<string | null>(null)
 
   // Disco Skills state
   const {
@@ -403,7 +404,13 @@ export const PlaygroundMessage = (props: Props) => {
     [t]
   )
 
-  const { trackCopy, trackSourcesExpanded, trackSourceClick } =
+  const {
+    trackCopy,
+    trackSourcesExpanded,
+    trackSourceClick,
+    trackCitationUsed,
+    trackDwellTime
+  } =
     useImplicitFeedback({
       conversationId: props.serverChatId ?? null,
       messageId: props.serverMessageId ?? null,
@@ -411,6 +418,32 @@ export const PlaygroundMessage = (props: Props) => {
       sources: props.sources ?? [],
       enabled: feedbackImplicitAvailable
     })
+
+  useEffect(() => {
+    const dwellMessageKey = props.serverMessageId ?? null
+    if (!dwellMessageKey) return
+    if (!props.isBot || !isLastMessage) return
+    if (props.isStreaming || props.isProcessing) return
+    if (!feedbackImplicitAvailable) return
+    if (responseDwellSentKeyRef.current === dwellMessageKey) return
+
+    const timeout = window.setTimeout(() => {
+      trackDwellTime(3000)
+      responseDwellSentKeyRef.current = dwellMessageKey
+    }, 3000)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [
+    feedbackImplicitAvailable,
+    isLastMessage,
+    props.isBot,
+    props.isProcessing,
+    props.isStreaming,
+    props.serverMessageId,
+    trackDwellTime
+  ])
 
   const handleReply = React.useCallback(() => {
     if (!replyId) return
@@ -559,6 +592,8 @@ export const PlaygroundMessage = (props: Props) => {
     Boolean(errorPayload) ||
     !feedbackExplicitAvailable ||
     isActiveResponse
+  const showFeedbackControls =
+    resolvedRole !== "user" && Boolean(props.serverMessageId)
   const feedbackDisabledReason =
     !canSubmit || Boolean(errorPayload) || !feedbackExplicitAvailable
       ? t(
@@ -866,7 +901,7 @@ export const PlaygroundMessage = (props: Props) => {
     total: props.totalMessages
   }) as string
 
-  if (isUserChatBubble && !props.isBot) {
+  if (isUserChatBubble && !props.isBot && !isSystemMessage) {
     return (
       <PlaygroundUserMessageBubble
         {...props}
@@ -1220,6 +1255,7 @@ export const PlaygroundMessage = (props: Props) => {
               onClearMessageSteering={props.onClearMessageSteering}
               onEdit={() => setEditMode(true)}
               editMode={editMode}
+              showFeedbackControls={showFeedbackControls}
               feedbackSelected={thumb}
               feedbackDisabled={feedbackDisabled}
               feedbackDisabledReason={feedbackDisabledReason}
@@ -1322,6 +1358,14 @@ export const PlaygroundMessage = (props: Props) => {
                             }
                             onSourceClick={props.onSourceClick}
                             onTrackClick={trackSourceClick}
+                            onTrackCitation={trackCitationUsed}
+                            onTrackDwell={(
+                              sourcePayload,
+                              dwellMs,
+                              sourceIndex
+                            ) =>
+                              trackDwellTime(dwellMs, sourcePayload, sourceIndex)
+                            }
                           />
                         )
                       })}
@@ -1335,7 +1379,7 @@ export const PlaygroundMessage = (props: Props) => {
         </div>
       </div>
       {/* </div> */}
-      {props.isBot && (
+      {showFeedbackControls && (
         <FeedbackModal
           open={isFeedbackOpen}
           onClose={() => setIsFeedbackOpen(false)}

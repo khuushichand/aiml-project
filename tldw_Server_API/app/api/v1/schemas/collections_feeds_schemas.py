@@ -56,6 +56,9 @@ class CollectionsFeed(BaseModel):
     defer_until: str | None = None
     status: str | None = None
     consec_not_modified: int | None = None
+    consec_errors: int | None = None
+    health_status: str | None = Field(default=None, description="Derived health: healthy, degraded, failing, disabled")
+    promoted_at: str | None = Field(default=None, description="When schedule was auto-promoted from hourly to daily")
     created_at: str | None = None
     updated_at: str | None = None
     job_id: int | None = None

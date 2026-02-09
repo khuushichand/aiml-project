@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+import sqlite3
 from typing import Any, List, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
@@ -34,6 +35,21 @@ class _StubChaChaDb:
         return self._conn.statements
 
 
+class _SQLiteBackfillDb:
+    def __init__(self, db_path: Path) -> None:
+        self.backend_type = BackendType.SQLITE
+        self._conn = sqlite3.connect(str(db_path))
+
+    @contextmanager
+    def transaction(self):  # type: ignore[override]
+        try:
+            yield self._conn
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+
+
 def test_user_feedback_schema_sqlite_executes_expected_statements() -> None:
 
     db = _StubChaChaDb(BackendType.SQLITE)
@@ -62,6 +78,42 @@ def test_user_feedback_schema_postgres_uses_boolean_and_timestamp() -> None:
     assert any("helpful BOOLEAN" in stmt for stmt in statements)
     assert any("issues" in stmt for stmt in statements)
     assert any("TIMESTAMPTZ" in stmt for stmt in statements)
+
+
+def test_user_feedback_schema_backfills_missing_issues_column_sqlite(tmp_path: Path) -> None:
+    db_path = tmp_path / "feedback-backfill.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("CREATE TABLE conversations (id TEXT PRIMARY KEY)")
+        conn.execute(
+            """
+            CREATE TABLE conversation_feedback (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                message_id TEXT,
+                query TEXT,
+                document_ids TEXT,
+                chunk_ids TEXT,
+                relevance_score INTEGER,
+                helpful INTEGER,
+                user_notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    db = _SQLiteBackfillDb(db_path)
+    try:
+        UserFeedbackStore(db)
+
+        cursor = db._conn.execute("PRAGMA table_info(conversation_feedback)")
+        columns = {row[1] for row in cursor.fetchall()}
+        assert "issues" in columns
+    finally:
+        db._conn.close()
 
 
 def test_record_search_sqlite_writes_row(tmp_path: Path) -> None:

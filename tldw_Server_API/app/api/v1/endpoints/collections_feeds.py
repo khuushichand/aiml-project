@@ -212,6 +212,33 @@ def _register_schedule(db: WatchlistsDatabase, job_row, *, current_user: User) -
         logger.debug(f"Collections feeds schedule DB fallback failed: {exc}")
 
 
+def _derive_health_status(source_row) -> str:
+    """Derive health status from source row fields."""
+    consec_errors = int(getattr(source_row, "consec_errors", 0) or 0)
+    active = bool(getattr(source_row, "active", 1))
+    if not active:
+        return "disabled"
+    if consec_errors >= 5:
+        return "failing"
+    if consec_errors >= 1:
+        return "degraded"
+    return "healthy"
+
+
+def _extract_promoted_at(settings: dict[str, Any], job_row=None) -> str | None:
+    """Extract promoted_at from job output_prefs schedule config."""
+    if job_row is not None:
+        try:
+            import json as _json
+            prefs = _json.loads(getattr(job_row, "output_prefs_json", None) or "{}")
+            schedule_cfg = prefs.get("collections_schedule")
+            if isinstance(schedule_cfg, dict) and schedule_cfg.get("promoted"):
+                return schedule_cfg.get("promoted_at")
+        except (ValueError, TypeError, AttributeError):
+            pass
+    return None
+
+
 def _to_feed_response(source_row, *, job_row=None, settings: dict[str, Any] | None = None) -> CollectionsFeed:
     settings = settings if settings is not None else _parse_settings(source_row.settings_json)
     job_id = _extract_job_id(settings)
@@ -230,6 +257,9 @@ def _to_feed_response(source_row, *, job_row=None, settings: dict[str, Any] | No
         defer_until=source_row.defer_until,
         status=source_row.status,
         consec_not_modified=source_row.consec_not_modified,
+        consec_errors=int(getattr(source_row, "consec_errors", 0) or 0),
+        health_status=_derive_health_status(source_row),
+        promoted_at=_extract_promoted_at(settings, job_row=job_row),
         created_at=source_row.created_at,
         updated_at=source_row.updated_at,
         job_id=job_row.id if job_row is not None else job_id,

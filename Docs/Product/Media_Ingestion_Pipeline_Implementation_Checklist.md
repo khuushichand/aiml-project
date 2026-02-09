@@ -13,7 +13,7 @@ Scope: Gap closure between `/api/v1/media/add`, watchlists/reading ingestion, co
 
 ### 1) URL Validation Parity with Upload Validation
 - Priority: P1
-- Status: Not Started
+- Status: In Progress (document-like URL path implemented in `process_document_like_item`; remaining parity checks for other URL ingestion paths pending)
 - Goal: Ensure URL-downloaded files receive equivalent validation guarantees to upload files.
 - Current behavior:
   - Upload path: `FileValidator` enforced before processing.

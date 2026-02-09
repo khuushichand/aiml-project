@@ -49,3 +49,49 @@ def test_persona_default_budget_invalid_values_fallback_or_clamp(monkeypatch):
     assert chat_endpoint_module._resolve_persona_default_budget_tokens(
         {"persona_exemplar_default_budget_tokens": "999999"}
     ) == 20_000
+
+
+@pytest.mark.unit
+def test_persona_effective_budget_auto_adjusts_on_sustained_alert_window(monkeypatch):
+    monkeypatch.setattr(chat_endpoint_module, "_PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED", True)
+    monkeypatch.setattr(chat_endpoint_module, "_PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR", 0.5)
+    monkeypatch.setattr(chat_endpoint_module, "_PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS", 120)
+
+    with chat_endpoint_module._persona_alert_guard:
+        chat_endpoint_module._persona_ioo_windows.clear()
+        window = chat_endpoint_module._persona_ioo_windows["u1:42"]
+        for _ in range(int(chat_endpoint_module._PERSONA_IOO_SUSTAIN_WINDOW)):
+            window.append(1)
+
+    budget, adjusted, reason = chat_endpoint_module._resolve_effective_persona_budget_tokens(
+        budget_override=None,
+        user_id="u1",
+        character_id=42,
+    )
+
+    assert adjusted is True
+    assert reason == "ioo_sustained_alert_window"
+    assert budget < int(chat_endpoint_module._PERSONA_EXEMPLAR_DEFAULT_BUDGET)
+
+
+@pytest.mark.unit
+def test_persona_effective_budget_override_bypasses_auto_adjust(monkeypatch):
+    monkeypatch.setattr(chat_endpoint_module, "_PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED", True)
+    monkeypatch.setattr(chat_endpoint_module, "_PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR", 0.5)
+    monkeypatch.setattr(chat_endpoint_module, "_PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS", 120)
+
+    with chat_endpoint_module._persona_alert_guard:
+        chat_endpoint_module._persona_ioo_windows.clear()
+        window = chat_endpoint_module._persona_ioo_windows["u2:7"]
+        for _ in range(int(chat_endpoint_module._PERSONA_IOO_SUSTAIN_WINDOW)):
+            window.append(1)
+
+    budget, adjusted, reason = chat_endpoint_module._resolve_effective_persona_budget_tokens(
+        budget_override=333,
+        user_id="u2",
+        character_id=7,
+    )
+
+    assert budget == 333
+    assert adjusted is False
+    assert reason == "request_override"

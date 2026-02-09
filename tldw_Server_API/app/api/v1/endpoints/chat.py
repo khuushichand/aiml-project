@@ -314,6 +314,50 @@ def _resolve_persona_default_budget_tokens(chat_config: dict[str, Any]) -> int:
     return parsed
 
 
+def _resolve_persona_ioo_budget_auto_adjust_enabled(chat_config: dict[str, Any]) -> bool:
+    """Resolve whether sustained IOO alerts should auto-adjust persona budget."""
+    env_raw = os.getenv("PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED")
+    if isinstance(env_raw, str) and env_raw.strip():
+        return _shared_is_truthy(env_raw)
+
+    cfg_raw = chat_config.get("persona_ioo_budget_auto_adjust_enabled")
+    if cfg_raw is None:
+        return True
+    return _shared_is_truthy(cfg_raw)
+
+
+def _resolve_persona_ioo_budget_auto_reduction_factor(chat_config: dict[str, Any]) -> float:
+    """Resolve multiplier used when sustained IOO alerts trigger budget adjustment."""
+    fallback = 0.75
+    env_raw = os.getenv("PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR")
+    raw_value: Any = env_raw if isinstance(env_raw, str) and env_raw.strip() else chat_config.get(
+        "persona_ioo_budget_auto_reduction_factor"
+    )
+    if raw_value is None:
+        return fallback
+    try:
+        parsed = float(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return fallback
+    return max(0.10, min(0.95, parsed))
+
+
+def _resolve_persona_ioo_budget_auto_min_tokens(chat_config: dict[str, Any]) -> int:
+    """Resolve lower bound for persona budget after auto-adjustment."""
+    fallback = 240
+    env_raw = os.getenv("PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS")
+    raw_value: Any = env_raw if isinstance(env_raw, str) and env_raw.strip() else chat_config.get(
+        "persona_ioo_budget_auto_min_tokens"
+    )
+    if raw_value is None:
+        return fallback
+    try:
+        parsed = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return fallback
+    return max(1, min(20_000, parsed))
+
+
 RECENCY_HALF_LIFE_DAYS: float = _cfg_float("half_life_days", 14.0)
 CHAT_BM25_WEIGHT: float = _cfg_float("w_bm25", 0.65)
 CHAT_RECENCY_WEIGHT: float = _cfg_float("w_recency", 0.35)
@@ -405,6 +449,12 @@ _PERSONA_IOR_LOW_ALERT_THRESHOLD = 0.10
 _PERSONA_IOR_HIGH_ALERT_THRESHOLD = 0.60
 _PERSONA_IOO_SUSTAIN_WINDOW = 8
 _PERSONA_IOO_SUSTAIN_MIN_HITS = 3
+_PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED = _resolve_persona_ioo_budget_auto_adjust_enabled(_chat_config)
+_PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR = _resolve_persona_ioo_budget_auto_reduction_factor(_chat_config)
+_PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS = _resolve_persona_ioo_budget_auto_min_tokens(_chat_config)
+_PERSONA_ID_ALIAS_DEPRECATION_START_DATE = date(2026, 2, 9)
+_PERSONA_ID_ALIAS_SUNSET_DATE = date(2026, 6, 30)
+_PERSONA_ID_ALIAS_REMOVAL_DATE = date(2026, 7, 1)
 _persona_ioo_windows: dict[str, deque[int]] = defaultdict(
     lambda: deque(maxlen=_PERSONA_IOO_SUSTAIN_WINDOW)
 )
@@ -591,19 +641,44 @@ def _resolve_persona_strategy(raw_strategy: str | None) -> str:
     return normalized
 
 
-def _resolve_character_id_from_persona_alias(request_data: ChatCompletionRequest) -> None:
+def _persona_alias_today() -> date:
+    """Return current UTC date for persona alias policy checks."""
+    return datetime.now(timezone.utc).date()
+
+
+def _build_persona_alias_deprecation_headers(alias_used: bool) -> dict[str, str]:
+    """Build response headers for deprecated `persona_id` alias usage."""
+    if not alias_used:
+        return {}
+    return {
+        "X-TLDW-Persona-ID-Alias-Deprecated": "true",
+        "X-TLDW-Persona-ID-Alias-Sunset-Date": _PERSONA_ID_ALIAS_REMOVAL_DATE.isoformat(),
+        "X-TLDW-Persona-ID-Alias-Replacement": "character_id",
+    }
+
+
+def _resolve_character_id_from_persona_alias(request_data: ChatCompletionRequest) -> bool:
     """Best-effort compatibility resolver from legacy persona_id to character_id."""
     character_id = str(getattr(request_data, "character_id", "") or "").strip()
     if character_id:
-        return
+        return False
 
     raw_persona_id = getattr(request_data, "persona_id", None)
     if raw_persona_id is None:
-        return
+        return False
 
     persona_id = str(raw_persona_id).strip()
     if not persona_id:
-        return
+        return False
+
+    if _persona_alias_today() >= _PERSONA_ID_ALIAS_REMOVAL_DATE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"persona_id alias was removed on {_PERSONA_ID_ALIAS_REMOVAL_DATE.isoformat()}. "
+                "Use character_id explicitly."
+            ),
+        )
 
     if not persona_id.isdigit():
         raise HTTPException(
@@ -612,6 +687,54 @@ def _resolve_character_id_from_persona_alias(request_data: ChatCompletionRequest
         )
 
     request_data.character_id = persona_id
+    return True
+
+
+def _has_sustained_persona_ioo_alerts(user_id: str | None, character_id: int | None) -> bool:
+    """Return True when the per-user/character IOO window indicates sustained over-copying risk."""
+    if not user_id or character_id is None:
+        return False
+    window_key = f"{str(user_id)}:{character_id}"
+    with _persona_alert_guard:
+        window = _persona_ioo_windows.get(window_key)
+        if not window:
+            return False
+        if len(window) < _PERSONA_IOO_SUSTAIN_WINDOW:
+            return False
+        return sum(window) >= _PERSONA_IOO_SUSTAIN_MIN_HITS
+
+
+def _resolve_effective_persona_budget_tokens(
+    *,
+    budget_override: Any,
+    user_id: str | None,
+    character_id: int | None,
+) -> tuple[int, bool, str | None]:
+    """
+    Resolve effective persona exemplar budget with optional sustained-IOO auto-adjust.
+
+    Returns:
+        (effective_budget_tokens, adjusted, adjustment_reason)
+    """
+    if budget_override is not None:
+        parsed = int(budget_override)
+        return max(1, parsed), False, "request_override"
+
+    base_budget = int(_PERSONA_EXEMPLAR_DEFAULT_BUDGET)
+    if (
+        not _PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED
+        or not _has_sustained_persona_ioo_alerts(user_id, character_id)
+    ):
+        return max(1, base_budget), False, None
+
+    adjusted_budget = max(
+        _PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS,
+        int(math.floor(base_budget * _PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR)),
+    )
+    adjusted_budget = max(1, min(base_budget, adjusted_budget))
+    if adjusted_budget < base_budget:
+        return adjusted_budget, True, "ioo_sustained_alert_window"
+    return max(1, base_budget), False, None
 
 
 def _extract_assistant_text_from_completion_payload(payload: dict[str, Any]) -> str:
@@ -2281,7 +2404,7 @@ async def create_chat_completion(
         if override_error:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
-        _resolve_character_id_from_persona_alias(request_data)
+        persona_alias_used = _resolve_character_id_from_persona_alias(request_data)
 
         user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
         logger.info(
@@ -2294,6 +2417,9 @@ async def create_chat_completion(
         persona_debug_requested = bool(getattr(request_data, "persona_debug", False))
         persona_debug_meta: dict[str, Any] | None = None
         persona_selected_exemplars: list[dict[str, Any]] = []
+        persona_budget_tokens_used = int(_PERSONA_EXEMPLAR_DEFAULT_BUDGET)
+        persona_budget_auto_adjusted = False
+        persona_budget_adjustment_reason: str | None = None
 
         try:
             # In TEST_MODE or when explicitly enabled via config/env, allow
@@ -2442,7 +2568,23 @@ async def create_chat_completion(
                 user_turn_text = _extract_latest_user_turn_text(getattr(request_data, "messages", []))
                 if user_turn_text:
                     budget_override = getattr(request_data, "persona_exemplar_budget_tokens", None)
-                    budget_tokens = int(budget_override) if budget_override is not None else _PERSONA_EXEMPLAR_DEFAULT_BUDGET
+                    budget_tokens, persona_budget_auto_adjusted, persona_budget_adjustment_reason = (
+                        _resolve_effective_persona_budget_tokens(
+                            budget_override=budget_override,
+                            user_id=user_id,
+                            character_id=character_db_id_for_context,
+                        )
+                    )
+                    persona_budget_tokens_used = int(budget_tokens)
+                    if persona_budget_auto_adjusted:
+                        logger.info(
+                            "Persona budget auto-adjust applied user_id={} character_id={} base={} adjusted={} reason={}",
+                            str(user_id or "unknown"),
+                            character_db_id_for_context,
+                            int(_PERSONA_EXEMPLAR_DEFAULT_BUDGET),
+                            int(budget_tokens),
+                            persona_budget_adjustment_reason or "unspecified",
+                        )
                     selector_config = PersonaExemplarSelectorConfig(
                         budget_tokens=max(1, budget_tokens),
                         max_exemplar_tokens=120,
@@ -2488,6 +2630,9 @@ async def create_chat_completion(
                             "coverage": selected_result.coverage,
                         }
                         persona_debug_meta["budget_tokens"] = selector_config.budget_tokens
+                        persona_debug_meta["budget_auto_adjusted"] = bool(persona_budget_auto_adjusted)
+                        if persona_budget_adjustment_reason:
+                            persona_debug_meta["budget_adjustment_reason"] = persona_budget_adjustment_reason
                 elif persona_debug_meta is not None:
                     persona_debug_meta["reason"] = "no_user_turn_text"
             elif persona_debug_meta is not None:
@@ -2497,12 +2642,10 @@ async def create_chat_completion(
                     persona_debug_meta["reason"] = "character_context_unavailable"
 
             if persona_debug_meta is not None and "budget_tokens" not in persona_debug_meta:
-                budget_override = getattr(request_data, "persona_exemplar_budget_tokens", None)
-                persona_debug_meta["budget_tokens"] = (
-                    int(budget_override)
-                    if budget_override is not None
-                    else _PERSONA_EXEMPLAR_DEFAULT_BUDGET
-                )
+                persona_debug_meta["budget_tokens"] = int(persona_budget_tokens_used)
+                persona_debug_meta["budget_auto_adjusted"] = bool(persona_budget_auto_adjusted)
+                if persona_budget_adjustment_reason:
+                    persona_debug_meta["budget_adjustment_reason"] = persona_budget_adjustment_reason
 
             if user_base_dir is not None and current_user and getattr(current_user, "id", None) is not None:
                 final_system_message = build_system_message_with_skills(
@@ -2941,6 +3084,9 @@ async def create_chat_completion(
                         stream_response.headers["X-TLDW-Persona-Debug-ID"] = str(persona_debug_meta["debug_id"])
                     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                         pass
+                alias_headers = _build_persona_alias_deprecation_headers(persona_alias_used)
+                for header_key, header_value in alias_headers.items():
+                    stream_response.headers[header_key] = header_value
                 return stream_response
 
             else: # Non-streaming
@@ -3046,7 +3192,8 @@ async def create_chat_completion(
                         rg_finalized = True
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _rg_commit_err:
                     logger.debug(f"RG tokens commit skipped/failed: {_rg_commit_err}")
-                return JSONResponse(content=encoded_payload)
+                alias_headers = _build_persona_alias_deprecation_headers(persona_alias_used)
+                return JSONResponse(content=encoded_payload, headers=alias_headers or None)
 
         # --- Exception Handling --- Improved with structured error handling
 

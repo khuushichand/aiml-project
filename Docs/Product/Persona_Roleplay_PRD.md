@@ -225,10 +225,20 @@ Operational:
 - Performance target: selector + prompt assembly adds <=120ms p95 for local character with <=10k exemplars.
 
 
-## 12) Open Questions
+## 12) Open Questions / Resolved Decisions
+Open:
 - Do we need a shared global curated overlay in v0, or is per-user/per-character storage sufficient?
-- Should `persona_id` alias support be temporary with deprecation messaging, or immediate strict `character_id` only?
-- What IOO alert policy should auto-adjust demo budget versus log-only?
+
+Resolved (2026-02-09):
+- `persona_id` alias support is temporary.
+  - Deprecation start: 2026-02-09.
+  - Sunset (last compatibility window day): 2026-06-30.
+  - Removal date (hard reject): 2026-07-01.
+  - Runtime behavior: alias usage emits deprecation/sunset response headers; post-removal requests must use `character_id`.
+- IOO alerts drive automatic budget downshift (not log-only).
+  - Trigger: sustained exceedance window (`>=3` threshold hits in rolling window size `8`).
+  - Default adjustment: multiply budget by `0.75` with floor `240` tokens.
+  - Scope: applied only when request-level budget override is omitted.
 
 
 ## 13) Implementation Notes
@@ -236,6 +246,8 @@ Operational:
 - Keep DB access in the Character/Chat abstractions; no raw SQL in endpoints.
 - Use Chroma batching for embedding upserts keyed by exemplar id.
 - Keep default demo budget 600 tokens, configurable in server config.
+- Automated performance profile command (selector + prompt assembly p95 target):
+  - `PERF=1 python -m pytest -q tldw_Server_API/tests/Chat_NEW/integration/test_chat_persona_selector_prompt_assembly_perf.py`
 - Testing should mirror existing suites under:
   - `tldw_Server_API/tests/Character_Chat_NEW/`
   - `tldw_Server_API/tests/Chat_NEW/`

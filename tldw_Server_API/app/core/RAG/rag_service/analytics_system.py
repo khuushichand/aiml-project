@@ -416,8 +416,26 @@ class UserFeedbackStore:
             with self.db.transaction() as conn:
                 for statement in statements:
                     conn.execute(statement)
+                self._ensure_issues_column(conn)
         except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"Failed to initialize feedback schema: {exc}", exc_info=True)
+
+    def _ensure_issues_column(self, conn: Any) -> None:
+        """Backfill `issues` on pre-existing schemas created before this field existed."""
+        if self.db.backend_type == BackendType.POSTGRESQL:
+            conn.execute(
+                "ALTER TABLE conversation_feedback "
+                "ADD COLUMN IF NOT EXISTS issues TEXT"
+            )
+            return
+
+        try:
+            conn.execute("ALTER TABLE conversation_feedback ADD COLUMN issues TEXT")
+        except Exception as exc:  # noqa: BLE001 - backend adapters expose varied DB exceptions
+            message = str(exc).lower()
+            if "duplicate column name" in message or "already exists" in message:
+                return
+            raise
 
     async def add_feedback(
         self,

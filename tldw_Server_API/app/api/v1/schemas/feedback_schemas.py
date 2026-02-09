@@ -27,11 +27,11 @@ _ERR_RELEVANCE_REQUIRED = "relevance_score is required when feedback_type is 're
 KNOWN_ISSUE_IDS: frozenset[str] = frozenset({
     "incorrect_information",
     "not_relevant",
-    "outdated",
     "missing_details",
-    "too_long",
-    "too_short",
-    "offensive_content",
+    "sources_unhelpful",
+    "too_verbose",
+    "too_brief",
+    "other",
 })
 
 

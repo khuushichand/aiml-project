@@ -1,13 +1,13 @@
 # Media Ingestion Pipeline PRD
 
-Status: Foundations shipped (v0.2.x); Stage 1 roadmap in progress
+Status: Foundations shipped (v0.2.x); Stage 1 partially shipped with gap-closure work in progress
 Owner: Core Maintainers
 Audience: Backend & infrastructure contributors
 
 ## 1. Summary
 - **Problem:** tldw_server ingests heterogeneous media (audio/video/documents/web dumps) but the knowledge about validation, parsing, persistence, and downstream hooks is scattered across modules. Contributors struggle to evolve the pipeline safely, and cross-cutting features (watchlists, collections, RAG) depend on predictable ingestion guarantees.
 - **Solution:** Define a cohesive Media Ingestion Pipeline charter that documents current capabilities, required invariants, integration points, and the staged roadmap toward a unified, observable, and scalable ingestion layer.
-- **Status (2025-10-20):** Core processors live under `app/core/Ingestion_Media_Processing/`, FastAPI endpoints expose per-media workflows, persistence flows through `Media_DB_v2` and content collections, and watchlists/reading services reuse the same primitives. Validation (Upload_Sink), chunking, claims extraction, and embeddings enqueueing are operational; observability and multi-backend parity are partially implemented.
+- **Status (2026-02-09):** Core processors live under `app/core/Ingestion_Media_Processing/`, FastAPI endpoints expose per-media workflows, and persistence flows through `Media_DB_v2`. Watchlists/reading services dual-write to collections, while `/api/v1/media/add` remains Media DB-first. Async ingestion jobs (`/api/v1/media/ingest/jobs`) and MediaWiki checkpoints are implemented; validation, embeddings, and observability still have path-specific behavior that this PRD now makes explicit.
 
 ## 2. Problem Statement
 Contributors must support new media types, improve processing fidelity, and connect ingestion outputs to Retrieval/RAG, watchlists, and collections. Without a shared plan, changes risk breaking DB invariants, duplicating validation logic, or bypassing downstream consumers (embeddings, claims, notifications). We need a PRD that articulates the ingestion contract and future stages so that the module evolves coherently.
@@ -47,7 +47,7 @@ Contributors must support new media types, improve processing fidelity, and conn
 | External tooling | `ffmpeg`, `yt-dlp`, optional `faster_whisper`, `NVIDIA NeMo`, `Qwen2Audio`, `pymupdf4llm`, `docling`, `pypandoc`, system Tesseract. |
 | Persistence | API layer persists into `Media_DB_v2` (per-user SQLite default) creating `Media`, `DocumentVersions`, `MediaChunks`, `Keywords`, transcripts, `Claims`, and `sync_log` entries. Soft deletes + optimistic concurrency enforced. |
 | Collections bridge | Watchlists and reading services dual-write to `content_items` and tag tables while linking the originating `media_id`. API-driven `/media` uploads currently persist to Media DB only (dual-write roadmap item). Embeddings queue integration uses `Collections.embedding_queue.enqueue_embeddings_job_for_item`. |
-| Downstream hooks | Chunking triggers embeddings enqueue, optional claims extraction (`core/Claims_Extraction/ingestion_claims.py`), and watchlist output generation. |
+| Downstream hooks | Claims extraction is optional/feature-flagged and non-fatal. Embeddings are currently path-specific: watchlists/reading enqueue collections embedding jobs, while `/media/add` triggers media embeddings background generation directly. |
 | API surface | `/api/v1/media/...` endpoints for upload + processing; `/api/v1/media/process-*` for ephemeral processing; watchlists and collections reuse ingestion helpers for scheduled scraping and manual saves. |
 | Security | Size limits from config, MIME enforcement, Yara optional, basic HTML/XML sanitization stubs (TODO for stronger sanitization), quarantine paths for archive validation. |
 | Testing | Extensive unit tests per processor, integration tests for media endpoints, watchlists pipeline tests, and collection ingestion tests. Some flows skip when ffmpeg/yt-dlp unavailable. |
@@ -63,10 +63,12 @@ Contributors must support new media types, improve processing fidelity, and conn
                                                Chunking & Metadata         Media DB v2 / Collections   Embeddings Queue,
                                                (segments, analysis)        (`media`, `content_items`)   Claims, Notifications
 ```
-- Validation occurs before any storage: the API saves uploads into temp dirs, delegates to `FileValidator`, and only proceeds on `ValidationResult.is_valid`.
+- Upload path validation occurs before processing: the API saves uploads into temp dirs, delegates to `FileValidator`, and only proceeds on `ValidationResult.is_valid`.
+- URL path validation currently relies on download guards (egress policy, extension/content-type checks, size limits) and does not yet run the same `FileValidator` pass used for uploads.
 - Processing modules encapsulate media-specific logic. They support both URL fetch and file upload paths, relying on helper utilities (e.g., yt-dlp wrappers, PDF parsers).
-- Persistence logic lives mostly in API/service layers: create/update media records, attach versions, keywords, transcripts, claims, and push items to collections.
-- Downstream hooks include embeddings enqueue, claims extraction, watchlist output generation, and optional notifications.
+- Persistence logic lives mostly in API/service layers: create/update media records, attach versions, keywords, transcripts, and claims.
+- Collections writes are currently guaranteed in watchlists/reading flows; `/media/add` collections dual-write is a roadmap item.
+- Downstream hooks include claims extraction, watchlist output generation, and embeddings integration (queue-based for collections paths; direct background generation for `/media/add`).
 
 ## 8. Data Model (SQLite default, Postgres optional)
 - **Media DB v2 (per-user `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`):**
@@ -92,17 +94,20 @@ Contributors must support new media types, improve processing fidelity, and conn
 - `/api/v1/media/mediawiki/...` - long-running MediaWiki ingestion with streaming responses.
 - `/api/v1/media/{id}` - CRUD endpoints (fetch, update metadata, delete/restore).
 - `/api/v1/watchlists/*` and `/api/v1/items` reuse ingestion outputs to list items and outputs.
-- Future: `/api/v1/media/jobs/*` for asynchronous queued ingestion (Stage 2).
+- Async jobs (implemented): `/api/v1/media/ingest/jobs`, `/api/v1/media/ingest/jobs/{job_id}` (submit/status/list/cancel).
+- Future: optional route aliasing to `/api/v1/media/jobs/*` if endpoint simplification is desired.
 
 ## 10. Functional Requirements (current + near term)
-1. **Validation Guarantee:** No file reaches processors without passing `FileValidator`. Test fixtures must cover oversized, invalid MIME, malicious archives.
-2. **Deterministic Metadata:** Each processor must populate `metadata` with the same core keys (`source_url`, `duration`, `page_count`, etc.) to support downstream consumers.
-3. **Chunk Consistency:** When chunking is enabled, chunk metadata includes offsets and section titles when available; chunk count must match persisted rows.
-4. **Idempotent Persistence:** Re-ingesting the same URL/file should update existing media versions rather than duplicating records; dedupe keyed by normalized URL + hash.
-5. **Collections Sync:** Newly ingested media should enqueue conversions into `content_items` for unified search/filter endpoints.
-6. **Embeddings Hook:** When chunks exist, enqueue `enqueue_embeddings_job_for_item` (best effort; safe to skip if queue disabled). Provide metadata for vector provenance.
-7. **Claims Optionality:** Claims extraction must be feature-flagged (enabled via config). Failures should not abort ingestion but should log warnings.
-8. **Observability:** Emit loguru events per ingestion stage; Stage 1 adds metrics for validation failures, processing durations, and downstream queue latency.
+1. **Validation Guarantee (path-specific):**
+   - Upload inputs MUST pass `FileValidator` before processing.
+   - URL inputs MUST pass download guardrails (egress policy, extension/content-type, max-size) and SHOULD converge to a shared post-download validator pass in Stage 1 gap closure.
+2. **Deterministic Metadata:** Processors SHOULD populate stable core metadata keys (`source_url`, `duration`, `page_count`, etc. when applicable). Stage 1 adds an explicit metadata contract test matrix per media type.
+3. **Chunk Consistency:** When chunking is enabled, chunk metadata SHOULD include offsets/section context when available. Stage 1 adds explicit chunk-count parity assertions between in-memory chunk outputs and persisted rows.
+4. **Idempotent Persistence:** Re-ingesting equivalent media SHOULD update/touch existing records rather than duplicating rows. Current dedupe is URL and/or content hash (with source-hash checks in some paths); Stage 1 defines normalized URL + hash parity behavior.
+5. **Collections Sync (path-specific):** Watchlists and reading services MUST dual-write to `content_items`; `/media/add` collections sync remains a Stage 1 roadmap deliverable.
+6. **Embeddings Hook (path-specific):** Watchlists/reading paths MUST enqueue `enqueue_embeddings_job_for_item`; `/media/add` currently schedules direct media embeddings generation. Stage 1 target is a unified queue/provenance contract.
+7. **Claims Optionality:** Claims extraction MUST be feature-flagged (enabled via config). Failures MUST not abort ingestion and SHOULD emit warnings.
+8. **Observability:** Emit loguru events per ingestion stage. Existing upload/processor metrics remain valid; Stage 1 adds standardized `ingestion_*` counters/histograms and queue-latency visibility.
 
 ## 11. Integrations & Dependencies
 - **Watchlists Pipeline:** Scheduled scraping uses ingestion processors for HTML extraction and persists through the same Media DB + collections pathway.
@@ -119,13 +124,14 @@ Contributors must support new media types, improve processing fidelity, and conn
 - Media DB persistence + claims extraction + chunking.
 - Watchlists/collections integration and embeddings enqueue hook.
 
-### Stage 1 - Observability & Job Control (In progress)
-- Instrument per-media metrics (validation failures, processing duration, chunk counts).
-- Normalize async task orchestration: background queues for long-running jobs (Large PDFs, yt-dlp).
-- Introduce ingestion job registry with retry/backoff metadata stored in Media DB (or new table).
-- Harden streaming ingestion (MediaWiki, large uploads) with resumable checkpoints.
-- Ensure Content Collections pipeline receives consistent provenance metadata (run_id, source_id).
-- Tighten sanitization (HTML/XML cleaning) and document safe defaults.
+### Stage 1 - Observability & Job Control (In progress)
+- [Shipped] Introduce async ingestion jobs endpoints and worker (`/api/v1/media/ingest/jobs`) with retry/backoff.
+- [Shipped/Partial] Harden long-running ingestion with checkpoints (MediaWiki implemented; parity for other long flows pending).
+- [In Progress] Instrument standardized per-media metrics (`ingestion_*`) for validation failures, processing duration, and chunk counts.
+- [In Progress] Ensure collections provenance metadata consistency (`run_id`, `source_id`, origin tags) across ingestion pathways.
+- [Pending] Add URL-path post-download validator parity with upload-path `FileValidator`.
+- [Pending] Add `/media/add` -> collections dual-write bridge and align embeddings path with queue metadata contract.
+- [In Progress] Tighten/document sanitization defaults for HTML/XML and archive-driven inputs.
 
 ### Stage 2 - Backend Parity & Scaling
 - Remove SQLite-specific SQL; add migrations for Postgres parity.
@@ -141,12 +147,13 @@ Contributors must support new media types, improve processing fidelity, and conn
 - First-class support for streaming media (live transcripts) with partial persistence.
 
 ## 13. Metrics & Observability
-- Proposed counters/gauges (Stage 1):
+- Current metrics observed in ingestion paths include upload/storage counters and processor-specific timers (e.g., `uploads_total`, `upload_bytes_total`, `pdf_processing_duration`).
+- Standardized counters/histograms targeted for Stage 1:
   - `ingestion_requests_total{media_type,outcome}`
   - `ingestion_processing_seconds_bucket{media_type,processor}` (histogram)
-  - `ingestion_validation_failures_total{reason}`
+  - `ingestion_validation_failures_total{reason,path_kind}`
   - `ingestion_chunks_total{media_type,chunk_method}`
-  - `ingestion_embeddings_enqueue_total{outcome}`
+  - `ingestion_embeddings_enqueue_total{path_kind,outcome}`
 - Logs: structured loguru fields (`media_type`, `source`, `duration_ms`, `chunk_count`, `warnings`).
 - Tracing: optional OpenTelemetry spans per stage (validation, download, parse, chunk).
 - Alerting: high validation failure rate, stuck processing jobs, embeddings enqueue backlog.
@@ -160,12 +167,12 @@ Contributors must support new media types, improve processing fidelity, and conn
 - Secrets: avoid logging API keys, cookies, credentials when fetching remote content.
 
 ## 15. Open Questions
-1. Should we standardize on asynchronous worker queues for heavy processors (audio/video) in Stage 1 or defer to Stage 2?
+1. Should we standardize on asynchronous worker queues for heavy processors (audio/video) in Stage 1 or defer to Stage 2?
 2. How do we reconcile per-user SQLite databases with org-level Postgres deployments for shared watchlists?
 3. Do we need a pluggable antivirus scan beyond Yara (e.g., ClamAV integration)?
 4. What is the long-term strategy for storing raw binaries (S3/minio vs. filesystem) when Media DB references file paths?
 5. How should we expose ingestion progress to clients (WebSockets vs. polling) for long operations?
-6. Which sanitization library should replace current stubs, and how do we validate it across formats?
+6. Should URL downloads always be run through the same `FileValidator` pipeline as uploads, or do we keep separate URL guardrails by media type?
 
 ## 16. References
 - Code: `tldw_Server_API/app/core/Ingestion_Media_Processing/` (processors, Upload_Sink).

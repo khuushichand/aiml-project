@@ -64,6 +64,7 @@ Setup CSP (Content Security Policy)
 - `BYOK_LAST_USED_THROTTLE_SECONDS`: Throttle runtime updates to BYOK `last_used_at` (seconds, default `300`).
 - `BYOK_SECONDARY_ENCRYPTION_KEY`: Secondary BYOK encryption key for dual-read during rotations.
 - `SHOW_API_KEY_ON_STARTUP`: Avoid in production.
+- `RG_ENABLED=0` should be treated as emergency/debug-only for AuthNZ ingress paths; dependency shims (`check_rate_limit`, `check_auth_rate_limit`) are diagnostics-only and do not restore legacy fallback 429 enforcement.
 
 Egress & Outbound Policy (global + Workflows)
 - `EGRESS_ALLOWLIST`, `EGRESS_DENYLIST`: Global DNS allow/deny lists for outbound requests.
@@ -110,6 +111,9 @@ Egress & Outbound Policy (global + Workflows)
 ## Chat
 - `CHAT_STREAM_INCLUDE_METADATA`: Include `tldw_*` IDs in chat SSE streaming chunks (`true|false`, default `true`). Set `false` for strict OpenAI streaming compatibility.
 - `PERSONA_EXEMPLAR_DEFAULT_BUDGET_TOKENS`: Default persona exemplar budget for character chat when request override is omitted (default `600`, clamped to `1..20000`).
+- `PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED`: Auto-adjust persona exemplar budget after sustained IOO alerts (`true|false`, default `true`).
+- `PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR`: Multiplicative downshift applied when auto-adjust triggers (default `0.75`, clamped to `0.10..0.95`).
+- `PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS`: Lower bound for auto-adjusted persona exemplar budget (default `240`, clamped to `1..20000`).
 - `CHAT_COMMANDS_ENABLED`: Enable slash-command preprocessing (`true|false`, default `false`).
 - `CHAT_COMMAND_INJECTION_MODE`: Slash-command injection mode (`system|preface|replace`, default `system`).
 - `CHAT_COMMANDS_REQUIRE_PERMISSIONS`: Require per-command RBAC permission checks (`true|false`, default `false`).
@@ -167,6 +171,25 @@ Streaming Audio / TTS
 Queues
 - CPU stages use `queue=default`.
 - GPU transcription uses dedicated `queue=transcribe` (see GPU worker container stub).
+
+## Resource Governor (Unified Rate Limiting)
+
+The Resource Governor (RG) is the **primary enforcement path** for all rate limiting. Some legacy per-module limiters remain during cutover and will be removed once shadow-mode exit criteria are met. AuthNZ dependency shims (`check_rate_limit`, `check_auth_rate_limit`) are diagnostics-only and do not enforce legacy fallback limits.
+
+- `RG_ENABLED`: Master toggle (`true|1|false|0`). Resolution: env var > `config.txt` `[ResourceGovernor] enabled` > default `false`.
+- `RG_BACKEND`: Backend type (`memory` | `redis`). Default `memory`. Redis requires `REDIS_URL`.
+- `RG_POLICY_PATH`: Path to YAML policy file. Default `tldw_Server_API/Config_Files/resource_governor_policies.yaml`.
+- `RG_POLICY_STORE`: Policy persistence backend (`yaml` | `db`). Default `yaml`.
+- `RG_POLICY_RELOAD_ENABLED`: Hot-reload policy changes (`true|false`). Default `true`.
+- `RG_POLICY_RELOAD_INTERVAL_SEC`: Policy reload check interval in seconds. Default `30`.
+- `RG_REDIS_FAIL_MODE`: Behavior when Redis unavailable (`fail_open` | `fail_closed` | `fallback_memory`). Default `fail_open`.
+- `RG_TRUSTED_PROXIES`: Comma-separated trusted proxy IPs for `X-Forwarded-For` resolution.
+- `RG_CLIENT_IP_HEADER`: Custom header for client IP extraction.
+- `RG_ROUTE_MAP_AUDIT`: When `true`, warn on HTTP routes not covered by the RG route map.
+
+Per-module policy overrides: `RG_CHAT_POLICY_ID`, `RG_EMBEDDINGS_POLICY_ID`, `RG_EMBEDDINGS_SERVER_POLICY_ID`, `RG_CHARACTER_CHAT_POLICY_ID`, `RG_CHARACTER_CHAT_ENFORCE_REQUESTS`, `RG_EVALUATIONS_POLICY_ID`, `RG_WEB_SCRAPING_POLICY_ID`.
+
+See `Docs/Operations/Env_Vars.md` for the full list including debug/test-only knobs and deprecated legacy rate limit variables.
 
 ## Chunking / RAG / Embeddings / MCP / TTS
 Module-specific toggles exist; see the repo `Env_Vars.md` or the respective module docs for details.

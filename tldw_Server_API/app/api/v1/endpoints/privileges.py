@@ -26,6 +26,7 @@ from tldw_Server_API.app.api.v1.schemas.privileges import (
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 from tldw_Server_API.app.core.PrivilegeMaps import (
+    PaginationLimitExceeded,
     PrivilegeMapService,
     PrivilegeSnapshotStore,
     get_privilege_map_service,
@@ -86,6 +87,7 @@ async def get_org_privilege_map(
     resource: str | None = Query(None),
     role: str | None = Query(None),
     dependency: str | None = Query(None),
+    org_id: str | None = Query(None, description="Filter to a specific organization"),
     current_user: dict[str, Any] = Depends(require_privilege_admin),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
 ) -> PrivilegeOrgResponse:
@@ -98,12 +100,16 @@ async def get_org_privilege_map(
                 resource=resource,
                 dependency=dependency,
                 role_filter=role,
+                org_id=org_id,
             )
         return await service.get_org_summary(
             group_by=group_by,
             include_trends=include_trends,
             since=since,
+            org_id=org_id,
         )
+    except PaginationLimitExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except ValueError as exc:
         logger.warning("Invalid privilege detail request: %s", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -142,6 +148,8 @@ async def get_team_privilege_map(
             include_trends=include_trends,
             since=since,
         )
+    except PaginationLimitExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except ValueError as exc:
         logger.warning("Invalid team privilege request: %s", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -165,6 +173,8 @@ async def get_user_privilege_map(
             page_size=page_size,
             resource=resource,
         )
+    except PaginationLimitExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except ValueError as exc:
         logger.warning("Invalid user privilege request: %s", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -223,6 +233,11 @@ async def get_privilege_snapshot(
     snapshot = await store.get_snapshot(snapshot_id=snapshot_id, page=page, page_size=page_size)
     if not snapshot:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found.")
+    if snapshot.get("_downsampled"):
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Snapshot detail has been downsampled to a weekly summary and is no longer available.",
+        )
     return snapshot
 
 
@@ -377,6 +392,12 @@ async def export_privilege_snapshot_csv(
     "/snapshots",
     response_model=PrivilegeSnapshotRecord,
     status_code=status.HTTP_201_CREATED,
+    responses={
+        202: {
+            "model": PrivilegeSnapshotAcceptedResponse,
+            "description": "Snapshot generation queued for async processing.",
+        },
+    },
 )
 async def create_privilege_snapshot(
     *,

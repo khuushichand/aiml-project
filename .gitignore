@@ -317,6 +317,9 @@ uv.lock
 !/models/flashrank/README.md
 !/models/flashrank/**
 models/flashrank/__MACOSX/
+models/flashrank/**/__MACOSX/
+models/flashrank/**/._*
+models/flashrank/**/.DS_Store
 /cache
 /.tmp
 /tldw_Server_API/Test_Cache

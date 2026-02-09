@@ -2222,6 +2222,55 @@ class CollectionsDatabase:
         with contextlib.suppress(_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
             self._delete_content_fts_entry(item_id)
 
+    def prune_content_items_for_source(
+        self,
+        *,
+        origin: str,
+        origin_id: int,
+        max_items: int | None = None,
+        retention_days: int | None = None,
+    ) -> int:
+        """Delete oldest content items for a source exceeding retention limits.
+
+        Returns count of deleted items.
+        """
+        deleted = 0
+        if retention_days and retention_days > 0:
+            cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()
+            old_ids = [
+                int(r["id"])
+                for r in self.backend.execute(
+                    "SELECT id FROM content_items WHERE user_id = ? AND origin = ? AND origin_id = ? AND created_at < ?",
+                    (self.user_id, origin, origin_id, cutoff),
+                ).rows
+            ]
+            for item_id in old_ids:
+                with contextlib.suppress(_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
+                    self.delete_content_item(item_id)
+                    deleted += 1
+
+        if max_items and max_items > 0:
+            total = int(
+                self.backend.execute(
+                    "SELECT COUNT(*) AS cnt FROM content_items WHERE user_id = ? AND origin = ? AND origin_id = ?",
+                    (self.user_id, origin, origin_id),
+                ).scalar or 0
+            )
+            excess = total - max_items
+            if excess > 0:
+                excess_ids = [
+                    int(r["id"])
+                    for r in self.backend.execute(
+                        "SELECT id FROM content_items WHERE user_id = ? AND origin = ? AND origin_id = ? ORDER BY created_at ASC LIMIT ?",
+                        (self.user_id, origin, origin_id, excess),
+                    ).rows
+                ]
+                for item_id in excess_ids:
+                    with contextlib.suppress(_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
+                        self.delete_content_item(item_id)
+                        deleted += 1
+        return deleted
+
     # ------------------------
     # Output Templates API
     # ------------------------

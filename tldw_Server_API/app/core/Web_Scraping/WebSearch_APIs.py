@@ -120,24 +120,22 @@ def _get_llm_timeouts() -> dict[str, float]:
     return {"llm": llm_to, "scrape": scrape_to}
 
 
-class _SimpleCircuitBreaker:
-    def __init__(self, fail_threshold: int = 3, reset_after_s: float = 30.0):
-        self.fail_threshold = int(fail_threshold)
-        self.reset_after_s = float(reset_after_s)
-        self.fail_count = 0
-        self.open_until = 0.0
-
-    def allow(self) -> bool:
-        return time.time() >= self.open_until
-
-    def record_success(self):
-        self.fail_count = 0
-
-    def record_failure(self):
-        self.fail_count += 1
-        if self.fail_count >= self.fail_threshold:
-            self.open_until = time.time() + self.reset_after_s
-            self.fail_count = 0
+def _make_simple_circuit_breaker(fail_threshold: int = 3, reset_after_s: float = 30.0):
+    """Create a unified CircuitBreaker configured for WebSearch usage."""
+    from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+        CircuitBreaker as _CB,
+        CircuitBreakerConfig as _Cfg,
+    )
+    return _CB(
+        name="websearch_llm",
+        config=_Cfg(
+            failure_threshold=int(fail_threshold),
+            recovery_timeout=float(reset_after_s),
+            half_open_max_calls=1,
+            success_threshold=1,
+            category="websearch",
+        ),
+    )
 
 
 def _close_response(resp: Any) -> None:
@@ -640,7 +638,7 @@ async def search_result_relevance(
     # Simple circuit breaker for LLM provider
     cfg = get_loaded_config()
     ws_section = cfg.get('Web-Scraping', {}) or {}
-    breaker = _SimpleCircuitBreaker(
+    breaker = _make_simple_circuit_breaker(
         fail_threshold=int(ws_section.get('llm_cb_fail_threshold', 3) or 3),
         reset_after_s=float(ws_section.get('llm_cb_reset_after_s', 30) or 30.0),
     )
@@ -686,7 +684,7 @@ async def search_result_relevance(
                 await asyncio.sleep(jitter_ms / 1000.0)
 
             # Evaluate relevance with timeout and circuit breaker
-            if not breaker.allow():
+            if not breaker.can_attempt():
                 logging.warning("LLM circuit breaker open; skipping relevance evaluation")
                 continue
 

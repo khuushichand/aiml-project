@@ -2,6 +2,48 @@
 
 This plan tracks staged implementation for Chatbooks export/import as specified in `Docs/Product/Chatbooks_PRD.md`. Each stage lists goals, success criteria, and concrete test notes. Update **Status** as work progresses.
 
+> **Last reviewed:** 2026-02-08 — Statuses corrected to reflect incremental delivery; Stage 3 split into sub-stages; dependency annotations and GA-priority classifications added.
+
+---
+
+## Cross-Cutting Dependencies
+
+The following dependencies affect multiple stages and should be tracked centrally:
+
+| Dependency | Affects | Status |
+|---|---|---|
+| ChaChaNotes citation storage (upstream) | Stage 3b (citation import) | **Export complete** — citation export already works via `rag_context` in `chatbook_service.py:2981-3021`; import still blocked on ChaChaNotes upstream |
+| Chatbook-Tools dictionary validator API surface | Stage 3b (dictionary import validation) | **Blocked** — depends on Chatbook-Tools implementation |
+| AuthNZ org/team hierarchy stability | Stages 3b, 4, 5 (multi-tenant scoping) | **In progress** — current implementation is single-user scoped; multi-tenant operations deferred |
+| `chatbook_service.py` monolith refactoring | Stage 3b (adding more import handlers) | **Recommended** — split into `chatbook_export_service.py` and `chatbook_import_service.py` before adding remaining import content-type handlers |
+
+---
+
+## GA-Priority Classification
+
+Items are classified to help prioritize remaining work:
+
+- **GA-blocking**: Required before general availability release
+- **Post-GA**: Desirable but can ship after GA
+- **Deferred**: Explicitly deferred pending external decisions or dependencies
+
+| Item | Priority | Stage |
+|---|---|---|
+| Import parity for prompts and media | GA-blocking | 3b |
+| `overwrite` conflict strategy | GA-blocking | 3c |
+| Fix stale status tracking (this document) | GA-blocking | N/A (done) |
+| Warn users when unsupported import types are silently skipped | GA-blocking | 3b |
+| Import parity for evaluations, embeddings, generated docs | Post-GA | 3b |
+| `merge` conflict strategy (full per-type semantics) | Post-GA | 3c |
+| Evaluation continuation tokens | Post-GA | 2 |
+| Full metrics registry (histograms) and SLO validation | Post-GA | 5 |
+| Structured audit events for all operations | Post-GA | 5 |
+| Large binary bundling | Post-GA | 6 |
+| Client-side encryption | Deferred | 7 |
+| Multi-tenant scoped operations (org/team) | Post-GA | Cross-cutting |
+| Citation metadata export | **Complete** — already functional in `chatbook_service.py` | 2 |
+| Citation metadata import | Blocked (ChaChaNotes upstream) | 3b |
+
 ---
 
 ## Stage 1: Core Export & Manifest v1
@@ -17,7 +59,7 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 - Unit: manifest builder (per-type mappers and statistics), JSON Schema validation against `Docs/Schemas/chatbooks_manifest_v1.json`, job model/state transitions, per-user storage path construction (`USER_DB_BASE_DIR`, defined in `tldw_Server_API.app.core.config`; override via environment variable or `Config_Files/config.txt`).
 - Integration: end-to-end export for a user with mixed content types; verification of manifest counts and identities; retry/export of large-but-metadata-only archives; download completed exports; listing jobs by user and (for admins) by team/org.
 
-**Status**: Completed (per “What’s working now” in the PRD)
+**Status**: **Completed** — 16 endpoints, manifest schema, job lifecycle all working.
 
 ---
 
@@ -35,60 +77,132 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 - Unit: embedding-set selection and dedupe by `embedding_id`; evaluation run pagination and continuation token generation; per content-type bundling limit enforcement and manifest recording; citation serialization and schema validation.
 - Integration: exports from users with large evaluation histories and multiple embedding sets; resumable evaluation exports appended to the same chatbook; verification that truncated exports are correctly marked and discoverable to clients.
 
-**Status**: Not Started (open items listed under PRD “To-Do items surfaced during implementation”)
+**Resolved dependency**: Citation metadata export is already functional via per-message `rag_context` extraction at `chatbook_service.py:2981-3021`. No upstream work needed for export.
+
+**Implementation note**: Evaluation continuation tokens that append to the same chatbook ZIP add significant complexity (reopening/appending streaming ZIPs, updating manifest in-place). Consider a simpler alternative for v1: linked chatbook exports (separate ZIPs with a shared `export_id`) rather than appending to the same ZIP. Full append-to-same-ZIP can be a post-GA enhancement.
+
+**Stage 2 Sub-task Checklist**:
+- [x] Citation metadata export (already complete)
+- [x] Binary limits extension to media embeddings
+- [x] ChromaDB collection-level embedding export
+- [x] Truncation metadata consistency (media capping + standardized format)
+- [x] Evaluation continuation export (linked chatbooks)
+- [x] Implementation plan status update
+
+**Status**: **Complete**
 
 ---
 
-## Stage 3: Import Pipeline, Conflict Handling & Validation
-**Goal**: Implement robust import/preview flows with conflict strategies, validation, quotas, and provenance.
+## Stage 3a: Import Framework (Core Pipeline)
+**Goal**: Establish the import/preview endpoint framework, validator, quota manager, and basic conflict resolution (`skip` + `rename`).
 
-**Success Criteria**:
-- `POST /api/v1/chatbooks/import` and `POST /api/v1/chatbooks/preview` accept v1 archives, apply `skip` / `overwrite` / `rename` / `merge` consistently per content type, and return per-item outcomes and warnings without partial silent failures.
-- Identity and ownership semantics match the PRD: imported entities are materialized under the importing user; organizations own artifacts across their teams/users; teams own artifacts created by their members; cross-scope imports respect role-based access controls.
-- ChatbookValidator is wired into import/preview to enforce file integrity, path sanitization, zip-bomb protection, and reference consistency (no dangling media/embedding references without manifest entries).
-- QuotaManager enforces Chatbooks-specific limits (tier-based storage, daily exports/imports, concurrent jobs, per-file caps), surfaces actionable errors, and respects overrides for privileged roles/service accounts.
-- Content-type policy controls are respected: operators can disable or restrict specific export/import content types (for example, evaluations or embeddings) via configuration/policy flags, and those policies are enforced consistently across API flows.
-- Dictionary/templating validation from `Docs/Product/Chatbook-Tools-PRD.md` is integrated into Chatbooks import: embedded dictionaries are validated, `ImportJob.warnings` populated, and `CHATBOOKS_IMPORT_DICT_STRICT` semantics honored without blocking entire imports on dictionary-only issues. This stage depends on the validator and API surface defined in the Chatbook-Tools implementation plan; Chatbooks-specific work focuses on wiring and verification.
+**Checklist** (all done):
+- [x] `POST /api/v1/chatbooks/import` endpoint accepting v1 archives
+- [x] `POST /api/v1/chatbooks/preview` endpoint returning manifest summary without persisting
+- [x] ChatbookValidator wired for file integrity, path sanitization, zip-bomb protection, reference consistency
+- [x] QuotaManager enforcing tier-based storage, daily operation limits, concurrent job caps, per-file size caps
+- [x] `skip` conflict strategy working across all currently-supported import types
+- [x] `rename` conflict strategy working across all currently-supported import types
+- [x] Import handlers for: conversations, notes, characters, world books, dictionaries
+- [x] Per-item outcomes and warnings returned in job results
 
 **Tests**:
-- Unit: conflict-resolution functions for each content type; ChatbookValidator scenarios (zip bombs, traversal attempts, missing references); quota checks with mocked tiers; content-type policy flag handling; dictionary validator wiring and strict/non-strict behavior.
-- Integration: import + preview of valid and invalid archives; conflict-strategy matrix across conversations/notes/prompts/characters/media/evaluations/embeddings; org/team-scope imports with correct ownership and audit logging; enforcement of disabled content types in exports/imports; rate limits under load (RG policy configuration); contract tests importing chatbooks generated by the previous minor version.
+- Unit: ChatbookValidator scenarios (zip bombs, traversal attempts, missing references); quota checks with mocked tiers; `skip` and `rename` conflict resolution for each supported type.
+- Integration: import + preview of valid and invalid archives; basic conflict-strategy tests for conversations/notes/characters/world books/dictionaries.
 
-**Status**: Not Started
+**Status**: **Completed**
+
+---
+
+## Stage 3b: Import Content-Type Parity
+**Goal**: Add import handlers for the remaining content types so import coverage matches export coverage.
+
+**Checklist**:
+- [ ] Media descriptor import handler (with transcript/attachment rehydration)
+- [ ] Prompt Studio prompt import handler
+- [ ] Evaluation definition + run import handler
+- [ ] Embedding set import handler
+- [ ] Generated document import handler
+- [ ] Return explicit warnings (not silent skips) when a user requests import of unsupported content types — currently the import endpoint silently sets unsupported types to `false`, which can cause partial results without user awareness
+- [ ] Dictionary/templating validation from Chatbook-Tools wired into import (**blocked** on Chatbook-Tools validator)
+- [ ] Content-type policy controls: operators can disable/restrict specific types via config flags
+
+**Blocked dependencies**:
+- Dictionary validation: depends on Chatbook-Tools implementation plan completion
+- Citation metadata: depends on ChaChaNotes upstream storage
+
+**Prerequisite recommendation**: Split `chatbook_service.py` (~6000+ lines) into `chatbook_export_service.py` and `chatbook_import_service.py` before adding more import handlers, to prevent further monolith growth.
+
+**Tests**:
+- Unit: import handler for each new content type; content-type policy flag handling; dictionary validator wiring and strict/non-strict behavior; explicit warning generation for unsupported types.
+- Integration: import of archives with media/prompts/evaluations/embeddings/generated docs; enforcement of disabled content types; contract tests importing chatbooks generated by the previous minor version.
+
+**Status**: **Not Started**
+
+---
+
+## Stage 3c: Advanced Conflict Resolution (`overwrite` + `merge`)
+**Goal**: Implement the remaining conflict resolution strategies beyond `skip` and `rename`.
+
+**Checklist**:
+- [ ] `overwrite` strategy: imported entity replaces existing entity's mutable fields while preserving audit history and provenance
+- [ ] `merge` strategy (simplified for v1 GA): append-only union with `rename` fallback on ambiguity — see PRD note on simplification
+- [ ] Full per-type `merge` semantics as defined in the PRD identity/merge table (post-GA)
+
+**Implementation notes**:
+- `overwrite` is GA-blocking and should be straightforward — replace mutable fields, keep audit trail.
+- Full `merge` semantics (per the PRD table) require a revision system in ChaChaNotes that doesn't currently exist for notes, characters, or prompts. For v1 GA, `merge` should behave as "append-only union with `rename` on ambiguity" — full revision-based merge is post-GA.
+- Slug-based `prompt_id` fallback to `rename` is a policy decision that needs explicit test coverage.
+
+**Tests**:
+- Unit: `overwrite` conflict resolution per content type; simplified `merge` behavior; slug-based prompt fallback.
+- Integration: conflict-strategy matrix across all content types including `overwrite` and `merge`; verification that `merge` degrades to `rename` for types where safe merging is ambiguous.
+
+**Status**: **Not Started**
 
 ---
 
 ## Stage 4: Retention & Cleanup (Scheduled + Manual)
 **Goal**: Implement scheduled retention cleanup plus manual cleanup triggering with scoped access control.
 
-**Success Criteria**:
-- `POST /api/v1/chatbooks/cleanup` triggers cleanup for the caller's allowed scope, transitioning completed jobs to `expired` when archives are removed and to `deleted` when metadata is removed by privileged operations.
-- Scheduled cleanup runs via the Chatbooks worker on a configurable interval, respects `CHATBOOKS_EXPORT_RETENTION_DEFAULT_HOURS`, and avoids unbounded scans through batching and scope filters.
-- Cleanup emits audit events for cross-user operations and records per-job outcomes so operators can trace retention actions.
+**Checklist**:
+- [x] `POST /api/v1/chatbooks/cleanup` endpoint exists and triggers cleanup
+- [x] `chatbooks_cleanup_service.py` runs on a configurable schedule
+- [x] `expired` state transition works (completed → expired when archives removed)
+- [x] Respects `CHATBOOKS_EXPORT_RETENTION_DEFAULT_HOURS`
+- [ ] `deleted` state transition for privileged metadata removal
+- [ ] Scoped access control: team leads clean their team, org owners clean their org, admins clean all
+- [ ] Audit events emitted for cross-user cleanup operations
+- [ ] Batching and scope filters to avoid unbounded scans in large deployments
+- [ ] Cleanup handles orphaned temp files from failed/crashed export/import jobs
 
 **Tests**:
-- Unit: retention cutoff calculations; scope filters for cleanup; state transitions (`completed → expired`, `expired → deleted`).
+- Unit: retention cutoff calculations; scope filters for cleanup; state transitions (`completed → expired`, `expired → deleted`); orphaned temp file detection.
 - Integration: scheduled cleanup runs against test archives; manual cleanup endpoint for user/admin scopes; verification that expired archives are removed while metadata is retained unless explicitly deleted.
 
-**Status**: Not Started
+**Status**: **Partially Implemented** — core cleanup endpoint and scheduled service work; multi-tenant scoping, audit events, and orphan cleanup remain.
 
 ---
 
 ## Stage 5: Observability, Health & SLOs
 **Goal**: Provide clear observability, health signals, and performance SLOs for Chatbooks jobs.
 
-**Success Criteria**:
-- Health endpoint `GET /api/v1/chatbooks/health` reflects storage readiness, background worker availability, and configuration sanity (for example, configured `USER_DB_BASE_DIR`, signing secret when required).
-- Metrics are emitted for exports/imports (e.g., `chatbooks_exports_total`, `chatbooks_imports_failed_total`, `chatbooks_export_bytes_total`, latency histograms) and integrated into the existing metrics registry.
-- Logs include structured job context (user/team/org scope, job_id, kind, status transitions) and audit events are emitted for any cross-user operations in line with the AuthNZ/audit modules.
-- Signed download URLs (`CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`) work in multi-user/org modes; `GET /api/v1/chatbooks/download/{job_id}` returns either a ZIP file or a signed URL honoring `expires_at`, and this behavior is covered by metrics and logs.
-- Performance targets from the PRD are validated on a reference setup (for example, ~4 vCPU, SSD-backed storage, local network) and documented as target SLOs (not hard guarantees for all deployments), including: async export throughput and import handling of 10k+ items under the stated time budgets.
+**Checklist**:
+- [x] Health endpoint `GET /api/v1/chatbooks/health` reflects storage readiness
+- [x] Counter metrics exist (`chatbooks_exports_total`, etc.)
+- [x] Signed URL support (`CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`)
+- [ ] Full metrics registry integration (histograms for latency, `chatbooks_export_bytes_total`, failure breakdowns)
+- [ ] Structured log context (user/team/org scope, job_id, kind, status transitions) in all job operations
+- [ ] Audit events emitted for cross-user operations
+- [ ] Health endpoint checks: background worker availability, configuration sanity (signing secret when required)
+- [ ] SLO validation on reference setup (async export throughput, import handling 10k+ items under 5 min)
+- [ ] Documentation of target SLOs as reference benchmarks (not hard guarantees)
 
 **Tests**:
 - Unit: health check components (storage, worker connectivity) and metrics registration; log/audit helpers for job operations; signed URL HMAC generation and expiry handling.
-- Integration: simulated job loads with exports/imports under various sizes; verification that health/metrics reflect backlogs and failures; cross-scope job listings (large-org scenarios with many users/jobs) remain within acceptable latency; spot checks that target SLOs are met on the reference environment.
+- Integration: simulated job loads with exports/imports under various sizes; verification that health/metrics reflect backlogs and failures; cross-scope job listings remain within acceptable latency; spot checks that target SLOs are met on the reference environment.
 
-**Status**: Not Started
+**Status**: **Partially Implemented** — health endpoint (storage checks), counter metrics, and signed URL support work; full metrics registry, structured audit events, and SLO validation remain.
 
 ---
 
@@ -105,7 +219,7 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 - Unit: streaming large-file writers, bundle-size accounting, and retention/quota calculations for large archives.
 - Integration: exports/imports with mixed small attachments and large media binaries; verification of offline rehydration from a v2 Chatbook; compatibility tests confirming that v1-only manifests still import correctly after v2 is introduced.
 
-**Status**: Not Started
+**Status**: **Not Started** (Post-GA)
 
 ---
 
@@ -120,4 +234,4 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 **Tests**:
 - To be defined once Open Question #3 in `Docs/Product/Chatbooks_PRD.md` is resolved and a concrete design is selected.
 
-**Status**: Deferred (pending resolution of PRD Open Question #3)
+**Status**: **Deferred** (pending resolution of PRD Open Question #3)

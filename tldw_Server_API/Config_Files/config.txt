@@ -172,6 +172,16 @@ history_messages_order = desc
 # when request-level override is omitted.
 # Env override: PERSONA_EXEMPLAR_DEFAULT_BUDGET_TOKENS
 persona_exemplar_default_budget_tokens = 600
+# Auto-adjust persona exemplar budget when sustained IOO alerts indicate
+# over-copying risk. Applies only when request-level budget override is omitted.
+# Env override: PERSONA_IOO_BUDGET_AUTO_ADJUST_ENABLED
+persona_ioo_budget_auto_adjust_enabled = true
+# Multiplicative reduction factor for sustained-IOO auto-adjust.
+# Clamped to [0.10, 0.95]. Env override: PERSONA_IOO_BUDGET_AUTO_REDUCTION_FACTOR
+persona_ioo_budget_auto_reduction_factor = 0.75
+# Lower bound for auto-adjusted persona exemplar budget tokens.
+# Env override: PERSONA_IOO_BUDGET_AUTO_MIN_TOKENS
+persona_ioo_budget_auto_min_tokens = 240
 
 # Server-side tool auto-execution (Phase 2; default remains off)
 # Env: CHAT_AUTO_EXECUTE_TOOLS=true|false

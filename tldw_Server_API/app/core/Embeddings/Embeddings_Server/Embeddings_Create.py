@@ -571,6 +571,15 @@ def _ensure_hf_revision(model_name_or_path: str, expected_sha: str | None) -> No
 
 
 class TokenBucketLimiter:
+    """Inline token-bucket rate limiter for the embeddings server.
+
+    .. deprecated:: Phase 3 - Resource Governor Unification
+       Primary enforcement is now handled by ``RGSimpleMiddleware`` and the
+       per-module RG integration in ``Embeddings/rate_limiter.py``.  This
+       class only runs as a **fallback** when RG is unavailable.  Remove
+       after shadow-mode exit criteria are met (see Resource_Governor_PRD.md).
+    """
+
     def __init__(self, capacity: int, period: int):
         self.capacity = capacity
         self.period = period  # seconds

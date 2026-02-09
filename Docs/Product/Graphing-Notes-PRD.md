@@ -1,8 +1,8 @@
 # Graphing-Notes-PRD
 
-Status: Draft (MVP scope agreed)
+Status: Draft (MVP scope agreed; partial implementation in progress)
 Owner: Notes/RAG Team
-Last updated: 2025-11-11 (amended)
+Last updated: 2026-02-08 (review findings appended)
 Target Release: v0.2.x
 
 ## 1. Problem Statement
@@ -60,9 +60,9 @@ MVP includes:
 ### 6.2 Non‑Functional Requirements (NFR)
 
 1. NFR-Performance: For default limits, 95p graph generation latency ≤ 300 ms on average hardware and datasets ≤ 10k notes per user.
-2. NFR-Scalability: Hard caps to prevent pathological queries; deny requests that exceed 2× defaults unless `allow_heavy=true` and caller has admin role.
-3. NFR-Reliability: Deterministic pagination with stable ordering; safe truncation strategy.
-4. NFR-Observability: Log node/edge counts, types, truncation reasons, and latency; basic counters per edge type.
+2. NFR-Scalability: Hard caps to prevent pathological queries; deny requests that exceed 2× defaults unless `allow_heavy=true` and caller has the `notes.graph.admin` privilege (define explicitly in RBAC terms rather than a vague "admin role").
+3. NFR-Reliability: Deterministic pagination with stable ordering; safe truncation strategy. Note: cursor stability under concurrent data mutations is best-effort (see section 23, finding #2).
+4. NFR-Observability: Log node/edge counts, types, truncation reasons, and latency; basic counters per edge type. Define structured metric names (e.g., `notes_graph_generation_duration_seconds`, `notes_graph_nodes_total`, `notes_graph_truncation_total{reason=...}`) to enable dashboard verification of NFR compliance.
 5. NFR-Security: Respect per-user isolation; validate note ownership; no sensitive content in logs.
 
 ## 7. Terminology
@@ -70,6 +70,28 @@ MVP includes:
 - Node types: `note`, `tag`, `source`.
 - Edge types: `manual` (explicit), `wikilink`, `backlink`, `tag_membership` (note↔tag), `source_membership` (note↔source).
 - Clique mode: Optional conversion of co-membership into note↔note edges (off by default in MVP).
+
+## 7a. Implementation Status (as of 2026-02-08)
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| DB table `note_edges` (V8→V9 migration) | **Done** | `ChaChaNotes_DB.py` — full schema, indexes, unique constraint |
+| DB methods (`create_manual_note_edge`, `delete_manual_note_edge`) | **Done** | Canonicalization, self-loop prevention, sync logging |
+| Pydantic schemas (`notes_graph.py`) | **Done** | All models defined: `NoteGraphRequest`, `NoteGraphResponse`, `NoteLinkCreate`, `GraphNode`, `GraphEdge`, enums |
+| Privilege catalog entries | **Done** | `notes.graph.read`, `.write`, `.suggest` in `privilege_catalog.yaml` |
+| Permission constants | **Done** | Exported from `permissions.py` |
+| Router registration in `main.py` | **Done** | Conditional inclusion in full app |
+| `POST /notes/{note_id}/links` | **Done** | Full implementation with RBAC, canonicalization, duplicate detection |
+| `DELETE /notes/links/{edge_id}` | **Stub** | Endpoint exists, returns placeholder response |
+| `GET /notes/graph` | **Stub** | Returns empty graph with limits metadata; no BFS/derived edges |
+| `GET /notes/{note_id}/neighbors` | **Stub** | Returns empty graph (radius=1 implied) |
+| BFS expansion / derived edge computation | **Not started** | Core graph generation logic |
+| Wikilink/backlink content parsing | **Not started** | No `[[id:UUID]]` or `[[Title]]` detection implemented |
+| Graph caching layer | **Not started** | No graph-specific cache |
+| Cytoscape format output | **Not started** | Schema exists but no formatter |
+| Tests | **Partial** | RBAC + link-create integration tests exist; no graph-generation tests |
+
+**Summary**: Plumbing (DB, schemas, auth, routing, manual link CRUD) is done. Core graph computation — BFS expansion, derived edge generation, pruning, pagination, caching — is entirely unimplemented.
 
 ## 8. Data Model Changes
 
@@ -85,7 +107,7 @@ Table: `note_edges`
 - `weight REAL DEFAULT 1.0`
 - `created_at DATETIME NOT NULL`
 - `created_by TEXT NOT NULL`
-- `metadata JSON`
+- `metadata JSON` — max 4 KB; recognized MVP keys: `label` (string). No nested objects deeper than 1 level. Enforce size limit at the API layer to prevent abuse and enable future indexing.
 
 Undirected canonicalization and uniqueness:
 - For `directed = 0` (undirected), store endpoints in canonical order: `from_note_id = min(note_a, note_b)` and `to_note_id = max(note_a, note_b)` (lexicographic by UUID). This guarantees uniqueness regardless of creation order.
@@ -165,6 +187,11 @@ Derived indices (computed at note save/update):
 4) DELETE `/api/v1/notes/links/{edge_id}`
 - Response: `{ "deleted": true }` if successful.
 
+5) POST `/api/v1/notes/links/batch` (future convenience — plan schema now)
+- Body: `{ "links": [ { "from_note_id": "...", "to_note_id": "...", "directed": false, "weight": 1.0, "metadata": {} }, ... ] }`
+- Max batch size: 100. Returns array of created edges or per-item errors.
+- Not required for MVP but reserving the route avoids breaking changes later.
+
 Notes:
 - Cytoscape format: when `format=cytoscape`, return `{ elements: { nodes: [...], edges: [...] }, ... }` following Cytoscape.js conventions.
 
@@ -190,7 +217,7 @@ Example (Cytoscape format):
 
 - `NoteLinkCreate`: `{ to_note_id: str, directed: bool = false, weight?: float, metadata?: dict }`
 - `NoteGraphRequest`: `{ center_note_id?: str, radius: int = 1, edge_types?: List[Literal["manual","wikilink","backlink","tag_membership","source_membership"]], tag?: str, source?: str, time_range?: {start?: datetime, end?: datetime}, time_range_field?: Literal["created_at","updated_at"] = "updated_at", max_nodes?: int, max_edges?: int, max_degree?: int, format?: Literal["default","cytoscape"], cursor?: str, allow_heavy?: bool }` where `tag` and `source` follow the identifier rules above.
-- `NoteGraphResponse`: `{ nodes: List[Node], edges: List[Edge], truncated: bool, truncated_by: List[str], has_more: bool, cursor?: str, limits: {...} }`
+- `NoteGraphResponse`: `{ nodes: List[Node], edges: List[Edge], truncated: bool, truncated_by: List[str], has_more: bool, cursor?: str, limits: {...}, radius_cap_applied?: bool }`
 - `Node`: `{ id: str, type: Literal["note","tag","source"], label: str, created_at?: str, degree?: int, tag_count?: int, primary_source_id?: str, deleted?: bool }` (`deleted` applies to soft-deleted notes and defaults to false/omitted; clients should dim/mark deleted notes. Hard-deleted notes are not returned.)
 - `Edge`: `{ id: str, source: str, target: str, type: str, directed: bool, weight?: float, label?: str }`
 
@@ -200,8 +227,7 @@ Example (Cytoscape format):
 - 403: lacking privilege for operation
 - 404: note not found or not owned by user
 - 409: duplicate manual link (same endpoints, type, and direction)
-- 413: request too large (exceeds caps without `allow_heavy`)
-- 422: invalid `edge_types` value(s) or incompatible parameter combination
+- 422: invalid `edge_types` value(s) or incompatible parameter combination; also used for requests exceeding caps without `allow_heavy` (use error code `limits_exceeded`). Note: 413 is inappropriate here — RFC 9110 defines 413 for request *body* size, not query complexity on a GET.
 
 ## 10. Defaults, Limits, and Pruning
 
@@ -225,6 +251,7 @@ Cursor semantics:
 
 Radius=2 caps:
 - Unless `allow_heavy=true` (admin), enforce stricter caps when `radius=2`: `max_nodes ≤ 200`, `max_edges ≤ 800`, `max_degree ≤ 20`.
+- **Review note**: This is surprising UX — a user requesting radius=2 expects *more* data but gets *fewer* nodes (300→200). Add a `radius_cap_applied: bool` field to the response so clients can inform users why results are smaller than expected.
 
 Multi-edge semantics:
 - The graph is a multigraph: different edge types between the same endpoints (e.g., `manual` + `wikilink`) are emitted as separate edges with distinct ids. Clients may coalesce for rendering if desired.
@@ -240,7 +267,7 @@ Config keys (env → config.txt → defaults):
 - `NOTES_GRAPH_POPULAR_TAG_CUTOFF=0.15` (ignore tags used by >15% of notes for tag edges)
 - `NOTES_GRAPH_CLIQUE_MIN_SHARED_TAGS=2` (used only if clique mode is added later)
 - `NOTES_GRAPH_MAX_CLIQUE_EDGES=400` (future guardrail)
-- `NOTES_GRAPH_CACHE_TTL=20` (seconds)
+- `NOTES_GRAPH_CACHE_TTL=20` (seconds; section 13 says "10-30 seconds" — use this config value as the single source of truth)
 - `NOTES_GRAPH_CACHE_MAX_KEYS=1000`
 
 ## 12. Security, AuthNZ, RBAC, Rate Limits
@@ -279,8 +306,11 @@ Token scopes:
 
 Resolution details:
 - Wikilinks: `[[id:UUID]]` resolves directly. `[[Title]]` resolution prefers (1) exact title match in the same notebook/folder, (2) most recently updated note with that title, then (3) lowest UUID as final tie-breaker. Unresolved titles do not emit edges in MVP.
+  - **Review note**: The ChaChaNotes DB may not currently have a "notebook/folder" concept. If it does not, rule (1) is inapplicable. For MVP, consider requiring `[[id:UUID]]` for unambiguous linking and deferring title-based resolution (`[[Title]]`) until notebook scoping exists. Common titles like "TODO" or "Notes" would otherwise produce spurious edges.
 - Popular tag cutoff: apply both relative and absolute thresholds. Ignore tags used by > `NOTES_GRAPH_POPULAR_TAG_CUTOFF` of notes AND with usage count ≥ 10 (default) to avoid over-pruning on small datasets.
+  - **Review note**: For a user with 20 notes, a tag on 3 notes hits 15%. The absolute floor of 10 helps but consider raising it to ~25, or making `NOTES_GRAPH_POPULAR_TAG_ABSOLUTE_MIN` a separate config key (default 25) to avoid over-pruning on moderate datasets.
 - Source nodes: represent primary content origin (e.g., `source:yt:<video_id>`, `source:url:<domain>`). ID format is implementation-defined but must be stable; expose human-readable `label`.
+  - **Review note**: The source ID format needs explicit design. Verify that the existing ChaChaNotes/Media DB schema has a stable source identifier that can be used here. If not, this requires schema work before graph generation can produce source edges.
 
 ## 16. Risks and Mitigations
 
@@ -288,6 +318,9 @@ Resolution details:
 - Popular tags create hubs → ignore ubiquitous tags via `NOTES_GRAPH_POPULAR_TAG_CUTOFF`.
 - Large sources (e.g., many notes from same source) → treat as bipartite edges by default; avoid note↔note co-origin cliques.
 - Performance regressions under radius=2 → reduce caps and/or require `allow_heavy`.
+- Cursor instability under mutations → if notes are created/deleted/updated between paginated requests, the BFS frontier changes and cursors may skip or duplicate nodes. Accept best-effort consistency for MVP and document this behavior.
+- `time_range` interaction with soft-delete → soft-deleted notes update `updated_at`, so a time-range filter may surface notes deleted during the window that are otherwise irrelevant. Clarify whether `time_range` should apply to the original `updated_at` or exclude soft-deleted notes from time filtering.
+- `edge_id` storage overhead → UUIDs as TEXT (36 bytes) vs BLOB (16 bytes). Acceptable for MVP but worth revisiting if the `note_edges` table grows large.
 
 ## 17. Rollout Plan
 
@@ -332,9 +365,12 @@ Resolution details:
 
 ## 20. Open Questions
 
-- Exact popular-tag cutoff default (start at 0.15, tune with telemetry).
-- Source node labeling conventions and maximum number in default responses.
+- Exact popular-tag cutoff default (start at 0.15, tune with telemetry). Consider separate absolute minimum config key (`NOTES_GRAPH_POPULAR_TAG_ABSOLUTE_MIN`, default 25).
+- Source node labeling conventions and maximum number in default responses. Requires verifying stable source ID exists in the current DB schema.
 - Whether to expose "clique mode" for tag/source co-membership as an advanced toggle post-MVP.
+- Does ChaChaNotes DB currently have a notebook/folder concept? If not, wikilink title resolution rule (1) is inapplicable and `[[Title]]` linking should be deferred.
+- What RBAC privilege or role maps to `allow_heavy=true`? Define explicitly (e.g., `notes.graph.admin` privilege) rather than a vague "admin role".
+- Should seedless graph queries be allowed when the user's total note count is below `max_nodes`? The current 400 rejection prevents a legitimate "show me my whole graph" for small collections.
 
 ## 21. Implementation Notes (Appendix)
 
@@ -347,6 +383,7 @@ Resolution details:
   - Cursor represents the last expanded layer and the last processed neighbor position within that layer.
   - Recommended encoding: base64-encoded JSON: `{ "layer": <int>, "pos": <int>, "last_id": "<id>" }` with optional filters snapshot for validation.
   - On resume, reconstruct the frontier and continue from `(layer, pos)` with the same deterministic sort. Reject cursors when filters differ.
+  - **Stability caveat**: Cursors are best-effort under concurrent mutations. If notes are created, deleted, or updated between paginated requests, the BFS frontier may change, causing skipped or duplicated nodes. For MVP, accept this eventual-consistency tradeoff and document it in API docs. A future option is to snapshot the seed set's IDs in the cursor token for stable re-expansion.
 
 - Edge typing and multigraph
   - Preserve separate edges per type between the same endpoints (multigraph). Clients may coalesce visually.
@@ -378,7 +415,8 @@ Resolution details:
 - Seed set:
   - If `center_note_id` is provided, use it as the root.
   - If `tag` or `source` filters are provided without a center, use the filtered note set as layer 0.
-  - If no seed is provided, return 400 to avoid full-graph scans.
+  - If no seed is provided AND the user's total note count exceeds `max_nodes`, return 400 to avoid full-graph scans.
+  - If no seed is provided AND the user's total note count is ≤ `max_nodes`, return the full graph (small-collection convenience). This allows the legitimate "show me everything" use case for users with few notes.
 - Expansion:
   - Expand only from note nodes in MVP; tag/source nodes do not fan out to keep radius bounded.
   - Neighbor ordering is deterministic (notes by `updated_at DESC, id ASC`; tags/sources by `label ASC, id ASC`).
@@ -394,3 +432,59 @@ Resolution details:
 ### 22.6 UX Notes
 - Clients should dim/mark nodes with `deleted=true`; hard-deleted notes are not returned.
 - Clients can coalesce multigraph edges for rendering if desired.
+
+## 23. Review Findings (2026-02-08)
+
+This section captures issues, risks, and improvements identified during PRD review.
+
+### Finding 1: Seedless query rejection is too strict (Section 22.4)
+**Severity**: Medium (UX gap)
+The blanket 400 for seedless queries prevents a legitimate "show me my entire graph" for small collections (<50 notes). **Resolution**: Allow seedless queries when the user's total note count is ≤ `max_nodes`. Updated in section 22.4.
+
+### Finding 2: Cursor stability under mutations (Section 21)
+**Severity**: Medium (correctness)
+BFS cursors become invalid if notes are created/deleted/updated between pages. **Resolution**: Accept best-effort consistency for MVP; document the behavior. Updated in section 21.
+
+### Finding 3: `time_range` interaction with soft-delete
+**Severity**: Low-Medium (ambiguity)
+Soft-deleted notes update `updated_at`, so a time-range filter may surface notes deleted during the window. **Action**: Clarify in implementation whether `time_range` should respect the original `updated_at` or exclude soft-deleted notes from time filtering.
+
+### Finding 4: Popular-tag cutoff cold-start (Section 15)
+**Severity**: Low (small-dataset UX)
+For 20 notes, a tag on 3 hits 15%. The absolute floor of 10 is low. **Resolution**: Consider raising to 25 or making it a separate config key. Updated in section 15 and 20.
+
+### Finding 5: Radius=2 cap is surprising UX (Section 10)
+**Severity**: Low (discoverability)
+Default `max_nodes=300` drops to 200 at radius=2 without explicit signaling. **Resolution**: Add `radius_cap_applied: bool` to response schema. Updated in sections 9.2 and 10.
+
+### Finding 6: `edge_id` TEXT vs BLOB storage (Section 8)
+**Severity**: Low (performance)
+TEXT UUIDs use ~36 bytes vs 16 for BLOB. Acceptable for MVP; revisit if `note_edges` grows large. Noted in section 16.
+
+### Finding 7: No batch link creation endpoint
+**Severity**: Low (convenience)
+Importing a mind-map requires N serial POST calls. **Resolution**: Reserved `POST /notes/links/batch` route in section 9.1 for future use.
+
+### Finding 8: `source` identifier format under-specified (Section 15)
+**Severity**: Medium (blocks implementation)
+No stable source ID contract exists in the current DB schema. **Action**: Verify ChaChaNotes/Media DB has usable source IDs before implementing source edges. Updated in section 15 and 20.
+
+### Finding 9: Wikilink title resolution assumes notebook/folder scoping (Section 15)
+**Severity**: Medium (blocks implementation)
+Resolution rule (1) references "same notebook/folder" but ChaChaNotes may lack this concept. **Action**: Verify schema; if absent, require `[[id:UUID]]` for MVP and defer title-based linking. Updated in section 15 and 20.
+
+### Finding 10: `metadata` JSON has no schema or size constraint (Section 8)
+**Severity**: Low (abuse prevention)
+No validation on keys, size, or nesting depth. **Resolution**: Added max 4 KB and recognized keys in section 8.
+
+### Finding 11: Observability contract lacks metric names (Section 6.2)
+**Severity**: Low (operability)
+NFR-Observability says "log counts and latency" but defines no structured metric names. **Resolution**: Added example metric names in section 6.2.
+
+### Finding 12: HTTP 413 misuse for query complexity (Section 9.3)
+**Severity**: Low (spec compliance)
+RFC 9110 defines 413 for request body size, not query complexity on a GET. **Resolution**: Changed to 422 with error code `limits_exceeded` in section 9.3.
+
+### Finding 13: `allow_heavy` role undefined
+**Severity**: Low (RBAC ambiguity)
+The PRD says "requires admin role" without defining what that means in RBAC terms. **Action**: Define a specific privilege (e.g., `notes.graph.admin`) in the privilege catalog. Added to section 20.

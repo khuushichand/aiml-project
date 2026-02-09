@@ -307,31 +307,7 @@ async def test_admin_rate_limit_bypass_is_principal_first(
 
 
 @pytest.mark.asyncio
-async def test_check_rate_limit_falls_back_to_ip_for_non_int_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TEST_MODE", "0")
-    request = _DummyRequest()
-    request.state.user_id = "not-an-int"
-
-    calls = {"user": 0, "ip": 0}
-
-    class _StubLimiter:
-        enabled = True
-
-        async def check_user_rate_limit(self, user_id, endpoint, **kwargs):
-            calls["user"] += 1
-            return True, {}
-
-        async def check_rate_limit(self, identifier, endpoint, **kwargs):
-            calls["ip"] += 1
-            return True, {}
-
-    await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
-    assert calls["user"] == 0
-    assert calls["ip"] == 1
-
-
-@pytest.mark.asyncio
-async def test_check_auth_rate_limit_uses_fallback_limiter_when_rg_disabled(
+async def test_check_rate_limit_uses_diagnostics_only_shim_when_rg_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RG_ENABLED", "0")
@@ -345,30 +321,54 @@ async def test_check_auth_rate_limit_uses_fallback_limiter_when_rg_disabled(
     monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
 
     request = _DummyRequest()
-    request.url.path = "/api/v1/auth/forgot-password"
-
-    calls: dict[str, Any] = {}
+    request.state.user_id = "not-an-int"
+    request.url.path = "/api/v1/rag/search"
 
     class _StubLimiter:
         enabled = True
 
-        async def check_rate_limit_fallback(self, **kwargs):
-            calls.update(kwargs)
-            return True, {"rate_limit_source": "authnz_fallback_db"}
+        async def check_user_rate_limit(self, **kwargs):
+            _ = kwargs
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is disabled")
 
         async def check_rate_limit(self, **kwargs):
-            raise AssertionError(
-                "check_auth_rate_limit should use check_rate_limit_fallback when RG ingress is inactive"
-            )
+            _ = kwargs
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is disabled")
 
-    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
-    assert calls["identifier"] == "ip:127.0.0.1"
-    assert calls["endpoint"] == "auth:/api/v1/auth/forgot-password"
-    assert calls["window_minutes"] == 1
+    await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
 
 
 @pytest.mark.asyncio
-async def test_check_auth_rate_limit_fails_open_when_fallback_backend_unavailable(
+async def test_check_rate_limit_uses_diagnostics_only_shim_when_rg_enabled_without_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RG_ENABLED", "1")
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("TESTING", "0")
+
+    async def _fake_get_auth_governor() -> object:
+        return object()
+
+    monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+
+    request = _DummyRequest()
+    request.url.path = "/api/v1/rag/search"
+
+    class _StubLimiter:
+        enabled = True
+
+        async def check_user_rate_limit(self, **kwargs):
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is enabled")
+
+        async def check_rate_limit(self, **kwargs):
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is enabled")
+
+    await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
+
+
+@pytest.mark.asyncio
+async def test_check_auth_rate_limit_uses_diagnostics_only_shim_when_rg_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RG_ENABLED", "0")
@@ -389,19 +389,20 @@ async def test_check_auth_rate_limit_fails_open_when_fallback_backend_unavailabl
 
         async def check_rate_limit_fallback(self, **kwargs):
             _ = kwargs
-            return True, {"rate_limit_source": "authnz_fallback_db", "error": "fallback_limiter_unavailable"}
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is disabled")
 
         async def check_rate_limit(self, **kwargs):
-            raise AssertionError("legacy no-op path should not be called")
+            _ = kwargs
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is disabled")
 
     await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
 
 
 @pytest.mark.asyncio
-async def test_check_auth_rate_limit_legacy_limiter_path_when_fallback_method_missing(
+async def test_check_auth_rate_limit_uses_diagnostics_only_shim_when_rg_enabled_without_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("RG_ENABLED", "0")
+    monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("TEST_MODE", "0")
     monkeypatch.setenv("TLDW_TEST_MODE", "0")
     monkeypatch.setenv("TESTING", "0")
@@ -414,17 +415,16 @@ async def test_check_auth_rate_limit_legacy_limiter_path_when_fallback_method_mi
     request = _DummyRequest()
     request.url.path = "/api/v1/auth/forgot-password"
 
-    calls: dict[str, Any] = {}
-
-    class _LegacyOnlyLimiter:
+    class _StubLimiter:
         enabled = True
 
-        async def check_rate_limit(self, **kwargs):
-            calls.update(kwargs)
-            return True, {"rate_limit_source": "legacy"}
+        async def check_rate_limit_fallback(self, **kwargs):
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is enabled")
 
-    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_LegacyOnlyLimiter())
-    assert calls["identifier"] == "ip:127.0.0.1"
+        async def check_rate_limit(self, **kwargs):
+            raise AssertionError("legacy fallback limiter should be bypassed when RG is enabled")
+
+    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
 
 
 @pytest.mark.asyncio

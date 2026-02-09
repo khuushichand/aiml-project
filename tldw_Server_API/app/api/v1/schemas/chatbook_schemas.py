@@ -380,6 +380,17 @@ class RemoveJobResponse(BaseModel):
     job_id: str
 
 
+class ContinueExportRequest(BaseModel):
+    """Request to continue a truncated chatbook export (e.g. evaluation runs)."""
+    export_id: str = Field(..., description="Export ID from the original chatbook manifest")
+    continuations: list[dict[str, Any]] = Field(
+        ...,
+        description="Continuation tokens from the original manifest's truncation metadata"
+    )
+    name: Optional[str] = Field(None, max_length=255, description="Override name for continuation chatbook")
+    async_mode: bool = Field(False, description="Run as background job")
+
+
 # Error Responses
 
 class ChatbookErrorResponse(BaseModel):

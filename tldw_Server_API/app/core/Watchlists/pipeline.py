@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import inspect
 import json
 import os
@@ -56,6 +57,11 @@ from tldw_Server_API.app.core.Watchlists.fetchers import (
 )
 from tldw_Server_API.app.core.Watchlists.filters import evaluate_filters, normalize_filters
 from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
+
+try:
+    import bleach as _bleach  # type: ignore
+except ImportError:  # pragma: no cover
+    _bleach = None  # type: ignore[assignment]
 
 _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -150,6 +156,75 @@ def _compute_next_run(cron: str | None, timezone_str: str | None) -> str | None:
 _truncate = truncate_text
 _hash_content = hash_text_sha256
 _word_count = word_count
+
+# ---------------------------------------------------------------------------
+# Feed content sanitization
+# ---------------------------------------------------------------------------
+_FEED_ALLOWED_TAGS = [
+    "a", "abbr", "b", "blockquote", "br", "code", "dd", "del", "dl", "dt",
+    "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "li",
+    "ol", "p", "pre", "strong", "sub", "sup", "table", "tbody", "td",
+    "tfoot", "th", "thead", "tr", "ul",
+]
+_FEED_ALLOWED_ATTRS: dict[str, list[str]] = {
+    "a": ["href", "title", "rel"],
+    "img": ["src", "alt", "title", "width", "height"],
+}
+_FEED_ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
+
+
+def _sanitize_feed_html(value: str | None) -> str | None:
+    """Sanitize HTML from feed content, stripping scripts/iframes/event handlers."""
+    if not value:
+        return value
+    if _bleach is not None:
+        return _bleach.clean(
+            value,
+            tags=_FEED_ALLOWED_TAGS,
+            attributes=_FEED_ALLOWED_ATTRS,
+            protocols=_FEED_ALLOWED_PROTOCOLS,
+            strip=True,
+            strip_comments=True,
+        )
+    # Fallback: strip all tags via regex (less precise but safe)
+    import re
+    cleaned = re.sub(r"<\s*script[^>]*>.*?</\s*script\s*>", "", value, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"<\s*style[^>]*>.*?</\s*style\s*>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"<\s*iframe[^>]*>.*?</\s*iframe\s*>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"\bon\w+\s*=\s*[\"'][^\"']*[\"']", "", cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Feed health tracking helpers
+# ---------------------------------------------------------------------------
+_FEED_HEALTH_MAX_CONSEC_ERRORS = int(os.getenv("COLLECTIONS_FEED_MAX_CONSEC_ERRORS", "10") or "10")
+_FEED_HEALTH_BACKOFF_BASE_HOURS = 1
+_FEED_HEALTH_BACKOFF_CAP_HOURS = 24
+
+
+def _compute_feed_backoff(consec_errors: int) -> timedelta:
+    """Exponential backoff: 1h, 2h, 4h, 8h, ... capped at 24h."""
+    hours = min(_FEED_HEALTH_BACKOFF_BASE_HOURS * (2 ** (consec_errors - 1)), _FEED_HEALTH_BACKOFF_CAP_HOURS)
+    return timedelta(hours=hours)
+
+
+def _feed_health_status(consec_errors: int, active: bool) -> str:
+    """Derive health status string from error count."""
+    if not active:
+        return "disabled"
+    if consec_errors >= 5:
+        return "failing"
+    if consec_errors >= 1:
+        return "degraded"
+    return "healthy"
+
+
+# ---------------------------------------------------------------------------
+# Feed retention defaults
+# ---------------------------------------------------------------------------
+_FEED_RETENTION_MAX_ITEMS = int(os.getenv("COLLECTIONS_FEED_MAX_ITEMS", "0") or "0")  # 0 = unlimited
+_FEED_RETENTION_DAYS = int(os.getenv("COLLECTIONS_FEED_RETENTION_DAYS", "0") or "0")  # 0 = unlimited
 
 # Tracking query parameters to strip during URL normalization
 _TRACKING_PARAMS = frozenset({
@@ -745,15 +820,29 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 db.update_source_scrape_meta(int(src.id), status="deferred", defer_until=until)
                         continue
                     if status // 100 != 2:
-                        # error path
+                        # error path — track consecutive errors and apply backoff
                         with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
-                            db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status=f"error:{status}")
+                            prev_errors = int(getattr(src, "consec_errors", 0) or 0)
+                            new_errors = prev_errors + 1
+                            backoff_until = (datetime.utcnow().replace(tzinfo=timezone.utc) + _compute_feed_backoff(new_errors)).isoformat()
+                            health = _feed_health_status(new_errors, bool(getattr(src, "active", 1)))
+                            auto_disable = new_errors >= _FEED_HEALTH_MAX_CONSEC_ERRORS
+                            db.update_source_scrape_meta(
+                                int(src.id),
+                                last_scraped_at=_utcnow_iso(),
+                                status=f"error:{status}",
+                                consec_errors=new_errors,
+                                defer_until=backoff_until,
+                                active=0 if auto_disable else None,
+                            )
+                            if auto_disable:
+                                logger.warning(f"watchlists.health: auto-disabled source {src.id} after {new_errors} consecutive errors")
                         continue
 
-                    # 200 OK
+                    # 200 OK — reset error tracking
                     if res.get("etag") is not None or res.get("last_modified") is not None:
                         with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
-                            db.update_source_scrape_meta(int(src.id), etag=res.get("etag"), last_modified=res.get("last_modified"), consec_not_modified=0)
+                            db.update_source_scrape_meta(int(src.id), etag=res.get("etag"), last_modified=res.get("last_modified"), consec_not_modified=0, consec_errors=0)
                     # Accumulate history counters for run stats when applicable
                     try:
                         if isinstance(res.get("pages_fetched"), int):
@@ -773,6 +862,14 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                             continue
                         # Item-level dedup check
                         item_key = (it.get("guid") or _normalize_url(link) or (it.get("title") or ""))
+                        if not item_key:
+                            # Fallback: hash content to avoid empty-key collisions
+                            _raw = json.dumps(
+                                {k: it.get(k) for k in ("title", "summary", "content", "url", "link", "published")},
+                                sort_keys=True, default=str,
+                            )
+                            item_key = f"sha256:{hashlib.sha256(_raw.encode()).hexdigest()[:32]}"
+                            logger.warning(f"watchlists.dedup: empty key for item in source {getattr(src, 'id', '?')}, using content hash")
                         # Skip dedup on the very first run (TEST_MODE only) to stabilize offline tests
                         skip_dedup = test_mode and is_first_run
                         if not skip_dedup:
@@ -894,6 +991,9 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 logger.debug(f"Media DB ingestion failed for {link}: {e}")
 
                         content_text = article.get("content") or summary_text or ""
+                        # Sanitize feed HTML before storing
+                        summary_text = _sanitize_feed_html(summary_text) or ""
+                        content_text = _sanitize_feed_html(content_text) or ""
                         tags_for_item = _keywords_for_source(src)
                         if flagged and "flagged" not in tags_for_item:
                             tags_for_item = tags_for_item + ["flagged"]
@@ -983,7 +1083,10 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
 
                     # Update last_scraped_at/status for source
                         with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
-                            db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok")
+                            db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok", consec_errors=0)
+
+                    # Apply retention policy if configured
+                        _apply_feed_retention(collections_db, collections_origin, src)
 
                 elif src_type in {"site", "forum"}:
                     # Determine discovery preferences
@@ -1184,6 +1287,9 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 logger.debug(f"Media DB ingestion failed for site {page_url}: {e}")
 
                         content_text = article.get("content") or summary_text or ""
+                        # Sanitize feed HTML before storing
+                        summary_text = _sanitize_feed_html(summary_text) or ""
+                        content_text = _sanitize_feed_html(content_text) or ""
                         tags_for_item = _keywords_for_source(src)
                         if flagged and "flagged" not in tags_for_item:
                             tags_for_item = tags_for_item + ["flagged"]
@@ -1268,14 +1374,29 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
                             )
                     with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
-                        db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok")
+                        db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok", consec_errors=0)
+                    # Apply retention policy if configured
+                    _apply_feed_retention(collections_db, collections_origin, src)
                 else:
                     # Unknown type - skip
                     continue
             except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Source processing failed (id={getattr(src, 'id', '?')}): {e}")
                 with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
-                    db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="error")
+                    prev_errors = int(getattr(src, "consec_errors", 0) or 0)
+                    new_errors = prev_errors + 1
+                    backoff_until = (datetime.utcnow().replace(tzinfo=timezone.utc) + _compute_feed_backoff(new_errors)).isoformat()
+                    auto_disable = new_errors >= _FEED_HEALTH_MAX_CONSEC_ERRORS
+                    db.update_source_scrape_meta(
+                        int(src.id),
+                        last_scraped_at=_utcnow_iso(),
+                        status="error",
+                        consec_errors=new_errors,
+                        defer_until=backoff_until,
+                        active=0 if auto_disable else None,
+                    )
+                    if auto_disable:
+                        logger.warning(f"watchlists.health: auto-disabled source {src.id} after {new_errors} consecutive errors")
 
     stats = {"items_found": items_found, "items_ingested": items_ingested}
     try:

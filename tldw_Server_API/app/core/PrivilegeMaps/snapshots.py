@@ -307,7 +307,8 @@ class PrivilegeSnapshotStore:
                    org_id,
                    team_id,
                    catalog_version,
-                   summary_json
+                   summary_json,
+                   COALESCE(downsampled, 0) AS downsampled
             FROM privilege_snapshots
             WHERE snapshot_id = ?
             """,
@@ -316,6 +317,9 @@ class PrivilegeSnapshotStore:
         record = self._row_to_dict(row)
         if not record:
             return None
+
+        if record.get("downsampled"):
+            return {"_downsampled": True, "snapshot_id": record.get("snapshot_id")}
 
         summary_obj = None
         if record.get("summary_json"):
@@ -499,6 +503,14 @@ class PrivilegeSnapshotStore:
         try:
             async with pool.transaction() as conn:
                 await conn.execute(
+                    "ALTER TABLE privilege_snapshots ADD COLUMN downsampled INTEGER DEFAULT 0"
+                )
+        except _SNAPSHOT_DB_NONCRITICAL_EXCEPTIONS:
+            pass
+
+        try:
+            async with pool.transaction() as conn:
+                await conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_priv_snapshots_generated_at ON privilege_snapshots(generated_at)"
                 )
                 await conn.execute(
@@ -544,10 +556,10 @@ class PrivilegeSnapshotStore:
             return None
         if isinstance(row, dict):
             return row
-        if hasattr(row, "keys"):
-            return {key: row[key] for key in row}
         if hasattr(row, "_mapping"):
             return dict(row._mapping)  # type: ignore[attr-defined]
+        if hasattr(row, "keys"):
+            return {key: row[key] for key in row.keys()}
         return None
 
     @staticmethod

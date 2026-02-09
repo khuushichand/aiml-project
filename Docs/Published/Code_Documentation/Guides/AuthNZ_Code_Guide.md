@@ -350,10 +350,11 @@ When adding a new FastAPI endpoint that needs AuthNZ and guardrails:
 - Governance facade: `AuthGovernor` (`auth_governor.py`) is the canonical entry point for AuthNZ guardrails. It wraps the shared `RateLimiter` and virtual-key budget helpers so core flows no longer talk to those primitives directly:
   - `check_llm_budget_for_api_key(principal, api_key_id)` decorates `is_key_over_budget(...)` with `AuthPrincipal` metadata and is used by `llm_budget_guard` and `llm_budget_middleware`.
   - `check_lockout(identifier, attempt_type="login", rate_limiter=...)` and `record_auth_failure(identifier, attempt_type, rate_limiter=...)` mediate login lockout and suspicious-activity tracking and are used by the `/auth/login` endpoint.
-  - `check_rate_limit(identifier, endpoint, limit=None, window_minutes=None, rate_limiter=...)` is the generic AuthNZ-level rate-limit helper used by `check_rate_limit` / `check_auth_rate_limit` to enforce 429 semantics.
+  - `check_rate_limit(identifier, endpoint, limit=None, window_minutes=None, rate_limiter=...)` remains available for compatibility/testing and non-RG fallback flows where explicitly used.
 - Endpoint helpers:
-  - `check_rate_limit` extracts a stable client identity (IP or user) and calls `AuthGovernor.check_rate_limit` with defaults, raising HTTP 429 on failure.
-  - `check_auth_rate_limit` uses `AuthGovernor.check_rate_limit` with stricter defaults (`limit=5`, `window_minutes=1`) for authentication routes.
+  - `check_rate_limit` is diagnostics-only (no legacy fallback limiter enforcement).
+  - `check_auth_rate_limit` is diagnostics-only (no legacy fallback limiter enforcement).
+  - Route abuse protection should come from RG ingress policies and endpoint-local RG checks.
 - LLM budgets: `llm_budget_middleware.py` and `llm_budget_guard.py` enforce endpoint/provider/model quotas when configured, always via `AuthGovernor.check_llm_budget_for_api_key`. Settings are `LLM_BUDGET_ENFORCE` (on/off) and `LLM_BUDGET_ENDPOINTS` (paths). Virtual key features are gated by `VIRTUAL_KEYS_ENABLED` (defaults true).
 
 References:

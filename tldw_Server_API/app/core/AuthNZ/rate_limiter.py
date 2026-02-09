@@ -1,4 +1,10 @@
-"""Simplified AuthNZ limiter: lockout tracking + RG-compatible no-op rate limits."""
+"""AuthNZ limiter facade: lockout tracking via LockoutTracker + RG-compatible no-op rate limits.
+
+Lockout logic has been extracted to ``lockout_tracker.py``.  This module
+preserves the public API (``RateLimiter``, ``get_rate_limiter``,
+``check_rate_limit``) for backward compatibility while delegating lockout
+methods to ``LockoutTracker``.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +15,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import RateLimitError
+from tldw_Server_API.app.core.AuthNZ.lockout_tracker import LockoutTracker, get_lockout_tracker
 from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
@@ -18,7 +25,8 @@ class RateLimiter:
     AuthNZ limiter facade.
 
     - Rate limiting is delegated to Resource Governor at ingress.
-    - This class preserves lockout tracking and compatibility signatures.
+    - Lockout tracking is delegated to ``LockoutTracker``.
+    - This class preserves compatibility signatures for existing callers.
     """
 
     def __init__(
@@ -31,6 +39,7 @@ class RateLimiter:
         self.enabled = True
         self._initialized = False
         self._rate_limits_repo: AuthnzRateLimitsRepo | None = None
+        self._lockout: LockoutTracker | None = None
 
     async def initialize(self) -> None:
         if self._initialized:
@@ -43,7 +52,16 @@ class RateLimiter:
             await self._rate_limits_repo.ensure_schema()
         except Exception as exc:
             logger.warning(f"AuthNZ limiter schema ensure warning: {exc}")
+        # Initialize the lockout tracker with the same pool
+        self._lockout = LockoutTracker(db_pool=self.db_pool, settings=self.settings)
+        await self._lockout.initialize()
         self._initialized = True
+
+    def _get_lockout_tracker(self) -> LockoutTracker:
+        if self._lockout is not None:
+            return self._lockout
+        # Fallback to global singleton when not explicitly initialized
+        return get_lockout_tracker()
 
     def _get_rate_limits_repo(self) -> AuthnzRateLimitsRepo:
         if not self.db_pool:
@@ -144,63 +162,24 @@ class RateLimiter:
         lockout_threshold: int | None = None,
         lockout_duration_minutes: int | None = None,
     ) -> dict[str, Any]:
-        if not self._initialized:
-            await self.initialize()
-
-        lockout_threshold = lockout_threshold or self.settings.MAX_LOGIN_ATTEMPTS
-        lockout_duration_minutes = lockout_duration_minutes or self.settings.LOCKOUT_DURATION_MINUTES
-
-        now = datetime.now(timezone.utc)
-        repo = self._get_rate_limits_repo()
-        result = await repo.record_failed_attempt_and_lockout(
-            identifier=identifier,
+        """Delegate to LockoutTracker."""
+        tracker = self._get_lockout_tracker()
+        return await tracker.record_failed_attempt(
+            identifier,
             attempt_type=attempt_type,
-            now=now,
-            lockout_threshold=int(lockout_threshold),
-            lockout_duration_minutes=int(lockout_duration_minutes),
+            lockout_threshold=lockout_threshold,
+            lockout_duration_minutes=lockout_duration_minutes,
         )
-
-        attempt_count = int(result.get("attempt_count", 0))
-        is_locked = bool(result.get("is_locked", False))
-        lockout_expires_dt = result.get("lockout_expires")
-
-        if is_locked and lockout_expires_dt is not None:
-            if self.settings.PII_REDACT_LOGS:
-                logger.warning("Account locked after failed attempts [redacted]")
-            else:
-                logger.warning(
-                    f"Account locked for {identifier} after {attempt_count} failed attempts"
-                )
-            return {
-                "attempt_count": attempt_count,
-                "is_locked": True,
-                "lockout_expires": lockout_expires_dt.isoformat(),
-                "remaining_attempts": 0,
-            }
-
-        return {
-            "attempt_count": attempt_count,
-            "is_locked": False,
-            "remaining_attempts": max(0, int(lockout_threshold) - attempt_count),
-        }
 
     async def check_lockout(self, identifier: str, attempt_type: str = "login") -> tuple[bool, datetime | None]:
-        if not self._initialized:
-            await self.initialize()
-        repo = self._get_rate_limits_repo()
-        locked_until = await repo.get_active_lockout(identifier=identifier, now=datetime.now(timezone.utc))
-        if locked_until is not None:
-            return True, locked_until
-        return False, None
+        """Delegate to LockoutTracker."""
+        tracker = self._get_lockout_tracker()
+        return await tracker.check_lockout(identifier, attempt_type=attempt_type)
 
     async def reset_failed_attempts(self, identifier: str, attempt_type: str = "login") -> None:
-        if not self._initialized:
-            await self.initialize()
-        repo = self._get_rate_limits_repo()
-        await repo.reset_failed_attempts_and_lockout(
-            identifier=identifier,
-            attempt_type=attempt_type,
-        )
+        """Delegate to LockoutTracker."""
+        tracker = self._get_lockout_tracker()
+        await tracker.reset_failed_attempts(identifier, attempt_type=attempt_type)
 
     async def reset_rate_limit(self, identifier: str, endpoint: str | None = None) -> None:
         """No-op reset for legacy rate limit counters (deprecated)."""

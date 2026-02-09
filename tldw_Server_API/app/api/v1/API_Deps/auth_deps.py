@@ -99,6 +99,7 @@ _SENSITIVE_USER_KEY_PATTERN = re.compile(
     r"(password|secret|token|api[_-]?key|ssn|totp|otp|mfa|backup_codes|recovery_codes)",
     re.IGNORECASE,
 )
+_AUTH_DEPS_RG_DIAGNOSTICS_ONLY_LOGGED: set[str] = set()
 
 
 def _public_user_dict(user: Mapping[str, Any]) -> dict[str, Any]:
@@ -1337,115 +1338,36 @@ def _rg_enabled_for_request(request: Request) -> bool:
     return bool(state is not None and getattr(state, "rg_policy_id", None))
 
 
+def _rg_enabled_flag() -> bool:
+    raw = os.getenv("RG_ENABLED", "")
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _log_auth_deps_rg_diagnostics_only_shim(
+    *,
+    dependency: str,
+    endpoint: str,
+    reason: str,
+) -> None:
+    key = f"{dependency}:{reason}"
+    if key in _AUTH_DEPS_RG_DIAGNOSTICS_ONLY_LOGGED:
+        return
+    _AUTH_DEPS_RG_DIAGNOSTICS_ONLY_LOGGED.add(key)
+    logger.warning(
+        "Auth dependency {} using diagnostics-only shim (reason={}); endpoint={}",
+        dependency,
+        reason,
+        endpoint,
+    )
+
+
 async def check_rate_limit(request: Request, rate_limiter=None) -> None:
-    """
-    RG-first rate limit dependency with legacy fallback.
-
-    When Resource Governor (RG) has already governed this request, this is a
-    no-op. Otherwise it calls the legacy AuthNZ limiter shim (user-scoped when
-    available, else IP-scoped). That shim is intentionally a compatibility
-    no-op in RG cutover mode and primarily preserves call contracts/metadata.
-    """
-    # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
+    """General ingress compatibility shim (diagnostics-only; no legacy limiter enforcement)."""
+    _ = rate_limiter
     if _rg_enabled_for_request(request):
-        return
-
-    settings = get_settings()
-    if not getattr(settings, "RATE_LIMIT_ENABLED", True):
-        return
-
-    principal = None
-    try:
-        ctx = getattr(request.state, "auth", None)
-        if isinstance(ctx, AuthContext):
-            principal = ctx.principal
-    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
-        principal = None
-
-    if is_single_user_principal(principal):
-        return
-
-    # Claim-first governor hook (primarily for test invariants)
-    await get_auth_governor()
-
-    # In test mode, bypass rate limiting entirely for deterministic tests.
-    if _is_test_mode():
-        return
-
-    try:
-        if rate_limiter is None:
-            rate_limiter = get_rate_limiter()
-    except asyncio.CancelledError:
-        raise
-    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
-        metrics.record_rate_limit_fallback()
-        logger.warning(
-            "Legacy rate limiter unavailable; skipping rate limit check; error={}",
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Rate limiter unavailable.",
-        ) from exc
-
-    if not getattr(rate_limiter, "enabled", False):
         return
 
     endpoint = request.url.path if getattr(request, "url", None) else "unknown"
-    client_ip = (
-        resolve_client_ip(request, settings)
-        or (request.client.host if getattr(request, "client", None) else None)
-        or "unknown"
-    )
-    user_id = getattr(request.state, "user_id", None)
-    user_id_int: Optional[int] = None
-    if user_id is not None:
-        try:
-            user_id_int = int(user_id)
-        except (TypeError, ValueError):
-            user_id_int = None
-    try:
-        if user_id_int is not None:
-            allowed, meta = await rate_limiter.check_user_rate_limit(
-                user_id_int,
-                endpoint,
-                limit=settings.RATE_LIMIT_PER_MINUTE,
-                window_minutes=1,
-            )
-        else:
-            allowed, meta = await rate_limiter.check_rate_limit(
-                identifier=f"ip:{client_ip}",
-                endpoint=endpoint,
-                limit=settings.RATE_LIMIT_PER_MINUTE,
-                window_minutes=1,
-            )
-    except asyncio.CancelledError:
-        raise
-    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
-        metrics.record_rate_limit_fallback()
-        logger.warning(
-            "Legacy rate limiter check failed; skipping rate limit check; error={}",
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Rate limiter unavailable.",
-        ) from exc
-
-    if not allowed:
-        detail = meta.get("error") if isinstance(meta, dict) else None
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=detail or "Rate limit exceeded.",
-        )
-
-
-async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
-    """RG-first auth rate limit dependency with legacy fallback (IP-scoped no-op shim)."""
-    # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
-    if _rg_enabled_for_request(request):
-        return
-
     settings = get_settings()
     if not getattr(settings, "RATE_LIMIT_ENABLED", True):
         return
@@ -1468,76 +1390,57 @@ async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
     if _is_test_mode():
         return
 
-    try:
-        if rate_limiter is None:
-            rate_limiter = get_rate_limiter()
-    except asyncio.CancelledError:
-        raise
-    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
-        metrics.record_rate_limit_fallback()
-        logger.warning(
-            "Legacy rate limiter unavailable; skipping auth rate limit check; error={}",
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Rate limiter unavailable.",
-        ) from exc
+    reason = (
+        "rg_enabled_without_policy_context"
+        if _rg_enabled_flag()
+        else "rg_disabled_legacy_limiter_retired"
+    )
+    _log_auth_deps_rg_diagnostics_only_shim(
+        dependency="check_rate_limit",
+        endpoint=endpoint,
+        reason=reason,
+    )
 
-    if not getattr(rate_limiter, "enabled", False):
+
+async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
+    """Auth ingress compatibility shim (diagnostics-only; no legacy limiter enforcement)."""
+    _ = rate_limiter
+    if _rg_enabled_for_request(request):
         return
 
     endpoint = request.url.path if getattr(request, "url", None) else "auth"
-    client_ip = (
-        resolve_client_ip(request, settings)
-        or (request.client.host if getattr(request, "client", None) else None)
-        or "unknown"
-    )
-    identifier = f"ip:{client_ip}"
-    fallback_check = getattr(rate_limiter, "check_rate_limit_fallback", None)
-    try:
-        if callable(fallback_check):
-            metrics.record_rate_limit_fallback(backend="authnz_fallback_db")
-            allowed, meta = await fallback_check(
-                identifier=identifier,
-                endpoint=f"auth:{endpoint}",
-                limit=settings.RATE_LIMIT_PER_MINUTE,
-                window_minutes=1,
-            )
-            if isinstance(meta, dict) and meta.get("error") == "fallback_limiter_unavailable":
-                logger.warning(
-                    "Auth fallback rate limiter unavailable while RG ingress is inactive; "
-                    "failing open for availability; endpoint={}",
-                    endpoint,
-                )
-        else:
-            allowed, meta = await rate_limiter.check_rate_limit(
-                identifier=identifier,
-                endpoint=f"auth:{endpoint}",
-                limit=settings.RATE_LIMIT_PER_MINUTE,
-                window_minutes=1,
-            )
-    except asyncio.CancelledError:
-        raise
-    except HTTPException:
-        raise
-    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
-        metrics.record_rate_limit_fallback()
-        logger.warning(
-            "Legacy auth rate limiter check failed; skipping auth rate limit check; error={}",
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Rate limiter unavailable.",
-        ) from exc
+    settings = get_settings()
+    if not getattr(settings, "RATE_LIMIT_ENABLED", True):
+        return
 
-    if not allowed:
-        detail = meta.get("error") if isinstance(meta, dict) else None
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=detail or "Rate limit exceeded.",
-        )
+    principal = None
+    try:
+        ctx = getattr(request.state, "auth", None)
+        if isinstance(ctx, AuthContext):
+            principal = ctx.principal
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+        principal = None
+
+    if is_single_user_principal(principal):
+        return
+
+    # Claim-first governor hook (primarily for test invariants)
+    await get_auth_governor()
+
+    # In test mode, bypass rate limiting entirely for deterministic tests.
+    if _is_test_mode():
+        return
+
+    reason = (
+        "rg_enabled_without_policy_context"
+        if _rg_enabled_flag()
+        else "rg_disabled_legacy_limiter_retired"
+    )
+    _log_auth_deps_rg_diagnostics_only_shim(
+        dependency="check_auth_rate_limit",
+        endpoint=endpoint,
+        reason=reason,
+    )
 
 
 # ---------------------------------------------------------------------------------

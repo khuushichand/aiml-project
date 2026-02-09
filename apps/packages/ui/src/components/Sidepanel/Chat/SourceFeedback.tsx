@@ -14,6 +14,8 @@ type Props = {
   onRate?: (sourceKey: string, source: any, thumb: FeedbackThumb) => void
   onSourceClick?: (source: any) => void
   onTrackClick?: (source: any, index?: number) => void
+  onTrackCitation?: (source: any, index?: number) => void
+  onTrackDwell?: (source: any, dwellMs: number, index?: number) => void
 }
 
 const buttonBase =
@@ -27,7 +29,9 @@ export const SourceFeedback = ({
   disabled = false,
   onRate,
   onSourceClick,
-  onTrackClick
+  onTrackClick,
+  onTrackCitation,
+  onTrackDwell
 }: Props) => {
   const { t } = useTranslation("playground")
 
@@ -42,8 +46,16 @@ export const SourceFeedback = ({
   const handleSourceNavigate = React.useCallback(
     (payload: any) => {
       onTrackClick?.(payload, sourceIndex)
+      onTrackCitation?.(payload, sourceIndex)
     },
-    [onTrackClick, sourceIndex]
+    [onTrackCitation, onTrackClick, sourceIndex]
+  )
+
+  const handleSourceDwell = React.useCallback(
+    (payload: any, dwellMs: number) => {
+      onTrackDwell?.(payload, dwellMs, sourceIndex)
+    },
+    [onTrackDwell, sourceIndex]
   )
 
   const isDisabled = disabled
@@ -54,6 +66,7 @@ export const SourceFeedback = ({
         source={source}
         onSourceClick={handleSourceClick}
         onSourceNavigate={handleSourceNavigate}
+        onSourceDwell={handleSourceDwell}
       />
       <div className="flex items-center gap-1">
         <Tooltip title={t("feedback.sourceHelpful", "Helpful source")}>

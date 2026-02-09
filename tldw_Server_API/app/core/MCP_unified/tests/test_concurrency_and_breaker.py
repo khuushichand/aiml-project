@@ -79,25 +79,29 @@ class FlappyModule(BaseModule):
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_half_open_with_backoff_behaves():
-    # Threshold=1, initial timeout=0s: immediate half-open on next call; backoff should extend
+    # Threshold=1, initial timeout=0.01s: near-instant half-open; backoff should extend
     mod = FlappyModule(ModuleConfig(
         name="flappy",
         circuit_breaker_threshold=1,
-        circuit_breaker_timeout=0,
-        circuit_breaker_backoff_factor=2.0,
+        circuit_breaker_timeout=0.01,
+        circuit_breaker_backoff_factor=100.0,
         circuit_breaker_max_timeout=2,
     ))
 
-    # First failure -> open (for 0s effective), next call becomes half-open
+    # First failure -> open
     with pytest.raises(Exception):
         await mod.execute_with_circuit_breaker(mod._always_fail)
+
+    # Wait for the short initial recovery timeout to expire
+    await asyncio.sleep(0.02)
     # Next attempt should enter half-open (is_circuit_breaker_open returns False)
     assert mod.is_circuit_breaker_open() is False
 
-    # Fail again in half-open -> re-open with backoff (>0s)
+    # Fail again in half-open -> re-open with backoff (longer timeout now)
     with pytest.raises(Exception):
         await mod.execute_with_circuit_breaker(mod._always_fail)
 
-    assert mod._circuit_breaker_half_open is False
-    # Now breaker should be open for some time
+    from tldw_Server_API.app.core.Infrastructure.circuit_breaker import CircuitState
+    # Backoff should have increased recovery timeout, so breaker stays OPEN
+    assert mod._circuit_breaker._current_recovery_timeout > 0.01
     assert mod.is_circuit_breaker_open() is True

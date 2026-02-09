@@ -52,7 +52,10 @@ def test_implicit_feedback_accepts_dwell_ms_for_dwell_time() -> None:
 def test_known_issue_ids_has_expected_members() -> None:
     assert "incorrect_information" in KNOWN_ISSUE_IDS
     assert "not_relevant" in KNOWN_ISSUE_IDS
-    assert "offensive_content" in KNOWN_ISSUE_IDS
+    assert "sources_unhelpful" in KNOWN_ISSUE_IDS
+    assert "too_verbose" in KNOWN_ISSUE_IDS
+    assert "too_brief" in KNOWN_ISSUE_IDS
+    assert "other" in KNOWN_ISSUE_IDS
     assert len(KNOWN_ISSUE_IDS) == 7
 
 
@@ -94,8 +97,8 @@ def test_feedback_list_response_schema() -> None:
 
 
 def test_feedback_update_request_schema() -> None:
-    req = FeedbackUpdateRequest(issues=["outdated"], user_notes="Changed my mind")
-    assert req.issues == ["outdated"]
+    req = FeedbackUpdateRequest(issues=["sources_unhelpful"], user_notes="Changed my mind")
+    assert req.issues == ["sources_unhelpful"]
     assert req.user_notes == "Changed my mind"
 
 

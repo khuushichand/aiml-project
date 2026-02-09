@@ -54,92 +54,60 @@ DEGRADED_THRESHOLD = 0.5  # Mark degraded if error rate > 50%
 # Classes:
 
 class CircuitBreaker:
-    """
-    Circuit breaker pattern implementation for provider failures.
-    States: CLOSED (normal), OPEN (failing), HALF_OPEN (testing)
+    """Thin adapter around the unified Infrastructure circuit breaker.
 
-    Thread-safe: All state transitions are protected by a lock.
+    Preserves the public interface used by :class:`ProviderManager`:
+    ``.state`` (string), ``.can_attempt_call()``, ``.call_succeeded()``,
+    ``.call_failed()``, ``.failure_count``, ``.last_failure_time``.
     """
 
     def __init__(
         self,
         failure_threshold: int = CIRCUIT_BREAKER_FAILURE_THRESHOLD,
         timeout: int = CIRCUIT_BREAKER_TIMEOUT,
-        half_open_requests: int = CIRCUIT_BREAKER_HALF_OPEN_REQUESTS
+        half_open_requests: int = CIRCUIT_BREAKER_HALF_OPEN_REQUESTS,
     ):
-        self.failure_threshold = failure_threshold
-        self.timeout = timeout
-        self.half_open_requests = half_open_requests
-        self._lock = threading.Lock()
-        # Protected state - only access under _lock
-        self._failure_count = 0
-        self._last_failure_time = None
-        self._state = "CLOSED"
-        self._half_open_count = 0
+        from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+            CircuitBreaker as _UnifiedCB,
+            CircuitBreakerConfig as _Cfg,
+        )
+        self._cb = _UnifiedCB(
+            name=f"chat_provider",
+            config=_Cfg(
+                failure_threshold=failure_threshold,
+                recovery_timeout=float(timeout),
+                half_open_max_calls=half_open_requests,
+                success_threshold=half_open_requests,
+                category="chat",
+            ),
+        )
 
     @property
     def failure_count(self) -> int:
-        """Read-only access to failure count."""
-        with self._lock:
-            return self._failure_count
+        return self._cb.failure_count
 
     @property
     def last_failure_time(self) -> Optional[float]:
-        """Read-only access to last failure time."""
-        with self._lock:
-            return self._last_failure_time
+        with self._cb._lock:
+            return self._cb._last_failure_time
 
     @property
     def state(self) -> str:
-        """Read-only access to current state."""
-        with self._lock:
-            return self._state
+        return self._cb.state.name  # "CLOSED" / "OPEN" / "HALF_OPEN"
 
     @property
     def half_open_count(self) -> int:
-        """Read-only access to half-open count."""
-        with self._lock:
-            return self._half_open_count
+        with self._cb._lock:
+            return self._cb._success_count
 
     def call_succeeded(self):
-        """Record a successful call. Thread-safe."""
-        with self._lock:
-            self._failure_count = 0
-            if self._state == "HALF_OPEN":
-                self._half_open_count += 1
-                if self._half_open_count >= self.half_open_requests:
-                    self._state = "CLOSED"
-                    logger.info("Circuit breaker closed after successful recovery")
+        self._cb.record_success()
 
     def call_failed(self):
-        """Record a failed call. Thread-safe."""
-        with self._lock:
-            self._failure_count += 1
-            self._last_failure_time = time.time()
-
-            if self._state == "HALF_OPEN":
-                self._state = "OPEN"
-                logger.warning("Circuit breaker reopened after failure in half-open state")
-            elif self._failure_count >= self.failure_threshold:
-                self._state = "OPEN"
-                logger.warning(f"Circuit breaker opened after {self._failure_count} failures")
+        self._cb.record_failure()
 
     def can_attempt_call(self) -> bool:
-        """Check if a call can be attempted. Thread-safe."""
-        with self._lock:
-            if self._state == "CLOSED":
-                return True
-
-            if self._state == "OPEN":
-                if self._last_failure_time and (time.time() - self._last_failure_time) > self.timeout:
-                    self._state = "HALF_OPEN"
-                    self._half_open_count = 0
-                    logger.info("Circuit breaker entering half-open state for testing")
-                    return True
-                return False
-
-            # HALF_OPEN state
-            return self._half_open_count < self.half_open_requests
+        return self._cb.can_attempt()
 
 
 class ProviderManager:

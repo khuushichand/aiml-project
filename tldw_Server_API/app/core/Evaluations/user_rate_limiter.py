@@ -3,6 +3,16 @@ Per-user rate limiting for Evaluations module.
 
 Implements tiered rate limiting based on user subscription levels
 with support for burst traffic and cost-based limits.
+
+**RG Integration Status (v1.1)**:
+- When ``RG_ENABLED=true``, evaluations/minute and evaluations/tokens daily
+  caps are enforced by the ResourceGovernor via ``_maybe_enforce_with_rg_evaluations``.
+- Cost caps (``max_cost_per_day``, ``max_cost_per_month``) remain **legacy-only**.
+  Unified eval endpoints pass ``estimated_cost=0.0`` and RG does not handle cost
+  limits. Cost enforcement here is a no-op in practice until a stable cost
+  estimator exists.
+- Legacy minute/daily SQLite checks are fallback-only when RG is enabled.
+- CUSTOM tier bypasses RG and uses legacy DB limits exclusively.
 """
 
 import asyncio

@@ -35,12 +35,13 @@ export const useImplicitFeedback = ({
 
   const sendEvent = React.useCallback(
     async (payload: {
-      event_type: "click" | "expand" | "copy"
+      event_type: "click" | "expand" | "copy" | "dwell_time" | "citation_used"
       doc_id?: string
       chunk_ids?: string[]
       rank?: number
       impression_list?: string[]
       corpus?: string
+      dwell_ms?: number
     }) => {
       if (!enabled) return
       const key = `${payload.event_type}:${payload.doc_id || ""}:${payload.rank || ""}`
@@ -97,9 +98,53 @@ export const useImplicitFeedback = ({
     [sendEvent, sources]
   )
 
+  const trackCitationUsed = React.useCallback(
+    (source?: any, index?: number) => {
+      const { documentIds, chunkIds, corpus } = extractSourceFeedbackIds(source)
+      const docId =
+        documentIds[0] ||
+        chunkIds[0] ||
+        getSourceImpressionId(source, index)
+      void sendEvent({
+        event_type: "citation_used",
+        doc_id: docId,
+        chunk_ids: chunkIds.length > 0 ? chunkIds : undefined,
+        rank: typeof index === "number" ? index + 1 : undefined,
+        impression_list:
+          sources.length > 0 ? collectImpressionList(sources) : undefined,
+        corpus
+      })
+    },
+    [sendEvent, sources]
+  )
+
+  const trackDwellTime = React.useCallback(
+    (dwellMs: number, source?: any, index?: number) => {
+      const normalizedDwellMs = Math.max(0, Math.floor(dwellMs))
+      const { documentIds, chunkIds, corpus } = extractSourceFeedbackIds(source)
+      const docId =
+        documentIds[0] ||
+        chunkIds[0] ||
+        (source ? getSourceImpressionId(source, index) : undefined)
+      void sendEvent({
+        event_type: "dwell_time",
+        dwell_ms: normalizedDwellMs,
+        doc_id: docId,
+        chunk_ids: chunkIds.length > 0 ? chunkIds : undefined,
+        rank: typeof index === "number" ? index + 1 : undefined,
+        impression_list:
+          sources.length > 0 ? collectImpressionList(sources) : undefined,
+        corpus
+      })
+    },
+    [sendEvent, sources]
+  )
+
   return {
     trackCopy,
     trackSourcesExpanded,
-    trackSourceClick
+    trackSourceClick,
+    trackCitationUsed,
+    trackDwellTime
   }
 }

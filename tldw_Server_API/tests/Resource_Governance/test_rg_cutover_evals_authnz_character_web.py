@@ -224,3 +224,67 @@ async def test_web_scraping_rg_unavailable_uses_diagnostics_only_shim(monkeypatc
     await limiter.acquire()
 
     assert list(limiter._request_times) == before
+
+
+@pytest.mark.asyncio
+async def test_evaluations_rg_allows_still_enforces_cost_caps(monkeypatch):
+    """
+    When RG allows a request, the Evaluations limiter must still enforce
+    cost caps locally (since RG does not handle cost limits).
+    """
+    monkeypatch.setenv("RG_ENABLED", "1")
+    fake = _FakeGovernor(allowed=True, retry_after=None)
+    monkeypatch.setattr(evals_rl, "_rg_evals_governor", fake)
+    monkeypatch.setattr(evals_rl, "_rg_evals_loader", None)
+
+    limiter = evals_rl.UserRateLimiter()
+
+    cost_denied = False
+
+    async def _deny_cost(*args, **kwargs):  # noqa: ARG001
+        nonlocal cost_denied
+        cost_denied = True
+        return False, {
+            "error": "Daily cost limit exceeded",
+            "limit": 1.0,
+            "used": 1.0,
+            "requested": 0.5,
+            "retry_after": 3600,
+        }
+
+    monkeypatch.setattr(limiter, "_check_cost_limits", _deny_cost)
+
+    allowed, meta = await limiter.check_rate_limit(
+        user_id="user-cost-test",
+        endpoint="/api/v1/evaluations",
+        tokens_requested=0,
+        estimated_cost=0.5,
+    )
+
+    assert cost_denied is True
+    assert allowed is False
+    assert "cost" in meta.get("error", "").lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluations_rg_allows_with_zero_cost_skips_cost_check(monkeypatch):
+    """
+    Unified eval endpoints pass estimated_cost=0.0. When RG allows and
+    cost is zero, the cost check should pass (no denial).
+    """
+    monkeypatch.setenv("RG_ENABLED", "1")
+    fake = _FakeGovernor(allowed=True, retry_after=None)
+    monkeypatch.setattr(evals_rl, "_rg_evals_governor", fake)
+    monkeypatch.setattr(evals_rl, "_rg_evals_loader", None)
+
+    limiter = evals_rl.UserRateLimiter()
+
+    allowed, meta = await limiter.check_rate_limit(
+        user_id="user-zero-cost",
+        endpoint="/api/v1/evaluations",
+        tokens_requested=100,
+        estimated_cost=0.0,
+    )
+
+    assert allowed is True
+    assert meta.get("rate_limit_source") == "resource_governor"

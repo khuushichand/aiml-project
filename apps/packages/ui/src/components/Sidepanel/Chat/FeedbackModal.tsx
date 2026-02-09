@@ -41,7 +41,7 @@ export const FeedbackModal = ({
   const issueOptions = [
     {
       label: t("feedback.issues.incorrect", "Incorrect information"),
-      value: "incorrect"
+      value: "incorrect_information"
     },
     {
       label: t("feedback.issues.notRelevant", "Not relevant to my question"),
@@ -53,7 +53,7 @@ export const FeedbackModal = ({
     },
     {
       label: t("feedback.issues.badSources", "Sources were unhelpful"),
-      value: "bad_sources"
+      value: "sources_unhelpful"
     },
     {
       label: t("feedback.issues.tooVerbose", "Too verbose"),

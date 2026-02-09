@@ -77,6 +77,7 @@ class SourceRow:
     defer_until: str | None
     status: str | None
     consec_not_modified: int | None
+    consec_errors: int | None
     created_at: str
     updated_at: str
     tags: list[str]
@@ -259,6 +260,7 @@ class WatchlistsDatabase:
                 defer_until TEXT,
                 status TEXT,
                 consec_not_modified INTEGER NOT NULL DEFAULT 0,
+                consec_errors INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -391,6 +393,7 @@ class WatchlistsDatabase:
                 defer_until TEXT,
                 status TEXT,
                 consec_not_modified INTEGER NOT NULL DEFAULT 0,
+                consec_errors INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -530,6 +533,9 @@ class WatchlistsDatabase:
         if not _col_exists("sources", "consec_not_modified"):
             with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
                 self.backend.execute("ALTER TABLE sources ADD COLUMN consec_not_modified INTEGER DEFAULT 0", ())
+        if not _col_exists("sources", "consec_errors"):
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute("ALTER TABLE sources ADD COLUMN consec_errors INTEGER DEFAULT 0", ())
         if not _col_exists("scrape_run_items", "source_id"):
             with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
                 self.backend.execute("ALTER TABLE scrape_run_items ADD COLUMN source_id INTEGER", ())
@@ -682,7 +688,7 @@ class WatchlistsDatabase:
 
     def get_source(self, source_id: int) -> SourceRow:
         row = self.backend.execute(
-            "SELECT id, user_id, name, url, source_type, active, settings_json, last_scraped_at, etag, last_modified, defer_until, status, consec_not_modified, created_at, updated_at FROM sources WHERE id = ? AND user_id = ?",
+            "SELECT id, user_id, name, url, source_type, active, settings_json, last_scraped_at, etag, last_modified, defer_until, status, consec_not_modified, consec_errors, created_at, updated_at FROM sources WHERE id = ? AND user_id = ?",
             (source_id, self.user_id),
         ).first
         if not row:
@@ -730,7 +736,7 @@ class WatchlistsDatabase:
         where_sql = " AND ".join(where)
         total = int(self.backend.execute(f"SELECT COUNT(*) AS cnt FROM sources WHERE {where_sql}", tuple(params)).scalar or 0)
         rows = self.backend.execute(
-            f"SELECT id, user_id, name, url, source_type, active, settings_json, last_scraped_at, etag, last_modified, defer_until, status, consec_not_modified, created_at, updated_at FROM sources WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            f"SELECT id, user_id, name, url, source_type, active, settings_json, last_scraped_at, etag, last_modified, defer_until, status, consec_not_modified, consec_errors, created_at, updated_at FROM sources WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
             tuple(params + [limit, offset]),
         ).rows
         out: list[SourceRow] = []
@@ -777,6 +783,8 @@ class WatchlistsDatabase:
         defer_until: str | None = None,
         status: str | None = None,
         consec_not_modified: int | None = None,
+        consec_errors: int | None = None,
+        active: int | None = None,
     ) -> None:
         """Update scrape metadata fields for a source (idempotent, partial)."""
         fields: list[str] = []
@@ -799,6 +807,12 @@ class WatchlistsDatabase:
         if consec_not_modified is not None:
             fields.append("consec_not_modified = ?")
             params.append(int(consec_not_modified))
+        if consec_errors is not None:
+            fields.append("consec_errors = ?")
+            params.append(int(consec_errors))
+        if active is not None:
+            fields.append("active = ?")
+            params.append(int(active))
         if not fields:
             return
         params.extend([source_id, self.user_id])
@@ -898,7 +912,7 @@ class WatchlistsDatabase:
             f"""
             SELECT s.id, s.user_id, s.name, s.url, s.source_type, s.active, s.settings_json,
                    s.last_scraped_at, s.etag, s.last_modified, s.defer_until, s.status,
-                   s.consec_not_modified, s.created_at, s.updated_at
+                   s.consec_not_modified, s.consec_errors, s.created_at, s.updated_at
             FROM sources s
             WHERE s.user_id = ? {active_clause}
               AND EXISTS (

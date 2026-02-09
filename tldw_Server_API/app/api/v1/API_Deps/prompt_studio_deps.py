@@ -488,8 +488,6 @@ async def check_rate_limit(
     Raises:
         HTTPException: If rate limit exceeded
     """
-    global _PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED
-
     # Bypass in tests or when globally disabled
     if is_test_mode():
         return True
@@ -534,8 +532,8 @@ async def check_rate_limit(
         except HTTPException:
             raise
         except _PROMPT_STUDIO_RATE_LIMIT_EXCEPTIONS as e:
-            if not _PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED:
-                _PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED = True
+            if not bool(globals().get("_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED", False)):
+                globals()["_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED"] = True
                 logger.warning(
                     "Prompt Studio shared rate limiter unavailable; local fallback limiter is retired. "
                     "Allowing request via diagnostics-only shim. operation={} error={}",
@@ -543,8 +541,8 @@ async def check_rate_limit(
                     e,
                 )
     else:
-        if not _PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED:
-            _PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED = True
+        if not bool(globals().get("_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED", False)):
+            globals()["_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED"] = True
             logger.warning(
                 "Prompt Studio shared rate limiter not available; local fallback limiter is retired. "
                 "Allowing request via diagnostics-only shim. operation={}",

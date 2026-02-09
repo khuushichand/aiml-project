@@ -25,6 +25,10 @@ from tldw_Server_API.app.core.PrivilegeMaps.trends import PrivilegeTrendStore, g
 RESOURCE_FALLBACK = "uncategorized"
 MAX_DETAIL_ROWS = 50_000
 
+
+class PaginationLimitExceeded(Exception):
+    """Raised when a client requests pagination beyond the allowed result window."""
+
 _PRIVILEGE_MAP_COERCE_EXCEPTIONS = (
     AttributeError,
     TypeError,
@@ -78,9 +82,9 @@ class PrivilegeMapService:
 
     def _resolve_cache_ttl(self) -> int:
         try:
-            ttl = int(os.getenv("PRIVILEGE_MAP_CACHE_TTL_SECONDS", "120") or "120")
+            ttl = int(os.getenv("PRIVILEGE_MAP_CACHE_TTL_SECONDS", "900") or "900")
         except _PRIVILEGE_MAP_COERCE_EXCEPTIONS:
-            ttl = 120
+            ttl = 900
         # Enforce a sensible floor to avoid thrashing.
         return max(ttl, 10)
 
@@ -173,8 +177,11 @@ class PrivilegeMapService:
         group_by: str,
         include_trends: bool,
         since: datetime | None,
+        org_id: str | None = None,
     ) -> dict[str, Any]:
         users = await self._fetch_users()
+        if org_id:
+            users = await self._filter_users_for_org(users, org_id=org_id)
         users_signature = self._compute_user_signature(users)
         cache_key = self._summary_cache_key(
             scope="org",
@@ -245,8 +252,11 @@ class PrivilegeMapService:
         resource: str | None,
         dependency: str | None,
         role_filter: str | None,
+        org_id: str | None = None,
     ) -> dict[str, Any]:
         users = await self._fetch_users()
+        if org_id:
+            users = await self._filter_users_for_org(users, org_id=org_id)
         items = self._build_detail_items(
             users,
             resource_filter=resource,
@@ -1047,14 +1057,14 @@ class PrivilegeMapService:
     ) -> dict[str, Any]:
         total_items = len(items)
         if page_size > MAX_DETAIL_ROWS:
-            raise ValueError("Requested page_size exceeds maximum allowed rows.")
+            raise PaginationLimitExceeded("Requested page_size exceeds maximum allowed rows.")
         if page_size <= 0:
             page_size = 1
         if page <= 0:
             page = 1
         start = (page - 1) * page_size
         if start >= MAX_DETAIL_ROWS:
-            raise ValueError("Requested pagination exceeds allowed result window.")
+            raise PaginationLimitExceeded("Requested pagination exceeds allowed result window.")
         end = min(start + page_size, len(items))
         paginated = items[start:end]
         return {
@@ -1167,10 +1177,10 @@ class PrivilegeMapService:
             return None
         if isinstance(row, dict):
             return row
-        if hasattr(row, "keys"):
-            return {key: row[key] for key in row}
         if hasattr(row, "_mapping"):
             return dict(row._mapping)  # type: ignore[attr-defined]
+        if hasattr(row, "keys"):
+            return {key: row[key] for key in row.keys()}
         return None
 
 

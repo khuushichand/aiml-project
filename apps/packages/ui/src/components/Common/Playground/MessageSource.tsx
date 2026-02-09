@@ -1,5 +1,6 @@
 import { KnowledgeIcon } from "@/components/Option/Knowledge/KnowledgeIcon"
 import { useTranslation } from "react-i18next"
+import React from "react"
 
 type Props = {
   source: {
@@ -25,14 +26,18 @@ type Props = {
   }
   onSourceClick?: (source: any) => void
   onSourceNavigate?: (source: any) => void
+  onSourceDwell?: (source: any, dwellMs: number) => void
 }
 
 export const MessageSource: React.FC<Props> = ({
   source,
   onSourceClick,
-  onSourceNavigate
+  onSourceNavigate,
+  onSourceDwell
 }) => {
   const { t } = useTranslation("common")
+  const detailsRef = React.useRef<HTMLDetailsElement | null>(null)
+  const dwellStartRef = React.useRef<number | null>(null)
   const isKnowledge = source?.mode === "rag" || source?.mode === "chat"
   const label =
     source?.name ||
@@ -51,6 +56,19 @@ export const MessageSource: React.FC<Props> = ({
   const lineFrom = source?.metadata?.loc?.lines?.from
   const lineTo = source?.metadata?.loc?.lines?.to
   const isExpandable = Boolean(content)
+
+  const emitDwell = React.useCallback(() => {
+    if (!onSourceDwell || dwellStartRef.current == null) return
+    const dwellMs = Date.now() - dwellStartRef.current
+    dwellStartRef.current = null
+    onSourceDwell(source, dwellMs)
+  }, [onSourceDwell, source])
+
+  React.useEffect(() => {
+    return () => {
+      emitDwell()
+    }
+  }, [emitDwell])
 
   if (!isExpandable) {
     if (url) {
@@ -76,7 +94,17 @@ export const MessageSource: React.FC<Props> = ({
   }
 
   return (
-    <details className="w-full rounded-md border border-border bg-surface2 px-2 py-1">
+    <details
+      ref={detailsRef}
+      className="w-full rounded-md border border-border bg-surface2 px-2 py-1"
+      onToggle={(event) => {
+        const detailsElement = event.currentTarget as HTMLDetailsElement
+        if (detailsElement.open) {
+          dwellStartRef.current = Date.now()
+          return
+        }
+        emitDwell()
+      }}>
       <summary
         onClick={() => {
           onSourceClick && onSourceClick(source)

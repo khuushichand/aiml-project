@@ -229,30 +229,24 @@ export const useFeedback = ({
       setIsSubmitting(true)
       try {
         const base = buildBasePayload()
-        if (hasRating) {
-          await sendDetailedFeedback(
-            "relevance",
-            {
-              ...base,
-              feedback_type: "relevance",
-              relevance_score: rating || undefined
-            },
-            entry?.detailIdempotencyKeys?.relevance
-          )
-        }
-
-        if (hasIssues || hasNotes) {
-          await sendDetailedFeedback(
-            "report",
-            {
-              ...base,
-              feedback_type: "report",
-              issues: hasIssues ? issues : undefined,
-              user_notes: hasNotes ? notes?.trim() : undefined
-            },
-            entry?.detailIdempotencyKeys?.report
-          )
-        }
+        const detailKind: "relevance" | "report" = hasRating
+          ? "relevance"
+          : "report"
+        const currentKey =
+          detailKind === "relevance"
+            ? entry?.detailIdempotencyKeys?.relevance
+            : entry?.detailIdempotencyKeys?.report
+        await sendDetailedFeedback(
+          detailKind,
+          {
+            ...base,
+            feedback_type: detailKind,
+            relevance_score: hasRating ? rating || undefined : undefined,
+            issues: hasIssues ? issues : undefined,
+            user_notes: hasNotes ? notes?.trim() : undefined
+          },
+          currentKey
+        )
 
         const detail: FeedbackDetail = {
           rating: hasRating ? rating : null,

@@ -117,6 +117,7 @@ type MessageActionsBarProps = {
   onClearMessageSteering?: () => void
   onEdit: () => void
   editMode: boolean
+  showFeedbackControls: boolean
   feedbackSelected?: FeedbackThumb
   feedbackDisabled: boolean
   feedbackDisabledReason: string
@@ -175,6 +176,7 @@ export function MessageActionsBar({
   onClearMessageSteering,
   onEdit,
   editMode,
+  showFeedbackControls,
   feedbackSelected,
   feedbackDisabled,
   feedbackDisabledReason,
@@ -528,7 +530,7 @@ export function MessageActionsBar({
           </div>
 
           {/* Feedback buttons (separate row, unaffected) */}
-          {!editMode && isBot && (
+          {!editMode && showFeedbackControls && (
             <FeedbackButtons
               compact
               selected={feedbackSelected}

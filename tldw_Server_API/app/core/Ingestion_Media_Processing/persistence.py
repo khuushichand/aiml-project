@@ -219,6 +219,125 @@ def _allowed_url_extensions(media_type: str, form_data: Any) -> set[str] | None:
     return None
 
 
+def _resolve_ingestion_file_validator(media_mod: Any | None) -> Any:
+    """
+    Resolve the shared file validator instance used by media ingestion flows.
+
+    Prefer the modular endpoint shim (for tests that monkeypatch
+    `endpoints.media.file_validator_instance`) and fall back to the core
+    dependency singleton.
+    """
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (  # type: ignore  # noqa: E501
+            file_validator_instance as core_file_validator_instance,
+        )
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (  # type: ignore  # noqa: E501
+            FileValidator,
+        )
+
+        core_file_validator_instance = FileValidator()
+
+    if media_mod is not None:
+        try:
+            return getattr(
+                media_mod,
+                "file_validator_instance",
+                core_file_validator_instance,
+            )
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+            return core_file_validator_instance
+    return core_file_validator_instance
+
+
+def _validate_downloaded_url_file(
+    *,
+    downloaded_path: FilePath,
+    processing_filename: str | None,
+    media_type: Any,
+    form_data: Any,
+    media_mod: Any | None,
+    allowed_extensions: set[str] | None,
+) -> None:
+    """
+    Apply upload-equivalent validation rules to files fetched from URLs.
+
+    This mirrors upload-path behavior for archive/pst special-cases while
+    reusing `process_and_validate_file` for normal document-like inputs.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (  # type: ignore  # noqa: E501
+        FileValidationError,
+        _resolve_media_type_key,
+        process_and_validate_file,
+    )
+
+    validator = _resolve_ingestion_file_validator(media_mod)
+    normalized_allowed_extensions = (
+        {str(ext).lower() for ext in allowed_extensions if ext}
+        if allowed_extensions is not None
+        else None
+    )
+
+    file_extension = downloaded_path.suffix.lower()
+    archive_exts = {
+        ".zip",
+        ".tar",
+        ".tgz",
+        ".tar.gz",
+        ".tbz2",
+        ".tar.bz2",
+        ".txz",
+        ".tar.xz",
+    }
+    skip_archive_scanning = (
+        str(media_type).lower() == "email"
+        and bool(getattr(form_data, "accept_archives", False))
+    )
+    is_pst_ost = file_extension in {".pst", ".ost"}
+    pst_accepted = normalized_allowed_extensions is not None and (
+        ".pst" in normalized_allowed_extensions or ".ost" in normalized_allowed_extensions
+    )
+
+    try:
+        if skip_archive_scanning and file_extension in archive_exts:
+            validation_result = validator.validate_file(
+                downloaded_path,
+                original_filename=processing_filename,
+                media_type_key="archive",
+            )
+        elif is_pst_ost and pst_accepted:
+            validation_result = validator.validate_file(
+                downloaded_path,
+                original_filename=processing_filename,
+                media_type_key="email",
+                allowed_mimetypes_override=set(),
+            )
+        else:
+            try:
+                inferred_media_key = _resolve_media_type_key(
+                    processing_filename or str(downloaded_path),
+                )
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+                inferred_media_key = None
+
+            media_key_override = inferred_media_key or str(media_type)
+            validation_result = process_and_validate_file(
+                downloaded_path,
+                validator,
+                original_filename=processing_filename,
+                media_type_key_override=media_key_override,
+            )
+    except FileValidationError as validation_err:
+        issues = getattr(validation_err, "issues", None) or [str(validation_err)]
+        issue_msg = "; ".join(str(issue) for issue in issues)
+        raise ValueError(f"Downloaded file failed validation: {issue_msg}") from validation_err
+
+    if not validation_result:
+        issues = getattr(validation_result, "issues", None) or ["Unknown validation failure"]
+        issue_msg = "; ".join(str(issue) for issue in issues)
+        raise ValueError(f"Downloaded file failed validation: {issue_msg}")
+
+
 def validate_add_media_inputs(
     media_type: Any,
     urls: list[str] | None,
@@ -2314,6 +2433,14 @@ async def process_document_like_item(
                     )
                 processing_filepath = safe_downloaded_path
                 processing_filename = safe_downloaded_path.name
+                _validate_downloaded_url_file(
+                    downloaded_path=safe_downloaded_path,
+                    processing_filename=processing_filename,
+                    media_type=media_type,
+                    form_data=form_data,
+                    media_mod=_media_mod,
+                    allowed_extensions=allowed_extensions,
+                )
 
                 if user_id is not None:
                     try:

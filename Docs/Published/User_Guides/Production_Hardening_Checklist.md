@@ -38,7 +38,7 @@ CORS & CSRF
 
 Rate Limiting & Abuse Prevention
 - RG (rate gating) global rate limiter is enabled by default in production unless you disable it with `RG_ENABLED=0` or in `config.txt`; in test environments, RG is disabled by default unless you explicitly enable it (for example via `RG_ENABLED=1` or `config.txt`).
-- RG can be disabled via env for compatibility/rollback. When disabled, the system continues to operate using non-RG limiter paths.
+- Treat `RG_ENABLED=0` as an emergency/debug-only setting; AuthNZ dependency limiters are diagnostics-only and do not provide equivalent abuse-limiter fallback enforcement when RG is disabled.
 - Tune per-module rate limiters (Chat/RAG/Evals) via their respective settings.
 - Consider a network-level rate limit at the reverse proxy for additional protection.
 

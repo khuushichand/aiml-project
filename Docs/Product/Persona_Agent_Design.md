@@ -13,25 +13,31 @@ https://github.com/VectorSpaceLab/general-agentic-memory
 
 Introduce a first-class Persona agent (text + optional voice + avatar) that chats naturally, remembers context, and uses server tools (via MCP Unified) to help with ingestion, search, analysis, and exports. Actions are transparent, previewed, and require confirmation for impactful operations.
 
-## Current Status (v0.2.x dev)
+## Current Status (v0.2.x dev, verified 2026-02-09)
 
-- Feature flag: endpoints/WS are gated; disabled state returns empty catalog/404 and WS notice.
-  - Config: `[persona] enabled=true` in `tldw_Server_API/Config_Files/config.txt`.
-  - Exposed at runtime via `GET /api/v1/config/docs-info` under `capabilities.persona`.
-- Endpoints: `GET /catalog`, `POST /session`, `WS /stream` implemented (scaffold).
-  - WS loop: plan → confirm → act using MCP tools; naive plan heuristics; per-step confirmations expected from client.
-  - RBAC: allow_export/allow_delete gates enforced server-side per step.
-- MCP Unified: tool calls use existing unified server with user-scoped execution.
-- WebUI: Persona tab (preview) and basic dock wiring; visibility follows capabilities.
-- Tests: basic WS plan/confirm smoke test.
+- Implemented (backend scaffold):
+  - Feature-flag plumbing (`PERSONA_ENABLED`, persona RBAC config) and docs-info capability exposure.
+  - Persona endpoints scaffolded: `GET /api/v1/persona/catalog`, `POST /api/v1/persona/session`, `WS /api/v1/persona/stream`.
+  - Basic WS flow: `user_message -> tool_plan`, `confirm_plan -> tool_call/tool_result`.
+  - Basic tests exist for catalog, WS smoke flow, and WS metrics.
+- Partially implemented:
+  - MCP tool execution integration exists, but plan confirmation currently trusts client-provided step payloads.
+  - RBAC-style export/delete string checks exist in persona WS, but full policy/scoping behavior depends on MCP user identity.
+- Not yet implemented:
+  - Full voice protocol (`audio_chunk`, `partial_transcript`, `tts_audio` binary stream).
+  - Persistent session/persona memory integration with personalization store.
+  - Robust plan-state validation (server-side stored plans keyed by `plan_id`).
+  - WebUI persona dock/tab integration for `/api/v1/persona/*` and stream events.
+- Important caveat:
+  - In full app mode, persona routes are treated as experimental and are not enabled by default route policy unless explicitly enabled by route toggles.
 
 ## Changelog
 
 - v0.2.x dev
-  - Feature flag gating and capability exposure via `/api/v1/config/docs-info`.
-  - Implemented persona endpoints (catalog, session) and WS stream with plan → confirm → act loop and RBAC guards.
-  - Integrated MCP Unified tool calls; added WebUI tab visibility based on capabilities.
-  - Added minimal WS smoke test for plan/confirm flow.
+  - Added feature flag and capability exposure via `/api/v1/config/docs-info`.
+  - Added scaffold persona endpoints (catalog, session) and WS stream with a naive plan → confirm → act loop.
+  - Integrated scaffold MCP Unified tool execution path and basic RBAC-style export/delete checks.
+  - Added minimal WS smoke and metrics tests for the scaffold flow.
 - v0.1.0
   - Initial draft design with goals, architecture, and API outline.
 

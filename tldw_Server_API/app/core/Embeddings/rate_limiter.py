@@ -1,5 +1,18 @@
 # rate_limiter.py
 # Per-user rate limiting for embeddings service
+#
+# DEPRECATION NOTICE (Phase 3 - Resource Governor Unification)
+# ─────────────────────────────────────────────────────────────
+# This module is a **legacy shim**.  Primary rate-limit enforcement is now
+# handled by the Resource Governor (``RGSimpleMiddleware`` + per-module RG
+# integration).  The in-memory sliding-window counters in ``UserRateLimiter``
+# only run as a **shadow comparison** (emitting ``rg_shadow_decision_mismatch``
+# metrics) or as a **fallback** when RG is unavailable.
+#
+# Once shadow-mode exit criteria are met (see Resource_Governor_PRD.md §
+# Shadow-Mode Exit Criteria), this module should be replaced by a thin
+# wrapper that delegates entirely to RG, and the legacy counters removed.
+# ─────────────────────────────────────────────────────────────
 
 import asyncio
 import configparser

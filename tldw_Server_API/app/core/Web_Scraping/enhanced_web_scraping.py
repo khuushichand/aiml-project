@@ -211,7 +211,15 @@ class ScrapingJob:
 
 
 class RateLimiter:
-    """Rate limiting for scraping requests"""
+    """Rate limiting for scraping requests.
+
+    .. deprecated:: Phase 3 - Resource Governor Unification
+       Primary enforcement is now handled by ``RGSimpleMiddleware`` and the
+       per-module ``_maybe_enforce_with_rg_web_scraping``.  The in-memory
+       counters here only run as a **fallback** when RG is unavailable.
+       Remove after shadow-mode exit criteria are met (see
+       Resource_Governor_PRD.md).
+    """
 
     def __init__(self, max_requests_per_second: float = 2.0,
                  max_requests_per_minute: int = 60,

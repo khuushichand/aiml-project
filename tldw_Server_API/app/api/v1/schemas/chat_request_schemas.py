@@ -756,7 +756,7 @@ class ChatCompletionRequest(BaseModel):
         None,
         description=(
             "[Compatibility] Optional persona alias. Accepted only when it can be deterministically resolved to "
-            "a character ID."
+            "a character ID. Deprecated as of 2026-02-09; planned removal date: 2026-07-01."
         ),
     )
     conversation_id: Optional[str] = Field(None, description="Optional ID of the conversation to use for context.")

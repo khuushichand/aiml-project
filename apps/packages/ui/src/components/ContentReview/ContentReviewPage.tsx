@@ -141,7 +141,8 @@ const buildSafeMetadata = (
 }
 
 const commitDraftToServer = async (
-  draft: ContentDraft
+  draft: ContentDraft,
+  onWarning?: (msg: string) => void
 ): Promise<ContentDraft> => {
   const fields = buildFields(draft)
   let includeOriginalType = false
@@ -224,6 +225,36 @@ const commitDraftToServer = async (
         merge: true
       }
     })
+  }
+
+  // Trigger reprocessing when content was edited so chunks and embeddings
+  // reflect the updated text.  Failures here are non-fatal – the content
+  // is already persisted, so we only warn.
+  const contentEdited =
+    draft.content != null &&
+    draft.originalContent != null &&
+    draft.content !== draft.originalContent
+  if (contentEdited) {
+    try {
+      await bgRequest({
+        path: `/api/v1/media/${mediaId}/reprocess`,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: {
+          perform_chunking: true,
+          generate_embeddings: true,
+          force_regenerate_embeddings: true
+        }
+      })
+    } catch (reprocessErr) {
+      console.warn(
+        "[ContentReview] Reprocess after content edit failed — chunks/embeddings may be stale:",
+        reprocessErr
+      )
+      onWarning?.(
+        "Content saved but re-indexing failed. Search results may be stale until manually reprocessed."
+      )
+    }
   }
 
   const now = Date.now()
@@ -842,7 +873,9 @@ export const ContentReviewPage: React.FC = () => {
     }
     setIsCommitting(true)
     try {
-      const updated = await commitDraftToServer(draftContent)
+      const updated = await commitDraftToServer(draftContent, (warn) =>
+        messageApi.warning(warn)
+      )
       await upsertContentDraft(updated)
       setDrafts((prev) => prev.map((d) => (d.id === updated.id ? updated : d)))
       setDraftContent(updated)
@@ -860,7 +893,9 @@ export const ContentReviewPage: React.FC = () => {
   }
 
   const handleCommitSingle = async (draft: ContentDraft) => {
-    const updated = await commitDraftToServer(draft)
+    const updated = await commitDraftToServer(draft, (warn) =>
+      messageApi.warning(warn)
+    )
     await upsertContentDraft(updated)
     setDrafts((prev) => prev.map((d) => (d.id === updated.id ? updated : d)))
     if (draftContent?.id === updated.id) {
