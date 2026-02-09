@@ -304,7 +304,7 @@ async def fetch_usage_top(
         sql = (
             f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, IFNULL(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms) AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
         )
-        if hasattr(db, "fetchall"):
+        if _is_db_pool_object(db):
             rows = await db.fetchall(sql, params + [limit])
         else:
             cur = await db.execute(sql, params + [limit])
@@ -343,7 +343,7 @@ async def fetch_usage_top(
         sql = (
             f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms) AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
         )
-        if hasattr(db, "fetchall"):
+        if _is_db_pool_object(db):
             rows = await db.fetchall(sql, params + [limit])
         else:
             cur = await db.execute(sql, params + [limit])

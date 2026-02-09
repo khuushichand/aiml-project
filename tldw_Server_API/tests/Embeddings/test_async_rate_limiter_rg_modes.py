@@ -1,10 +1,13 @@
+import warnings
+
 import pytest
 
 from tldw_Server_API.app.core.Embeddings import rate_limiter
 
 
 @pytest.mark.asyncio
-async def test_async_rate_limiter_falls_back_when_rg_disabled(monkeypatch):
+async def test_async_rate_limiter_allows_when_rg_disabled(monkeypatch):
+    """Phase 2: RG disabled → fail-open (allow all) + deprecation warning."""
     limiter = rate_limiter.UserRateLimiter(
         default_limit=2,
         window_seconds=60,
@@ -13,49 +16,22 @@ async def test_async_rate_limiter_falls_back_when_rg_disabled(monkeypatch):
     async_limiter = rate_limiter.AsyncRateLimiter(rate_limiter=limiter)
 
     monkeypatch.setattr(rate_limiter, "_rg_embeddings_enabled", lambda: False)
+    monkeypatch.setattr(rate_limiter, "_EMBEDDINGS_DEPRECATION_WARNED", False)
 
-    allowed, retry_after = await async_limiter.check_rate_limit_async("user-1")
-    assert allowed is True
-    assert retry_after is None
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
 
-    allowed, retry_after = await async_limiter.check_rate_limit_async("user-1")
-    assert allowed is True
-    assert retry_after is None
+        # All requests should be allowed (no counters in Phase 2 shim)
+        for _ in range(5):
+            allowed, retry_after = await async_limiter.check_rate_limit_async("user-1")
+            assert allowed is True
+            assert retry_after is None
 
-    allowed, retry_after = await async_limiter.check_rate_limit_async("user-1")
-    assert allowed is True
-    assert retry_after is None
+        # Deprecation warning should have been emitted (at least once)
+        deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+        assert len(deprecation_warnings) >= 1
+        assert "Phase 2" in str(deprecation_warnings[0].message)
 
-    allowed, retry_after = await async_limiter.check_rate_limit_async("user-1")
-    assert allowed is False
-    assert retry_after is not None
-
-
-@pytest.mark.asyncio
-async def test_async_rate_limiter_uses_token_cost_when_rg_disabled(monkeypatch):
-    limiter = rate_limiter.UserRateLimiter(
-        default_limit=3,
-        window_seconds=60,
-        premium_limit=3,
-        burst_allowance=1.0,
-    )
-    async_limiter = rate_limiter.AsyncRateLimiter(rate_limiter=limiter)
-
-    monkeypatch.setattr(rate_limiter, "_rg_embeddings_enabled", lambda: False)
-
-    allowed, retry_after = await async_limiter.check_rate_limit_async(
-        "user-1",
-        tokens_units=2,
-    )
-    assert allowed is True
-    assert retry_after is None
-
-    allowed, retry_after = await async_limiter.check_rate_limit_async(
-        "user-1",
-        tokens_units=2,
-    )
-    assert allowed is False
-    assert retry_after is not None
 
 @pytest.mark.asyncio
 async def test_async_rate_limiter_uses_rg_when_enabled(monkeypatch):
@@ -65,7 +41,6 @@ async def test_async_rate_limiter_uses_rg_when_enabled(monkeypatch):
         premium_limit=1,
     )
     async_limiter = rate_limiter.AsyncRateLimiter(rate_limiter=limiter)
-    async_limiter.shadow_enabled = False
 
     monkeypatch.setattr(rate_limiter, "_rg_embeddings_enabled", lambda: True)
 
@@ -74,48 +49,36 @@ async def test_async_rate_limiter_uses_rg_when_enabled(monkeypatch):
 
     monkeypatch.setattr(rate_limiter, "_maybe_enforce_with_rg", _fake_rg)
 
-    def _legacy_called(*args, **kwargs):
-
-        raise AssertionError("legacy limiter should not be called when RG is enabled")
-
-    monkeypatch.setattr(limiter, "check_rate_limit", _legacy_called)
-
     allowed, retry_after = await async_limiter.check_rate_limit_async("user-2")
     assert allowed is False
     assert retry_after == 7
 
 
 @pytest.mark.asyncio
-async def test_async_rate_limiter_falls_back_when_rg_unavailable(monkeypatch):
-    limiter = rate_limiter.UserRateLimiter(
-        default_limit=1,
-        window_seconds=60,
-        premium_limit=1,
-    )
-    async_limiter = rate_limiter.AsyncRateLimiter(rate_limiter=limiter)
-    async_limiter.shadow_enabled = False
+async def test_async_rate_limiter_allows_when_rg_unavailable(monkeypatch):
+    """Phase 2: RG enabled but returns None → fail-open + deprecation warning."""
+    async_limiter = rate_limiter.AsyncRateLimiter()
 
     monkeypatch.setattr(rate_limiter, "_rg_embeddings_enabled", lambda: True)
+    monkeypatch.setattr(rate_limiter, "_rg_embeddings_fallback_logged", False)
+    monkeypatch.setattr(rate_limiter, "_EMBEDDINGS_DEPRECATION_WARNED", False)
 
     async def _fake_rg(*args, **kwargs):
         return None
 
     monkeypatch.setattr(rate_limiter, "_maybe_enforce_with_rg", _fake_rg)
 
-    calls = []
-    original = limiter.check_rate_limit
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
 
-    def _wrapped(*args, **kwargs):
-        calls.append(1)
-        return original(*args, **kwargs)
+        allowed, retry_after = await async_limiter.check_rate_limit_async("user-3")
+        assert allowed is True
+        assert retry_after is None
 
-    monkeypatch.setattr(limiter, "check_rate_limit", _wrapped)
+        # Second call should also allow
+        allowed, retry_after = await async_limiter.check_rate_limit_async("user-3")
+        assert allowed is True
+        assert retry_after is None
 
-    allowed, retry_after = await async_limiter.check_rate_limit_async("user-3")
-    assert allowed is True
-    assert retry_after is None
-
-    allowed, retry_after = await async_limiter.check_rate_limit_async("user-3")
-    assert allowed is False
-    assert retry_after is not None
-    assert len(calls) >= 2
+        deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+        assert len(deprecation_warnings) >= 1

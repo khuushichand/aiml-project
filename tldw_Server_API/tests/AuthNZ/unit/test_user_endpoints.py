@@ -89,7 +89,7 @@ class TestUserEndpoints:
         app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
-    async def test_change_password(self, mock_db_pool, password_service, test_user, valid_access_token):
+    async def test_change_password(self, monkeypatch, mock_db_pool, password_service, test_user, valid_access_token):
         """Test changing user password."""
         # Setup user with known password
         test_user_copy = test_user.copy()
@@ -110,10 +110,15 @@ class TestUserEndpoints:
             get_db_transaction,
             get_password_service_dep
         )
+        from tldw_Server_API.app.api.v1.endpoints import users as users_endpoint
 
         async def mock_get_current_active_user():
             return test_user_copy
 
+        async def _fake_is_postgres_backend() -> bool:
+            return True
+
+        monkeypatch.setattr(users_endpoint, "is_postgres_backend", _fake_is_postgres_backend)
         app.dependency_overrides[get_current_active_user] = mock_get_current_active_user
         async def mock_get_db_transaction():
             yield mock_conn
@@ -141,7 +146,7 @@ class TestUserEndpoints:
         app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
-    async def test_change_password_wrong_current(self, mock_db_pool, password_service, test_user, valid_access_token):
+    async def test_change_password_wrong_current(self, monkeypatch, mock_db_pool, password_service, test_user, valid_access_token):
         """Test changing password with wrong current password."""
         test_user_copy = test_user.copy()
         test_user_copy['password_hash'] = password_service.hash_password("Old@Pass#2024")
@@ -159,10 +164,15 @@ class TestUserEndpoints:
             get_db_transaction,
             get_password_service_dep
         )
+        from tldw_Server_API.app.api.v1.endpoints import users as users_endpoint
 
         async def mock_get_current_active_user():
             return test_user_copy
 
+        async def _fake_is_postgres_backend() -> bool:
+            return True
+
+        monkeypatch.setattr(users_endpoint, "is_postgres_backend", _fake_is_postgres_backend)
         app.dependency_overrides[get_current_active_user] = mock_get_current_active_user
         async def mock_get_db_transaction():
             yield mock_conn

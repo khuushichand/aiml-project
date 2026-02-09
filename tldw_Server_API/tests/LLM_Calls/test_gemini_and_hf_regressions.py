@@ -66,8 +66,11 @@ def test_google_streaming_handles_done_sentinel(monkeypatch):
         lambda *a, **k: DummyClient(raw_lines),
     )
 
-    generator = llm_calls.chat_with_google(
-        input_data=[{"role": "user", "content": "Ping?"}],
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+
+    generator = perform_chat_api_call(
+        api_provider="google",
+        messages=[{"role": "user", "content": "Ping?"}],
         streaming=True,
         api_key="test-key",
         model="gemini-pro-test",

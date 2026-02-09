@@ -1,4 +1,6 @@
 import asyncio
+import warnings
+
 import pytest
 
 from tldw_Server_API.app.core.Character_Chat import character_rate_limiter as char_rl
@@ -53,11 +55,10 @@ async def test_evaluations_rg_denies(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_evaluations_rg_allows_bypasses_legacy_denies(monkeypatch):
+async def test_evaluations_rg_allows_bypasses_legacy(monkeypatch):
     """
-    When RG returns an allow decision, Evaluations must not deny based on the
-    legacy per-minute/daily checks. Those legacy checks are treated as
-    shadow-only (drift signals).
+    Phase 2: When RG returns allow, the evaluations limiter should allow
+    the request. No legacy minute/daily checks exist to override.
     """
     monkeypatch.setenv("RG_ENABLED", "1")
     fake = _FakeGovernor(allowed=True, retry_after=None)
@@ -65,15 +66,6 @@ async def test_evaluations_rg_allows_bypasses_legacy_denies(monkeypatch):
     monkeypatch.setattr(evals_rl, "_rg_evals_loader", None)
 
     limiter = evals_rl.UserRateLimiter()
-
-    async def _deny_minute(*args, **kwargs):  # noqa: ARG001
-        return False, {"error": "legacy minute deny"}
-
-    async def _deny_daily(*args, **kwargs):  # noqa: ARG001
-        return False, {"error": "legacy daily deny"}
-
-    monkeypatch.setattr(limiter, "_check_minute_limit", _deny_minute)
-    monkeypatch.setattr(limiter, "_check_daily_limits", _deny_daily)
 
     allowed, meta = await limiter.check_rate_limit(
         user_id="user-123",
@@ -88,39 +80,35 @@ async def test_evaluations_rg_allows_bypasses_legacy_denies(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_evaluations_rg_unavailable_uses_diagnostics_only_shim(monkeypatch):
+async def test_evaluations_rg_unavailable_fail_open(monkeypatch):
+    """Phase 2: RG returns None → fail-open for eval/token caps, cost-only enforcement."""
     monkeypatch.setenv("RG_ENABLED", "1")
+    monkeypatch.setattr(evals_rl, "_rg_evals_fallback_logged", False)
+    monkeypatch.setattr(evals_rl, "_EVALS_DEPRECATION_WARNED", False)
 
     limiter = evals_rl.UserRateLimiter()
 
     async def _no_rg_decision(*args, **kwargs):  # noqa: ARG001
         return None
 
-    async def _legacy_check_should_not_run(*args, **kwargs):  # noqa: ARG001
-        raise AssertionError("legacy evaluations checks must not run in diagnostics-only mode")
-
-    async def _record_should_not_run(*args, **kwargs):  # noqa: ARG001
-        raise AssertionError("legacy counter writes must not run in diagnostics-only mode")
-
     monkeypatch.setattr(evals_rl, "_maybe_enforce_with_rg_evaluations", _no_rg_decision)
-    monkeypatch.setattr(limiter, "_check_minute_limit", _legacy_check_should_not_run)
-    monkeypatch.setattr(limiter, "_check_daily_limits", _legacy_check_should_not_run)
-    monkeypatch.setattr(limiter, "_check_cost_limits", _legacy_check_should_not_run)
-    monkeypatch.setattr(limiter, "_record_request", _record_should_not_run)
 
-    allowed, meta = await limiter.check_rate_limit(
-        user_id="user-123",
-        endpoint="/api/v1/evaluations",
-        tokens_requested=123,
-        estimated_cost=1.25,
-    )
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
 
-    assert allowed is True
-    assert meta.get("policy_id") == "evals.free"
-    assert meta.get("rate_limit_source") == "resource_governor"
-    assert "legacy_fallback_mode" not in meta
-    assert "legacy_would_deny" not in meta
-    assert "legacy_diagnostic_reasons" not in meta
+        allowed, meta = await limiter.check_rate_limit(
+            user_id="user-123",
+            endpoint="/api/v1/evaluations",
+            tokens_requested=123,
+            estimated_cost=0.0,
+        )
+
+        assert allowed is True
+        assert meta.get("policy_id") == "evals.free"
+        assert meta.get("rate_limit_source") == "resource_governor"
+
+        deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+        assert len(deprecation_warnings) >= 1
 
 
 @pytest.mark.asyncio
@@ -201,29 +189,31 @@ async def test_web_scraping_rg_denies(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_web_scraping_rg_unavailable_uses_diagnostics_only_shim(monkeypatch):
+async def test_web_scraping_rg_unavailable_fail_open(monkeypatch):
+    """Phase 2: RG returns None → fail-open (no sleeps, no counters)."""
     monkeypatch.setenv("RG_ENABLED", "1")
+    monkeypatch.setattr(web_rl, "_rg_web_fallback_logged", False)
+    monkeypatch.setattr(web_rl, "_WEB_SCRAPING_DEPRECATION_WARNED", False)
 
     async def _no_rg_decision():
         return None
 
-    async def _sleep_should_not_run(_delay: float):
-        raise AssertionError("legacy sleep path must not run in diagnostics-only mode")
-
     monkeypatch.setattr(web_rl, "_maybe_enforce_with_rg_web_scraping", _no_rg_decision)
-    monkeypatch.setattr(web_rl.asyncio, "sleep", _sleep_should_not_run)
 
     limiter = web_rl.RateLimiter(
         max_requests_per_second=1000.0,
         max_requests_per_minute=1,
         max_requests_per_hour=1,
     )
-    limiter._request_times.append(web_rl.time.time())
-    before = list(limiter._request_times)
 
-    await limiter.acquire()
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
 
-    assert list(limiter._request_times) == before
+        await limiter.acquire()
+
+        # No assertion about _request_times — Phase 2 shim has no internal counters.
+        deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+        assert len(deprecation_warnings) >= 1
 
 
 @pytest.mark.asyncio

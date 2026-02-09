@@ -1,5 +1,12 @@
 """AuthNZ limiter facade: lockout tracking via LockoutTracker + RG-compatible no-op rate limits.
 
+**Phase 2 Deprecation Notice**:
+Rate-limit enforcement is fully delegated to Resource Governor (RG).
+``check_rate_limit()`` and ``check_user_rate_limit()`` are no-ops.
+``check_rate_limit_fallback()`` retains DB-backed fallback but is deprecated;
+enable ``RG_ENABLED=true`` for enforcement. This shim will be removed in a
+future release.
+
 Lockout logic has been extracted to ``lockout_tracker.py``.  This module
 preserves the public API (``RateLimiter``, ``get_rate_limiter``,
 ``check_rate_limit``) for backward compatibility while delegating lockout
@@ -8,10 +15,27 @@ methods to ``LockoutTracker``.
 
 from __future__ import annotations
 
+import warnings
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
+
+_AUTHNZ_DEPRECATION_WARNED = False
+
+
+def _emit_authnz_legacy_deprecation(context: str) -> None:
+    global _AUTHNZ_DEPRECATION_WARNED
+    if _AUTHNZ_DEPRECATION_WARNED:
+        return
+    _AUTHNZ_DEPRECATION_WARNED = True
+    msg = (
+        "AuthNZ legacy rate limiter is deprecated (Phase 2). "
+        f"Context: {context}. Enable RG_ENABLED=true for enforcement. "
+        "This shim will be removed in a future release."
+    )
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
+    logger.warning(msg)
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import RateLimitError
@@ -109,9 +133,11 @@ class RateLimiter:
         """
         DB-backed fallback limiter for auth endpoint abuse controls.
 
-        This path is intended for explicit fallback usage when RG ingress
-        governance is unavailable for a request.
+        .. deprecated:: Phase 2
+            This path is retained for backward compatibility but is deprecated.
+            Enable ``RG_ENABLED=true`` for enforcement via Resource Governor.
         """
+        _emit_authnz_legacy_deprecation(f"check_rate_limit_fallback endpoint={endpoint}")
         if not getattr(self.settings, "RATE_LIMIT_ENABLED", True):
             return True, {"rate_limit_source": "authnz_fallback_db", "disabled": True}
 
@@ -153,7 +179,7 @@ class RateLimiter:
                     "rate_limit_source": "authnz_fallback_db",
                     "error": "fallback_limiter_unavailable",
                 }
-            raise RateLimitError("Fallback rate limiter unavailable")
+            raise RateLimitError("Fallback rate limiter unavailable") from exc
 
     async def record_failed_attempt(
         self,

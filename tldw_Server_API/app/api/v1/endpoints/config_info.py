@@ -14,6 +14,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.config import route_enabled
 from tldw_Server_API.app.core.config import settings as global_settings
 from tldw_Server_API.app.core.testing import is_truthy
 
@@ -104,8 +105,10 @@ def load_safe_config() -> dict:
     try:
         from tldw_Server_API.app.core.config import settings as _settings
         caps = {
-            "personalization": bool(_settings.get("PERSONALIZATION_ENABLED", True)),
-            "persona": bool(_settings.get("PERSONA_ENABLED", True)),
+            "personalization": bool(_settings.get("PERSONALIZATION_ENABLED", True))
+            and bool(route_enabled("personalization", default_stable=False)),
+            "persona": bool(_settings.get("PERSONA_ENABLED", True))
+            and bool(route_enabled("persona", default_stable=False)),
         }
         # expose both for backward-compat and forward-looking UI
         safe_config["supported_features"] = caps

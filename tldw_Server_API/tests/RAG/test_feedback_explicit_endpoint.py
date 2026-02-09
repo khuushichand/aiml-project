@@ -143,6 +143,46 @@ def test_explicit_feedback_idempotent_merge_updates_issues_and_notes(feedback_se
 
 
 @pytest.mark.integration
+def test_explicit_feedback_persists_idempotency_state_in_db(feedback_setup):
+    client, db, conversation_id, message_id = feedback_setup
+
+    payload = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "feedback_type": "helpful",
+        "helpful": False,
+        "issues": ["missing_details"],
+        "user_notes": "Initial notes",
+        "idempotency_key": "feedback-idem-key-1",
+    }
+    first = client.post("/api/v1/feedback/explicit", json=payload)
+    assert first.status_code == status.HTTP_200_OK
+    feedback_id = first.json()["feedback_id"]
+    assert feedback_id
+
+    payload_update = dict(payload)
+    payload_update["issues"] = ["incorrect_information"]
+    payload_update["user_notes"] = "Merged notes"
+
+    second = client.post("/api/v1/feedback/explicit", json=payload_update)
+    assert second.status_code == status.HTTP_200_OK
+    assert second.json()["feedback_id"] == feedback_id
+
+    cursor = db.execute_query(
+        "SELECT feedback_id, pending, issues, user_notes FROM feedback_idempotency WHERE dedupe_key = ?",
+        ("idem:1:feedback-idem-key-1",),
+    )
+    row = cursor.fetchone()
+    assert row is not None
+    record = _row_to_dict(row, cursor)
+    issues = json.loads(record["issues"]) if record.get("issues") else []
+    assert record["feedback_id"] == feedback_id
+    assert set(issues) == {"missing_details", "incorrect_information"}
+    assert record["user_notes"] == "Merged notes"
+    assert int(record["pending"]) == 0
+
+
+@pytest.mark.integration
 def test_explicit_feedback_rag_only_accepts_query(feedback_setup):
     client, _db, _conversation_id, _message_id = feedback_setup
 
@@ -320,8 +360,8 @@ def test_explicit_feedback_finalizes_pending_idempotency_merges(feedback_setup, 
     captured_dedupe_key: dict[str, str] = {}
     original_reserve = feedback_endpoint._reserve_idempotency_record
 
-    async def _capture_reserve(key: str, issues: list[str], user_notes: str | None):
-        reserved, record = await original_reserve(key, issues, user_notes)
+    async def _capture_reserve(db, key: str, issues: list[str], user_notes: str | None):
+        reserved, record = await original_reserve(db, key, issues, user_notes)
         if reserved:
             captured_dedupe_key["value"] = key
         return reserved, record
@@ -332,6 +372,7 @@ def test_explicit_feedback_finalizes_pending_idempotency_merges(feedback_setup, 
         dedupe_key = captured_dedupe_key.get("value")
         if dedupe_key:
             await feedback_endpoint._update_idempotency_record(
+                db,
                 dedupe_key,
                 ["missing_details", "incorrect_information"],
                 "Merged while pending",

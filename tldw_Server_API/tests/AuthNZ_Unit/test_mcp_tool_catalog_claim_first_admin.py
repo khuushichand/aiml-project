@@ -66,3 +66,10 @@ def test_catalog_admin_context_returns_false_without_admin_claims_or_roles():
     request = _make_request_with_principal(None)
     token = _make_token_data(roles=["user"])
     assert mcp_mod._is_catalog_admin_context(request, token) is False
+
+
+def test_catalog_admin_context_prefers_explicit_principal_argument():
+    request = _make_request_with_principal(None)
+    token = _make_token_data(roles=["admin"])
+    principal = _make_principal(is_admin=False, roles=["user"])
+    assert mcp_mod._is_catalog_admin_context(request, token, principal=principal) is False

@@ -22,6 +22,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
     get_db_transaction,
     require_permissions,
 )
@@ -200,6 +201,7 @@ def _get_client_ip(request: Optional[Request]) -> Optional[str]:
 class McpAuthContext:
     """Resolved authentication context for MCP HTTP endpoints."""
     user: Optional[TokenData]
+    principal: Optional[AuthPrincipal]
     api_key_info: Optional[dict[str, Any]]
     raw_api_key: Optional[str]
 
@@ -404,9 +406,34 @@ async def get_current_user(
     return None
 
 
+async def _get_optional_auth_principal(request: Request) -> Optional[AuthPrincipal]:
+    """Best-effort principal resolver for optional MCP auth context."""
+    try:
+        current = getattr(request.state, "auth", None)
+        if isinstance(current, AuthPrincipal):
+            return current
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        logger.debug(
+            "MCP unified: failed to read request.state.auth for optional principal",
+            exc_info=True,
+        )
+
+    try:
+        return await get_auth_principal(request)
+    except HTTPException:
+        return None
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        logger.debug(
+            "MCP unified: optional principal resolution failed",
+            exc_info=True,
+        )
+        return None
+
+
 async def get_mcp_auth_context(
     request: Request,
     user: Optional[TokenData] = Depends(get_current_user),
+    principal: Optional[AuthPrincipal] = Depends(_get_optional_auth_principal),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
 ) -> McpAuthContext:
     """Resolve MCP auth context (user + API key metadata) for HTTP endpoints.
@@ -427,7 +454,12 @@ async def get_mcp_auth_context(
             exc_info=True,
         )
         api_key_info = None
-    return McpAuthContext(user=user, api_key_info=api_key_info, raw_api_key=x_api_key)
+    return McpAuthContext(
+        user=user,
+        principal=principal,
+        api_key_info=api_key_info,
+        raw_api_key=x_api_key,
+    )
 
 
 async def _attach_api_key_metadata(
@@ -543,8 +575,12 @@ def _principal_has_admin_claims(principal: Optional[AuthPrincipal]) -> bool:
 def _is_catalog_admin_context(
     request: Optional[Request],
     user: Optional[TokenData],
+    principal: Optional[AuthPrincipal] = None,
 ) -> bool:
     """Claim-first admin check for MCP tool catalogs visibility."""
+    if principal is not None:
+        return _principal_has_admin_claims(principal)
+
     principal = _resolve_auth_principal_from_request(request)
     if principal is not None:
         return _principal_has_admin_claims(principal)
@@ -967,12 +1003,13 @@ async def list_tool_catalogs(
     db=Depends(get_db_transaction),
 ) -> list[ToolCatalogResponse]:
     user = auth.user
+    principal = auth.principal
     metadata = await _attach_api_key_metadata(auth, http_request)
 
-    if user is None and not metadata:
+    if user is None and principal is None and not metadata:
         raise HTTPException(status_code=403, detail="Authentication required")
 
-    admin_all = _is_catalog_admin_context(http_request, user)
+    admin_all = _is_catalog_admin_context(http_request, user, principal)
 
     org_ids: set[int] = set()
     team_ids: set[int] = set()
@@ -982,6 +1019,14 @@ async def list_tool_catalogs(
     if metadata.get("team_id") is not None:
         with contextlib.suppress(_MCP_UNIFIED_NONCRITICAL_EXCEPTIONS):
             team_ids.add(int(metadata["team_id"]))
+
+    if principal is not None and not admin_all:
+        for principal_org_id in list(getattr(principal, "org_ids", []) or []):
+            with contextlib.suppress(_MCP_UNIFIED_NONCRITICAL_EXCEPTIONS):
+                org_ids.add(int(principal_org_id))
+        for principal_team_id in list(getattr(principal, "team_ids", []) or []):
+            with contextlib.suppress(_MCP_UNIFIED_NONCRITICAL_EXCEPTIONS):
+                team_ids.add(int(principal_team_id))
 
     if user and not admin_all:
         try:

@@ -27,7 +27,7 @@ import asyncio
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import IntEnum
 from functools import wraps
 from typing import Any, Callable, Optional, TypeVar
@@ -43,6 +43,8 @@ T = TypeVar("T")
 try:
     from tldw_Server_API.app.core.Metrics.metrics_manager import (
         increment_counter as _increment_counter,
+    )
+    from tldw_Server_API.app.core.Metrics.metrics_manager import (
         set_gauge as _set_gauge,
     )
 except Exception:  # noqa: BLE001

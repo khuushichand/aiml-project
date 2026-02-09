@@ -1,17 +1,15 @@
 # rate_limiter.py
 # Description: Advanced rate limiting with per-conversation and per-user limits
 #
-# DEPRECATION NOTICE (Phase 3 - Resource Governor Unification)
+# Phase 2 Deprecation Notice
 # ─────────────────────────────────────────────────────────────
-# This module is a **legacy shim**.  Primary rate-limit enforcement is now
+# This module is a **Phase 2 legacy shim**. Primary rate-limit enforcement is
 # handled by the Resource Governor (``RGSimpleMiddleware`` + per-module
-# ``_maybe_enforce_with_rg_chat``).  The in-memory sliding-window counters
-# in ``ConversationRateLimiter`` only run as a **fallback** when RG is
-# unavailable or explicitly disabled (``RG_ENABLED=0``).
+# ``_maybe_enforce_with_rg_chat``). When RG is unavailable or disabled, the
+# shim fails open (no counters, no enforcement) with a deprecation warning.
+# This shim will be removed in a future release.
 #
-# Once shadow-mode exit criteria are met (see Resource_Governor_PRD.md §
-# Shadow-Mode Exit Criteria), this module should be replaced by a thin
-# wrapper that delegates entirely to RG, and the legacy counters removed.
+# ``TokenBucket`` is still imported by ``command_router.py`` and is preserved.
 # ─────────────────────────────────────────────────────────────
 #
 # Imports
@@ -19,11 +17,12 @@ import asyncio
 import os
 import threading
 import time
-from collections import defaultdict, deque
+import warnings
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from loguru import logger
+
 from tldw_Server_API.app.core.testing import is_test_mode
 
 _RATE_LIMITER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
@@ -145,169 +144,37 @@ class TokenBucket:
             self.tokens = min(self.capacity, self.tokens + tokens)
 
 
+_CHAT_DEPRECATION_WARNED = False
+
+
+def _emit_chat_legacy_deprecation(context: str) -> None:
+    global _CHAT_DEPRECATION_WARNED
+    if _CHAT_DEPRECATION_WARNED:
+        return
+    _CHAT_DEPRECATION_WARNED = True
+    msg = (
+        "Chat legacy rate limiter is deprecated (Phase 2). "
+        f"Context: {context}. Enable RG_ENABLED=true for enforcement. "
+        "This shim will be removed in a future release."
+    )
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
+    logger.warning(msg)
+
+
 class ConversationRateLimiter:
     """
     Rate limiter with per-conversation, per-user, and global limits.
 
-    Legacy shim – when ResourceGovernor is enabled, chat ingress should be
-    governed via RG and this in-process limiter is diagnostics-only.
+    **Phase 2 Deprecation Notice**:
+    When ResourceGovernor is enabled, chat ingress is governed via RG and this
+    shim delegates entirely. When RG is disabled or unavailable, the shim fails
+    open (no counters, no enforcement) with a deprecation warning. This shim
+    will be removed in a future release.
     """
 
     def __init__(self, config: RateLimitConfig):
-        """
-        Initialize the rate limiter.
-
-        Args:
-            config: Rate limit configuration
-        """
         self.config = config
-
-        # Lock for thread-safe bucket and stats operations
         self._state_lock = asyncio.Lock()
-
-        # Token buckets for different scopes
-        self.global_bucket = TokenBucket(
-            capacity=int(config.global_rpm * config.burst_multiplier),
-            refill_rate=config.global_rpm / 60
-        )
-
-        self.user_buckets: dict[str, TokenBucket] = {}
-        self.conversation_buckets: dict[str, TokenBucket] = {}
-        self.user_token_buckets: dict[str, TokenBucket] = {}
-
-        # Usage tracking
-        self.usage_stats: dict[str, UsageStats] = defaultdict(UsageStats)
-
-        # Sliding window for more accurate tracking
-        self.request_windows: dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
-
-        # Idle cleanup support
-        self._last_cleanup: float = time.time()
-        self._idle_threshold_seconds: int = 3600  # default: purge buckets idle > 1h
-        self._cleanup_in_progress: bool = False
-
-    async def _get_or_create_bucket(
-        self,
-        bucket_dict: dict[str, TokenBucket],
-        key: str,
-        capacity: int,
-        refill_rate: float
-    ) -> TokenBucket:
-        """Get or create a token bucket with double-checked locking for efficiency.
-
-        Uses double-checked locking pattern to avoid acquiring the lock on every
-        request when the bucket already exists.
-        """
-        # First check without lock (fast path for existing buckets)
-        bucket = bucket_dict.get(key)
-        if bucket is not None:
-            return bucket
-
-        # Bucket doesn't exist, acquire lock and check again
-        async with self._state_lock:
-            # Double-check after acquiring lock
-            bucket = bucket_dict.get(key)
-            if bucket is not None:
-                return bucket
-            # Create new bucket
-            bucket = TokenBucket(capacity, refill_rate)
-            bucket_dict[key] = bucket
-            return bucket
-
-    async def _check_legacy_rate_limit(
-        self,
-        user_id: str,
-        conversation_id: Optional[str] = None,
-        estimated_tokens: int = 0,
-    ) -> tuple[bool, Optional[str]]:
-        """
-        Legacy in-process rate limit evaluation using token buckets.
-
-        This path is retained as a compatibility shim when ResourceGovernor is
-        disabled and remains the primary enforcement mechanism only when RG is
-        disabled.
-        """
-        # Opportunistic idle cleanup every 5 minutes (with lock to prevent concurrent cleanup)
-        now = time.time()
-        should_cleanup = False
-        async with self._state_lock:
-            if now - self._last_cleanup > 300 and not self._cleanup_in_progress:
-                self._cleanup_in_progress = True
-                should_cleanup = True
-
-        if should_cleanup:
-            try:
-                await self.cleanup_idle_buckets(self._idle_threshold_seconds)
-            finally:
-                async with self._state_lock:
-                    self._last_cleanup = time.time()
-                    self._cleanup_in_progress = False
-
-        # Check global rate limit
-        if not await self.global_bucket.consume():
-            return False, "Global rate limit exceeded"
-
-        # Check per-user rate limit
-        user_bucket = await self._get_or_create_bucket(
-            self.user_buckets,
-            user_id,
-            int(self.config.per_user_rpm * self.config.burst_multiplier),
-            self.config.per_user_rpm / 60,
-        )
-
-        if not await user_bucket.consume():
-            # Return token to global bucket since we're not using it
-            await self.global_bucket.refund(1)
-            return False, f"User rate limit exceeded for {user_id}"
-
-        # Check per-conversation rate limit if specified
-        conv_bucket: Optional[TokenBucket] = None
-        if conversation_id:
-            conv_bucket = await self._get_or_create_bucket(
-                self.conversation_buckets,
-                conversation_id,
-                int(self.config.per_conversation_rpm * self.config.burst_multiplier),
-                self.config.per_conversation_rpm / 60,
-            )
-
-            if not await conv_bucket.consume():
-                # Return tokens
-                await self.global_bucket.refund(1)
-                await user_bucket.refund(1)
-                return False, f"Conversation rate limit exceeded for {conversation_id}"
-
-        # Check token limit if specified
-        if estimated_tokens > 0:
-            token_bucket = await self._get_or_create_bucket(
-                self.user_token_buckets,
-                user_id,
-                int(self.config.per_user_tokens_per_minute * self.config.burst_multiplier),
-                self.config.per_user_tokens_per_minute / 60,
-            )
-
-            if not await token_bucket.consume(estimated_tokens):
-                # Return tokens
-                await self.global_bucket.refund(1)
-                await user_bucket.refund(1)
-                if conv_bucket is not None:
-                    await conv_bucket.refund(1)
-                return False, f"Token limit exceeded for user {user_id}"
-
-        # Update usage stats (with lock for thread safety)
-        async with self._state_lock:
-            stats = self.usage_stats[user_id]
-            stats.request_count += 1
-            stats.token_count += estimated_tokens
-            stats.last_request_time = time.time()
-            if conversation_id:
-                stats.conversation_request_counts[conversation_id] = (
-                    stats.conversation_request_counts.get(conversation_id, 0) + 1
-                )
-
-            # Record in sliding window
-            self.request_windows[user_id].append((time.time(), estimated_tokens))
-
-        return True, None
 
     async def check_rate_limit(
         self,
@@ -327,12 +194,9 @@ class ConversationRateLimiter:
             Tuple of (allowed, error_message)
         """
         if not _rg_chat_primary_enabled():
-            # RG is disabled - enforce legacy limiter.
-            return await self._check_legacy_rate_limit(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                estimated_tokens=estimated_tokens,
-            )
+            # RG is disabled - fail open with deprecation warning.
+            _emit_chat_legacy_deprecation("rg_disabled")
+            return True, None
 
         # RG is enabled - try RG enforcement first
         try:
@@ -348,8 +212,9 @@ class ConversationRateLimiter:
             rg_decision = None
 
         if rg_decision is None:
-            # RG unavailable: keep legacy path as diagnostics-only (no counters).
+            # RG unavailable: fail open with deprecation warning.
             _log_rg_chat_fallback("rg_decision_unavailable")
+            _emit_chat_legacy_deprecation("rg_decision_unavailable")
             return True, None
 
         if not rg_decision.get("allowed", False):
@@ -398,7 +263,7 @@ class ConversationRateLimiter:
 
     async def get_usage_stats(self, user_id: str) -> dict[str, Any]:
         """
-        Get usage statistics for a user (async with lock protection).
+        Get usage statistics for a user.
 
         Args:
             user_id: User identifier
@@ -406,129 +271,19 @@ class ConversationRateLimiter:
         Returns:
             Dictionary with usage statistics
         """
-        # Snapshot state under lock to avoid race conditions
-        async with self._state_lock:
-            stats = self.usage_stats.get(user_id, UsageStats())
-            window = list(self.request_windows.get(user_id, deque()))
-            self.user_buckets.get(user_id)
-            token_bucket = self.user_token_buckets.get(user_id)
-            # Copy stats values while under lock
-            request_count = stats.request_count
-            token_count = stats.token_count
-            last_request_time = stats.last_request_time
-            conversation_counts = dict(stats.conversation_request_counts)
-
-        # Calculate rates over last minute (can be done outside lock)
-        now = time.time()
-        minute_ago = now - 60
-        recent_requests = [(t, tokens) for t, tokens in window if t > minute_ago]
-
-        requests_per_minute = len(recent_requests)
-        tokens_per_minute = sum(tokens for _, tokens in recent_requests)
-
-        # Get current bucket states
-        user_token_capacity = token_bucket.tokens if token_bucket else self.config.per_user_tokens_per_minute
-
         return {
-            "total_requests": request_count,
-            "total_tokens": token_count,
-            "requests_per_minute": requests_per_minute,
-            "tokens_per_minute": tokens_per_minute,
-            "tokens_available": user_token_capacity,
-            "last_request": last_request_time,
-            "conversation_counts": conversation_counts,
-            "limits": {
+            "rate_limit_source": "resource_governor",
+            "config": {
                 "per_user_rpm": self.config.per_user_rpm,
                 "per_conversation_rpm": self.config.per_conversation_rpm,
-                "per_user_tokens_per_minute": self.config.per_user_tokens_per_minute
-            }
+                "per_user_tokens_per_minute": self.config.per_user_tokens_per_minute,
+            },
         }
 
     async def reset_user_limits(self, user_id: str):
-        """
-        Reset rate limits for a specific user.
-
-        This method is thread-safe and uses locking to prevent race conditions.
-
-        Args:
-            user_id: User identifier
-        """
-        async with self._state_lock:
-            if user_id in self.user_buckets:
-                bucket = self.user_buckets[user_id]
-                async with bucket._lock:
-                    bucket.tokens = bucket.capacity
-
-            if user_id in self.user_token_buckets:
-                token_bucket = self.user_token_buckets[user_id]
-                async with token_bucket._lock:
-                    token_bucket.tokens = token_bucket.capacity
-
-            # Clear conversation buckets for this user
-            stats = self.usage_stats.get(user_id)
-            if stats:
-                # Create a copy of keys to avoid modification during iteration
-                conv_ids = list(stats.conversation_request_counts.keys())
-                for conv_id in conv_ids:
-                    if conv_id in self.conversation_buckets:
-                        conv_bucket = self.conversation_buckets[conv_id]
-                        async with conv_bucket._lock:
-                            conv_bucket.tokens = conv_bucket.capacity
-
-        logger.info(f"Reset rate limits for user {user_id}")
-
-    async def cleanup_idle_buckets(self, max_idle_seconds: int = 3600) -> int:
-        """Remove idle user and conversation buckets and windows.
-
-        This method is thread-safe and uses locking to prevent race conditions
-        with concurrent requests.
-
-        Args:
-            max_idle_seconds: Threshold of inactivity to purge entries
-
-        Returns:
-            Count of purged entries
-        """
-        cutoff = time.time() - max_idle_seconds
-        removed = 0
-
-        async with self._state_lock:
-            # Users - collect keys to remove first, then remove
-            users_to_remove = []
-            for uid in list(self.usage_stats.keys()):
-                stats = self.usage_stats.get(uid)
-                if stats is None:
-                    continue
-                last = stats.last_request_time or 0
-                if last and last < cutoff:
-                    users_to_remove.append(uid)
-
-            for uid in users_to_remove:
-                # Purge buckets and windows
-                self.user_buckets.pop(uid, None)
-                self.user_token_buckets.pop(uid, None)
-                self.request_windows.pop(uid, None)
-                self.usage_stats.pop(uid, None)
-                removed += 1
-
-            # Conversations
-            # Remove conversation buckets with no recent activity based on any user's conversation counts
-            active_conversations = set()
-            for stats in self.usage_stats.values():
-                for cid in stats.conversation_request_counts:
-                    active_conversations.add(cid)
-
-            conversations_to_remove = [
-                cid for cid in self.conversation_buckets
-                if cid not in active_conversations
-            ]
-            for cid in conversations_to_remove:
-                self.conversation_buckets.pop(cid, None)
-                removed += 1
-
-        if removed:
-            logger.debug(f"ConversationRateLimiter cleanup removed {removed} idle entries")
-        return removed
+        """No-op reset (Phase 2 shim: no bucket state to reset)."""
+        _emit_chat_legacy_deprecation("reset_user_limits")
+        logger.info(f"Reset rate limits for user {user_id} (no-op, RG handles enforcement)")
 
 
 # Global rate limiter instance

@@ -2,8 +2,11 @@
 """
 Rate limiting for character operations.
 
+**Phase 2 Deprecation Notice**:
 Resource Governor is the single enforcement path. Non-rate-limit guardrails
 live in character_limits.py and are wrapped here for compatibility.
+When RG is unavailable or disabled, the shim fails open with a deprecation
+warning. This shim will be removed in a future release.
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import warnings
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -70,6 +74,22 @@ except RG_IMPORT_EXCEPTIONS:  # pragma: no cover - safe fallback when RG not ins
     default_policy_loader = None  # type: ignore
     rg_enabled = None  # type: ignore
 
+_CHARACTER_DEPRECATION_WARNED = False
+
+
+def _emit_character_legacy_deprecation(context: str) -> None:
+    global _CHARACTER_DEPRECATION_WARNED
+    if _CHARACTER_DEPRECATION_WARNED:
+        return
+    _CHARACTER_DEPRECATION_WARNED = True
+    msg = (
+        "Character Chat legacy rate limiter is deprecated (Phase 2). "
+        f"Context: {context}. Enable RG_ENABLED=true for enforcement. "
+        "This shim will be removed in a future release."
+    )
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
+    logger.warning(msg)
+
 
 class CharacterRateLimiter:
     """
@@ -127,6 +147,7 @@ class CharacterRateLimiter:
             return True, 0
 
         if not _rg_character_enabled():
+            _emit_character_legacy_deprecation("rg_disabled")
             return True, 0
 
         if not _rg_character_enforce_requests():
@@ -139,6 +160,7 @@ class CharacterRateLimiter:
         )
         if rg_decision is None:
             _log_rg_character_fallback("rg_decision_unavailable")
+            _emit_character_legacy_deprecation("rg_decision_unavailable")
             return True, 0
 
         if not rg_decision.get("allowed", False):

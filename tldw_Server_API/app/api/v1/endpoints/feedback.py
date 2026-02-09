@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import time
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,23 +20,18 @@ from tldw_Server_API.app.api.v1.schemas.feedback_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
-from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFeedbackSystem
+from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFeedbackSystem, UserFeedbackStore
 
 router = APIRouter()
 
-# In-memory cache for idempotency; per-process scope (no cross-worker guarantees).
-# Pending entries reduce duplicate submissions within a single worker.
+# Feedback idempotency is persisted in the user ChaCha DB so dedupe is shared
+# across workers/processes.
 _IDEMPOTENCY_WINDOW_SECONDS = 300
-_IDEMPOTENCY_CLEANUP_INTERVAL_SECONDS = 60
-_idempotency_lock = asyncio.Lock()
-_idempotency_store: dict[str, _IdempotencyRecord] = {}
-_idempotency_last_cleanup = 0.0
 
 
 @dataclass
 class _IdempotencyRecord:
     feedback_id: str | None
-    created_at: float
     issues: list[str]
     user_notes: str | None
     pending: bool = False
@@ -69,89 +62,60 @@ def _merge_issues(existing: list[str], incoming: list[str]) -> list[str]:
     return merged
 
 
-def _cleanup_idempotency_store(now: float) -> None:
-    global _idempotency_last_cleanup
-    if (now - _idempotency_last_cleanup) < _IDEMPOTENCY_CLEANUP_INTERVAL_SECONDS:
-        return
-    expired = [
-        key for key, record in _idempotency_store.items()
-        if (now - record.created_at) > _IDEMPOTENCY_WINDOW_SECONDS
-    ]
-    for key in expired:
-        _idempotency_store.pop(key, None)
-    _idempotency_last_cleanup = now
-
-
-async def _get_idempotency_record(key: str) -> _IdempotencyRecord | None:
-    now = time.monotonic()
-    async with _idempotency_lock:
-        _cleanup_idempotency_store(now)
-        record = _idempotency_store.get(key)
-        if not record:
-            return None
-        if (now - record.created_at) > _IDEMPOTENCY_WINDOW_SECONDS:
-            _idempotency_store.pop(key, None)
-            return None
-        return record
+def _get_feedback_store(db: CharactersRAGDB) -> UserFeedbackStore:
+    return UserFeedbackStore(db)
 
 
 async def _reserve_idempotency_record(
+    db: CharactersRAGDB,
     key: str,
     issues: list[str],
     user_notes: str | None,
 ) -> tuple[bool, _IdempotencyRecord]:
-    now = time.monotonic()
-    async with _idempotency_lock:
-        _cleanup_idempotency_store(now)
-        record = _idempotency_store.get(key)
-        if record:
-            if (now - record.created_at) > _IDEMPOTENCY_WINDOW_SECONDS:
-                _idempotency_store.pop(key, None)
-            else:
-                return False, record
-        record = _IdempotencyRecord(
-            feedback_id=None,
-            created_at=now,
-            issues=issues,
-            user_notes=user_notes,
-            pending=True,
-        )
-        _idempotency_store[key] = record
-        return True, record
+    store = _get_feedback_store(db)
+    reserved, record = await store.claim_idempotency(
+        key,
+        issues,
+        user_notes,
+        ttl_seconds=_IDEMPOTENCY_WINDOW_SECONDS,
+    )
+    return reserved, _IdempotencyRecord(
+        feedback_id=record.get("feedback_id"),
+        issues=_normalize_text_list(record.get("issues")),
+        user_notes=record.get("user_notes"),
+        pending=bool(record.get("pending")),
+    )
 
 
 async def _finalize_idempotency_record(
+    db: CharactersRAGDB,
     key: str,
     feedback_id: str | None,
     fallback_issues: list[str],
     fallback_user_notes: str | None,
 ) -> tuple[list[str], str | None, bool]:
-    async with _idempotency_lock:
-        record = _idempotency_store.get(key)
-        if not record:
-            return fallback_issues, fallback_user_notes, False
-        merged_issues = _merge_issues(fallback_issues, record.issues)
-        merged_user_notes = record.user_notes if record.user_notes is not None else fallback_user_notes
-        has_pending_merge = merged_issues != fallback_issues or merged_user_notes != fallback_user_notes
-        record.feedback_id = feedback_id
-        record.issues = merged_issues
-        record.user_notes = merged_user_notes
-        record.pending = False
-        return merged_issues, merged_user_notes, has_pending_merge
+    store = _get_feedback_store(db)
+    return await store.finalize_idempotency(
+        key,
+        feedback_id,
+        fallback_issues,
+        fallback_user_notes,
+    )
 
 
-async def _clear_idempotency_record(key: str) -> None:
-    async with _idempotency_lock:
-        _idempotency_store.pop(key, None)
+async def _clear_idempotency_record(db: CharactersRAGDB, key: str) -> None:
+    store = _get_feedback_store(db)
+    await store.clear_idempotency(key)
 
 
-async def _update_idempotency_record(key: str, issues: list[str], user_notes: str | None) -> None:
-    async with _idempotency_lock:
-        record = _idempotency_store.get(key)
-        if not record:
-            return
-        record.issues = issues
-        record.user_notes = user_notes
+async def _update_idempotency_record(
+    db: CharactersRAGDB,
+    key: str,
+    issues: list[str],
+    user_notes: str | None,
+) -> None:
+    store = _get_feedback_store(db)
+    await store.update_idempotency(key, issues, user_notes)
 
 
 def _build_dedupe_key(
@@ -259,7 +223,7 @@ async def submit_explicit_feedback(
         chunk_ids=chunk_ids,
     )
 
-    reserved, existing = await _reserve_idempotency_record(dedupe_key, issues, payload.user_notes)
+    reserved, existing = await _reserve_idempotency_record(db, dedupe_key, issues, payload.user_notes)
     if not reserved:
         if issues or payload.user_notes is not None:
             merged_issues = _merge_issues(existing.issues, issues)
@@ -284,7 +248,7 @@ async def submit_explicit_feedback(
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="merge_feedback_update_failed",
                         ) from e
-            await _update_idempotency_record(dedupe_key, merged_issues, updated_notes)
+            await _update_idempotency_record(db, dedupe_key, merged_issues, updated_notes)
         return ExplicitFeedbackResponse(ok=True, feedback_id=existing.feedback_id)
 
     collector = UnifiedFeedbackSystem(chacha_db=db)
@@ -304,10 +268,10 @@ async def submit_explicit_feedback(
             message_id=payload.message_id,
         )
     except (HTTPException, ValueError, RuntimeError):
-        await _clear_idempotency_record(dedupe_key)
+        await _clear_idempotency_record(db, dedupe_key)
         raise
     except Exception as exc:
-        await _clear_idempotency_record(dedupe_key)
+        await _clear_idempotency_record(db, dedupe_key)
         logger.exception("Unexpected error in submit_feedback: {}", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -319,10 +283,11 @@ async def submit_explicit_feedback(
 
     feedback_id = result.get("feedback_id")
     if resolved_conversation_id and not feedback_id:
-        await _clear_idempotency_record(dedupe_key)
+        await _clear_idempotency_record(db, dedupe_key)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not record feedback")
 
     final_issues, final_user_notes, has_pending_merge = await _finalize_idempotency_record(
+        db,
         dedupe_key,
         feedback_id,
         issues,

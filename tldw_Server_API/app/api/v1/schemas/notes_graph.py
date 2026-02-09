@@ -73,6 +73,7 @@ class NoteGraphResponse(BaseModel):
     has_more: bool = False
     cursor: str | None = None
     limits: GraphLimits
+    radius_cap_applied: bool = False
 
     model_config = ConfigDict(
         json_schema_extra={

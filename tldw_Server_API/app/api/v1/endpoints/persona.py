@@ -338,6 +338,7 @@ async def persona_stream(
             turn_type: str,
             metadata: dict[str, Any] | None = None,
             persist_as_memory: bool = False,
+            persist_personalization: bool = True,
         ) -> None:
             try:
                 session_manager.append_turn(
@@ -351,16 +352,17 @@ async def persona_stream(
                 )
             except Exception as exc:
                 logger.debug(f"persona turn append skipped: {exc}")
-            _ = persist_persona_turn(
-                user_id=authenticated_user_id,
-                session_id=session_id,
-                persona_id=persona_id,
-                role=role,
-                content=content,
-                turn_type=turn_type,
-                metadata=metadata,
-                store_as_memory=persist_as_memory,
-            )
+            if persist_personalization:
+                _ = persist_persona_turn(
+                    user_id=authenticated_user_id,
+                    session_id=session_id,
+                    persona_id=persona_id,
+                    role=role,
+                    content=content,
+                    turn_type=turn_type,
+                    metadata=metadata,
+                    store_as_memory=persist_as_memory,
+                )
 
         async def _call_tool(
             name: str,
@@ -640,6 +642,7 @@ async def persona_stream(
                         turn_type="tool_result",
                         metadata={"tool": step.tool, "step_idx": step.idx},
                         persist_as_memory=False,
+                        persist_personalization=False,
                     )
                     _ = persist_tool_outcome(
                         user_id=authenticated_user_id,

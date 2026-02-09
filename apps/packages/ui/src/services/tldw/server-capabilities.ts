@@ -1,4 +1,5 @@
 import { tldwClient } from "./TldwApiClient"
+import { bgRequest } from "@/services/background-proxy"
 
 export type ServerCapabilities = {
   hasChat: boolean
@@ -26,6 +27,8 @@ export type ServerCapabilities = {
   hasFeedbackExplicit: boolean
   hasFeedbackImplicit: boolean
   hasSkills: boolean
+  hasPersona: boolean
+  hasPersonalization: boolean
   hasGuardian: boolean
   hasSelfMonitoring: boolean
   specVersion: string | null
@@ -57,6 +60,8 @@ const defaultCapabilities: ServerCapabilities = {
   hasFeedbackExplicit: false,
   hasFeedbackImplicit: false,
   hasSkills: false,
+  hasPersona: false,
+  hasPersonalization: false,
   hasGuardian: false,
   hasSelfMonitoring: false,
   specVersion: null
@@ -127,9 +132,20 @@ const fallbackSpec = {
       "/api/v1/writing/token-count",
       "/api/v1/research/websearch",
       "/api/v1/skills/",
-      "/api/v1/skills/context"
+      "/api/v1/skills/context",
+      "/api/v1/persona/catalog",
+      "/api/v1/persona/session",
+      "/api/v1/persona/stream",
+      "/api/v1/personalization/profile",
+      "/api/v1/personalization/opt-in",
+      "/api/v1/personalization/memories"
     ].map((p) => [p, {}])
   )
+}
+
+type DocsInfoResponse = {
+  capabilities?: Record<string, unknown> | null
+  supported_features?: Record<string, unknown> | null
 }
 
 const normalizePaths = (raw: any): Record<string, any> => {
@@ -192,6 +208,64 @@ const detectChatSaveToDb = (spec: any): boolean => {
   return schemaHasProperty(schema, "save_to_db", spec)
 }
 
+const parseBooleanish = (raw: unknown): boolean | null => {
+  if (typeof raw === "boolean") return raw
+  if (typeof raw === "number") return raw !== 0
+  if (typeof raw !== "string") return null
+  const normalized = raw.trim().toLowerCase()
+  if (!normalized) return null
+  if (["true", "1", "yes", "on", "enabled"].includes(normalized)) {
+    return true
+  }
+  if (["false", "0", "no", "off", "disabled"].includes(normalized)) {
+    return false
+  }
+  return null
+}
+
+const extractFeatureFlag = (
+  docsInfo: DocsInfoResponse | null | undefined,
+  key: string
+): boolean | null => {
+  const maps: Array<Record<string, unknown> | null | undefined> = [
+    docsInfo?.capabilities,
+    docsInfo?.supported_features
+  ]
+  for (const map of maps) {
+    if (!map || typeof map !== "object" || !(key in map)) {
+      continue
+    }
+    const parsed = parseBooleanish(map[key])
+    if (parsed !== null) {
+      return parsed
+    }
+  }
+  return null
+}
+
+const applyDocsInfoFeatureGates = (
+  capabilities: ServerCapabilities,
+  docsInfo: DocsInfoResponse | null | undefined
+): ServerCapabilities => {
+  const personaFeatureEnabled = extractFeatureFlag(docsInfo, "persona")
+  const personalizationFeatureEnabled = extractFeatureFlag(
+    docsInfo,
+    "personalization"
+  )
+
+  return {
+    ...capabilities,
+    hasPersona:
+      personaFeatureEnabled === null
+        ? capabilities.hasPersona
+        : capabilities.hasPersona && personaFeatureEnabled,
+    hasPersonalization:
+      personalizationFeatureEnabled === null
+        ? capabilities.hasPersonalization
+        : capabilities.hasPersonalization && personalizationFeatureEnabled
+  }
+}
+
 const computeCapabilities = (spec: any | null | undefined): ServerCapabilities => {
   if (!spec || typeof spec !== "object") return { ...defaultCapabilities }
   const paths = normalizePaths(spec.paths || {})
@@ -241,6 +315,14 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
       has("/api/v1/writing/capabilities"),
     hasWebSearch: has("/api/v1/research/websearch"),
     hasSkills: has("/api/v1/skills/") || has("/api/v1/skills/context"),
+    hasPersona:
+      has("/api/v1/persona/catalog") ||
+      has("/api/v1/persona/session") ||
+      has("/api/v1/persona/stream"),
+    hasPersonalization:
+      has("/api/v1/personalization/profile") ||
+      has("/api/v1/personalization/opt-in") ||
+      has("/api/v1/personalization/memories"),
     hasFeedbackExplicit: has("/api/v1/feedback/explicit"),
     hasFeedbackImplicit: has("/api/v1/rag/feedback/implicit"),
     hasGuardian:
@@ -261,10 +343,20 @@ export const getServerCapabilities = async (): Promise<ServerCapabilities> => {
   if (!capabilitiesPromise) {
     capabilitiesPromise = (async () => {
       let spec: any | null = null
+      let docsInfo: DocsInfoResponse | null = null
       try {
         const healthy = await tldwClient.healthCheck()
         if (healthy) {
-          spec = await tldwClient.getOpenAPISpec()
+          const [openApiSpec, docsInfoResponse] = await Promise.all([
+            tldwClient.getOpenAPISpec(),
+            bgRequest<DocsInfoResponse, any>({
+              path: "/api/v1/config/docs-info" as any,
+              method: "GET" as any,
+              noAuth: true
+            }).catch(() => null)
+          ])
+          spec = openApiSpec
+          docsInfo = docsInfoResponse
         }
       } catch {
         // ignore, fall back to bundled spec
@@ -272,7 +364,7 @@ export const getServerCapabilities = async (): Promise<ServerCapabilities> => {
       if (!spec) {
         spec = fallbackSpec
       }
-      return computeCapabilities(spec)
+      return applyDocsInfoFeatureGates(computeCapabilities(spec), docsInfo)
     })()
   }
   return capabilitiesPromise

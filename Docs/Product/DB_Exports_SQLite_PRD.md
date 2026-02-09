@@ -242,17 +242,24 @@ Telemetry is not collected; metrics captured via logs/tests and support feedback
 1. **Phase 0 - Design (this document)**
    - Finalize requirements and cross-team agreement.
 2. **Phase 1 - Backend API (Admin Data Ops Extension)**
-   - Implement bundle service + admin endpoints.
-   - Unit + integration tests (export/import success, schema mismatch, checksum failure).
-3. **Phase 2 - WebUI + Helper Script**
-   - Extend Admin Data Ops UI.
+   - Implement bundle service + admin endpoints (create, list, get, download, import, delete).
+   - Implement schema version registry (`SCHEMA_VERSIONS`).
+   - Implement dry-run import mode.
+   - Unit + integration tests (export/import success, schema mismatch, checksum failure, disk space, dry-run, downgrade + migration, failure cleanup).
+3. **Phase 2 - WebUI + Helper Script + Vector Store**
+   - Extend Admin Data Ops UI (bundle card, restore dialog, validate-only button).
    - Add CLI helper for cron usage.
+   - Implement `include_vector_store` support (Chroma directory snapshots).
 4. **Phase 3 - Documentation & Release**
    - Update Admin Data Ops docs, Long-Term Admin Guide, and a new how-to.
    - Include migration notes in release changelog.
+   - Add comparison table: Chatbooks export vs DB bundle export.
 5. **Phase 4 - Hardening**
    - Gather community feedback.
-   - Consider optional async jobs and encryption enhancements.
+   - Async job support for long-running exports/imports with progress polling.
+   - Range request support for download endpoint.
+   - Optional encryption (password-protected ZIP).
+   - Consider multi-user bulk export (currently a non-goal).
 
 Feature flag and default behavior: align with Admin Data Ops configuration (TBD).
 
@@ -260,10 +267,12 @@ Feature flag and default behavior: align with Admin Data Ops configuration (TBD)
 
 ## 9. Open Questions
 
-1. What is the most reliable strategy for snapshotting active Chroma directories without prolonged downtime?
-2. Do we need built-in encryption (password-protected ZIP) for first release?
-3. How do we expose progress for long-running exports in WebUI (per-file vs aggregate)?
-4. Should imports be allowed while the server is handling user traffic, or do we require maintenance mode?
+1. ~~What is the most reliable strategy for snapshotting active Chroma directories without prolonged downtime?~~ **Resolved**: deferred to Phase 2. The `include_vector_store` flag returns `422` until then.
+2. ~~Do we need built-in encryption (password-protected ZIP) for first release?~~ **Resolved**: no. Listed as a non-goal; deferred to Phase 4 hardening.
+3. ~~How do we expose progress for long-running exports in WebUI (per-file vs aggregate)?~~ **Resolved**: Phase 1 uses an indeterminate spinner with estimated duration. True progress bars require async jobs (Phase 4). See Section 4.2.
+4. ~~Should imports be allowed while the server is handling user traffic, or do we require maintenance mode?~~ **Resolved**: imports are allowed during normal operation. The `asyncio.Lock` serializes bundle operations, and pre-import snapshots provide rollback safety. Maintenance mode is not required but is recommended in documentation for large imports.
+5. How should `SCHEMA_VERSIONS` be bootstrapped for databases that predate the registry? Should we introspect the live schema or assume the latest version?
+6. Should the `DELETE` endpoint require confirmation (e.g., a `confirm=true` query param) or is admin auth sufficient?
 
 ---
 
@@ -271,10 +280,14 @@ Feature flag and default behavior: align with Admin Data Ops configuration (TBD)
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| Import overwrites data irreversibly | High | Mandatory pre-import snapshot, confirmation dialogs, audit trail |
-| Disk space exhaustion during export | Medium | Quota checks + configurable staging path + early warnings |
-| Large exports block main event loop | Medium | Stream archives, enforce size limits, and add optional async job handling if needed |
-| Schema drift between releases | Medium | Manifest versioning + migration path detection |
+| Import overwrites data irreversibly | High | Mandatory pre-import snapshot, confirmation dialogs, audit trail, dry-run mode |
+| Schema downgrade silently breaks runtime | High | `allow_downgrade` runs forward migration after restore; rollback on migration failure (Section 5.5) |
+| Disk space exhaustion during export | Medium | Pre-check requires 2x dataset size free; returns `507` with message (Section 3.1.6) |
+| Disk space exhaustion during import | Medium | Pre-check requires 3x bundle size free (extraction + snapshots + restore); returns `507` (Section 3.1.6) |
+| Large exports block main event loop | Medium | Stream archives, enforce size limits; async jobs in Phase 4 |
+| Partial staging artifacts left after failure | Medium | `try/finally` cleanup in all bundle operations (Section 5.6) |
+| Schema drift between releases | Medium | Per-dataset schema version registry + manifest versioning + migration path detection |
+| SQLite version mismatch across platforms | Low | Manifest records `sqlite_version`; import logs a warning if versions differ significantly |
 | User confusion between Chatbooks vs DB exports | Low | Clear UI copy + docs comparison table |
 
 ---

@@ -24,7 +24,8 @@ import pickle
 import re
 import time
 import uuid
-from collections import defaultdict, deque
+import warnings
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
@@ -210,31 +211,41 @@ class ScrapingJob:
         }
 
 
+_WEB_SCRAPING_DEPRECATION_WARNED = False
+
+
+def _emit_web_scraping_legacy_deprecation(context: str) -> None:
+    global _WEB_SCRAPING_DEPRECATION_WARNED
+    if _WEB_SCRAPING_DEPRECATION_WARNED:
+        return
+    _WEB_SCRAPING_DEPRECATION_WARNED = True
+    msg = (
+        "Web scraping legacy rate limiter is deprecated (Phase 2). "
+        f"Context: {context}. Enable RG_ENABLED=true for enforcement. "
+        "This shim will be removed in a future release."
+    )
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
+    logger.warning(msg)
+
+
 class RateLimiter:
     """Rate limiting for scraping requests.
 
-    .. deprecated:: Phase 3 - Resource Governor Unification
-       Primary enforcement is now handled by ``RGSimpleMiddleware`` and the
-       per-module ``_maybe_enforce_with_rg_web_scraping``.  The in-memory
-       counters here only run as a **fallback** when RG is unavailable.
-       Remove after shadow-mode exit criteria are met (see
-       Resource_Governor_PRD.md).
+    **Phase 2 Deprecation Notice**:
+    Primary enforcement is handled by ``RGSimpleMiddleware`` and the per-module
+    ``_maybe_enforce_with_rg_web_scraping``. When RG is unavailable or disabled,
+    this shim fails open (no sleeps or counters). This shim will be removed in a
+    future release.
     """
 
     def __init__(self, max_requests_per_second: float = 2.0,
                  max_requests_per_minute: int = 60,
                  max_requests_per_hour: int = 1000):
+        # Parameters preserved for API compatibility; no internal state.
         self.max_rps = max_requests_per_second
         self.max_rpm = max_requests_per_minute
         self.max_rph = max_requests_per_hour
-        self._request_times: deque = deque(maxlen=max_requests_per_hour)
         self._lock = asyncio.Lock()
-
-    def _prune_old_request_times(self, now: float) -> None:
-        """Drop timestamps outside the hourly window."""
-        cutoff_hour = now - 3600
-        while self._request_times and self._request_times[0] < cutoff_hour:
-            self._request_times.popleft()
 
     async def acquire(self):
         """Acquire permission to make a request"""
@@ -244,6 +255,7 @@ class RateLimiter:
             if rg_active:
                 if rg_decision is None:
                     _log_rg_web_fallback("rg_decision_unavailable")
+                    _emit_web_scraping_legacy_deprecation("rg_decision_unavailable")
                 elif not rg_decision["allowed"]:
                     retry_after = rg_decision.get("retry_after") or 1
                     logger.info(
@@ -254,34 +266,8 @@ class RateLimiter:
                     await asyncio.sleep(retry_after)
                 return
 
-            now = time.time()
-            self._prune_old_request_times(now)
-
-            # Check hourly limit
-            if len(self._request_times) >= self.max_rph:
-                wait_time = 3600 - (now - self._request_times[0])
-                if wait_time > 0:
-                    logger.info(f"Rate limit: waiting {wait_time:.1f}s for hourly limit")
-                    await asyncio.sleep(wait_time)
-
-            # Check minute limit
-            minute_ago = now - 60
-            recent_times = [t for t in self._request_times if t > minute_ago]
-            recent_minute = len(recent_times)
-            if recent_minute >= self.max_rpm:
-                oldest_recent = min(recent_times) if recent_times else now
-                wait_time = 60 - (now - oldest_recent)
-                if wait_time > 0:
-                    logger.info(f"Rate limit: waiting {wait_time:.1f}s for minute limit")
-                    await asyncio.sleep(wait_time)
-
-            # Check second limit
-            if self._request_times and (now - self._request_times[-1]) < (1.0 / self.max_rps):
-                wait_time = (1.0 / self.max_rps) - (now - self._request_times[-1])
-                await asyncio.sleep(wait_time)
-
-            # Record request time
-            self._request_times.append(now)
+            # RG disabled: fail-open (no sleeps, no counters).
+            _emit_web_scraping_legacy_deprecation("rg_disabled")
 
 
 _rg_web_governor = None

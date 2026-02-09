@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+import warnings
 import weakref
 from functools import wraps
 from pathlib import Path
@@ -570,60 +571,43 @@ def _ensure_hf_revision(model_name_or_path: str, expected_sha: str | None) -> No
         raise RuntimeError(f"Failed to verify model revision for {model_name_or_path}: {e}") from e
 
 
+_EMB_SERVER_DEPRECATION_WARNED = False
+
+
+def _emit_emb_server_legacy_deprecation(context: str) -> None:
+    global _EMB_SERVER_DEPRECATION_WARNED
+    if _EMB_SERVER_DEPRECATION_WARNED:
+        return
+    _EMB_SERVER_DEPRECATION_WARNED = True
+    msg = (
+        "Embeddings server legacy rate limiter is deprecated (Phase 2). "
+        f"Context: {context}. Enable RG_ENABLED=true for enforcement. "
+        "This shim will be removed in a future release."
+    )
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
+    logger.warning(msg)
+
+
 class TokenBucketLimiter:
     """Inline token-bucket rate limiter for the embeddings server.
 
-    .. deprecated:: Phase 3 - Resource Governor Unification
-       Primary enforcement is now handled by ``RGSimpleMiddleware`` and the
-       per-module RG integration in ``Embeddings/rate_limiter.py``.  This
-       class only runs as a **fallback** when RG is unavailable.  Remove
-       after shadow-mode exit criteria are met (see Resource_Governor_PRD.md).
+    **Phase 2 Deprecation Notice**:
+    Primary enforcement is handled by ``RGSimpleMiddleware`` and the per-module
+    RG integration. When RG is disabled, this shim fails open (no sleeps or
+    counters). When RG is enabled but unavailable, it fails closed with a
+    ``RuntimeError``. This shim will be removed in a future release.
     """
 
     def __init__(self, capacity: int, period: int):
+        # Parameters preserved for API compatibility; no internal state.
         self.capacity = capacity
         self.period = period  # seconds
-        self.tokens = float(capacity)
-        self.last_refill_time = time.monotonic()
-        self.lock = threading.Lock()
-        logger.info(f"TokenBucketLimiter initialized with capacity {capacity} tokens per {period} seconds.")
-
-    def _acquire(self) -> None:
-        while True:
-            with self.lock:
-                now = time.monotonic()
-                elapsed_time = now - self.last_refill_time
-                # Calculate tokens to add based on rate (tokens per second)
-                # Ensure period is not zero to avoid division by zero
-                rate = self.capacity / self.period if self.period > 0 else float('inf')
-
-                tokens_to_add = elapsed_time * rate
-                self.tokens = min(self.capacity, self.tokens + tokens_to_add)
-                self.last_refill_time = now
-
-                if self.tokens >= 1:
-                    self.tokens -= 1
-                    return  # Token acquired
-
-                # Calculate wait time if no token is available
-                # This is the time until one full token is generated
-                wait_time = (1 - self.tokens) / rate if rate > 0 else float('inf')
-
-            if wait_time == float('inf'):  # Should not happen if capacity/period are sane
-                logger.error("TokenBucketLimiter: Cannot acquire token, rate is zero or invalid.")
-                time.sleep(self.period)  # Fallback wait
-            elif wait_time > 0:
-                logger.debug(f"TokenBucketLimiter: Waiting {wait_time:.2f}s for token.")
-                time.sleep(wait_time)
-            # Loop again to re-evaluate after waiting
+        logger.info(f"TokenBucketLimiter initialized (Phase 2 shim) with capacity {capacity} tokens per {period} seconds.")
 
     def acquire(self) -> None:
         """Acquire a token, honoring ResourceGovernor if enabled."""
-        # When ResourceGovernor is enabled, prefer ResourceGovernor as
-        # the primary enforcement path. The legacy in-process token bucket
-        # is retained as a fallback when RG is disabled.
         if not _rg_embeddings_server_enabled():
-            self._acquire()
+            _emit_emb_server_legacy_deprecation("rg_disabled")
             return
 
         # RG enforcement with simple backoff based on retry_after.
@@ -1705,6 +1689,7 @@ _LIMITER_CACHE_LOCK = threading.Lock()
 
 
 def _get_token_bucket_limiter(capacity: int, period: int) -> TokenBucketLimiter:
+    """Return a cached TokenBucketLimiter (Phase 2 shim: no internal state)."""
     cap = max(1, int(capacity))
     per = max(1, int(period))
     key = (cap, per)

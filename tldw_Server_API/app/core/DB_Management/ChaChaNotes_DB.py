@@ -6022,6 +6022,140 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except BackendDatabaseError as e:
             raise CharactersRAGDBError(f"Backend error deleting manual note edge: {e}") from e  # noqa: TRY003
 
+    # ----------------------
+    # Notes Graph: batch query helpers
+    # ----------------------
+
+    _SQLITE_PARAM_LIMIT = 900  # stay well under 999
+
+    def get_manual_edges_for_notes(self, user_id: str, note_ids: list[str]) -> list[dict[str, Any]]:
+        """Return all manual edges touching any of *note_ids* for *user_id*."""
+        if not note_ids:
+            return []
+        results: list[dict[str, Any]] = []
+        for batch in self._chunk_list(note_ids, self._SQLITE_PARAM_LIMIT):
+            ph = ",".join(["?"] * len(batch))
+            query = (
+                f"SELECT edge_id, user_id, from_note_id, to_note_id, type, directed, weight, "
+                f"created_at, created_by, metadata "
+                f"FROM note_edges "
+                f"WHERE user_id = ? AND (from_note_id IN ({ph}) OR to_note_id IN ({ph}))"
+            )
+            params = (str(user_id), *batch, *batch)
+            cur = self.execute_query(query, params)
+            for row in cur.fetchall():
+                r = dict(row) if hasattr(row, "keys") else {
+                    "edge_id": row[0], "user_id": row[1], "from_note_id": row[2],
+                    "to_note_id": row[3], "type": row[4], "directed": row[5],
+                    "weight": row[6], "created_at": row[7], "created_by": row[8],
+                    "metadata": row[9],
+                }
+                if isinstance(r.get("metadata"), str):
+                    try:
+                        r["metadata"] = json.loads(r["metadata"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                results.append(r)
+        return results
+
+    def get_notes_batch(self, note_ids: list[str], include_deleted: bool = True) -> list[dict[str, Any]]:
+        """Return note rows for the given IDs. Batches in groups of 900."""
+        if not note_ids:
+            return []
+        results: list[dict[str, Any]] = []
+        for batch in self._chunk_list(note_ids, self._SQLITE_PARAM_LIMIT):
+            ph = ",".join(["?"] * len(batch))
+            deleted_clause = "" if include_deleted else " AND deleted = 0"
+            query = (
+                f"SELECT id, title, content, created_at, last_modified, deleted, conversation_id "
+                f"FROM notes WHERE id IN ({ph}){deleted_clause}"
+            )
+            cur = self.execute_query(query, tuple(batch))
+            for row in cur.fetchall():
+                r = dict(row) if hasattr(row, "keys") else {
+                    "id": row[0], "title": row[1], "content": row[2],
+                    "created_at": row[3], "last_modified": row[4],
+                    "deleted": row[5], "conversation_id": row[6],
+                }
+                results.append(r)
+        return results
+
+    def get_all_note_ids_for_graph(self, include_deleted: bool = True, limit: int = 500) -> list[str]:
+        """Return note IDs ordered by last_modified DESC, id ASC. For seedless graph."""
+        deleted_clause = "" if include_deleted else " WHERE deleted = 0"
+        query = f"SELECT id FROM notes{deleted_clause} ORDER BY last_modified DESC, id ASC LIMIT ?"
+        cur = self.execute_query(query, (limit,))
+        return [row[0] for row in cur.fetchall()]
+
+    def get_note_tag_edges(self, note_ids: list[str]) -> list[dict[str, Any]]:
+        """Return (note_id, keyword_id, keyword) for notes with active keywords."""
+        if not note_ids:
+            return []
+        results: list[dict[str, Any]] = []
+        for batch in self._chunk_list(note_ids, self._SQLITE_PARAM_LIMIT):
+            ph = ",".join(["?"] * len(batch))
+            query = (
+                f"SELECT nk.note_id, k.id AS keyword_id, k.keyword "
+                f"FROM note_keywords nk "
+                f"JOIN keywords k ON k.id = nk.keyword_id "
+                f"WHERE nk.note_id IN ({ph}) AND k.deleted = 0"
+            )
+            cur = self.execute_query(query, tuple(batch))
+            for row in cur.fetchall():
+                r = dict(row) if hasattr(row, "keys") else {
+                    "note_id": row[0], "keyword_id": row[1], "keyword": row[2],
+                }
+                results.append(r)
+        return results
+
+    def count_notes_per_tag(self) -> dict[int, int]:
+        """Return {keyword_id: note_count} for popularity cutoff."""
+        query = (
+            "SELECT nk.keyword_id, COUNT(DISTINCT nk.note_id) AS cnt "
+            "FROM note_keywords nk "
+            "JOIN notes n ON n.id = nk.note_id AND n.deleted = 0 "
+            "JOIN keywords k ON k.id = nk.keyword_id AND k.deleted = 0 "
+            "GROUP BY nk.keyword_id"
+        )
+        cur = self.execute_query(query)
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+    def get_note_source_info(self, note_ids: list[str]) -> list[dict[str, Any]]:
+        """Return source info for notes that have a conversation with source set."""
+        if not note_ids:
+            return []
+        results: list[dict[str, Any]] = []
+        for batch in self._chunk_list(note_ids, self._SQLITE_PARAM_LIMIT):
+            ph = ",".join(["?"] * len(batch))
+            query = (
+                f"SELECT n.id AS note_id, c.id AS conversation_id, c.source, c.external_ref "
+                f"FROM notes n "
+                f"JOIN conversations c ON c.id = n.conversation_id "
+                f"WHERE n.id IN ({ph}) AND c.source IS NOT NULL"
+            )
+            cur = self.execute_query(query, tuple(batch))
+            for row in cur.fetchall():
+                r = dict(row) if hasattr(row, "keys") else {
+                    "note_id": row[0], "conversation_id": row[1],
+                    "source": row[2], "external_ref": row[3],
+                }
+                results.append(r)
+        return results
+
+    def count_user_notes(self, include_deleted: bool = True) -> int:
+        """Count total notes for seedless query gate."""
+        if include_deleted:
+            query = "SELECT COUNT(*) FROM notes"
+        else:
+            query = "SELECT COUNT(*) FROM notes WHERE deleted = 0"
+        cur = self.execute_query(query)
+        return cur.fetchone()[0]
+
+    @staticmethod
+    def _chunk_list(lst: list, size: int) -> list[list]:
+        """Split *lst* into sub-lists of at most *size* elements."""
+        return [lst[i:i + size] for i in range(0, len(lst), size)]
+
     def _get_current_db_version(self, conn: sqlite3.Connection, table_name: str, pk_col_name: str,
                                 pk_value: Any) -> int:
         """

@@ -58,6 +58,8 @@ def test_user_feedback_schema_sqlite_executes_expected_statements() -> None:
     assert any("CREATE TABLE IF NOT EXISTS conversation_feedback" in stmt for stmt in statements)
     assert any("idx_feedback_conv" in stmt for stmt in statements)
     assert any("idx_feedback_created" in stmt for stmt in statements)
+    assert any("CREATE TABLE IF NOT EXISTS feedback_idempotency" in stmt for stmt in statements)
+    assert any("idx_feedback_idempotency_created" in stmt for stmt in statements)
 
 
 def test_user_feedback_schema_sqlite_includes_required_fields() -> None:
@@ -66,8 +68,8 @@ def test_user_feedback_schema_sqlite_includes_required_fields() -> None:
     UserFeedbackStore(db)
     statements = [stmt for stmt, _ in db.executed]
     assert any("helpful INTEGER" in stmt for stmt in statements)
-    assert any("issues" in stmt for stmt in statements)
-    assert all("conversation_feedback" in stmt for stmt in statements)
+    assert any("issues" in stmt and "conversation_feedback" in stmt for stmt in statements)
+    assert any("pending INTEGER" in stmt and "feedback_idempotency" in stmt for stmt in statements)
 
 
 def test_user_feedback_schema_postgres_uses_boolean_and_timestamp() -> None:
@@ -76,7 +78,8 @@ def test_user_feedback_schema_postgres_uses_boolean_and_timestamp() -> None:
     UserFeedbackStore(db)
     statements = [stmt for stmt, _ in db.executed]
     assert any("helpful BOOLEAN" in stmt for stmt in statements)
-    assert any("issues" in stmt for stmt in statements)
+    assert any("issues" in stmt and "conversation_feedback" in stmt for stmt in statements)
+    assert any("pending BOOLEAN" in stmt and "feedback_idempotency" in stmt for stmt in statements)
     assert any("TIMESTAMPTZ" in stmt for stmt in statements)
 
 
@@ -112,6 +115,66 @@ def test_user_feedback_schema_backfills_missing_issues_column_sqlite(tmp_path: P
         cursor = db._conn.execute("PRAGMA table_info(conversation_feedback)")
         columns = {row[1] for row in cursor.fetchall()}
         assert "issues" in columns
+    finally:
+        db._conn.close()
+
+
+@pytest.mark.asyncio
+async def test_feedback_idempotency_claim_finalize_roundtrip_sqlite(tmp_path: Path) -> None:
+    db_path = tmp_path / "feedback-idempotency.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("CREATE TABLE conversations (id TEXT PRIMARY KEY)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    db = _SQLiteBackfillDb(db_path)
+    try:
+        store = UserFeedbackStore(db)
+        reserved, record = await store.claim_idempotency(
+            "idem:test-key",
+            ["missing_details"],
+            "Initial note",
+            ttl_seconds=300,
+        )
+        assert reserved is True
+        assert record["feedback_id"] is None
+        assert record["pending"] is True
+
+        reserved_again, record_again = await store.claim_idempotency(
+            "idem:test-key",
+            [],
+            None,
+            ttl_seconds=300,
+        )
+        assert reserved_again is False
+        assert record_again["pending"] is True
+
+        await store.update_idempotency(
+            "idem:test-key",
+            ["missing_details", "incorrect_information"],
+            "Merged note",
+        )
+        issues, notes, has_pending_merge = await store.finalize_idempotency(
+            "idem:test-key",
+            "fb_123",
+            ["missing_details"],
+            "Initial note",
+        )
+        assert set(issues) == {"missing_details", "incorrect_information"}
+        assert notes == "Merged note"
+        assert has_pending_merge is True
+
+        reserved_final, record_final = await store.claim_idempotency(
+            "idem:test-key",
+            [],
+            None,
+            ttl_seconds=300,
+        )
+        assert reserved_final is False
+        assert record_final["feedback_id"] == "fb_123"
+        assert record_final["pending"] is False
     finally:
         db._conn.close()
 

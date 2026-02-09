@@ -55,6 +55,34 @@ class _SQLiteTxConnWithPoolHelperTraps:
         raise AssertionError(f"Unexpected query: {query!r}")
 
 
+class _SQLiteTxConnTopWithPoolHelperTraps:
+    def __init__(self) -> None:
+        self.execute_calls: list[tuple[str, Any]] = []
+        self.fetchall_called = False
+
+    async def fetchall(self, *args: Any, **kwargs: Any) -> list[Any]:  # pragma: no cover - should never run
+        self.fetchall_called = True
+        raise AssertionError("sqlite transaction path should not use db.fetchall")
+
+    async def execute(self, query: str, params: Any) -> _CursorStub:
+        q = str(query).lower()
+        self.execute_calls.append((str(query), params))
+        if "sum(requests)" in q and "ifnull(sum(bytes_in_total),0)" in q:
+            return _CursorStub(
+                rows=[
+                    {
+                        "user_id": 7,
+                        "requests": 21,
+                        "errors": 1,
+                        "bytes_total": 4096,
+                        "bytes_in_total": 2048,
+                        "latency_avg_ms": 12.3,
+                    }
+                ]
+            )
+        raise AssertionError(f"Unexpected query: {query!r}")
+
+
 @pytest.mark.asyncio
 async def test_fetch_usage_daily_sqlite_tx_path_ignores_pool_helpers(
     monkeypatch: pytest.MonkeyPatch,
@@ -80,5 +108,30 @@ async def test_fetch_usage_daily_sqlite_tx_path_ignores_pool_helpers(
     assert rows and rows[0]["user_id"] == 1
     assert rows[0]["bytes_in_total"] == 800
     assert db.fetchval_called is False
+    assert db.fetchall_called is False
+    assert db.execute_calls, "sqlite transaction path should use execute()"
+
+
+@pytest.mark.asyncio
+async def test_fetch_usage_top_sqlite_tx_path_ignores_pool_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_is_postgres_backend() -> bool:
+        return False
+
+    monkeypatch.setattr(admin_usage_service, "is_postgres_backend", _fake_is_postgres_backend)
+    db = _SQLiteTxConnTopWithPoolHelperTraps()
+
+    rows = await admin_usage_service.fetch_usage_top(
+        db,
+        start=None,
+        end=None,
+        limit=10,
+        metric="requests",
+        org_ids=None,
+    )
+
+    assert rows and rows[0]["user_id"] == 7
+    assert rows[0]["requests"] == 21
     assert db.fetchall_called is False
     assert db.execute_calls, "sqlite transaction path should use execute()"

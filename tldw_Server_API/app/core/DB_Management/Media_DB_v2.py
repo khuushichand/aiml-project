@@ -44,6 +44,7 @@ from datetime import datetime, timedelta, timezone  # Use timezone-aware UTC
 from math import ceil
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 
@@ -155,6 +156,50 @@ _MEDIA_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
 
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _DATA_TABLES_UNSET = object()
+
+
+def normalize_media_dedupe_url(url: str | None) -> str | None:
+    """Normalize URL-like media identifiers for dedupe comparisons.
+
+    Rules:
+    - Preserve non-HTTP(S) identifiers as-is (e.g., ``local://...`` or filenames).
+    - For HTTP(S), apply crawl normalization (lowercase scheme/host, drop fragments,
+      strip tracking params, normalize path/query ordering).
+    """
+    if url is None:
+        return None
+    raw = str(url).strip()
+    if not raw:
+        return None
+
+    try:
+        scheme = (urlparse(raw).scheme or "").lower()
+    except _MEDIA_NONCRITICAL_EXCEPTIONS:
+        return raw
+
+    if scheme not in {"http", "https"}:
+        return raw
+
+    try:
+        from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
+
+        normalized = str(normalize_for_crawl(raw, raw) or "").strip()
+        return normalized or raw
+    except _MEDIA_NONCRITICAL_EXCEPTIONS:
+        return raw
+
+
+def media_dedupe_url_candidates(url: str | None) -> tuple[str, ...]:
+    """Return stable candidate URLs for dedupe lookups (normalized first)."""
+    normalized = normalize_media_dedupe_url(url)
+    raw = str(url).strip() if url is not None else ""
+
+    candidates: list[str] = []
+    if normalized:
+        candidates.append(normalized)
+    if raw and raw not in candidates:
+        candidates.append(raw)
+    return tuple(candidates)
 
 
 class _RowAdapter:
@@ -10915,7 +10960,13 @@ class MediaDatabase:
         if source_hash is not None:
             source_hash_str = str(source_hash).strip()
             source_hash_norm = source_hash_str if source_hash_str else None
-        url = url or f"local://{media_type}/{content_hash}"
+        raw_url_input = str(url).strip() if url is not None else ""
+        if raw_url_input:
+            dedupe_url_candidates = media_dedupe_url_candidates(raw_url_input)
+            url = normalize_media_dedupe_url(raw_url_input) or raw_url_input
+        else:
+            url = f"local://{media_type}/{content_hash}"
+            dedupe_url_candidates = (url,)
 
         # Determine the final chunk status before any DB operation
         final_chunk_status = "completed" if chunks is not None else "pending"
@@ -11060,11 +11111,24 @@ class MediaDatabase:
                 def _fetchall(query: str, params: tuple | list | dict | None = None):
                     return self._fetchall_with_connection(conn, query, params)
 
+                def _fetch_existing_by_url(select_columns: str):
+                    if len(dedupe_url_candidates) == 1:
+                        return _fetchone(
+                            f"SELECT {select_columns} "
+                            "FROM Media WHERE url = ? AND deleted = 0 LIMIT 1",
+                            (dedupe_url_candidates[0],),
+                        )
+                    placeholders = ", ".join(["?"] * len(dedupe_url_candidates))
+                    return _fetchone(
+                        f"SELECT {select_columns} "
+                        f"FROM Media WHERE url IN ({placeholders}) AND deleted = 0 "
+                        "ORDER BY last_modified DESC, id DESC LIMIT 1",
+                        tuple(dedupe_url_candidates),
+                    )
+
                 # Find existing record by URL or content_hash
-                row = _fetchone(
-                    "SELECT id, uuid, version, url, content_hash, source_hash, visibility, owner_user_id, org_id, team_id "
-                    "FROM Media WHERE url = ? AND deleted = 0 LIMIT 1",
-                    (url,),
+                row = _fetch_existing_by_url(
+                    "id, uuid, version, url, content_hash, source_hash, visibility, owner_user_id, org_id, team_id"
                 )
 
                 if not row:
@@ -11276,10 +11340,7 @@ class MediaDatabase:
                     # Use lock to prevent race conditions during concurrent inserts
                     with self._media_insert_lock:
                         # Double-check within lock that record still doesn't exist
-                        recheck_row = _fetchone(
-                            "SELECT id, uuid, version FROM Media WHERE url = ? AND deleted = 0",
-                            (url,),
-                        )
+                        recheck_row = _fetch_existing_by_url("id, uuid, version")
                         if recheck_row:
                             # Another thread inserted while we were waiting for lock
                             media_id, media_uuid, current_ver = recheck_row["id"], recheck_row["uuid"], recheck_row["version"]
@@ -13765,8 +13826,17 @@ def get_media_by_url(self, url: str, include_deleted=False, include_trash=False)
     if not url:
         raise InputError("url cannot be empty or None.")  # noqa: TRY003
 
-    query = "SELECT * FROM Media WHERE url = ?"
-    params = [url]
+    url_candidates = media_dedupe_url_candidates(url)
+    if not url_candidates:
+        raise InputError("url cannot be empty or None.")  # noqa: TRY003
+
+    if len(url_candidates) == 1:
+        query = "SELECT * FROM Media WHERE url = ?"
+        params = [url_candidates[0]]
+    else:
+        placeholders = ", ".join(["?"] * len(url_candidates))
+        query = f"SELECT * FROM Media WHERE url IN ({placeholders})"
+        params = list(url_candidates)
 
     if not include_deleted:
         query += " AND deleted = 0"
@@ -14836,8 +14906,14 @@ def check_media_exists(db_instance: MediaDatabase, media_id: int | None = None, 
         query_parts.append("id = ?")
         params.append(media_id)
     if url:
-        query_parts.append("url = ?")
-        params.append(url)
+        url_candidates = media_dedupe_url_candidates(url)
+        if len(url_candidates) == 1:
+            query_parts.append("url = ?")
+            params.append(url_candidates[0])
+        elif url_candidates:
+            placeholders = ", ".join(["?"] * len(url_candidates))
+            query_parts.append(f"url IN ({placeholders})")
+            params.extend(url_candidates)
     if content_hash:
         query_parts.append("content_hash = ?")
         params.append(content_hash)

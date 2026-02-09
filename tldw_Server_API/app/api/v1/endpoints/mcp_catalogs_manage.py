@@ -12,7 +12,7 @@ from sqlite3 import Error as SQLiteError
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user, get_db_transaction
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal, get_db_transaction
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     ToolCatalogCreateRequest,
     ToolCatalogEntryCreateRequest,
@@ -21,6 +21,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_members, list_team_members
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 router = APIRouter(prefix="", tags=["mcp-catalogs-scope"])
 _CATALOG_NONCRITICAL_EXCEPTIONS = (
@@ -43,14 +44,22 @@ def _is_manager(role: str | None) -> bool:
     return r in {"owner", "admin", "lead"}
 
 
-async def _require_org_manager(user: dict, org_id: int) -> None:
+def _is_admin_principal(principal: AuthPrincipal) -> bool:
+    if principal.is_admin:
+        return True
+    return any(str(role).lower() == "admin" for role in principal.roles)
+
+
+async def _require_org_manager(principal: AuthPrincipal, org_id: int) -> None:
     # Admin bypass
-    if str(user.get("role", "")).lower() == "admin":
+    if _is_admin_principal(principal):
         return
+    if principal.user_id is None:
+        raise HTTPException(status_code=403, detail="Org manager role required")
     # Check org membership
     try:
         members = await list_org_members(org_id=org_id, limit=1000, offset=0)
-        uid = int(user.get("id"))
+        uid = int(principal.user_id)
         for m in members:
             try:
                 if int(m.get("user_id")) == uid and _is_manager(m.get("role")):
@@ -62,13 +71,15 @@ async def _require_org_manager(user: dict, org_id: int) -> None:
     raise HTTPException(status_code=403, detail="Org manager role required")
 
 
-async def _require_team_manager(user: dict, team_id: int) -> None:
+async def _require_team_manager(principal: AuthPrincipal, team_id: int) -> None:
     # Admin bypass
-    if str(user.get("role", "")).lower() == "admin":
+    if _is_admin_principal(principal):
         return
+    if principal.user_id is None:
+        raise HTTPException(status_code=403, detail="Team manager role required")
     try:
         members = await list_team_members(team_id)
-        uid = int(user.get("id"))
+        uid = int(principal.user_id)
         for m in members:
             try:
                 if int(m.get("user_id")) == uid and _is_manager(m.get("role")):
@@ -92,10 +103,10 @@ async def _require_team_manager(user: dict, team_id: int) -> None:
 )
 async def list_org_tool_catalogs(
     org_id: int,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ) -> list[ToolCatalogResponse]:
-    await _require_org_manager(user, org_id)
+    await _require_org_manager(principal, org_id)
     try:
         is_pg = await is_postgres_backend()
         if is_pg:
@@ -134,10 +145,10 @@ async def list_org_tool_catalogs(
 async def create_org_tool_catalog(
     org_id: int,
     payload: ToolCatalogCreateRequest,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ) -> ToolCatalogResponse:
-    await _require_org_manager(user, org_id)
+    await _require_org_manager(principal, org_id)
     # Force scope to org
     name = payload.name.strip()
     desc = payload.description
@@ -197,10 +208,10 @@ async def create_org_tool_catalog(
 )
 async def list_team_tool_catalogs(
     team_id: int,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ) -> list[ToolCatalogResponse]:
-    await _require_team_manager(user, team_id)
+    await _require_team_manager(principal, team_id)
     try:
         is_pg = await is_postgres_backend()
         if is_pg:
@@ -239,10 +250,10 @@ async def list_team_tool_catalogs(
 async def create_team_tool_catalog(
     team_id: int,
     payload: ToolCatalogCreateRequest,
-    user: dict = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ) -> ToolCatalogResponse:
-    await _require_team_manager(user, team_id)
+    await _require_team_manager(principal, team_id)
     name = payload.name.strip()
     desc = payload.description
     is_active = bool(payload.is_active if payload.is_active is not None else True)
@@ -297,8 +308,8 @@ async def create_team_tool_catalog(
         "Scope: Fails with 404 if the catalog is not owned by the specified org."
     ),
 )
-async def add_org_catalog_entry(org_id: int, catalog_id: int, payload: ToolCatalogEntryCreateRequest, user: dict = Depends(get_current_user), db=Depends(get_db_transaction)) -> ToolCatalogEntryResponse:
-    await _require_org_manager(user, org_id)
+async def add_org_catalog_entry(org_id: int, catalog_id: int, payload: ToolCatalogEntryCreateRequest, principal: AuthPrincipal = Depends(get_auth_principal), db=Depends(get_db_transaction)) -> ToolCatalogEntryResponse:
+    await _require_org_manager(principal, org_id)
     # Confirm catalog scope
     is_pg = await is_postgres_backend()
     if is_pg:
@@ -340,8 +351,8 @@ async def add_org_catalog_entry(org_id: int, catalog_id: int, payload: ToolCatal
         "Scope: Fails with 404 if the catalog is not owned by the specified team."
     ),
 )
-async def add_team_catalog_entry(team_id: int, catalog_id: int, payload: ToolCatalogEntryCreateRequest, user: dict = Depends(get_current_user), db=Depends(get_db_transaction)) -> ToolCatalogEntryResponse:
-    await _require_team_manager(user, team_id)
+async def add_team_catalog_entry(team_id: int, catalog_id: int, payload: ToolCatalogEntryCreateRequest, principal: AuthPrincipal = Depends(get_auth_principal), db=Depends(get_db_transaction)) -> ToolCatalogEntryResponse:
+    await _require_team_manager(principal, team_id)
     is_pg = await is_postgres_backend()
     if is_pg:
         owner = await db.fetchrow("SELECT id FROM tool_catalogs WHERE id = $1 AND team_id = $2", catalog_id, team_id)
@@ -379,12 +390,12 @@ async def add_team_catalog_entry(team_id: int, catalog_id: int, payload: ToolCat
         "Scope: Returns 404 if the catalog does not belong to the specified org."
     ),
 )
-async def delete_org_tool_catalog(org_id: int, catalog_id: int, user: dict = Depends(get_current_user), db=Depends(get_db_transaction)) -> dict:
+async def delete_org_tool_catalog(org_id: int, catalog_id: int, principal: AuthPrincipal = Depends(get_auth_principal), db=Depends(get_db_transaction)) -> dict:
     """Delete an org-scoped tool catalog (entries cascade).
 
     Requires the requester to be an org manager (owner/admin/lead) or global admin.
     """
-    await _require_org_manager(user, org_id)
+    await _require_org_manager(principal, org_id)
     try:
         is_pg = await is_postgres_backend()
         # Ensure catalog belongs to org
@@ -416,12 +427,12 @@ async def delete_org_tool_catalog(org_id: int, catalog_id: int, user: dict = Dep
         "Scope: Returns 404 if the catalog does not belong to the specified org."
     ),
 )
-async def delete_org_catalog_entry(org_id: int, catalog_id: int, tool_name: str, user: dict = Depends(get_current_user), db=Depends(get_db_transaction)) -> dict:
+async def delete_org_catalog_entry(org_id: int, catalog_id: int, tool_name: str, principal: AuthPrincipal = Depends(get_auth_principal), db=Depends(get_db_transaction)) -> dict:
     """Remove a tool entry from an org-scoped catalog.
 
     Requires the requester to be an org manager (owner/admin/lead) or global admin.
     """
-    await _require_org_manager(user, org_id)
+    await _require_org_manager(principal, org_id)
     try:
         is_pg = await is_postgres_backend()
         # Verify scope
@@ -456,12 +467,12 @@ async def delete_org_catalog_entry(org_id: int, catalog_id: int, tool_name: str,
         "Scope: Returns 404 if the catalog does not belong to the specified team."
     ),
 )
-async def delete_team_tool_catalog(team_id: int, catalog_id: int, user: dict = Depends(get_current_user), db=Depends(get_db_transaction)) -> dict:
+async def delete_team_tool_catalog(team_id: int, catalog_id: int, principal: AuthPrincipal = Depends(get_auth_principal), db=Depends(get_db_transaction)) -> dict:
     """Delete a team-scoped tool catalog (entries cascade).
 
     Requires the requester to be a team manager (owner/admin/lead) or global admin.
     """
-    await _require_team_manager(user, team_id)
+    await _require_team_manager(principal, team_id)
     try:
         is_pg = await is_postgres_backend()
         if is_pg:
@@ -492,12 +503,12 @@ async def delete_team_tool_catalog(team_id: int, catalog_id: int, user: dict = D
         "Scope: Returns 404 if the catalog does not belong to the specified team."
     ),
 )
-async def delete_team_catalog_entry(team_id: int, catalog_id: int, tool_name: str, user: dict = Depends(get_current_user), db=Depends(get_db_transaction)) -> dict:
+async def delete_team_catalog_entry(team_id: int, catalog_id: int, tool_name: str, principal: AuthPrincipal = Depends(get_auth_principal), db=Depends(get_db_transaction)) -> dict:
     """Remove a tool entry from a team-scoped catalog.
 
     Requires the requester to be a team manager (owner/admin/lead) or global admin.
     """
-    await _require_team_manager(user, team_id)
+    await _require_team_manager(principal, team_id)
     try:
         is_pg = await is_postgres_backend()
         if is_pg:

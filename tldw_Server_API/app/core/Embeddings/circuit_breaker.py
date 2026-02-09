@@ -7,11 +7,13 @@
 from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (  # noqa: F401
     CircuitBreaker,
     CircuitBreakerConfig,
-    CircuitBreakerOpenError as CircuitBreakerError,
     CircuitBreakerRegistry,
     CircuitState,
     circuit_breaker,
     registry,
+)
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+    CircuitBreakerOpenError as CircuitBreakerError,
 )
 
 __all__ = [

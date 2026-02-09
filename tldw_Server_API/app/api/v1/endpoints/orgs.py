@@ -52,7 +52,7 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     TeamUpdateRequest,
 )
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateOrganizationError,
     DuplicateTeamError,
@@ -300,39 +300,37 @@ async def delete_org(
         )
 
     db_pool = await get_db_pool()
+    is_pg = await is_postgres_backend()
 
     async with db_pool.transaction() as conn:
-        if hasattr(conn, "execute"):
-            if hasattr(conn, "fetchrow"):
-                # PostgreSQL
-                await conn.execute(
-                    "DELETE FROM org_provider_secrets WHERE scope_type = 'org' AND scope_id = $1",
-                    ctx.org_id,
-                )
-                await conn.execute(
-                    """
-                    DELETE FROM org_provider_secrets
-                    WHERE scope_type = 'team'
-                      AND scope_id IN (SELECT id FROM teams WHERE org_id = $1)
-                    """,
-                    ctx.org_id,
-                )
-                await conn.execute("DELETE FROM organizations WHERE id = $1", ctx.org_id)
-            else:
-                # SQLite
-                await conn.execute(
-                    "DELETE FROM org_provider_secrets WHERE scope_type = 'org' AND scope_id = ?",
-                    (ctx.org_id,),
-                )
-                await conn.execute(
-                    """
-                    DELETE FROM org_provider_secrets
-                    WHERE scope_type = 'team'
-                      AND scope_id IN (SELECT id FROM teams WHERE org_id = ?)
-                    """,
-                    (ctx.org_id,),
-                )
-                await conn.execute("DELETE FROM organizations WHERE id = ?", (ctx.org_id,))
+        if is_pg:
+            await conn.execute(
+                "DELETE FROM org_provider_secrets WHERE scope_type = 'org' AND scope_id = $1",
+                ctx.org_id,
+            )
+            await conn.execute(
+                """
+                DELETE FROM org_provider_secrets
+                WHERE scope_type = 'team'
+                  AND scope_id IN (SELECT id FROM teams WHERE org_id = $1)
+                """,
+                ctx.org_id,
+            )
+            await conn.execute("DELETE FROM organizations WHERE id = $1", ctx.org_id)
+        else:
+            await conn.execute(
+                "DELETE FROM org_provider_secrets WHERE scope_type = 'org' AND scope_id = ?",
+                (ctx.org_id,),
+            )
+            await conn.execute(
+                """
+                DELETE FROM org_provider_secrets
+                WHERE scope_type = 'team'
+                  AND scope_id IN (SELECT id FROM teams WHERE org_id = ?)
+                """,
+                (ctx.org_id,),
+            )
+            await conn.execute("DELETE FROM organizations WHERE id = ?", (ctx.org_id,))
 
     logger.info(f"Org {ctx.org_id} deleted by owner")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -378,9 +376,9 @@ async def transfer_ownership(
             detail="New owner must be an existing member of the organization",
         )
 
+    is_pg = await is_postgres_backend()
     async with db_pool.transaction() as conn:
-        if hasattr(conn, "fetchrow"):
-            # PostgreSQL
+        if is_pg:
             # Update org owner
             await conn.execute(
                 "UPDATE organizations SET owner_user_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
@@ -405,7 +403,6 @@ async def transfer_ownership(
             )
             org = dict(row) if row else {}
         else:
-            # SQLite
             await conn.execute(
                 "UPDATE organizations SET owner_user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (body.new_owner_user_id, ctx.org_id),
@@ -699,8 +696,9 @@ async def update_team(
             detail="No fields to update",
         )
 
+    is_pg = await is_postgres_backend()
     async with db_pool.transaction() as conn:
-        if hasattr(conn, "fetchrow"):
+        if is_pg:
             set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
             params = [team_id] + list(updates.values())
             row = await conn.fetchrow(
@@ -764,8 +762,9 @@ async def delete_team(
             detail="Team not found",
         )
 
+    is_pg = await is_postgres_backend()
     async with db_pool.transaction() as conn:
-        if hasattr(conn, "fetchrow"):
+        if is_pg:
             await conn.execute(
                 "DELETE FROM org_provider_secrets WHERE scope_type = 'team' AND scope_id = $1",
                 team_id,

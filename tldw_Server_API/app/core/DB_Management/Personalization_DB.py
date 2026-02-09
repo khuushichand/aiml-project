@@ -181,7 +181,7 @@ class PersonalizationDB:
                 cur = conn.execute("SELECT * FROM profiles WHERE user_id = ?", (str(user_id),))
                 row = cur.fetchone()
                 if row:
-                    return {k: row[k] for k in row}
+                    return {k: row[k] for k in row.keys()}
                 now = _utcnow_iso()
                 conn.execute(
                     """

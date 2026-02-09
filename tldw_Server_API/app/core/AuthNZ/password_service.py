@@ -14,6 +14,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, VerifyMismatchError
 from loguru import logger
 
+from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.exceptions import WeakPasswordError
 
 #
@@ -296,8 +297,8 @@ class PasswordService:
         try:
             # Get recent password hashes
             history_count = self.settings.PASSWORD_HISTORY_RETENTION_COUNT
-
-            if hasattr(db_connection, 'fetch'):
+            postgres_backend = await is_postgres_backend()
+            if postgres_backend:
                 # PostgreSQL
                 rows = await db_connection.fetch(
                     """
@@ -368,7 +369,8 @@ class PasswordService:
             db_connection: Database connection
         """
         try:
-            if hasattr(db_connection, 'execute'):
+            postgres_backend = await is_postgres_backend()
+            if postgres_backend:
                 # PostgreSQL
                 await db_connection.execute(
                     """

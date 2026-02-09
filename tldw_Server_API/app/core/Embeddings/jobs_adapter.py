@@ -148,6 +148,7 @@ class EmbeddingsJobsAdapter:
         force_regenerate: bool = False,
         stage: str | None = None,
         embedding_priority: int | None = None,
+        provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         stage_name = (stage or "chunking").strip().lower() or "chunking"
         if stage_name not in _VALID_STAGES:
@@ -167,6 +168,8 @@ class EmbeddingsJobsAdapter:
             payload["chunk_overlap"] = int(chunk_overlap)
         if request_source:
             payload["request_source"] = str(request_source)
+        if isinstance(provenance, dict) and provenance:
+            payload["provenance"] = dict(provenance)
         idempotency_key = None
         root_idempotency_key = None
         version = None

@@ -26,6 +26,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     DatabaseError,
     InputError,
     MediaDatabase,
+    media_dedupe_url_candidates,
+    normalize_media_dedupe_url,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     prepare_chunking_options_dict,
@@ -218,6 +220,29 @@ def _allowed_url_extensions(media_type: str, form_data: Any) -> set[str] | None:
         if isinstance(extensions, (set, list, tuple)):
             return {str(ext).lower() for ext in extensions if ext}
     return None
+
+
+def _normalize_dedupe_url_for_db(value: str) -> str:
+    """Normalize URL-like identifiers before persistence while preserving non-URL refs."""
+    raw = str(value).strip()
+    if not raw:
+        return raw
+    normalized = normalize_media_dedupe_url(raw)
+    return str(normalized).strip() if normalized else raw
+
+
+def _build_url_match_clause(
+    url_candidates: tuple[str, ...],
+    *,
+    column: str = "url",
+) -> tuple[str, tuple[str, ...]]:
+    """Build a SQL match clause for one or more candidate URLs."""
+    if not url_candidates:
+        return f"{column} = ?", ("",)
+    if len(url_candidates) == 1:
+        return f"{column} = ?", (url_candidates[0],)
+    placeholders = ", ".join(["?"] * len(url_candidates))
+    return f"{column} IN ({placeholders})", url_candidates
 
 
 def _resolve_ingestion_file_validator(media_mod: Any | None) -> Any:
@@ -527,6 +552,280 @@ def sync_media_add_results_to_collections(
     finally:
         with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
             collections_db.close()
+
+
+def _normalize_embeddings_dispatch_mode(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    aliases = {
+        "job": "jobs",
+        "queue": "jobs",
+        "queued": "jobs",
+        "direct": "background",
+        "legacy": "background",
+        "bg": "background",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized in {"auto", "jobs", "background"}:
+        return normalized
+    return None
+
+
+def _resolve_media_add_embeddings_mode(form_data: Any) -> str:
+    form_mode = _normalize_embeddings_dispatch_mode(
+        getattr(form_data, "embedding_dispatch_mode", None),
+    )
+    if form_mode:
+        return form_mode
+
+    env_mode = _normalize_embeddings_dispatch_mode(
+        os.getenv("MEDIA_ADD_EMBEDDINGS_MODE"),
+    )
+    if env_mode:
+        return env_mode
+
+    cfg_mode: Any = None
+    try:
+        cfg = loaded_config_data.get("media_processing", {}) if loaded_config_data else {}
+        if isinstance(cfg, dict):
+            cfg_mode = cfg.get("media_add_embeddings_mode")
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        cfg_mode = None
+
+    normalized_cfg_mode = _normalize_embeddings_dispatch_mode(cfg_mode)
+    if normalized_cfg_mode:
+        return normalized_cfg_mode
+    return "auto"
+
+
+def _coerce_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+        if parsed > 0:
+            return parsed
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        pass
+    return int(default)
+
+
+def _resolve_media_add_embedding_config(form_data: Any) -> tuple[str, str, int, int]:
+    embedding_settings = settings.get("EMBEDDING_CONFIG", {}) or {}
+    embedding_model = (
+        getattr(form_data, "embedding_model", None)
+        or embedding_settings.get("embedding_model")
+        or "sentence-transformers/all-MiniLM-L6-v2"
+    )
+    embedding_provider = (
+        getattr(form_data, "embedding_provider", None)
+        or embedding_settings.get("embedding_provider")
+        or "huggingface"
+    )
+    chunk_size = _coerce_positive_int(getattr(form_data, "chunk_size", None), 1000)
+    chunk_overlap = _coerce_positive_int(
+        getattr(form_data, "chunk_overlap", None) or getattr(form_data, "overlap", None),
+        200,
+    )
+    return (
+        str(embedding_model),
+        str(embedding_provider),
+        chunk_size,
+        chunk_overlap,
+    )
+
+
+def _build_media_add_embeddings_provenance(
+    *,
+    result: dict[str, Any],
+    form_data: Any,
+    current_user: Any,
+    media_id: int,
+) -> dict[str, Any]:
+    origin = str(
+        result.get("collections_origin")
+        or getattr(form_data, "collections_origin", None)
+        or "media_add"
+    )
+    media_type = str(result.get("media_type") or getattr(form_data, "media_type", "")).strip()
+    input_ref = str(result.get("input_ref") or "")
+    processing_source = str(result.get("processing_source") or "")
+    source_url = input_ref if input_ref.startswith(("http://", "https://")) else None
+
+    collections_item_id = result.get("collections_item_id")
+    try:
+        collections_item_id = (
+            int(collections_item_id) if collections_item_id is not None else None
+        )
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        collections_item_id = None
+
+    return {
+        "origin": origin,
+        "origin_type": media_type or None,
+        "origin_id": media_id,
+        "source_id": media_id,
+        "run_id": None,
+        "job_id": None,
+        "media_id": media_id,
+        "media_uuid": result.get("media_uuid"),
+        "collections_item_id": collections_item_id,
+        "request_source": "media_add",
+        "entrypoint": "/api/v1/media/add",
+        "user_id": getattr(current_user, "id", None),
+        "input_ref": input_ref,
+        "processing_source": processing_source,
+        "source_url": source_url,
+    }
+
+
+async def schedule_media_add_embeddings(
+    *,
+    results: list[dict[str, Any]],
+    form_data: Any,
+    background_tasks: BackgroundTasks,
+    db: MediaDatabase,
+    current_user: Any,
+) -> None:
+    """
+    Schedule embeddings for successful `/media/add` items.
+
+    Dispatch strategy is selected from:
+    1) `form_data.embedding_dispatch_mode`
+    2) `MEDIA_ADD_EMBEDDINGS_MODE` env var
+    3) `media_processing.media_add_embeddings_mode` config
+    4) default `auto` (jobs first, fallback to background)
+    """
+    generate_embeddings = bool(getattr(form_data, "generate_embeddings", False))
+    logger.info("generate_embeddings flag: {}", generate_embeddings)
+    if not generate_embeddings:
+        return
+
+    dispatch_mode = _resolve_media_add_embeddings_mode(form_data)
+    logger.info(
+        "Scheduling embeddings for successfully processed media items (dispatch_mode={})",
+        dispatch_mode,
+    )
+
+    embedding_model, embedding_provider, chunk_size, chunk_overlap = (
+        _resolve_media_add_embedding_config(form_data)
+    )
+    user_id = str(getattr(current_user, "id", "1"))
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        if result.get("status") not in {"Success", "Warning"}:
+            continue
+        db_id = result.get("db_id")
+        if db_id is None:
+            continue
+        try:
+            media_id = int(db_id)
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+            continue
+
+        provenance = _build_media_add_embeddings_provenance(
+            result=result,
+            form_data=form_data,
+            current_user=current_user,
+            media_id=media_id,
+        )
+        result["embeddings_provenance"] = provenance
+
+        dispatched = False
+        if dispatch_mode in {"auto", "jobs"}:
+            try:
+                from tldw_Server_API.app.core.Embeddings.jobs_adapter import (  # type: ignore
+                    EmbeddingsJobsAdapter,
+                )
+
+                adapter = EmbeddingsJobsAdapter()
+                job_row = adapter.create_job(
+                    user_id=user_id,
+                    media_id=media_id,
+                    embedding_model=embedding_model,
+                    embedding_provider=embedding_provider,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                    request_source="media_add",
+                    force_regenerate=False,
+                    stage="chunking",
+                    embedding_priority=None,
+                    provenance=provenance,
+                )
+                job_id = str(
+                    (job_row or {}).get("uuid") or (job_row or {}).get("id") or ""
+                ).strip()
+                result["embeddings_scheduled"] = True
+                result["embeddings_dispatch"] = "jobs"
+                if job_id:
+                    result["embeddings_job_id"] = job_id
+                dispatched = True
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as jobs_err:
+                logger.warning(
+                    "Failed to enqueue embeddings job for media {}: {}",
+                    media_id,
+                    jobs_err,
+                )
+                _ensure_warnings_list(result).append(
+                    f"Embeddings jobs enqueue failed: {jobs_err}",
+                )
+                if dispatch_mode == "jobs":
+                    continue
+
+        if not dispatched and dispatch_mode in {"auto", "background"}:
+            logger.info(
+                "Scheduling background embedding generation for media ID {}",
+                media_id,
+            )
+
+            async def generate_embeddings_task(
+                media_id: int,
+                provenance_payload: dict[str, Any],
+            ) -> None:
+                try:
+                    from tldw_Server_API.app.api.v1.endpoints.media_embeddings import (  # type: ignore
+                        generate_embeddings_for_media,
+                        get_media_content,
+                    )
+
+                    media_content = await get_media_content(media_id, db)
+                    media_item = media_content.get("media_item")
+                    if isinstance(media_item, dict):
+                        meta = media_item.get("metadata")
+                        metadata_payload = meta if isinstance(meta, dict) else {}
+                        metadata_payload["embedding_provenance"] = provenance_payload
+                        media_item["metadata"] = metadata_payload
+
+                    result_emb = await generate_embeddings_for_media(
+                        media_id=media_id,
+                        media_content=media_content,
+                        embedding_model=embedding_model,
+                        embedding_provider=embedding_provider,
+                        chunk_size=chunk_size,
+                        chunk_overlap=chunk_overlap,
+                    )
+                    logger.info(
+                        "Embedding generation result for media {}: {}",
+                        media_id,
+                        result_emb,
+                    )
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as embed_err:
+                    logger.error(
+                        "Failed to generate embeddings for media {}: {}",
+                        media_id,
+                        embed_err,
+                    )
+
+            background_tasks.add_task(
+                generate_embeddings_task,
+                media_id,
+                provenance,
+            )
+            result["embeddings_scheduled"] = True
+            result["embeddings_dispatch"] = "background"
 
 
 def validate_add_media_inputs(
@@ -1217,65 +1516,19 @@ async def add_media_orchestrate(
 
 
         # --- 7. Generate Embeddings if Requested ---
-        logger.info("generate_embeddings flag: {}", form_data.generate_embeddings)
-        if form_data.generate_embeddings:
-            logger.info(
-                "Generating embeddings for successfully processed media items..."
+        try:
+            await schedule_media_add_embeddings(
+                results=results,
+                form_data=form_data,
+                background_tasks=background_tasks,
+                db=db,
+                current_user=current_user,
             )
-
-            for result in results:
-                if result.get("status") == "Success" and result.get("db_id"):
-                    media_id = result["db_id"]
-                    logger.info(
-                        "Scheduling embedding generation for media ID {}",
-                        media_id,
-                    )
-
-                    async def generate_embeddings_task(media_id: int) -> None:
-                        try:
-                            from tldw_Server_API.app.api.v1.endpoints.media_embeddings import (  # type: ignore
-                                generate_embeddings_for_media,
-                                get_media_content,
-                            )
-
-                            media_content = await get_media_content(media_id, db)
-                            embedding_settings = settings.get("EMBEDDING_CONFIG", {}) or {}
-                            embedding_model = (
-                                form_data.embedding_model
-                                or embedding_settings.get("embedding_model")
-                                or "sentence-transformers/all-MiniLM-L6-v2"
-                            )
-                            embedding_provider = (
-                                form_data.embedding_provider
-                                or embedding_settings.get("embedding_provider")
-                                or "huggingface"
-                            )
-
-                            result_emb = await generate_embeddings_for_media(
-                                media_id=media_id,
-                                media_content=media_content,
-                                embedding_model=embedding_model,
-                                embedding_provider=embedding_provider,
-                                chunk_size=form_data.chunk_size or 1000,
-                                chunk_overlap=getattr(
-                                    form_data, "overlap", None
-                                )
-                                or 200,
-                            )
-                            logger.info(
-                                "Embedding generation result for media {}: {}",
-                                media_id,
-                                result_emb,
-                            )
-                        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as embed_err:
-                            logger.error(
-                                "Failed to generate embeddings for media {}: {}",
-                                media_id,
-                                embed_err,
-                            )
-
-                    background_tasks.add_task(generate_embeddings_task, media_id)
-                    result["embeddings_scheduled"] = True
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as embeddings_err:
+            logger.warning(
+                "Embeddings scheduling step failed: {}",
+                embeddings_err,
+            )
 
         # --- 8. Determine Final Status Code and Return Response ---
         final_status_code = _determine_final_status(results)
@@ -1603,7 +1856,7 @@ async def persist_primary_av_item(
             pass
 
         db_add_kwargs = {
-            "url": str(original_input_ref),
+            "url": _normalize_dedupe_url_for_db(str(original_input_ref)),
             "title": title_for_db,
             "media_type": media_type,
             "content": content_for_db,
@@ -1847,7 +2100,7 @@ async def process_batch_media(
             )
             input_ref = source_path_or_url
 
-        identifier_for_check = input_ref
+        identifier_for_check = str(input_ref)
         should_process = True
         existing_id: int | None = None
         reason = "Ready for processing."
@@ -1856,6 +2109,13 @@ async def process_batch_media(
         is_url = isinstance(source_path_or_url, str) and source_path_or_url.startswith(
             ("http://", "https://")
         )
+        if is_url:
+            url_dedupe_candidates = media_dedupe_url_candidates(identifier_for_check)
+            if not url_dedupe_candidates:
+                url_dedupe_candidates = (identifier_for_check,)
+            identifier_for_check = url_dedupe_candidates[0]
+        else:
+            url_dedupe_candidates = (identifier_for_check,)
 
         if is_url:
             try:
@@ -1935,6 +2195,14 @@ async def process_batch_media(
         if not getattr(form_data, "overwrite_existing", False) and str(media_type) in ["video", "audio"]:
             try:
                 model_for_check = getattr(form_data, "transcription_model", None)
+                url_clause, url_params = _build_url_match_clause(
+                    url_dedupe_candidates,
+                    column="url",
+                )
+                url_clause_alias, url_params_alias = _build_url_match_clause(
+                    url_dedupe_candidates,
+                    column="m.url",
+                )
                 if source_hash and not is_url:
                     temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
                     try:
@@ -1943,10 +2211,10 @@ async def process_batch_media(
                                 temp_db_for_check
                             )
                         if source_hash_column_available:
-                            pre_check_query = """
+                            pre_check_query = f"""
                                 SELECT id
                                 FROM Media
-                                WHERE url = ?
+                                WHERE {url_clause}
                                   AND transcription_model = ?
                                   AND source_hash = ?
                                   AND is_trash = 0
@@ -1955,15 +2223,15 @@ async def process_batch_media(
                             """
                             cursor = temp_db_for_check.execute_query(
                                 pre_check_query,
-                                (identifier_for_check, model_for_check, source_hash),
+                                (*url_params, model_for_check, source_hash),
                             )
                             existing_record = cursor.fetchone()
                             if not existing_record:
-                                pre_check_query = """
+                                pre_check_query = f"""
                                     SELECT m.id
                                     FROM Media m
                                     JOIN DocumentVersions dv ON dv.media_id = m.id
-                                    WHERE m.url = ?
+                                    WHERE {url_clause_alias}
                                       AND m.transcription_model = ?
                                       AND m.is_trash = 0
                                       AND m.deleted = 0
@@ -1974,15 +2242,15 @@ async def process_batch_media(
                                 hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
                                 cursor = temp_db_for_check.execute_query(
                                     pre_check_query,
-                                    (identifier_for_check, model_for_check, hash_fragment),
+                                    (*url_params_alias, model_for_check, hash_fragment),
                                 )
                                 existing_record = cursor.fetchone()
                         else:
-                            pre_check_query = """
+                            pre_check_query = f"""
                                 SELECT m.id
                                 FROM Media m
                                 JOIN DocumentVersions dv ON dv.media_id = m.id
-                                WHERE m.url = ?
+                                WHERE {url_clause_alias}
                                   AND m.transcription_model = ?
                                   AND m.is_trash = 0
                                   AND m.deleted = 0
@@ -1993,7 +2261,7 @@ async def process_batch_media(
                             hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
                             cursor = temp_db_for_check.execute_query(
                                 pre_check_query,
-                                (identifier_for_check, model_for_check, hash_fragment),
+                                (*url_params_alias, model_for_check, hash_fragment),
                             )
                             existing_record = cursor.fetchone()
                     finally:
@@ -2021,17 +2289,17 @@ async def process_batch_media(
                 else:
                     temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
                     try:
-                        pre_check_query = """
-                                          SELECT id \
+                        pre_check_query = f"""
+                                          SELECT id
                                           FROM Media
-                                          WHERE url = ?
+                                          WHERE {url_clause}
                                             AND transcription_model = ?
                                             AND is_trash = 0
-                                            AND deleted = 0 \
+                                            AND deleted = 0
                                           """
                         cursor = temp_db_for_check.execute_query(
                             pre_check_query,
-                            (identifier_for_check, model_for_check),
+                            (*url_params, model_for_check),
                         )
                         existing_record = cursor.fetchone()
                     finally:
@@ -3467,7 +3735,7 @@ async def persist_doc_item_and_children(
                 chunks_for_sql = None
 
             db_add_kwargs = {
-                "url": item_input_ref,
+                "url": _normalize_dedupe_url_for_db(item_input_ref),
                 "title": title_for_db,
                 "media_type": media_type,
                 "content": content_for_db,
@@ -3661,7 +3929,7 @@ async def persist_doc_item_and_children(
                                                 client_id=client_id_local,
                                             )
                                             return worker_db.add_media_with_keywords(
-                                                url=child_url,
+                                                url=_normalize_dedupe_url_for_db(child_url),
                                                 title=child_title,
                                                 media_type=media_type_local,
                                                 content=child_content,
@@ -3892,7 +4160,7 @@ async def persist_doc_item_and_children(
                                             client_id=client_id_local,
                                         )
                                         return worker_db.add_media_with_keywords(
-                                            url=child_url_local,
+                                            url=_normalize_dedupe_url_for_db(child_url_local),
                                             title=child_title_local,
                                             media_type=media_type_local,
                                             content=child_content_local,
@@ -3970,4 +4238,6 @@ __all__ = [
     "add_media_persist",
     "persist_primary_av_item",
     "persist_doc_item_and_children",
+    "schedule_media_add_embeddings",
+    "sync_media_add_results_to_collections",
 ]

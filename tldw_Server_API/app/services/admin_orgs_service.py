@@ -329,7 +329,8 @@ async def update_org_watchlists_settings(
 ) -> OrganizationWatchlistsSettingsResponse:
     try:
         await admin_scope_service.enforce_admin_org_access(principal, org_id, require_admin=True)
-        if hasattr(db, "fetchrow"):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             row = await db.fetchrow("SELECT metadata FROM organizations WHERE id = $1", org_id)
             meta_raw = row.get("metadata") if row else None
         else:
@@ -353,7 +354,7 @@ async def update_org_watchlists_settings(
             changed = True
         if changed:
             meta["watchlists"] = wl
-            if hasattr(db, "fetchrow"):
+            if is_pg:
                 await db.execute(
                     "UPDATE organizations SET metadata = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
                     json.dumps(meta), org_id,
@@ -382,7 +383,8 @@ async def get_org_watchlists_settings(
 ) -> OrganizationWatchlistsSettingsResponse:
     try:
         await admin_scope_service.enforce_admin_org_access(principal, org_id, require_admin=True)
-        if hasattr(db, "fetchrow"):
+        is_pg = await is_postgres_backend()
+        if is_pg:
             row = await db.fetchrow("SELECT metadata FROM organizations WHERE id = $1", org_id)
             meta_raw = row.get("metadata") if row else None
         else:

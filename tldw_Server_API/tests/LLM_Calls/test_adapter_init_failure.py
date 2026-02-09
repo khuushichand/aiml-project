@@ -15,7 +15,7 @@ class _FailingRegistry:
 
 @pytest.mark.asyncio
 async def test_openrouter_async_adapter_unavailable(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls import chat_calls as llm
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Chat.chat_service._get_llm_registry",
@@ -24,18 +24,16 @@ async def test_openrouter_async_adapter_unavailable(monkeypatch):
     )
 
     with pytest.raises(ChatConfigurationError):
-        await llm.chat_with_openrouter_async(
-            input_data=[{"role": "user", "content": "hi"}],
+        await perform_chat_api_call_async(
+            api_provider="openrouter",
+            messages=[{"role": "user", "content": "hi"}],
             model="m",
             api_key="k",
-            app_config={},
         )
 
 
 def test_anthropic_adapter_unavailable(monkeypatch):
-
-
-    from tldw_Server_API.app.core.LLM_Calls import chat_calls as llm
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Chat.chat_service._get_llm_registry",
@@ -44,8 +42,9 @@ def test_anthropic_adapter_unavailable(monkeypatch):
     )
 
     with pytest.raises(ChatConfigurationError):
-        llm.chat_with_anthropic(
-            input_data=[{"role": "user", "content": "hi"}],
+        perform_chat_api_call(
+            api_provider="anthropic",
+            messages=[{"role": "user", "content": "hi"}],
             model="m",
             api_key="k",
         )

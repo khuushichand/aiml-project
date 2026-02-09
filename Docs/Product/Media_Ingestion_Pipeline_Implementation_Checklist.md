@@ -34,7 +34,7 @@ Scope: Gap closure between `/api/v1/media/add`, watchlists/reading ingestion, co
 
 ### 2) `/media/add` to Collections Dual-Write
 - Priority: P1
-- Status: Not Started
+- Status: Complete (`/media/add` now dual-writes successful items into Collections `content_items` via `sync_media_add_results_to_collections`, returning `collections_item_id`/`collections_origin` on success and non-fatal warnings on sync failures)
 - Goal: Align `/api/v1/media/add` with watchlists/reading by writing `content_items` and related tags/metadata.
 - Current behavior:
   - Watchlists/reading dual-write to collections.
@@ -48,12 +48,13 @@ Scope: Gap closure between `/api/v1/media/add`, watchlists/reading ingestion, co
 - Acceptance criteria:
   - Newly ingested `/media/add` items are visible in collections list/search endpoints without separate ingest path.
 - Test requirements:
-  - Integration test for `/media/add` -> collections visibility.
+  - Integration test for `/media/add` -> collections visibility (`tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_add_collections_visibility.py`).
+  - Unit coverage for collections dual-write payload/warning behavior (`tldw_Server_API/tests/MediaIngestion_NEW/unit/test_persistence_collections_dual_write.py`).
   - Regression tests for watchlists/reading unaffected.
 
 ### 3) Embeddings Path Unification and Provenance Contract
 - Priority: P1
-- Status: Not Started
+- Status: Complete (`/media/add` embeddings now use unified dispatch orchestration with a shared provenance contract and mode selection: `jobs`, `background`, or `auto` (jobs-first fallback). Jobs payloads now carry provenance metadata for traceability)
 - Goal: Converge embeddings orchestration semantics across ingestion paths.
 - Current behavior:
   - Watchlists/reading: `enqueue_embeddings_job_for_item` with metadata.
@@ -67,8 +68,8 @@ Scope: Gap closure between `/api/v1/media/add`, watchlists/reading ingestion, co
 - Acceptance criteria:
   - Embeddings jobs are traceable by provenance across all ingestion entry points.
 - Test requirements:
-  - Unit tests for metadata payload construction.
-  - Integration test asserting enqueue/background behavior selected per configured mode.
+  - Unit tests for metadata payload construction (`tldw_Server_API/tests/MediaIngestion_NEW/unit/test_persistence_embeddings_dispatch.py`).
+  - Integration test asserting enqueue/background behavior selected per configured mode (`tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_add_embeddings_dispatch_modes.py`).
 
 ### 4) Metadata Contract Enforcement per Media Type
 - Priority: P2

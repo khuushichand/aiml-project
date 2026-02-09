@@ -313,6 +313,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
 
     if use_adapter:
         # Keep a single connection open for the request lifetime so cursors remain valid
+        is_postgres_backend = bool(isinstance(db_pool, DatabasePool) and getattr(db_pool, "pool", None) is not None)
         conn_cm = db_pool.acquire()
         conn = await conn_cm.__aenter__()
 
@@ -320,10 +321,9 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
         # query/return semantics for tests. If other modules need similar behavior,
         # it can be extracted into the DB_Management layer.
         class _ConnAdapter:
-            def __init__(self, _conn: Any) -> None:
+            def __init__(self, _conn: Any, *, is_postgres: bool) -> None:
                 self._conn = _conn
-                # Heuristic: asyncpg connection exposes fetchrow; aiosqlite does not
-                self._is_sqlite = not hasattr(self._conn, "fetchrow")
+                self._is_sqlite = not is_postgres
                 self._dollar_param = re.compile(r"\$\d+")
 
             def _normalize_sqlite_sql(self, query: str) -> str:
@@ -411,7 +411,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                         )
                         raise
 
-        adapter = _ConnAdapter(conn)
+        adapter = _ConnAdapter(conn, is_postgres=is_postgres_backend)
         try:
             yield adapter
         finally:

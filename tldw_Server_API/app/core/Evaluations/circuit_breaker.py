@@ -20,8 +20,14 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (  # noqa: F401
     CircuitBreaker as _UnifiedCB,
+)
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
     CircuitBreakerConfig as _UnifiedCfg,
+)
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
     CircuitBreakerOpenError,
+)
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
     CircuitState as _UnifiedState,
 )
 
@@ -206,9 +212,9 @@ class CircuitBreaker:
             self.stats.consecutive_failures = 0
             return result
 
-        except _CBOpen:
+        except _CBOpen as e:
             self.stats.rejected_calls += 1
-            raise CircuitOpenError(f"Circuit breaker {self.name} is OPEN")
+            raise CircuitOpenError(f"Circuit breaker {self.name} is OPEN") from e
 
         except asyncio.TimeoutError:
             self.stats.timeouts += 1

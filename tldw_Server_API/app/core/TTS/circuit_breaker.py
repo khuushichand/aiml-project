@@ -20,17 +20,21 @@ from typing import Any, Callable, Optional
 # Third-party Imports
 from loguru import logger
 
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+    CircuitBreaker as _UnifiedCB,
+)
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+    CircuitBreakerConfig as _UnifiedCfg,
+)
+from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
+    CircuitState as _UnifiedState,
+)
+
 #
 # Local Imports
 from .tts_exceptions import (
     TTSCircuitOpenError,
     categorize_error,
-)
-from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
-    CircuitBreaker as _UnifiedCB,
-    CircuitBreakerConfig as _UnifiedCfg,
-    CircuitBreakerOpenError as _UnifiedCBOpen,
-    CircuitState as _UnifiedState,
 )
 
 #

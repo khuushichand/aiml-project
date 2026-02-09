@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest"
 
 import {
   GUARDIAN_SETTINGS_PATH,
+  PERSONA_DOCK_PATH,
   isGuardianSettingsAvailable,
+  isPersonaDockAvailable,
   isRouteEnabledForCapabilities
 } from "../route-capabilities"
 import type { ServerCapabilities } from "@/services/tldw/server-capabilities"
@@ -13,6 +15,7 @@ const makeCapabilities = (
   ({
     hasGuardian: false,
     hasSelfMonitoring: false,
+    hasPersona: false,
     ...overrides
   } as ServerCapabilities)
 
@@ -52,5 +55,20 @@ describe("route capability gating", () => {
       hasSelfMonitoring: false
     })
     expect(isRouteEnabledForCapabilities("/settings/chat", caps)).toBe(true)
+  })
+
+  it("hides persona dock route when persona capability is missing", () => {
+    const caps = makeCapabilities({
+      hasPersona: false
+    })
+    expect(isRouteEnabledForCapabilities(PERSONA_DOCK_PATH, caps)).toBe(false)
+  })
+
+  it("enables persona dock route when persona capability is present", () => {
+    const caps = makeCapabilities({
+      hasPersona: true
+    })
+    expect(isPersonaDockAvailable(caps)).toBe(true)
+    expect(isRouteEnabledForCapabilities(PERSONA_DOCK_PATH, caps)).toBe(true)
   })
 })
