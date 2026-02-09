@@ -217,6 +217,7 @@ class ResourceGovernor:
   - `RG_TRUSTED_PROXIES`: Comma-separated CIDRs for trusted reverse proxies; when unset, IP scope uses the direct remote address only.
   - `RG_METRICS_ENTITY_LABEL`: `true|false` (default `false`). If true, include hashed entity label in metrics; otherwise exclude to avoid high cardinality.
   - `RG_POLICY_STORE`: `file` | `db` (default `file`). In production, prefer `db` and use AuthNZ DB as SoT; in dev, `file` + env overrides.
+  - `RG_ROUTE_MAP_AUDIT`: `true|false` (default `true`). When enabled, the startup audit in `main.py` logs warnings for any HTTP routes not covered by the RG route map (`by_path` or `by_tag`). This is a Phase 1 validation tool used to identify policy gaps before enabling enforcement. Warnings are logged at `WARNING` level with the uncovered route path and method.
   - Test‑harness flags (diagnostics only):
     - `RG_TEST_FORCE_STUB_RATE`: `true|false` forces in‑process sliding‑window logic for requests/tokens in Redis backend. Useful to make burst/steady tests deterministic when real Redis timing or clock skew affects retry_after near window boundaries.
     - `RG_TEST_PURGE_LEASES_BEFORE_RESERVE`: `true|false` best‑effort purge of expired leases before reserve in tests to reduce flakiness.
@@ -702,6 +703,16 @@ Before removing a legacy limiter (Phase 7 / retirement checklist), the following
 
 If mismatch rate exceeds 1% of total decisions for > 24 hours, investigate and resolve before proceeding with legacy removal.
 
+### Shadow Monitoring Tooling (Post-v1.1 Gap)
+
+The exit criteria above require "near-zero mismatches for >= 7 days under representative load", but no automated monitoring or alerting infrastructure currently exists to track this. The `rg_shadow_decision_mismatch_total` metric is emitted and unit-tested (counter increments are validated), but operators must manually query it. To close this gap:
+
+- **Minimum**: Add a Prometheus/Grafana alert rule that fires when `rate(rg_shadow_decision_mismatch_total[1h])` exceeds a configurable threshold (e.g., 1% of `rate(rg_decisions_total[1h])`) for any module label, sustained for > 1 hour.
+- **Recommended**: Create a dashboard panel per module showing the 7-day rolling mismatch rate alongside total RG decisions, with a visual marker at the 1% threshold.
+- **Stretch**: Add a `/api/v1/resource-governor/shadow-status` endpoint that returns per-module mismatch counts and a boolean `ready_for_cutover` flag based on the 7-day criteria.
+
+Until this tooling exists, operators should periodically query the mismatch metric manually before approving legacy limiter retirement.
+
 ## Backward Compatibility for API Consumers
 
 - **429 response payloads**: RG-generated 429 responses include `{"error": "...", "retry_after": N, "policy_id": "..."}`. Legacy 429 payloads varied per module. During migration, modules preserve their existing error message format and add `rate_limit_source: "resource_governor"` as a discriminator.
@@ -723,6 +734,16 @@ The following subsystems were built as part of the RG implementation but are not
 - **DB-backed policy store** (`authnz_policy_store.py`): PostgreSQL/SQLite policy store as alternative to YAML.
 - **Evaluations user rate limiter** (`user_rate_limiter.py`): Tier-based (FREE/BASIC/PREMIUM/ENTERPRISE/CUSTOM) rate limiting with SQLite backend, daily caps, cost tracking, and RG integration. This is a consolidation target alongside the other legacy limiters.
 
+### Cost Enforcement Timeline (Post-v1.1)
+
+Cost-unit enforcement via RG is currently deferred. The `cost_units.py` module provides analytics-only conversion mappings, and the Evaluations module's `max_cost_per_day` / `max_cost_per_month` caps remain legacy-only (unified eval endpoints pass `estimated_cost=0.0`). To move cost enforcement into RG:
+
+1. **Prerequisite**: A stable, per-provider cost estimator that can convert token counts and model IDs to cost units with acceptable accuracy. This does not exist today.
+2. **Implementation path**: Introduce an RG category (e.g., `cost_units`) with a daily ledger, similar to the existing `tokens` daily cap. The `cost_units.py` mapping would feed the estimator.
+3. **Migration**: Replace `max_cost_per_day` / `max_cost_per_month` in `Evaluations/user_rate_limiter.py` with RG daily-ledger-backed cost caps. The legacy SQLite `daily_usage` table would be retained for backfill during upgrade.
+4. **Decision needed**: Whether cost enforcement should be per-module (evals only) or cross-module (all LLM calls). Cross-module requires a unified cost tracking surface that does not yet exist.
+
+Until a cost estimator is available, treat cost caps as deprecated/legacy-only. No timeline is currently set for this work.
 
 ## Acceptance Criteria
 
@@ -805,6 +826,14 @@ The following subsystems were built as part of the RG implementation but are not
 - Evaluations/AuthNZ/Character Chat/Web Scraping
   - Before: bespoke.
   - After: move to governor with appropriate categories; keep per-feature knobs as policy inputs.
+
+- Watchlists
+  - Before: no dedicated rate limiter.
+  - After: `requests` via ingress middleware (`watchlists.default`, 60 RPM, scopes `[user, api_key, ip]`). RG is the sole enforcement path.
+
+- Prompt Studio
+  - Before: per-operation AuthNZ limits (`create_project: 10`, `optimize: 5`, `evaluate: 20`, `generate: 30`).
+  - After: `requests` via ingress middleware (`prompt_studio.default`, 300 RPM); per-operation AuthNZ fallback when RG unavailable.
 
 ## Implementation Plan (v1 Roadmap)
 

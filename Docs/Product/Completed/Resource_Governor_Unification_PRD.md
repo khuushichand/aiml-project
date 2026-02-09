@@ -1,7 +1,7 @@
 # Resource Governor Unification PRD
 
 > **Superseded**: This short PRD is an early summary. The canonical, comprehensive document is
-> [`Docs/Product/Completed/AuthNZ-Refactor/Resource_Governor_PRD.md`](../Completed/AuthNZ-Refactor/Resource_Governor_PRD.md)
+> [`Docs/Product/Completed/AuthNZ-Refactor/Resource_Governor_PRD.md`](AuthNZ-Refactor/Resource_Governor_PRD.md)
 > (v1 / v1.1), which covers daily caps, cost units, fail modes, tenant scoping, Redis+Lua,
 > policy admin API, hot-reload, shadow-mode exit criteria, backward compatibility, and the
 > full 7-stage implementation plan. Refer to that document for all design and status details.

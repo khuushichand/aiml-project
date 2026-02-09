@@ -1,260 +1,202 @@
-import type { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { render, screen, act, waitFor } from "@testing-library/react"
+import { describe, it, expect, vi, beforeEach } from "vitest"
+import React from "react"
 
-// TODO: These integration tests require a comprehensive test harness with:
-// - QueryClientProvider (React Query)
-// - Router context (react-router-dom)
-// - Dexie/IndexedDB mock
-// - Various UI providers (Toast, Layout, Theme)
-// Skip until a shared test wrapper is created.
-const SKIP_INTEGRATION_TESTS = true;
+import { useFeedback } from "@/hooks/useFeedback"
+import { useImplicitFeedback } from "@/hooks/useImplicitFeedback"
+import { MessageActionsBar } from "@/components/Common/Playground/MessageActionsBar"
+import { useFeedbackStore } from "@/store/feedback"
 
 const mocks = vi.hoisted(() => ({
-  showToast: vi.fn(),
-  apiClient: {
-    get: vi.fn(),
-    post: vi.fn(),
-  },
-  streamSSE: vi.fn(),
-}));
+  submitExplicitFeedback: vi.fn().mockResolvedValue({ ok: true, feedback_id: "fb-chat-1" }),
+  submitImplicitFeedback: vi.fn().mockResolvedValue({ ok: true }),
+  updateChatRating: vi.fn().mockResolvedValue({}),
+  notificationError: vi.fn(),
+  setServerChatVersion: vi.fn()
+}))
 
-vi.mock('@web/components/layout/Layout', () => ({
-  Layout: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-}));
+vi.mock("@/services/feedback", () => ({
+  getFeedbackSessionId: () => "sess-chat-test",
+  submitExplicitFeedback: mocks.submitExplicitFeedback,
+  submitImplicitFeedback: mocks.submitImplicitFeedback,
+  updateChatRating: mocks.updateChatRating
+}))
 
-vi.mock('@web/components/ui/ToastProvider', () => ({
-  useToast: () => ({ show: mocks.showToast }),
-}));
+vi.mock("@/store/option", () => ({
+  useStoreMessageOption: (selector: any) =>
+    selector({
+      serverChatVersion: null,
+      setServerChatVersion: mocks.setServerChatVersion
+    })
+}))
 
-vi.mock('@web/components/ui/JsonEditor', () => ({
-  default: () => <div data-testid="json-editor" />,
-  JsonEditor: () => <div data-testid="json-editor" />,
-}));
+vi.mock("@/hooks/useAntdNotification", () => ({
+  useAntdNotification: () => ({ error: mocks.notificationError })
+}))
 
-vi.mock('@web/components/ui/HotkeysOverlay', () => ({
-  default: () => null,
-  HotkeysOverlay: () => null,
-}));
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (_key: string, fallback?: string) => fallback || _key
+  })
+}))
 
-vi.mock('@web/lib/api', () => ({
-  apiClient: mocks.apiClient,
-  getApiBaseUrl: () => 'http://example.com/api/v1',
-  buildAuthHeaders: () => ({}),
-}));
+vi.mock("antd", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>
+}))
 
-vi.mock('@web/lib/sse', () => ({
-  streamSSE: mocks.streamSSE,
-}));
+describe("Chat feedback flows", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useFeedbackStore.setState({ entries: {} })
+    window.localStorage.clear()
+  })
 
-import ChatPage from '@web/pages/chat';
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  Object.defineProperty(navigator, 'clipboard', {
-    value: { writeText: vi.fn().mockResolvedValue(undefined) },
-    configurable: true,
-  });
-  mocks.apiClient.get.mockImplementation((url: string) => {
-    if (url.startsWith('/llm/providers')) {
-      return Promise.resolve({ providers: [] });
-    }
-    if (url.startsWith('/chats?')) {
-      return Promise.resolve({ chats: [] });
-    }
-    if (url.startsWith('/chats/')) {
-      return Promise.resolve({ messages: [] });
-    }
-    return Promise.resolve({});
-  });
-  mocks.apiClient.post.mockResolvedValue({});
-  mocks.streamSSE.mockImplementation(async (_url, _opts, onDelta, onJSON, onDone) => {
-    if (onJSON) onJSON({ tldw_system_message_id: 'sys_1' });
-    if (onDelta) onDelta('Hello from stream');
-    if (onJSON) onJSON({ tldw_message_id: 'msg_1' });
-    if (onDone) onDone();
-  });
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-});
-
-describe.skipIf(SKIP_INTEGRATION_TESTS)('ChatPage feedback (streaming)', () => {
-  it('sends feedback with streamed message IDs for system and assistant messages', async () => {
-    const user = userEvent.setup();
-    render(<ChatPage />);
-
-    const composer = screen.getByPlaceholderText('Type your message…');
-    await user.type(composer, 'Hello');
-    await user.click(screen.getByRole('button', { name: 'Send' }));
-
-    await screen.findByText('Hello from stream');
-    await waitFor(() => expect(mocks.streamSSE).toHaveBeenCalled());
-
-    const systemContainer = screen.getByTestId('message-container-sys_1');
-    const systemFeedbackButton = within(systemContainer).getByRole('button', {
-      name: /Send helpful feedback/i,
-    });
-
-    const assistantContainer = screen.getByTestId('message-container-msg_1');
-    const assistantFeedbackButton = within(assistantContainer).getByRole('button', {
-      name: /Send helpful feedback/i,
-    });
-
-    await user.click(assistantFeedbackButton);
-    await waitFor(() => {
-      expect(mocks.apiClient.post).toHaveBeenCalledWith(
-        '/feedback/explicit',
-        expect.objectContaining({ message_id: 'msg_1', helpful: true })
-      );
-    });
-
-    await user.click(systemFeedbackButton);
-    await waitFor(() => {
-      expect(mocks.apiClient.post).toHaveBeenCalledWith(
-        '/feedback/explicit',
-        expect.objectContaining({ message_id: 'sys_1', helpful: true })
-      );
-    });
-  });
-
-  it('submits detailed feedback from the modal', async () => {
-    const user = userEvent.setup();
-    render(<ChatPage />);
-
-    const composer = screen.getByPlaceholderText('Type your message…');
-    await user.type(composer, 'Hello');
-    await user.click(screen.getByRole('button', { name: 'Send' }));
-
-    await screen.findByText('Hello from stream');
-    await waitFor(() => expect(mocks.streamSSE).toHaveBeenCalled());
-
-    const assistantContainer = screen.getByTestId('message-container-msg_1');
-    const detailsButton = within(assistantContainer).getByRole('button', {
-      name: /Open feedback details/i,
-    });
-
-    await user.click(detailsButton);
-
-    const dialog = screen.getByRole('dialog');
-    await user.click(within(dialog).getByRole('button', { name: /Rate 3 out of 5/i }));
-    await user.click(within(dialog).getByLabelText('Missing important details'));
-    await user.type(within(dialog).getByLabelText('Additional comments (optional)'), 'Needs more specifics.');
-    await user.click(within(dialog).getByRole('button', { name: /Submit Feedback/i }));
-
-    await waitFor(() => {
-      expect(mocks.apiClient.post).toHaveBeenCalledWith(
-        '/feedback/explicit',
-        expect.objectContaining({
-          feedback_type: 'relevance',
-          message_id: 'msg_1',
-          relevance_score: 3,
-          issues: ['missing_details'],
-          user_notes: 'Needs more specifics.',
-        })
-      );
-    });
-  });
-
-  it('emits dwell_time implicit feedback after a response settles', async () => {
-    vi.useFakeTimers();
-    render(<ChatPage />);
-
-    const composer = screen.getByPlaceholderText('Type your message…');
-    fireEvent.change(composer, { target: { value: 'Hello' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-
-    await vi.advanceTimersByTimeAsync(3100);
-    await vi.runOnlyPendingTimersAsync();
-    await Promise.resolve();
-
-    expect(mocks.apiClient.post).toHaveBeenCalledWith(
-      '/rag/feedback/implicit',
-      expect.objectContaining({
-        event_type: 'dwell_time',
-        message_id: 'msg_1',
-        dwell_ms: 3000,
+  it("submits detailed chat feedback in one payload (rating + taxonomy + notes)", async () => {
+    const TestHarness = () => {
+      const feedback = useFeedback({
+        messageKey: "srv:M_chat_1",
+        conversationId: "C_chat_1",
+        messageId: "M_chat_1",
+        query: null
       })
-    );
-  });
 
-  it('emits citation_used implicit feedback when copying citations', async () => {
-    const user = userEvent.setup();
-    mocks.streamSSE.mockImplementation(async (_url, _opts, onDelta, onJSON, onDone) => {
-      if (onJSON) onJSON({ tldw_system_message_id: 'sys_1' });
-      if (onDelta) onDelta('Answer text\n\nSources:\n- Doc 1');
-      if (onJSON) onJSON({ tldw_message_id: 'msg_1' });
-      if (onDone) onDone();
-    });
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            void feedback.submitDetail({
+              rating: 4,
+              issues: ["missing_details", "sources_unhelpful"],
+              notes: "Needed stronger citations."
+            })
+          }}
+        >
+          submit-detail
+        </button>
+      )
+    }
 
-    render(<ChatPage />);
-
-    const composer = screen.getByPlaceholderText('Type your message…');
-    await user.type(composer, 'Hello');
-    await user.click(screen.getByRole('button', { name: 'Send' }));
-
-    const assistantContainer = await screen.findByTestId('message-container-msg_1');
-    const copyButton = within(assistantContainer).getByRole('button', { name: /Copy with citations/i });
-    await user.click(copyButton);
+    render(<TestHarness />)
+    await act(async () => {
+      screen.getByRole("button", { name: "submit-detail" }).click()
+    })
 
     await waitFor(() => {
-      expect(mocks.apiClient.post).toHaveBeenCalledWith(
-        '/rag/feedback/implicit',
+      expect(mocks.submitExplicitFeedback).toHaveBeenCalledWith(
         expect.objectContaining({
-          event_type: 'citation_used',
-          message_id: 'msg_1',
+          conversation_id: "C_chat_1",
+          message_id: "M_chat_1",
+          feedback_type: "relevance",
+          relevance_score: 4,
+          issues: ["missing_details", "sources_unhelpful"],
+          user_notes: "Needed stronger citations.",
+          idempotency_key: expect.any(String)
         })
-      );
-    });
-  });
+      )
+    })
+  })
 
-  it('includes document ids for citation_used when tool results include documents', async () => {
-    const user = userEvent.setup();
-    mocks.streamSSE.mockImplementation(async (_url, _opts, onDelta, onJSON, onDone) => {
-      if (onJSON) onJSON({ tldw_system_message_id: 'sys_1' });
-      if (onDelta) onDelta('Answer text\n\nSources:\n- Doc 1');
-      if (onJSON) {
-        onJSON({
-          tldw_tool_results: [
-            {
-              name: 'rag.search',
-              content: {
-                documents: [
-                  { id: 'doc-1', metadata: { chunk_id: 'chunk-1', corpus: 'media_db' } },
-                ],
-              },
-            },
-          ],
-        });
+  it("emits dwell_time and citation_used implicit events", async () => {
+    const source = {
+      metadata: {
+        document_id: "doc-chat-1",
+        chunk_id: "chunk-chat-1",
+        corpus: "media_db"
       }
-      if (onJSON) onJSON({ tldw_message_id: 'msg_1' });
-      if (onDone) onDone();
-    });
+    }
 
-    render(<ChatPage />);
+    const TestHarness = () => {
+      const implicit = useImplicitFeedback({
+        conversationId: "C_chat_2",
+        messageId: "M_chat_2",
+        query: "chat query",
+        sources: [source]
+      })
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => implicit.trackDwellTime(3000, source, 0)}
+          >
+            dwell
+          </button>
+          <button
+            type="button"
+            onClick={() => implicit.trackCitationUsed(source, 0)}
+          >
+            citation
+          </button>
+        </>
+      )
+    }
 
-    const composer = screen.getByPlaceholderText('Type your message…');
-    await user.type(composer, 'Hello');
-    await user.click(screen.getByRole('button', { name: 'Send' }));
-
-    const assistantContainer = await screen.findByTestId('message-container-msg_1');
-    const copyButton = within(assistantContainer).getByRole('button', { name: /Copy with citations/i });
-    await user.click(copyButton);
+    render(<TestHarness />)
+    await act(async () => {
+      screen.getByRole("button", { name: "dwell" }).click()
+      screen.getByRole("button", { name: "citation" }).click()
+    })
 
     await waitFor(() => {
-      expect(mocks.apiClient.post).toHaveBeenCalledWith(
-        '/rag/feedback/implicit',
+      expect(mocks.submitImplicitFeedback).toHaveBeenCalledWith(
         expect.objectContaining({
-          event_type: 'citation_used',
-          message_id: 'msg_1',
-          doc_id: 'doc-1',
-          chunk_ids: ['chunk-1'],
-          impression_list: ['doc-1'],
-          corpus: 'media_db',
+          event_type: "dwell_time",
+          dwell_ms: 3000,
+          message_id: "M_chat_2"
         })
-      );
-    });
-  });
-});
+      )
+      expect(mocks.submitImplicitFeedback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: "citation_used",
+          doc_id: "doc-chat-1",
+          chunk_ids: ["chunk-chat-1"],
+          corpus: "media_db",
+          message_id: "M_chat_2"
+        })
+      )
+    })
+  })
+
+  it("renders feedback controls for persisted non-user messages", () => {
+    render(
+      <MessageActionsBar
+        t={(key: string, fallback?: string) => fallback || key}
+        isProMode={false}
+        isBot={false}
+        showVariantPager={false}
+        resolvedVariantIndex={0}
+        variantCount={1}
+        canSwipePrev={false}
+        canSwipeNext={false}
+        overflowChipVisibility="hidden"
+        actionRowVisibility="flex"
+        isSpeaking={false}
+        onToggleTts={() => {}}
+        copyPressed={false}
+        onCopy={() => {}}
+        canReply={false}
+        onReply={() => {}}
+        canSaveToNotes={false}
+        canSaveToFlashcards={false}
+        canGenerateDocument={false}
+        onGenerateDocument={() => {}}
+        onSaveKnowledge={() => {}}
+        savingKnowledge={null}
+        isLastMessage={false}
+        onRegenerate={() => {}}
+        onEdit={() => {}}
+        editMode={false}
+        showFeedbackControls
+        feedbackDisabled={false}
+        feedbackDisabledReason=""
+        isFeedbackSubmitting={false}
+        showThanks={false}
+        onThumbUp={() => {}}
+        onThumbDown={() => {}}
+        onOpenDetails={() => {}}
+      />
+    )
+
+    expect(screen.getByText("Was this helpful?")).toBeInTheDocument()
+  })
+})

@@ -1,9 +1,13 @@
+import base64
 import json
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB, SemanticMemory
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Persona.session_manager import SessionManager
 from tldw_Server_API.app.main import app as fastapi_app
 
 
@@ -24,6 +28,15 @@ def _recv_until(client, predicate, timeout=2.0):
         if predicate(data):
             return data
     raise AssertionError("Expected event not received in time")
+
+
+def _seed_personalization_db(tmp_path, monkeypatch, *, user_id: str, enabled: bool) -> PersonalizationDB:
+    base = tmp_path / "user_db"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    path = DatabasePaths.get_personalization_db_path(int(user_id))
+    db = PersonalizationDB(str(path))
+    db.update_profile(user_id, enabled=1 if enabled else 0)
+    return db
 
 
 def test_persona_websocket_plan_and_confirm():
@@ -288,3 +301,137 @@ def test_persona_tool_call_attaches_audit_metadata(monkeypatch):
     assert persona_audit.get("plan_id")
     assert persona_audit.get("tool") == step["tool"]
     assert persona_audit.get("why")
+
+
+def test_persona_audio_chunk_emits_partial_transcript_and_tts_audio():
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            audio_payload = base64.b64encode(b"hello from audio").decode("ascii")
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "audio_chunk",
+                        "session_id": "sess_audio",
+                        "audio_format": "pcm16",
+                        "bytes_base64": audio_payload,
+                    }
+                )
+            )
+
+            partial = _recv_until(ws, lambda d: d.get("event") == "partial_transcript")
+            assert partial.get("session_id") == "sess_audio"
+            assert "hello from audio" in str(partial.get("text_delta"))
+
+            tts_event = _recv_until(ws, lambda d: d.get("event") == "tts_audio")
+            assert tts_event.get("session_id") == "sess_audio"
+            assert tts_event.get("audio_format") == "pcm16"
+            assert tts_event.get("chunk_id")
+
+            audio_bytes = ws.receive_bytes()
+            assert audio_bytes
+
+
+def test_persona_persists_session_turns_and_tool_outcomes(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    manager = SessionManager()
+
+    async def _fake_resolve(*args, **kwargs):
+        return "777", True, True
+
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            session_id = "sess_turn_persist"
+            ws.send_text(json.dumps({"type": "user_message", "session_id": session_id, "text": "hello"}))
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            first_idx = int(plan["steps"][0]["idx"])
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": session_id,
+                        "plan_id": plan["plan_id"],
+                        "approved_steps": [first_idx],
+                    }
+                )
+            )
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+
+    turns = manager.list_turns(session_id=session_id, user_id="777")
+    assert any(t["role"] == "user" and t["content"] == "hello" for t in turns)
+    assert any(t["role"] == "tool" and t["type"] == "tool_result" for t in turns)
+
+
+def test_persona_memory_context_applied_when_opted_in(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    user_id = "888"
+    db = _seed_personalization_db(tmp_path, monkeypatch, user_id=user_id, enabled=True)
+    _ = db.add_semantic_memory(
+        SemanticMemory(user_id=user_id, content="Prefers concise explanations.", tags=["prefs"])
+    )
+
+    async def _fake_resolve(*args, **kwargs):
+        return user_id, True, True
+
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_mem_on",
+                        "text": "find notes about FastAPI testing",
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice" and "Applied" in str(d.get("message")),
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    query_value = str(plan["steps"][0]["args"]["query"])
+    assert "Prefers concise explanations." in query_value
+
+
+def test_persona_memory_context_skipped_when_opted_out(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    user_id = "889"
+    db = _seed_personalization_db(tmp_path, monkeypatch, user_id=user_id, enabled=False)
+    _ = db.add_semantic_memory(
+        SemanticMemory(user_id=user_id, content="Should not be injected.", tags=["prefs"])
+    )
+
+    async def _fake_resolve(*args, **kwargs):
+        return user_id, True, True
+
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_mem_off",
+                        "text": "find notes about FastAPI testing",
+                    }
+                )
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    query_value = str(plan["steps"][0]["args"]["query"])
+    assert "Should not be injected." not in query_value

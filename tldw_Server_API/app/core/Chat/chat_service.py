@@ -973,6 +973,19 @@ def _attach_internal_http_hooks(adapter: Any, request: dict[str, Any], internal:
         request.update(internal)
 
 
+def _is_client_like_error(exc: Exception) -> bool:
+    """Return True if *exc* looks like a client/config error (not an upstream failure).
+
+    Used to gate provider fallback: we only fall back on upstream/server errors,
+    not on client-side mistakes such as bad credentials or malformed requests.
+    """
+    name_lower = type(exc).__name__.lower()
+    return any(t in name_lower for t in (
+        "authentication", "ratelimit", "rate_limit",
+        "badrequest", "bad_request", "configuration",
+    ))
+
+
 def _get_llm_registry():
     """Resolve the adapter registry at call time to honor test monkeypatching."""
     return _adapter_registry.get_registry()
@@ -2070,16 +2083,7 @@ async def execute_streaming_call(
                     stream_failure_recorded = True
                     if provider_manager:
                         provider_manager.record_failure(selected_provider, proc_error)
-                        name_lower = type(proc_error).__name__.lower()
-                        client_like_error = (
-                            "authentication" in name_lower
-                            or "ratelimit" in name_lower
-                            or "rate_limit" in name_lower
-                            or "badrequest" in name_lower
-                            or "bad_request" in name_lower
-                            or "configuration" in name_lower
-                        )
-                        if enable_provider_fallback and isinstance(proc_error, (ChatProviderError, ChatAPIError)) and not client_like_error:
+                        if enable_provider_fallback and isinstance(proc_error, (ChatProviderError, ChatAPIError)) and not _is_client_like_error(proc_error):
                             fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
                             if fallback_provider:
                                 logger.warning(
@@ -2274,16 +2278,7 @@ async def execute_streaming_call(
         if provider_manager and not queue_enabled:
             provider_manager.record_failure(selected_provider, e)
             # Only fallback on upstream/server errors; skip fallback for client/config errors
-            name_lower_e = type(e).__name__.lower()
-            client_like_error = (
-                "authentication" in name_lower_e
-                or "ratelimit" in name_lower_e
-                or "rate_limit" in name_lower_e
-                or "badrequest" in name_lower_e
-                or "bad_request" in name_lower_e
-                or "configuration" in name_lower_e
-            )
-            if enable_provider_fallback and isinstance(e, (ChatProviderError, ChatAPIError)) and not client_like_error:
+            if enable_provider_fallback and isinstance(e, (ChatProviderError, ChatAPIError)) and not _is_client_like_error(e):
                 fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
                 if fallback_provider:
                     logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
@@ -3148,16 +3143,7 @@ async def execute_non_stream_call(
                 provider_manager.record_failure(selected_provider, e)
 
         if provider_manager:
-            name_lower_e = type(e).__name__.lower()
-            client_like_error = (
-                "authentication" in name_lower_e
-                or "ratelimit" in name_lower_e
-                or "rate_limit" in name_lower_e
-                or "badrequest" in name_lower_e
-                or "bad_request" in name_lower_e
-                or "configuration" in name_lower_e
-            )
-            if enable_provider_fallback and isinstance(e, (ChatProviderError, ChatAPIError)) and not client_like_error:
+            if enable_provider_fallback and isinstance(e, (ChatProviderError, ChatAPIError)) and not _is_client_like_error(e):
                 fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
                 if fallback_provider:
                     logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")

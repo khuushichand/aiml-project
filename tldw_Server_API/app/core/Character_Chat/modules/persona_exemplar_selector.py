@@ -381,9 +381,36 @@ def _score_candidates(
     return scored
 
 
-def _text_similarity(lhs: dict[str, Any], rhs: dict[str, Any]) -> float:
-    lhs_terms = _tokenize(str(lhs.get("text") or ""))
-    rhs_terms = _tokenize(str(rhs.get("text") or ""))
+def _exemplar_key(exemplar: dict[str, Any]) -> str:
+    item_id = str(exemplar.get("id") or "").strip()
+    if item_id:
+        return f"id:{item_id}"
+    return f"obj:{id(exemplar)}"
+
+
+def _get_exemplar_terms(
+    exemplar: dict[str, Any],
+    *,
+    terms_cache: dict[str, set[str]] | None = None,
+) -> set[str]:
+    if terms_cache is None:
+        return _tokenize(str(exemplar.get("text") or ""))
+    key = _exemplar_key(exemplar)
+    terms = terms_cache.get(key)
+    if terms is None:
+        terms = _tokenize(str(exemplar.get("text") or ""))
+        terms_cache[key] = terms
+    return terms
+
+
+def _text_similarity(
+    lhs: dict[str, Any],
+    rhs: dict[str, Any],
+    *,
+    terms_cache: dict[str, set[str]] | None = None,
+) -> float:
+    lhs_terms = _get_exemplar_terms(lhs, terms_cache=terms_cache)
+    rhs_terms = _get_exemplar_terms(rhs, terms_cache=terms_cache)
     return _jaccard_similarity(lhs_terms, rhs_terms)
 
 
@@ -391,6 +418,11 @@ def _apply_mmr(scored: list[ScoredExemplar], mmr_lambda: float) -> list[ScoredEx
     """Diversify scored candidates using a simple MMR pass."""
     if not scored:
         return []
+
+    terms_cache = {
+        _exemplar_key(item.exemplar): _tokenize(str(item.exemplar.get("text") or ""))
+        for item in scored
+    }
 
     selected: list[ScoredExemplar] = []
     remaining = scored.copy()
@@ -406,7 +438,10 @@ def _apply_mmr(scored: list[ScoredExemplar], mmr_lambda: float) -> list[ScoredEx
         for idx, candidate in enumerate(remaining):
             max_similarity = 0.0
             for chosen in selected:
-                max_similarity = max(max_similarity, _text_similarity(candidate.exemplar, chosen.exemplar))
+                max_similarity = max(
+                    max_similarity,
+                    _text_similarity(candidate.exemplar, chosen.exemplar, terms_cache=terms_cache),
+                )
             mmr_score = mmr_lambda * candidate.base_score - (1.0 - mmr_lambda) * max_similarity
             if mmr_score > best_score:
                 best_score = mmr_score
@@ -442,6 +477,11 @@ def _pack_budget(
     coverage = {"openers": 0, "emphasis": 0, "enders": 0, "catchphrases_used": 0}
     budget_used = 0
 
+    terms_cache = {
+        _exemplar_key(item.exemplar): _tokenize(str(item.exemplar.get("text") or ""))
+        for item in ranked
+    }
+
     remaining = ranked.copy()
     while remaining:
         feasible: list[ScoredExemplar] = []
@@ -452,7 +492,10 @@ def _pack_budget(
             if budget_used + token_len > config.budget_tokens:
                 continue
 
-            is_duplicate = any(_text_similarity(candidate.exemplar, chosen.exemplar) > 0.92 for chosen in selected)
+            is_duplicate = any(
+                _text_similarity(candidate.exemplar, chosen.exemplar, terms_cache=terms_cache) > 0.92
+                for chosen in selected
+            )
             if is_duplicate:
                 continue
 

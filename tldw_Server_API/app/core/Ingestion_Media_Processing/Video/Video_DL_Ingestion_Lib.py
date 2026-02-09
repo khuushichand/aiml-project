@@ -168,6 +168,24 @@ _VIDEO_NONCRITICAL_EXCEPTIONS = (
 )
 
 
+def _validate_downloaded_url_video_file(downloaded_path: Path) -> None:
+    """
+    Apply upload-equivalent validation to URL-downloaded video payloads.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (  # type: ignore  # noqa: E501
+        _validate_downloaded_url_file,
+    )
+
+    _validate_downloaded_url_file(
+        downloaded_path=downloaded_path,
+        processing_filename=downloaded_path.name,
+        media_type="video",
+        form_data=None,
+        media_mod=None,
+        allowed_extensions=None,
+    )
+
+
 def _safe_remove_file(file_path: Path) -> None:
     """Attempt to remove a file while swallowing non-critical errors."""
     try:
@@ -1329,6 +1347,7 @@ def process_single_video(
                 raise FileNotFoundError(
                     "Downloaded file path rejected outside temp directory."
                 )
+            _validate_downloaded_url_video_file(safe_downloaded)
             local_file_path_for_transcription = str(safe_downloaded)
             # *** Update only the processing_source, keep original input_ref ***
             processing_result["processing_source"] = local_file_path_for_transcription

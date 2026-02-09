@@ -173,25 +173,40 @@ _FEED_ALLOWED_ATTRS: dict[str, list[str]] = {
 _FEED_ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
 
 
+import re as _re
+
+# Pre-strip patterns: remove entire tag+content for dangerous elements
+_STRIP_CONTENT_RE = [
+    _re.compile(r"<\s*script[^>]*>.*?</\s*script\s*>", _re.IGNORECASE | _re.DOTALL),
+    _re.compile(r"<\s*script[^>]*/?\s*>", _re.IGNORECASE),
+    _re.compile(r"<\s*style[^>]*>.*?</\s*style\s*>", _re.IGNORECASE | _re.DOTALL),
+    _re.compile(r"<\s*iframe[^>]*>.*?</\s*iframe\s*>", _re.IGNORECASE | _re.DOTALL),
+    _re.compile(r"<\s*iframe[^>]*/?\s*>", _re.IGNORECASE),
+    _re.compile(r"<\s*object[^>]*>.*?</\s*object\s*>", _re.IGNORECASE | _re.DOTALL),
+    _re.compile(r"<\s*embed[^>]*/?\s*>", _re.IGNORECASE),
+]
+_EVENT_HANDLER_RE = _re.compile(r"\bon\w+\s*=\s*[\"'][^\"']*[\"']", _re.IGNORECASE)
+
+
 def _sanitize_feed_html(value: str | None) -> str | None:
     """Sanitize HTML from feed content, stripping scripts/iframes/event handlers."""
     if not value:
         return value
+    # Phase 1: remove dangerous elements and their content (regex)
+    cleaned = value
+    for pattern in _STRIP_CONTENT_RE:
+        cleaned = pattern.sub("", cleaned)
+    cleaned = _EVENT_HANDLER_RE.sub("", cleaned)
+    # Phase 2: allowlist remaining tags via bleach (if available)
     if _bleach is not None:
-        return _bleach.clean(
-            value,
+        cleaned = _bleach.clean(
+            cleaned,
             tags=_FEED_ALLOWED_TAGS,
             attributes=_FEED_ALLOWED_ATTRS,
             protocols=_FEED_ALLOWED_PROTOCOLS,
             strip=True,
             strip_comments=True,
         )
-    # Fallback: strip all tags via regex (less precise but safe)
-    import re
-    cleaned = re.sub(r"<\s*script[^>]*>.*?</\s*script\s*>", "", value, flags=re.IGNORECASE | re.DOTALL)
-    cleaned = re.sub(r"<\s*style[^>]*>.*?</\s*style\s*>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
-    cleaned = re.sub(r"<\s*iframe[^>]*>.*?</\s*iframe\s*>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
-    cleaned = re.sub(r"\bon\w+\s*=\s*[\"'][^\"']*[\"']", "", cleaned, flags=re.IGNORECASE)
     return cleaned
 
 
@@ -225,6 +240,31 @@ def _feed_health_status(consec_errors: int, active: bool) -> str:
 # ---------------------------------------------------------------------------
 _FEED_RETENTION_MAX_ITEMS = int(os.getenv("COLLECTIONS_FEED_MAX_ITEMS", "0") or "0")  # 0 = unlimited
 _FEED_RETENTION_DAYS = int(os.getenv("COLLECTIONS_FEED_RETENTION_DAYS", "0") or "0")  # 0 = unlimited
+
+
+def _apply_feed_retention(collections_db: CollectionsDatabase, origin: str, src) -> None:
+    """Apply per-source retention policy after successful ingestion."""
+    try:
+        src_settings = json.loads(getattr(src, "settings_json", None) or "{}") if getattr(src, "settings_json", None) else {}
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+        src_settings = {}
+    retention = src_settings.get("retention") if isinstance(src_settings, dict) else None
+    max_items = (retention.get("max_items") if isinstance(retention, dict) else None) or _FEED_RETENTION_MAX_ITEMS
+    retention_days = (retention.get("retention_days") if isinstance(retention, dict) else None) or _FEED_RETENTION_DAYS
+    if not max_items and not retention_days:
+        return
+    try:
+        pruned = collections_db.prune_content_items_for_source(
+            origin=origin,
+            origin_id=int(src.id),
+            max_items=int(max_items) if max_items else None,
+            retention_days=int(retention_days) if retention_days else None,
+        )
+        if pruned:
+            logger.debug(f"watchlists.retention: pruned {pruned} items for source {src.id}")
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(f"watchlists.retention: failed for source {getattr(src, 'id', '?')}: {exc}")
+
 
 # Tracking query parameters to strip during URL normalization
 _TRACKING_PARAMS = frozenset({

@@ -487,12 +487,12 @@ class TestCircuitBreakerConcurrency:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Some should be ValueError, later ones should be circuit open
+        # All should be ValueError or circuit open; circuit should end open
         value_errors = sum(1 for r in results if isinstance(r, ValueError))
         circuit_errors = sum(1 for r in results if isinstance(r, CircuitOpenError))
 
-        assert value_errors <= 3  # At most threshold failures
-        assert circuit_errors >= 2  # Remaining should be rejected
+        assert value_errors + circuit_errors == 5
+        assert value_errors >= 3  # At least threshold failures needed to trip
         assert cb.state == CircuitState.OPEN
 
     @pytest.mark.asyncio

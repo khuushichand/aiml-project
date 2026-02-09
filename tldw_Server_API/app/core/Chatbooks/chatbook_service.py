@@ -1385,6 +1385,156 @@ class ChatbookService:
                 except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e3:
                     logger.warning(f"Connection close failed after transaction: error={e3}")
 
+    async def continue_chatbook_export(
+        self,
+        export_id: str,
+        continuations: list[dict[str, Any]],
+        name: str | None = None,
+        async_mode: bool = False,
+        request_id: str | None = None,
+    ) -> tuple[bool, str, str | None]:
+        """
+        Continue a truncated export by producing a linked chatbook with continuation data.
+
+        Args:
+            export_id: Original export's export_id from manifest.
+            continuations: Continuation tokens from the original manifest's truncation metadata.
+            name: Override name for the continuation chatbook.
+            async_mode: Whether to run asynchronously (not yet supported for continuation).
+            request_id: Optional request ID for tracing.
+
+        Returns:
+            Tuple of (success, message, file_path).
+        """
+        if async_mode:
+            return False, "Async continuation exports are not yet supported", None
+
+        work_dir: Path | None = None
+        output_path: Path | None = None
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            work_dir = self.temp_dir / f"continue_{timestamp}_{uuid4().hex[:8]}"
+            work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+            # Determine sequence number from export_id
+            seq = 1
+            if "_cont_" in export_id:
+                try:
+                    seq = int(export_id.rsplit("_cont_", 1)[-1]) + 1
+                except (TypeError, ValueError):
+                    seq = 1
+            cont_export_id = f"{export_id}_cont_{seq}"
+
+            cont_name = name or f"Continuation of {export_id}"
+            manifest = ChatbookManifest(
+                version=ChatbookVersion.V1,
+                name=cont_name,
+                description=f"Continuation export linked to {export_id}",
+                user_id=hashlib.sha256(self.user_id.encode()).hexdigest()[:16],
+                export_id=cont_export_id,
+                metadata={"continues_export_id": export_id},
+            )
+            manifest.binary_limits = self._get_binary_limits_bytes()
+            content = ChatbookContent()
+
+            evals_db = self._get_evaluations_db()
+
+            raw_max_rows = os.getenv("CHATBOOKS_EVAL_EXPORT_MAX_ROWS", "200")
+            try:
+                max_rows = int(raw_max_rows)
+            except (TypeError, ValueError):
+                max_rows = 200
+
+            eval_dir = work_dir / "content" / "evaluations"
+            eval_dir.mkdir(parents=True, exist_ok=True)
+
+            for token in continuations:
+                eval_id = token.get("evaluation_id")
+                after = token.get("continuation_token")
+                if not eval_id or not after:
+                    logger.debug(f"Skipping invalid continuation token: {token}")
+                    continue
+                if evals_db is None:
+                    self._note_todo("Continuation requires EvaluationsDatabase; skipping.")
+                    continue
+
+                try:
+                    runs, has_more = evals_db.list_runs(
+                        eval_id=str(eval_id), limit=max_rows,
+                        after=str(after), return_has_more=True
+                    )
+                    runs_payload = [self._normalize_evaluation_run(run) for run in runs]
+
+                    eval_data: dict[str, Any] = {
+                        "evaluation_id": str(eval_id),
+                        "continued_from": str(after),
+                        "runs": runs_payload,
+                    }
+
+                    if has_more:
+                        eval_data["truncated"] = True
+                        eval_data["max_rows"] = max_rows
+                        truncation = manifest.truncation.setdefault("evaluations", {})
+                        truncation["truncated"] = True
+                        truncation["max_rows"] = max_rows
+                        truncation["exported_count"] = truncation.get("exported_count", 0) + len(runs_payload)
+                        if runs_payload:
+                            last_run_id = runs_payload[-1].get("id")
+                            if last_run_id:
+                                new_continuations = truncation.setdefault("continuations", [])
+                                new_continuations.append({
+                                    "evaluation_id": str(eval_id),
+                                    "run_id": str(last_run_id),
+                                    "continuation_token": str(last_run_id)
+                                })
+
+                    eval_file = eval_dir / f"evaluation_{eval_id}_cont.json"
+                    with open(eval_file, "w", encoding="utf-8") as ef:
+                        json.dump(eval_data, ef, indent=2, ensure_ascii=False)
+                    content.evaluations[str(eval_id)] = eval_data
+                    manifest.content_items.append(ContentItem(
+                        id=str(eval_id),
+                        type=ContentType.EVALUATION,
+                        title=f"Evaluation {eval_id} (continuation)",
+                        file_path=f"content/evaluations/{eval_file.name}"
+                    ))
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
+                    logger.debug(f"Failed to continue evaluation {eval_id}: {exc}")
+
+            manifest.total_evaluations = len(content.evaluations)
+
+            # Write manifest
+            manifest_path = work_dir / "manifest.json"
+            async with aiofiles.open(manifest_path, 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False))
+
+            # Create archive
+            output_filename = self._build_export_filename(cont_name, timestamp)
+            output_path = self.export_dir / output_filename
+            await self._create_zip_archive_async(work_dir, output_path)
+
+            manifest.total_size_bytes = output_path.stat().st_size
+            async with aiofiles.open(manifest_path, 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False))
+            await self._create_zip_archive_async(work_dir, output_path)
+
+            return True, "Continuation chatbook created successfully", str(output_path)
+
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Error creating continuation chatbook: {e}")
+            if output_path and output_path.exists():
+                try:
+                    await asyncio.to_thread(output_path.unlink)
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
+                    pass
+            return False, f"Error creating continuation chatbook: {e}", None
+        finally:
+            if work_dir and work_dir.exists():
+                try:
+                    await asyncio.to_thread(shutil.rmtree, work_dir)
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
+                    pass
+
     async def _create_chatbook_sync_wrapper(
         self,
         name: str,

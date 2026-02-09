@@ -25,7 +25,7 @@ class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
         return is_truthy(v)
 
     def _base_url(self, openai_cfg: dict[str, Any] | None = None) -> str:
-        from tldw_Server_API.app.core.LLM_Calls.chat_calls import _resolve_openai_api_base
+        from tldw_Server_API.app.core.LLM_Calls.adapter_utils import _resolve_openai_api_base
         return _resolve_openai_api_base(openai_cfg or {})
 
     def _headers(self, api_key: str | None) -> dict[str, str]:

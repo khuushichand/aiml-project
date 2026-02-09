@@ -281,6 +281,25 @@ def _default_title_from_audio_path(audio_path: str | Path) -> str:
             return trimmed or stem
     return stem
 
+
+def _validate_downloaded_url_audio_file(downloaded_path: Path) -> None:
+    """
+    Apply upload-equivalent validation to URL-downloaded audio payloads.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (  # type: ignore  # noqa: E501
+        _validate_downloaded_url_file,
+    )
+
+    _validate_downloaded_url_file(
+        downloaded_path=downloaded_path,
+        processing_filename=downloaded_path.name,
+        media_type="audio",
+        form_data=None,
+        media_mod=None,
+        allowed_extensions=None,
+    )
+
+
 def download_audio_file(
     url: str,
     target_temp_dir: str,
@@ -857,6 +876,9 @@ def process_audio_files(
 
                 if not current_audio_path or not Path(current_audio_path).exists():
                      raise RuntimeError("Audio file path is missing or invalid after download/copy check.")
+
+                if is_url:
+                    _validate_downloaded_url_audio_file(Path(current_audio_path))
 
                 # 2. Convert to WAV using the library function (skip if already WAV)
                 if Path(current_audio_path).suffix.lower() == '.wav':

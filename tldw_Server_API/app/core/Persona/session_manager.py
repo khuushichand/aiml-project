@@ -137,6 +137,53 @@ class SessionManager:
         session.pending_plans.clear()
         return cleared
 
+    def append_turn(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        persona_id: str,
+        role: str,
+        content: str,
+        turn_type: str = "text",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        session = self.create(user_id=user_id, persona_id=persona_id, resume_session_id=session_id)
+        turn: dict[str, Any] = {
+            "turn_id": uuid.uuid4().hex,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "role": str(role or "unknown"),
+            "type": str(turn_type or "text"),
+            "content": str(content or ""),
+            "metadata": dict(metadata or {}),
+        }
+        session.turns.append(turn)
+        return turn
+
+    def list_turns(
+        self,
+        *,
+        session_id: str,
+        user_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        session = self._sessions.get(session_id)
+        if session is None:
+            return []
+        if user_id is not None and session.user_id != user_id:
+            return []
+        turns = list(session.turns)
+        if limit is not None:
+            try:
+                safe_limit = max(0, int(limit))
+            except (TypeError, ValueError):
+                safe_limit = 0
+            if safe_limit:
+                turns = turns[-safe_limit:]
+            else:
+                turns = []
+        return turns
+
 
 _singleton: SessionManager | None = None
 

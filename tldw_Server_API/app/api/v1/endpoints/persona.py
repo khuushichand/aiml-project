@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import contextlib
 import json
 import uuid
@@ -25,6 +27,11 @@ from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.feature_flags import is_persona_enabled
 from tldw_Server_API.app.core.MCP_unified import MCPRequest, get_mcp_server
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
+from tldw_Server_API.app.core.Persona.memory_integration import (
+    persist_persona_turn,
+    persist_tool_outcome,
+    retrieve_top_memories,
+)
 from tldw_Server_API.app.core.Persona.session_manager import get_session_manager
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
@@ -39,6 +46,58 @@ def _get_persona_max_tool_steps() -> int:
     except Exception:
         value = 3
     return max(1, min(value, 20))
+
+
+def _get_persona_memory_top_k() -> int:
+    try:
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        value = int(_app_settings.get("PERSONA_MEMORY_TOP_K", 3))
+    except Exception:
+        value = 3
+    return max(1, min(value, 10))
+
+
+def _decode_audio_chunk(bytes_base64: str) -> bytes:
+    encoded = str(bytes_base64 or "").strip()
+    if not encoded:
+        raise ValueError("bytes_base64 is required")
+    try:
+        return base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Invalid base64 payload for audio chunk") from exc
+
+
+async def _transcribe_audio_chunk(audio_bytes: bytes, audio_format: str) -> str:
+    """
+    Lightweight scaffold transcription.
+
+    This is intentionally simple to keep persona WS independent from heavy STT
+    runtime requirements during early-stage rollout and tests.
+    """
+    if not audio_bytes:
+        return ""
+    try:
+        text = audio_bytes.decode("utf-8", errors="ignore").strip()
+    except Exception:
+        text = ""
+    if text:
+        return text
+    return f"[audio:{audio_format or 'unknown'}:{len(audio_bytes)} bytes]"
+
+
+async def _generate_tts_audio_chunks(text: str, audio_format: str) -> list[bytes]:
+    """
+    Lightweight scaffold TTS chunk generator.
+
+    The event contract (`tts_audio` + binary frame) is implemented here; a full
+    provider-backed synthesis path can be added without changing WS semantics.
+    """
+    spoken = str(text or "").strip()
+    if not spoken:
+        return []
+    # Emit a single binary chunk for now; content is deterministic for tests.
+    return [spoken.encode("utf-8")]
 
 
 def _is_authnz_access_token(token: str) -> bool:
@@ -254,9 +313,11 @@ async def persona_stream(
             return
 
         await stream.send_json({"event": "notice", "message": "persona stream connected (scaffold)"})
-        connection_user_id = user_id or f"anonymous:{uuid.uuid4().hex}"
+        authenticated_user_id = user_id
+        connection_user_id = authenticated_user_id or f"anonymous:{uuid.uuid4().hex}"
         session_manager = get_session_manager()
         default_session_id = uuid.uuid4().hex
+        persona_id = "research_assistant"
 
         # Basic RBAC policy from settings
         from tldw_Server_API.app.core.config import settings as _app_settings
@@ -269,6 +330,38 @@ async def persona_stream(
                 return False
             return not ("export" in n and not allow_export)
 
+        def _record_turn(
+            *,
+            session_id: str,
+            role: str,
+            content: str,
+            turn_type: str,
+            metadata: dict[str, Any] | None = None,
+            persist_as_memory: bool = False,
+        ) -> None:
+            try:
+                session_manager.append_turn(
+                    session_id=session_id,
+                    user_id=connection_user_id,
+                    persona_id=persona_id,
+                    role=role,
+                    content=content,
+                    turn_type=turn_type,
+                    metadata=metadata,
+                )
+            except Exception as exc:
+                logger.debug(f"persona turn append skipped: {exc}")
+            _ = persist_persona_turn(
+                user_id=authenticated_user_id,
+                session_id=session_id,
+                persona_id=persona_id,
+                role=role,
+                content=content,
+                turn_type=turn_type,
+                metadata=metadata,
+                store_as_memory=persist_as_memory,
+            )
+
         async def _call_tool(
             name: str,
             arguments: dict,
@@ -279,7 +372,7 @@ async def persona_stream(
             why: str | None = None,
             description: str | None = None,
         ) -> dict:
-            if user_id is None:
+            if authenticated_user_id is None:
                 return {"error": "Authentication required for tool execution"}
             if not _tool_allowed(name):
                 return {"error": f"Tool '{name}' not permitted by policy"}
@@ -298,12 +391,12 @@ async def persona_stream(
                     "description": str(description or ""),
                 },
             }
-            resp = await server.handle_http_request(req, user_id=user_id, metadata=audit_metadata)
+            resp = await server.handle_http_request(req, user_id=authenticated_user_id, metadata=audit_metadata)
             if resp.error:
                 return {"error": resp.error.message}
             return {"ok": True, "result": resp.result}
 
-        async def _propose_plan(text: str) -> dict:
+        async def _propose_plan(text: str, memory_context: list[str] | None = None) -> dict:
             steps = []
             t = (text or "").lower()
             if "http" in t or "ingest" in t or "url" in t:
@@ -326,13 +419,22 @@ async def persona_stream(
                     }
                 )
             else:
+                query_text = text
+                compact_memories = [m.strip() for m in (memory_context or []) if str(m or "").strip()]
+                if compact_memories:
+                    memory_lines = "\n".join(f"- {m}" for m in compact_memories[: _get_persona_memory_top_k()])
+                    query_text = f"{text}\n\nPersona memory hints:\n{memory_lines}"
                 steps.append(
                     {
                         "idx": 0,
                         "tool": "rag_search",
-                        "args": {"query": text},
+                        "args": {"query": query_text},
                         "description": "Search your knowledge base",
-                        "why": "Input appears to be a knowledge query.",
+                        "why": (
+                            "Input appears to be a knowledge query with applied personalization memories."
+                            if compact_memories
+                            else "Input appears to be a knowledge query."
+                        ),
                     }
                 )
             return {"steps": steps}
@@ -348,7 +450,30 @@ async def persona_stream(
             if mtype == "user_message":
                 text = (msg.get("text") or msg.get("message") or "").strip()
                 session_id = str(msg.get("session_id") or default_session_id)
-                plan = await _propose_plan(text)
+                _record_turn(
+                    session_id=session_id,
+                    role="user",
+                    content=text,
+                    turn_type="user_message",
+                    metadata={"source": "ws"},
+                    persist_as_memory=False,
+                )
+                memories = retrieve_top_memories(
+                    user_id=authenticated_user_id,
+                    query_text=text,
+                    top_k=_get_persona_memory_top_k(),
+                )
+                memory_context = [m.content for m in memories]
+                if memory_context:
+                    await stream.send_json(
+                        {
+                            "event": "notice",
+                            "session_id": session_id,
+                            "level": "info",
+                            "message": f"Applied {len(memory_context)} personalization memories",
+                        }
+                    )
+                plan = await _propose_plan(text, memory_context=memory_context)
                 plan_id = uuid.uuid4().hex
                 max_tool_steps = _get_persona_max_tool_steps()
                 proposed_steps = list(plan.get("steps", []))
@@ -384,6 +509,72 @@ async def persona_stream(
                     for step in pending_plan.steps
                 ]
                 await stream.send_json({"event": "tool_plan", "session_id": session_id, "plan_id": plan_id, "steps": stored_steps})
+            elif mtype == "audio_chunk":
+                session_id = str(msg.get("session_id") or default_session_id)
+                audio_format = str(msg.get("audio_format") or "pcm16")
+                try:
+                    audio_bytes = _decode_audio_chunk(str(msg.get("bytes_base64") or ""))
+                except ValueError as exc:
+                    await stream.send_json(
+                        {
+                            "event": "notice",
+                            "session_id": session_id,
+                            "level": "error",
+                            "message": str(exc),
+                        }
+                    )
+                    continue
+
+                transcript_delta = await _transcribe_audio_chunk(audio_bytes, audio_format=audio_format)
+                if transcript_delta:
+                    _record_turn(
+                        session_id=session_id,
+                        role="user",
+                        content=transcript_delta,
+                        turn_type="audio_transcript",
+                        metadata={"audio_format": audio_format, "bytes": len(audio_bytes)},
+                        persist_as_memory=False,
+                    )
+                    await stream.send_json(
+                        {
+                            "event": "partial_transcript",
+                            "session_id": session_id,
+                            "text_delta": transcript_delta,
+                        }
+                    )
+
+                tts_text = str(msg.get("tts_text") or f"You said: {transcript_delta or 'audio received.'}")
+                tts_chunks = await _generate_tts_audio_chunks(tts_text, audio_format=audio_format)
+                for chunk in tts_chunks:
+                    chunk_id = uuid.uuid4().hex
+                    await stream.send_json(
+                        {
+                            "event": "tts_audio",
+                            "session_id": session_id,
+                            "audio_format": audio_format,
+                            "chunk_id": chunk_id,
+                        }
+                    )
+                    try:
+                        await stream.ws.send_bytes(chunk)
+                    except Exception as exc:
+                        await stream.send_json(
+                            {
+                                "event": "notice",
+                                "session_id": session_id,
+                                "level": "warning",
+                                "message": f"Failed to send tts audio binary chunk: {exc}",
+                            }
+                        )
+                        break
+                _record_turn(
+                    session_id=session_id,
+                    role="assistant",
+                    content=tts_text,
+                    turn_type="tts_audio",
+                    metadata={"audio_format": audio_format, "chunks": len(tts_chunks)},
+                    persist_as_memory=True,
+                )
             elif mtype == "confirm_plan":
                 session_id = str(msg.get("session_id") or default_session_id)
                 plan_id = str(msg.get("plan_id") or "").strip()
@@ -442,6 +633,22 @@ async def persona_stream(
                         description=step.description,
                     )
                     await stream.send_json({"event": "tool_result", "session_id": session_id, "step_idx": step.idx, **result})
+                    _record_turn(
+                        session_id=session_id,
+                        role="tool",
+                        content=json.dumps(result, ensure_ascii=True),
+                        turn_type="tool_result",
+                        metadata={"tool": step.tool, "step_idx": step.idx},
+                        persist_as_memory=False,
+                    )
+                    _ = persist_tool_outcome(
+                        user_id=authenticated_user_id,
+                        session_id=session_id,
+                        persona_id=persona_id,
+                        tool_name=step.tool,
+                        step_idx=step.idx,
+                        outcome=result,
+                    )
                 if executed_steps == 0:
                     await stream.send_json({"event": "notice", "session_id": session_id, "level": "warning", "message": "No approved steps matched plan"})
             elif mtype == "cancel":
@@ -458,8 +665,17 @@ async def persona_stream(
                 )
             else:
                 session_id = str(msg.get("session_id") or default_session_id)
-                await stream.send_json({"event": "assistant_delta", "session_id": session_id, "text_delta": "(scaffold)"})
+                assistant_text = "(scaffold)"
+                await stream.send_json({"event": "assistant_delta", "session_id": session_id, "text_delta": assistant_text})
                 await stream.send_json({"event": "notice", "session_id": session_id, "message": f"echo: {mtype}"})
+                _record_turn(
+                    session_id=session_id,
+                    role="assistant",
+                    content=assistant_text,
+                    turn_type="assistant_delta",
+                    metadata={"echo_type": str(mtype)},
+                    persist_as_memory=False,
+                )
     except WebSocketDisconnect:
         logger.info("Persona stream disconnected")
     except Exception as e:

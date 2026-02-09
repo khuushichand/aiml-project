@@ -76,3 +76,32 @@ def test_session_manager_clear_plans():
     assert cleared == 2
     assert manager.get_plan(session_id="sess_clear", plan_id="plan_1", user_id="user_1") is None
     assert manager.get_plan(session_id="sess_clear", plan_id="plan_2", user_id="user_1") is None
+
+
+def test_session_manager_turn_append_and_list_limit():
+    manager = SessionManager()
+    manager.append_turn(
+        session_id="sess_turns",
+        user_id="user_1",
+        persona_id="research_assistant",
+        role="user",
+        content="hello",
+        turn_type="user_message",
+    )
+    manager.append_turn(
+        session_id="sess_turns",
+        user_id="user_1",
+        persona_id="research_assistant",
+        role="assistant",
+        content="hi there",
+        turn_type="assistant_delta",
+    )
+
+    turns = manager.list_turns(session_id="sess_turns", user_id="user_1")
+    assert len(turns) == 2
+    assert turns[0]["role"] == "user"
+    assert turns[1]["role"] == "assistant"
+
+    limited = manager.list_turns(session_id="sess_turns", user_id="user_1", limit=1)
+    assert len(limited) == 1
+    assert limited[0]["role"] == "assistant"

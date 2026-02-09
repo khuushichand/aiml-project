@@ -17,7 +17,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     UsageTopResponse,
     UsageTopRow,
 )
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.services import admin_scope_service
@@ -41,6 +41,10 @@ _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     ValueError,
 )
+
+
+def _is_db_pool_object(db: Any) -> bool:
+    return isinstance(db, DatabasePool)
 
 
 def _fmt_csv_value(x: Any) -> str:
@@ -134,8 +138,7 @@ async def fetch_usage_daily(
             out.append(d)
         return out, int(total or 0), has_in
     # SQLite
-    # Prefer pool-style helpers when available (e.g., DatabasePool in tests)
-    if hasattr(db, "fetchval"):
+    if _is_db_pool_object(db):
         total = int(
             (await db.fetchval(f"SELECT COUNT(*) FROM usage_daily{join_clause}{where_clause}", params))
             or 0
@@ -150,7 +153,7 @@ async def fetch_usage_daily(
             f"SELECT user_id, day, requests, errors, bytes_total, IFNULL(bytes_in_total,0) as bytes_in_total, latency_avg_ms "
             f"FROM usage_daily{join_clause}{where_clause} ORDER BY day DESC, user_id ASC LIMIT ? OFFSET ?"
         )
-        if hasattr(db, "fetchall"):
+        if _is_db_pool_object(db):
             rows = await db.fetchall(sql, params + [limit, offset])
         else:
             cur = await db.execute(sql, params + [limit, offset])
@@ -169,7 +172,7 @@ async def fetch_usage_daily(
             f"SELECT user_id, day, requests, errors, bytes_total, latency_avg_ms "
             f"FROM usage_daily{join_clause}{where_clause} ORDER BY day DESC, user_id ASC LIMIT ? OFFSET ?"
         )
-        if hasattr(db, "fetchall"):
+        if _is_db_pool_object(db):
             rows = await db.fetchall(sql, params + [limit, offset])
         else:
             cur = await db.execute(sql, params + [limit, offset])

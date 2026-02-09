@@ -18,7 +18,7 @@ async def test_circuit_breaker_isolation_per_provider(monkeypatch):
     monkeypatch.setattr(pool_a, "_request_impl", _fail_request)
     monkeypatch.setattr(pool_b, "_request_impl", _ok_request)
 
-    for _ in range(pool_a._breaker.failure_threshold):
+    for _ in range(pool_a._breaker.config.failure_threshold):
         with pytest.raises(aiohttp.ClientError):
             await pool_a.request("GET", "http://example.com")
 

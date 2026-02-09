@@ -61,7 +61,7 @@ def _patch_groq(monkeypatch, captured):
 
 
 def test_openai_tool_choice_gating(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openai
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
 
     captured = {}
     _patch_openai(monkeypatch, captured)
@@ -70,27 +70,28 @@ def test_openai_tool_choice_gating(monkeypatch):
 
     # 1) No tools, tool_choice should raise a deterministic 400
     with pytest.raises(ChatBadRequestError):
-        chat_with_openai(
-            messages,
+        perform_chat_api_call(
+            api_provider="openai",
+            messages=messages,
             model="gpt-4o-mini",
             tool_choice={"type": "function", "function": {"name": "f"}},
         )
 
     # 2) No tools, tool_choice == "none" should be allowed
-    chat_with_openai(messages, model="gpt-4o-mini", tool_choice="none")
+    perform_chat_api_call(api_provider="openai", messages=messages, model="gpt-4o-mini", tool_choice="none")
     payload = captured["json"]
     assert payload.get("tool_choice") == "none"
 
     # 3) Tools present, function tool_choice should be honored
     tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]
     tc = {"type": "function", "function": {"name": "f"}}
-    chat_with_openai(messages, model="gpt-4o-mini", tools=tools, tool_choice=tc)
+    perform_chat_api_call(api_provider="openai", messages=messages, model="gpt-4o-mini", tools=tools, tool_choice=tc)
     payload = captured["json"]
     assert payload.get("tool_choice") == tc
 
 
 def test_groq_tool_choice_gating(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_groq
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
 
     captured = {}
     _patch_groq(monkeypatch, captured)
@@ -99,20 +100,21 @@ def test_groq_tool_choice_gating(monkeypatch):
 
     # 1) No tools, tool_choice should raise a deterministic 400
     with pytest.raises(ChatBadRequestError):
-        chat_with_groq(
-            messages,
+        perform_chat_api_call(
+            api_provider="groq",
+            messages=messages,
             model="llama-3.1-8b-instant",
             tool_choice={"type": "function", "function": {"name": "f"}},
         )
 
     # 2) No tools, tool_choice == "none" should be allowed
-    chat_with_groq(messages, model="llama-3.1-8b-instant", tool_choice="none")
+    perform_chat_api_call(api_provider="groq", messages=messages, model="llama-3.1-8b-instant", tool_choice="none")
     payload = captured["json"]
     assert payload.get("tool_choice") == "none"
 
     # 3) Tools present, function tool_choice should be honored
     tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]
     tc = {"type": "function", "function": {"name": "f"}}
-    chat_with_groq(messages, model="llama-3.1-8b-instant", tools=tools, tool_choice=tc)
+    perform_chat_api_call(api_provider="groq", messages=messages, model="llama-3.1-8b-instant", tools=tools, tool_choice=tc)
     payload = captured["json"]
     assert payload.get("tool_choice") == tc

@@ -10,6 +10,7 @@ import os
 import sqlite3
 from pathlib import Path as FilePath
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from fastapi import BackgroundTasks, HTTPException, UploadFile, status
 from loguru import logger
@@ -336,6 +337,196 @@ def _validate_downloaded_url_file(
         issues = getattr(validation_result, "issues", None) or ["Unknown validation failure"]
         issue_msg = "; ".join(str(issue) for issue in issues)
         raise ValueError(f"Downloaded file failed validation: {issue_msg}")
+
+
+def sync_media_add_results_to_collections(
+    *,
+    results: list[dict[str, Any]],
+    form_data: Any,
+    current_user: Any,
+    db: Any,
+) -> None:
+    """
+    Dual-write successful `/media/add` items into Collections `content_items`.
+
+    This is intentionally non-fatal: failures are recorded as warnings on each
+    result item and do not fail the ingestion request.
+    """
+    user_id = getattr(current_user, "id", None)
+    if user_id is None or not isinstance(results, list):
+        return
+
+    from tldw_Server_API.app.core.DB_Management.Collections_DB import (  # type: ignore
+        CollectionsDatabase,
+    )
+
+    collections_origin = "media_add"
+    form_origin = getattr(form_data, "collections_origin", None)
+    if isinstance(form_origin, str) and form_origin.strip():
+        collections_origin = form_origin.strip()
+
+    collections_db = None
+    try:
+        backend = getattr(db, "backend", None)
+        if backend is not None:
+            collections_db = CollectionsDatabase.from_backend(
+                user_id=user_id,
+                backend=backend,
+            )
+        else:
+            collections_db = CollectionsDatabase.for_user(user_id=user_id)
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Collections dual-write initialization failed: {}", exc)
+        return
+
+    try:
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            if result.get("status") not in {"Success", "Warning"}:
+                continue
+            db_id = result.get("db_id")
+            if db_id is None:
+                continue
+            try:
+                media_id = int(db_id)
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+                continue
+
+            input_ref = str(result.get("input_ref") or "")
+            processing_source = str(result.get("processing_source") or "")
+            media_uuid = result.get("media_uuid")
+            media_type = str(result.get("media_type") or getattr(form_data, "media_type", ""))
+
+            metadata = result.get("metadata")
+            metadata_map = metadata if isinstance(metadata, dict) else {}
+
+            title = (
+                metadata_map.get("title")
+                or getattr(form_data, "title", None)
+                or (FilePath(input_ref).stem if input_ref else None)
+                or f"Media {media_id}"
+            )
+
+            content_val = result.get("content")
+            if content_val is None:
+                content_val = result.get("transcript")
+            if isinstance(content_val, str):
+                content_text = content_val
+            else:
+                try:
+                    content_text = json.dumps(content_val, ensure_ascii=False)
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+                    content_text = str(content_val or "")
+
+            analysis_val = result.get("analysis")
+            if analysis_val is None:
+                analysis_val = result.get("summary")
+            if analysis_val is None:
+                analysis_val = metadata_map.get("summary")
+            summary_text = str(analysis_val or "").strip()
+            if not summary_text and content_text:
+                summary_text = content_text[:600]
+            if len(summary_text) > 600:
+                summary_text = summary_text[:600]
+
+            source_url = input_ref if input_ref.startswith(("http://", "https://")) else None
+            url_value = source_url or input_ref or f"media://{media_id}"
+            canonical_url = f"media://{media_id}"
+            domain = None
+            if source_url:
+                with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+                    domain = (urlparse(source_url).hostname or "").lower() or None
+
+            content_hash = (
+                hashlib.sha256(content_text.encode("utf-8", errors="ignore")).hexdigest()
+                if content_text
+                else None
+            )
+            word_count = len(content_text.split()) if content_text else None
+            published_at = metadata_map.get("published_at") or metadata_map.get("publish_date")
+
+            tags: list[str] = []
+            seen: set[str] = set()
+            for keyword in getattr(form_data, "keywords", []) or []:
+                if isinstance(keyword, str):
+                    normalized = keyword.strip().lower()
+                    if normalized and normalized not in seen:
+                        seen.add(normalized)
+                        tags.append(normalized)
+            for keyword in metadata_map.get("keywords", []) if isinstance(metadata_map.get("keywords"), list) else []:
+                if isinstance(keyword, str):
+                    normalized = keyword.strip().lower()
+                    if normalized and normalized not in seen:
+                        seen.add(normalized)
+                        tags.append(normalized)
+
+            provenance_payload = {
+                "entrypoint": "/api/v1/media/add",
+                "origin": collections_origin,
+                "media_id": media_id,
+                "media_uuid": media_uuid,
+                "media_type": media_type,
+                "input_ref": input_ref,
+                "processing_source": processing_source,
+                "source_url": source_url,
+            }
+            metadata_payload: dict[str, Any] = {
+                "origin": collections_origin,
+                "provenance": provenance_payload,
+                "media_type": media_type,
+                "media_uuid": media_uuid,
+                "input_ref": input_ref,
+                "processing_source": processing_source,
+                "title": title,
+                "summary": summary_text,
+                "source_url": source_url,
+                "source_domain": domain,
+                "tags": tags,
+            }
+
+            item_row = collections_db.upsert_content_item(
+                origin=collections_origin,
+                origin_type=media_type or None,
+                origin_id=media_id,
+                url=url_value,
+                canonical_url=canonical_url,
+                domain=domain,
+                title=title,
+                summary=summary_text or None,
+                notes=None,
+                content_hash=content_hash,
+                word_count=word_count,
+                published_at=str(published_at) if published_at else None,
+                status="saved",
+                favorite=False,
+                metadata=metadata_payload,
+                media_id=media_id,
+                job_id=None,
+                run_id=None,
+                source_id=media_id,
+                read_at=None,
+                tags=tags,
+                merge_tags=True,
+            )
+            result["collections_item_id"] = item_row.id
+            result["collections_origin"] = collections_origin
+
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Collections dual-write failed: {}", exc)
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            if result.get("status") not in {"Success", "Warning"}:
+                continue
+            if result.get("db_id") is None:
+                continue
+            _ensure_warnings_list(result).append(
+                f"Collections dual-write failed: {exc}",
+            )
+    finally:
+        with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+            collections_db.close()
 
 
 def validate_add_media_inputs(
@@ -1011,6 +1202,18 @@ async def add_media_orchestrate(
 
                 except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as storage_init_err:
                     logger.error(f"Failed to initialize storage backend: {storage_init_err}")
+
+
+        # --- 6b. Dual-write to Collections content_items ---
+        try:
+            sync_media_add_results_to_collections(
+                results=results,
+                form_data=form_data,
+                current_user=current_user,
+                db=db,
+            )
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as collections_err:
+            logger.warning("Collections dual-write step failed: {}", collections_err)
 
 
         # --- 7. Generate Embeddings if Requested ---

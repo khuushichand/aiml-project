@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import Any
+import os
+from typing import Any, Optional
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.Utils.Utils import logging
 
 _PROVIDER_SECTION_MAP: dict[str, str] = {
     "openai": "openai_api",
@@ -125,3 +127,57 @@ def split_system_message(messages: list[dict[str, Any]]) -> tuple[str | None, li
             continue
         remaining.append(msg)
     return system_message, remaining
+
+
+# ---------------------------------------------------------------------------
+# Shared utilities relocated from chat_calls.py (Feb 2026)
+# ---------------------------------------------------------------------------
+
+def _safe_cast(value: Any, cast_to: type, default: Any = None) -> Any:
+    """Safely casts value to specified type, returning default on failure."""
+    if value is None:
+        return default
+    try:
+        return cast_to(value)
+    except (ValueError, TypeError):
+        logging.warning(f"Could not cast '{value}' to {cast_to}. Using default: {default}")
+        return default
+
+
+def _resolve_openai_api_base(openai_cfg: dict[str, Any]) -> str:
+    """Resolve the OpenAI API base URL.
+
+    Precedence: config keys (api_base_url, api_base, base_url),
+    then environment vars (OPENAI_API_BASE_URL, OPENAI_API_BASE, OPENAI_BASE_URL, MOCK_OPENAI_BASE_URL),
+    then default 'https://api.openai.com/v1'.
+    """
+    try:
+        cfg_base = (
+            openai_cfg.get('api_base_url')
+            or openai_cfg.get('api_base')
+            or openai_cfg.get('base_url')
+        )
+    except Exception:
+        cfg_base = None
+
+    env_api_base = (
+        os.getenv('OPENAI_API_BASE_URL')
+        or os.getenv('OPENAI_API_BASE')
+        or os.getenv('OPENAI_BASE_URL')
+        or os.getenv('MOCK_OPENAI_BASE_URL')
+    )
+    return (cfg_base or env_api_base or 'https://api.openai.com/v1')
+
+
+def _parse_data_url_for_multimodal(data_url: str) -> Optional[tuple[str, str]]:
+    """Parses a data URL (e.g., data:image/png;base64,xxxx) into (mime_type, base64_data)."""
+    if data_url.startswith("data:") and ";base64," in data_url:
+        try:
+            header, b64_data = data_url.split(";base64,", 1)
+            mime_type = header.split("data:", 1)[1]
+            return mime_type, b64_data
+        except Exception as e:
+            logging.warning(f"Could not parse data URL: {data_url[:60]}... Error: {e}")
+            return None
+    logging.debug(f"Data URL did not match expected format: {data_url[:60]}...")
+    return None

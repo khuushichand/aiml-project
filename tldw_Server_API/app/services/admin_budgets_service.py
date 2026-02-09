@@ -12,7 +12,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     OrgBudgetListResponse,
     OrgBudgetUpdateRequest,
 )
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Billing.plan_limits import get_plan_limits
 
@@ -682,17 +682,26 @@ def _build_nested_changes(
     return changes
 
 
-async def _fetchval(db, query: str, params: list[Any]) -> Any:
-    if hasattr(db, "fetchval"):
+def _is_db_pool_object(db: Any) -> bool:
+    return isinstance(db, DatabasePool)
+
+
+async def _fetchval(db, query: str, params: list[Any], *, pg: bool) -> Any:
+    if pg:
         return await db.fetchval(query, *params)
+    if _is_db_pool_object(db):
+        return await db.fetchval(query, params)
     cur = await db.execute(query, params)
     row = await cur.fetchone()
     return row[0] if row else None
 
 
-async def _fetchrow(db, query: str, params: list[Any]) -> dict[str, Any] | None:
-    if hasattr(db, "fetchrow"):
+async def _fetchrow(db, query: str, params: list[Any], *, pg: bool) -> dict[str, Any] | None:
+    if pg:
         row = await db.fetchrow(query, *params)
+        return dict(row) if row and not isinstance(row, dict) else row
+    if _is_db_pool_object(db):
+        row = await db.fetchrow(query, params)
         return dict(row) if row and not isinstance(row, dict) else row
     cur = await db.execute(query, params)
     row = await cur.fetchone()
@@ -703,9 +712,11 @@ async def _fetchrow(db, query: str, params: list[Any]) -> dict[str, Any] | None:
     return dict(row) if not isinstance(row, dict) else row
 
 
-async def _fetchrows(db, query: str, params: list[Any]) -> list[Any]:
-    if hasattr(db, "fetch"):
+async def _fetchrows(db, query: str, params: list[Any], *, pg: bool) -> list[Any]:
+    if pg:
         return await db.fetch(query, *params)
+    if _is_db_pool_object(db):
+        return await db.fetchall(query, params)
     cur = await db.execute(query, params)
     return await cur.fetchall()
 
@@ -743,7 +754,7 @@ async def list_org_budgets(
     where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
     count_sql = f"SELECT COUNT(*) FROM organizations o{where_clause}"
-    total = int(await _fetchval(db, count_sql, params) or 0)
+    total = int(await _fetchval(db, count_sql, params, pg=pg) or 0)
 
     if pg:
         limit_placeholder = f"${len(params) + 1}"
@@ -765,7 +776,7 @@ async def list_org_budgets(
         f"ORDER BY o.name ASC LIMIT {limit_placeholder} OFFSET {offset_placeholder}"
     )
 
-    rows = await _fetchrows(db, sql, params + [limit, offset])
+    rows = await _fetchrows(db, sql, params + [limit, offset], pg=pg)
     items = []
     for row in rows:
         row_dict = dict(row) if not isinstance(row, dict) else row
@@ -793,6 +804,7 @@ async def upsert_org_budget(
         db,
         "SELECT id, name, slug FROM organizations WHERE id = $1",
         [org_id],
+        pg=pg,
     )
     if not org_row:
         raise ValueError("org_not_found")
@@ -808,6 +820,7 @@ async def upsert_org_budget(
         WHERE os.org_id = $1
         """,
         [org_id],
+        pg=pg,
     )
 
     if not sub_row:
@@ -815,6 +828,7 @@ async def upsert_org_budget(
             db,
             "SELECT id, name, display_name, limits_json FROM subscription_plans WHERE name = $1",
             ["free"],
+            pg=pg,
         )
         if not plan_row:
             default_limits = get_plan_limits("free")
@@ -855,6 +869,7 @@ async def upsert_org_budget(
                 db,
                 "SELECT id, name, display_name, limits_json FROM subscription_plans WHERE name = $1",
                 ["free"],
+                pg=pg,
             )
         if not plan_row:
             raise ValueError("plan_not_found")
@@ -879,6 +894,7 @@ async def upsert_org_budget(
             WHERE os.org_id = $1
             """,
             [org_id],
+            pg=pg,
         )
 
     if not sub_row:
@@ -891,6 +907,7 @@ async def upsert_org_budget(
         db,
         "SELECT org_id, budgets_json, updated_at FROM org_budgets WHERE org_id = $1",
         [org_id],
+        pg=pg,
     )
     budgets_payload = _normalize_budget_payload(
         budget_row.get("budgets_json") if budget_row else None

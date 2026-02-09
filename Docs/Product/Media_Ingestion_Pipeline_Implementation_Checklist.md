@@ -13,11 +13,11 @@ Scope: Gap closure between `/api/v1/media/add`, watchlists/reading ingestion, co
 
 ### 1) URL Validation Parity with Upload Validation
 - Priority: P1
-- Status: In Progress (document-like URL path implemented in `process_document_like_item`; remaining parity checks for other URL ingestion paths pending)
+- Status: Complete (`process_document_like_item`, `process_audio_files`, and `process_single_video` now run shared post-download `FileValidator` checks before processor execution)
 - Goal: Ensure URL-downloaded files receive equivalent validation guarantees to upload files.
 - Current behavior:
   - Upload path: `FileValidator` enforced before processing.
-  - URL path: egress policy + extension/content-type/max-size checks, but no shared `FileValidator` post-download pass.
+  - URL path: egress policy + extension/content-type/max-size checks plus shared post-download `FileValidator` pass.
 - Target behavior:
   - Add optional or mandatory post-download `FileValidator` pass before processor invocation for applicable media types.
   - Preserve existing URL guardrails.

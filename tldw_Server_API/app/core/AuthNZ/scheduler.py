@@ -552,12 +552,13 @@ class AuthNZScheduler:
 
             row_count = await db_pool.fetchval("SELECT COUNT(*) FROM privilege_snapshots") or 0
             size_bytes = None
-            try:
-                size_bytes = await db_pool.fetchval(
-                    "SELECT pg_total_relation_size('privilege_snapshots')"
-                )
-            except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS:
-                size_bytes = None
+            if is_postgres:
+                try:
+                    size_bytes = await db_pool.fetchval(
+                        "SELECT pg_total_relation_size('privilege_snapshots')"
+                    )
+                except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS:
+                    size_bytes = None
 
             if size_bytes is not None:
                 set_gauge("privilege_snapshots_table_bytes", float(size_bytes))

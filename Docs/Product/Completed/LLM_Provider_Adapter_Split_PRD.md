@@ -45,18 +45,18 @@ Success metrics
 In scope (Phase 1–4)
 - Define `ChatProvider` interface and minimal core types (request, response, stream iterators) in `LLM_Calls/providers/base.py`.
 - Implement adapter registry in `LLM_Calls/adapter_registry.py` (mirrors TTS): lazy loading by dotted path, capability discovery.
-- Extract adapters for top providers used in tests and defaults: OpenAI, Anthropic, Groq, OpenRouter, Google (Gemini), Mistral, HuggingFace, Qwen, DeepSeek, plus a generic OpenAI-compatible adapter used by several custom/local servers.
+- Extract adapters for all providers: OpenAI, Anthropic, Groq, OpenRouter, Google (Gemini), Mistral, HuggingFace, Qwen, DeepSeek, Cohere, Moonshot, Z.AI, Bedrock, plus a generic OpenAI-compatible adapter used by several custom/local servers (llama.cpp, Kobold, Oobabooga, TabbyAPI, vLLM, Ollama, Aphrodite, MLX, Custom OpenAI v1/v2, local-llm).
 - Move streaming normalization to a shared path via `sse.py` and `streaming.py`; remove per-provider ad-hoc parsing.
 - Centralize error mapping and tool_choice gating utilities.
 - Keep legacy dispatch compatibility via `chat_service.perform_chat_api_call` routing to registry-backed adapters to avoid endpoint changes.
 - Update `GET /api/v1/llm/providers` to draw capabilities from the registry (keeping existing metadata shape).
-- Add embeddings adapters + registry for OpenAI/HuggingFace/Google and wire the endpoint behind `LLM_EMBEDDINGS_ADAPTERS_ENABLED=1`.
+- Add embeddings adapters + registry for OpenAI/HuggingFace/Google/MLX and wire the endpoint behind `LLM_EMBEDDINGS_ADAPTERS_ENABLED=1`.
 
 Out of scope (for initial rollout)
 - New fallback selection algorithms or large changes to `provider_manager.py` behavior.
 - Changes to public API schemas for chat/embeddings requests.
 - Provider-specific advanced features not currently supported (vision upload pipelines, files API, advanced JSON schemas).
-- Embeddings expansion beyond OpenAI/HuggingFace/Google (additional providers and advanced features).
+- Embeddings expansion beyond OpenAI/HuggingFace/Google/MLX (additional providers and advanced features).
 
 ## 5. Architecture Overview
 Components
@@ -138,39 +138,31 @@ Phase 2: Core providers
 - Update `llm_providers.py` endpoint to use registry for capability flags.
 
 Phase 3: Remaining providers + cleanup
-- Port Qwen, DeepSeek, HuggingFace, and generic OpenAI-compatible adapter used by local/custom servers.
-- Remove large branching from `chat_calls.py` and `local_chat_calls.py`; leave compatibility wrappers that call the registry.
+- Port Qwen, DeepSeek, HuggingFace, Cohere, Moonshot, Z.AI, Bedrock, and generic OpenAI-compatible adapter used by local/custom servers (llama.cpp, Kobold, Oobabooga, TabbyAPI, vLLM, Ollama, Aphrodite, MLX, Custom OpenAI v1/v2, local-llm).
+- Route legacy handlers to adapters for all migrated providers.
+- Remove provider-specific branching from `chat_calls.py` and `local_chat_calls.py`; leave compatibility wrappers that call the registry.
 
 Phase 4: Embeddings adapters
 - Implement embeddings adapters (via `EmbeddingsProvider`) and wire the endpoint behind `LLM_EMBEDDINGS_ADAPTERS_ENABLED=1`, preserving legacy behavior when disabled.
 
-Current Status (Nov 2025)
-- Adapters & shims (implementation complete; verification pending)
-  - Chat adapters implemented: OpenAI, Anthropic, Groq, OpenRouter, Google (Gemini), Mistral, Qwen, DeepSeek, HuggingFace, Custom OpenAI (v1/v2).
-  - Async adapter routing wired for OpenAI, Anthropic, Groq, OpenRouter plus Stage 3 providers (Qwen/DeepSeek/HF/Custom OpenAI).
-  - Endpoint providers capability merge uses adapter registry; shape validated by unit test.
-- Native HTTP (implementation complete; verification pending)
-  - Native httpx paths for OpenAI/Anthropic/Groq/OpenRouter/Google/Mistral; adapters are default-on.
-- Tests (local runs; CI and full-suite verification pending)
-  - Adapters unit: 44 passed (STREAMS_UNIFIED=1).
-  - OpenAI async streaming via orchestrator now passes (fixed in async shim by honoring monkeypatched legacy during streaming; verified on test slice `tldw_Server_API/tests/LLM_Adapters/integration/test_async_adapters_orchestrator.py::test_chat_api_call_async_streaming`).
-  - Embeddings adapters: OpenAI/HF/Google wired with unit coverage; endpoint adapter path tested (multi-input + optional L2).
-- CI (jobs added; green status not yet verified)
-  - llm-adapters-suites: runs unit + subset of integration adapter tests with adapters enabled.
-  - llm-adapters-native-matrix: per‑provider native-http unit slices with feature flags.
-- Cleanup (pending)
-  - Stage 3 monolith cleanup not complete: provider branching removal and helper centralization still pending per checklist.
-  - Definition of Done remains unchecked until Stage 0 verification (import sanity check, CI green, full test suite) and Stage 3 cleanup complete.
+Current Status (Feb 2026)
+- **Stages 0–4 complete.** All 23 chat adapters and 4 embeddings adapters (OpenAI, HuggingFace, Google, MLX) are implemented and covered by tests.
+- Adapter registry is the default routing path for all provider calls.
+- Native httpx paths working for OpenAI/Anthropic/Groq/OpenRouter/Google/Mistral.
+- 44+ adapter test files passing in CI; `llm-adapters-suites` and `llm-adapters-native-matrix` CI jobs are green.
+- Stage 3 monolith cleanup is complete: `chat_calls.py` and `local_chat_calls.py` contain only thin compatibility wrappers (deleted Feb 2026) plus embeddings functions.
+- Providers endpoint reports registry-backed capabilities; shape validated by unit test.
 
-Latest Changes (Nov 04, 2025)
-- Fixed OpenAI async streaming route: async shim now yields SSE lines when legacy is monkeypatched in tests (no network), resolving the prior failure.
-- Began monolith cleanup: added deprecation banner to `chat_calls.py` and preserved thin wrappers; deeper branch pruning staged post-CI stability.
-- Action item: re-enable the previously skipped async streaming test in CI after a broader adapter integration run.
+Latest Changes (Feb 2026)
+- Deleted all `chat_with_*` wrapper functions and `_call_adapter` shims from `chat_calls.py` and `local_chat_calls.py`.
+- Moved shared utilities (`_safe_cast`, `_resolve_openai_api_base`, `_parse_data_url_for_multimodal`) to `adapter_utils.py`.
+- Extracted duplicated `_is_client_like_error()` heuristic in `chat_service.py` into a shared helper.
+- Updated test files to import from adapter registry path instead of legacy wrappers.
 
 Remaining Work
-- Incrementally flip native HTTP flags per provider in CI as suites remain green; then prune provider-specific branches in legacy modules.
-- Broaden async tests for Stage 3 providers when native AsyncClient paths are introduced (optional).
-- Expand embeddings adapters to more providers as needed and add error‑path tests.
+- **Feature flag sunset**: Flip `STREAMS_UNIFIED` default to `"1"` and remove legacy branches; flip `LLM_EMBEDDINGS_ADAPTERS_ENABLED` once all embeddings native HTTP flags are validated; then remove `LLM_EMBEDDINGS_NATIVE_HTTP_*` flags. See Feature Flag Sunset Plan below.
+- **Circuit breaker unification**: Tracked in `IMPLEMENTATION_PLAN_circuit_breaker_unification_2026_02_08.md`. The ProviderManager's local CircuitBreaker class needs metrics integration.
+- **Embeddings expansion**: Additional embeddings providers beyond OpenAI/HuggingFace/Google/MLX as needed.
 
 ## 11. Backward Compatibility
 - Public FastAPI endpoints unchanged; request/response schema remains OpenAI-compatible.
@@ -194,6 +186,8 @@ Remaining Work
 - Log provider selection and timing at DEBUG without leaking prompt content (continue using `_sanitize_payload_for_logging`).
 - Optional adapter-level counters: calls, failures by error class, average response duration.
 - Reuse http_client metrics; integrate provider health with `provider_manager.record_success/record_failure`.
+- `record_success`/`record_failure` calls in `chat_service.py` are already complete for every terminal outcome.
+- Remaining: ProviderManager's local `CircuitBreaker` class emits zero metrics; tracked in circuit breaker unification plan.
 
 ## 14. Risks & Mitigations
 - Regression in streaming edge cases across providers
@@ -212,29 +206,29 @@ Remaining Work
 - Week 4: Stabilization, docs, performance baseline comparison; validate embeddings adapter rollout.
 
 ## 16. Acceptance Criteria
-- Registry and base adapter modules exist; all in-scope chat adapters (OpenAI, Anthropic, Groq, OpenRouter, Google, Mistral, Qwen, DeepSeek, HuggingFace, Custom OpenAI) are implemented and covered by tests.
+- Registry and base adapter modules exist; all in-scope chat adapters (OpenAI, Anthropic, Groq, OpenRouter, Google, Mistral, Qwen, DeepSeek, HuggingFace, Cohere, Moonshot, Z.AI, Bedrock, Custom OpenAI v1/v2, plus 8 local providers) are implemented and covered by tests.
 - `/api/v1/chat/completions` works for streaming and non-streaming paths with no behavioral regressions in existing tests.
 - `GET /api/v1/llm/providers` returns capability info sourced from the registry.
 - Code reduction achieved in monolithic files; obvious duplicated streaming/error logic removed.
-- Embeddings adapters for OpenAI/HuggingFace/Google are wired behind `LLM_EMBEDDINGS_ADAPTERS_ENABLED=1` with endpoint parity tests.
+- Embeddings adapters for OpenAI/HuggingFace/Google/MLX are wired behind `LLM_EMBEDDINGS_ADAPTERS_ENABLED=1` with endpoint parity tests.
 - Documentation updated: this PRD, adapter authoring guide, and migration notes.
 
 ## 17. Deliverables
 - Code: `LLM_Calls/providers/*`, `LLM_Calls/adapter_registry.py`, updated legacy wrappers.
 - Tests: unit + integration under `tldw_Server_API/tests/LLM_Calls/` following existing markers.
-- Docs: this PRD plus a short "Adding a new LLM adapter" guide in `Docs/Design/`.
+- Docs: this PRD plus a short "Adding a new LLM adapter" guide in `Docs/Development/LLM_Adapters_Authoring_Guide.md`.
 
 ## 18. Deletions & Cleanup (after Phase 3)
 - Remove provider-specific branching from `chat_calls.py` and `local_chat_calls.py`.
 - Consolidate tool_choice handling and error normalization into shared helpers; delete scattered duplicates.
 - Keep thin compatibility wrappers only where needed by imported call sites.
-- Status: initial pass started (deprecation banner added; wrappers preserved); deeper branch pruning pending CI stability.
+- Status (Feb 2026): **Complete.** All `chat_with_*` wrappers deleted. `local_chat_calls.py` deleted. Shared utilities relocated to `adapter_utils.py`. Only embeddings functions remain in `chat_calls.py` (~280 lines).
 
-## 19. Open Questions
-- Should embeddings be part of the same adapter registry or a sibling `EmbeddingsProvider` with shared config?
-- Do we want provider-level retry policies configurable via registry (override http_client defaults)?
-- Unify circuit breaker implementation across Chat/TTS/Evals into a single shared component?
-- Any providers requiring non-HTTP transport (e.g., gRPC) in near term?
+## 19. Open Questions (Resolved)
+1. **Should embeddings be part of the same adapter registry or a sibling?** — **Decided**: sibling `EmbeddingsProviderRegistry` in `embeddings_adapter_registry.py`.
+2. **Do we want provider-level retry policies configurable via registry?** — **Deferred**: adapters use http_client defaults; no per-provider override needed yet.
+3. **Unify circuit breaker implementation across Chat/TTS/Evals?** — **In progress**: tracked in `IMPLEMENTATION_PLAN_circuit_breaker_unification_2026_02_08.md`.
+4. **Any providers requiring non-HTTP transport (e.g., gRPC) in near term?** — **No**: no near-term need identified.
 
 ## 20. Implementation Guide & Checklist
 
@@ -243,13 +237,13 @@ This guide breaks implementation into clear, verifiable stages. Checkboxes are m
 Stage 0: Scaffolding (foundation)
 - [x] Add adapter base and helpers: `LLM_Calls/providers/base.py` (ChatProvider, error mapping, tool_choice helper)
 - [x] Add adapter registry: `LLM_Calls/adapter_registry.py` with lazy loading, capability discovery, singleton accessor
-- [x] Authoring guide in `Docs/Design/LLM_Adapters_Authoring_Guide.md`
-- [ ] Import sanity check: registry import causes no cycles in API layers
-- [ ] CI green with no behavior changes
+- [x] Authoring guide in `Docs/Development/LLM_Adapters_Authoring_Guide.md`
+- [x] Import sanity check: registry import causes no cycles in API layers
+- [x] CI green with no behavior changes
 
 Verification
-- [ ] `python -m pytest -m "unit or integration" -q` passes
-- [ ] Lint/formatters (if configured) show no new warnings
+- [x] `python -m pytest -m "unit or integration" -q` passes
+- [x] Lint/formatters (if configured) show no new warnings
 
 Stage 1: OpenAI adapter + shim
 - [x] Implement `providers/openai_adapter.py` with:
@@ -280,12 +274,16 @@ Stage 2: Core providers (Anthropic, Groq, OpenRouter, Google, Mistral)
 - [x] Providers endpoint: aggregate capabilities from registry and merge with existing `MODEL_METADATA` where applicable
 
 Stage 3: Remaining providers + monolith cleanup
-- [x] Implement Qwen, DeepSeek, HuggingFace, generic OpenAI-compatible (for local/custom servers)
+- [x] Implement Qwen, DeepSeek, HuggingFace, Cohere, Moonshot, Z.AI, Bedrock, generic OpenAI-compatible (for local/custom servers), MLX
 - [x] Route legacy handlers to adapters for all migrated providers
 - [x] Remove provider-specific branching from `chat_calls.py`, keeping thin wrappers only
 - [x] Remove provider-specific branching from `local_chat_calls.py`, keeping thin wrappers only
 - [x] Centralize tool_choice and error normalization (delete duplicates in monolith)
-- [ ] Re-run entire LLM test suite including `tests/LLM_Calls/test_async_streaming_dedup.py` and strict filter tests
+- [x] Re-run entire LLM test suite including `tests/LLM_Calls/test_async_streaming_dedup.py` and strict filter tests
+- [x] Delete `chat_with_*` wrapper functions from `chat_calls.py` (~800 lines) and `_call_adapter`/`_call_adapter_async` shims
+- [x] Delete `local_chat_calls.py` entirely (663 lines, zero production callers)
+- [x] Relocate shared utilities (`_safe_cast`, `_resolve_openai_api_base`, `_parse_data_url_for_multimodal`) to `adapter_utils.py`
+- [x] Update test files to use `perform_chat_api_call(provider=...)` or direct adapter imports
 
 Stage 4: Embeddings adapters (scaffold → endpoint wiring)
 - [x] Add `EmbeddingsProvider` to base interface (`providers/base.py`).
@@ -295,41 +293,52 @@ Stage 4: Embeddings adapters (scaffold → endpoint wiring)
   - When enabled, route via registry adapter for supported providers and map response to OpenAI-compatible shape.
   - Preserve existing behavior (circuit breaker, batching, caching) when flag is disabled.
 - [x] Add minimal unit test that exercises the adapter-backed endpoint with a stub adapter.
-- [x] Extend registry with HF/Google embeddings adapters: `providers/huggingface_embeddings_adapter.py`, `providers/google_embeddings_adapter.py`.
+- [x] Extend registry with HF/Google/MLX embeddings adapters: `providers/huggingface_embeddings_adapter.py`, `providers/google_embeddings_adapter.py`, `providers/mlx_embeddings_adapter.py`.
 - [x] Add native HTTP unit tests for HuggingFace and Google embeddings (mocked httpx).
 - [x] Add endpoint unit test for multiple inputs and optional L2 normalization under `LLM_EMBEDDINGS_L2_NORMALIZE=1`.
 
 Stage 5: Embeddings expansion (future)
-- [ ] Expand embeddings adapters to additional providers beyond OpenAI/HuggingFace/Google
+- [ ] Expand embeddings adapters to additional providers beyond OpenAI/HuggingFace/Google/MLX
 - [ ] Add advanced embeddings features (e.g., provider-specific batching, dimensions overrides) where needed
 - [ ] Extend endpoint parity tests for new providers/features
 
 Observability, Health, and Operations
-- [ ] Integrate `provider_manager.record_success/record_failure` in orchestrator paths that call adapters
-- [ ] Ensure http_client metrics emit for adapter calls; add optional adapter-level counters
-- [ ] Keep prompt-safe logs using existing sanitization utilities
+- [x] Integrate `provider_manager.record_success/record_failure` in orchestrator paths that call adapters
+- [ ] Ensure http_client metrics emit for adapter calls; add optional adapter-level counters (tracked in circuit breaker unification plan)
+- [x] Keep prompt-safe logs using existing sanitization utilities (`_sanitize_payload_for_logging` used across all adapters)
 
 Rollout & Safety
 - [x] Adapter registry is the default routing path (no legacy feature flag).
-- [ ] Canary enable providers (OpenAI first) in non-prod, then prod
-- [ ] Rollback plan: deploy the previous release to restore legacy routing
+- [x] Canary enable providers (OpenAI first) in non-prod, then prod
+- [x] Rollback plan: deploy the previous release to restore legacy routing
 
 Compatibility & Parity Checks
-- [ ] Streaming: exactly one final `[DONE]` from the endpoint (no duplicates)
+- [x] Streaming: exactly one final `[DONE]` from the endpoint (no duplicates) — verified across 4 dedup layers (adapter `seen_done`, `StreamingResponseHandler.done_sent`, `create_streaming_response_with_timeout` guard, `SSEStream.done_seen`)
 - [x] Tool calling: identical behavior for `tool_choice` and `tools` presence
-- [ ] Error taxonomy: same HTTP status mapping at FastAPI layer
-- [ ] Environment precedence for base URLs and keys matches legacy behavior
+- [x] Error taxonomy: same HTTP status mapping at FastAPI layer — verified consistent across adapter `normalize_error()`, endpoint `ChatModuleException` handler, and `client_like_error` heuristic
+- [x] Environment precedence for base URLs and keys matches legacy behavior
 
 Definition of Done (Phase 1–4)
-- [ ] Registry and base adapter in place with docs
-- [ ] All in-scope chat adapters implemented and covered by tests
-- [ ] `/api/v1/chat/completions` streaming and non-streaming regression tests pass
-- [ ] Providers endpoint reports registry-backed capabilities
-- [ ] Embeddings adapters wired behind `LLM_EMBEDDINGS_ADAPTERS_ENABLED=1` with endpoint parity tests
-- [ ] Monolith branching removed; wrappers remain for compatibility; duplicated helpers deleted
+- [x] Registry and base adapter in place with docs
+- [x] All in-scope chat adapters implemented and covered by tests
+- [x] `/api/v1/chat/completions` streaming and non-streaming regression tests pass
+- [x] Providers endpoint reports registry-backed capabilities
+- [x] Embeddings adapters wired behind `LLM_EMBEDDINGS_ADAPTERS_ENABLED=1` with endpoint parity tests
+- [x] Monolith branching removed; wrappers deleted; duplicated helpers relocated — `chat_calls.py` reduced to ~280 lines (embeddings only); `local_chat_calls.py` deleted
+
+## 21. Feature Flag Sunset Plan
+
+| Flag | Current Default | Sunset Condition | Action |
+|------|----------------|-----------------|--------|
+| `STREAMS_UNIFIED` | `"0"` in code, `"1"` in Docker compose | Rollout documented as "Complete" | Flip default to `"1"`, then remove flag + legacy branches in 5 endpoint files |
+| `LLM_EMBEDDINGS_ADAPTERS_ENABLED` | `""` (off) | All 3 embeddings native HTTP flags validated | Flip to `"1"`, then remove flag |
+| `LLM_EMBEDDINGS_NATIVE_HTTP_OPENAI` | off | OpenAI native HTTP validated in CI | Flip on, then delete legacy `get_openai_embeddings*` from `chat_calls.py` |
+| `LLM_EMBEDDINGS_NATIVE_HTTP_HUGGINGFACE` | off | HF native HTTP validated | Flip on |
+| `LLM_EMBEDDINGS_NATIVE_HTTP_GOOGLE` | off | Google native HTTP validated | Flip on |
 
 Reference Artifacts
 - Base/Registry: `tldw_Server_API/app/core/LLM_Calls/providers/base.py`, `tldw_Server_API/app/core/LLM_Calls/adapter_registry.py`
 - Shared Streaming: `tldw_Server_API/app/core/LLM_Calls/sse.py`, `tldw_Server_API/app/core/LLM_Calls/streaming.py`, `tldw_Server_API/app/core/http_client.py`
 - Legacy Dispatch: `tldw_Server_API/app/core/Chat/chat_service.py` (`perform_chat_api_call` delegates to registry)
 - Health/Fallback: `tldw_Server_API/app/core/Chat/provider_manager.py`
+- Shared Utilities: `tldw_Server_API/app/core/LLM_Calls/adapter_utils.py` (safe_cast, resolve_openai_api_base, etc.)

@@ -38,6 +38,7 @@ from ..schemas.chatbook_schemas import (
     CancelJobResponse,
     ChatbookManifestResponse,
     CleanupExpiredExportsResponse,
+    ContinueExportRequest,
     CreateChatbookRequest,
     CreateChatbookResponse,
     ExportJobResponse,
@@ -376,6 +377,62 @@ async def create_chatbook(
             traceparent=ensure_traceparent(request),
         ).exception(f"Unhandled exception creating chatbook for user {user.id}")
         raise HTTPException(status_code=500, detail="An error occurred while creating the chatbook") from None
+
+
+@router.post("/export/continue", response_model=CreateChatbookResponse)
+async def continue_chatbook_export(
+    request_data: ContinueExportRequest,
+    request: Request,
+    service: ChatbookService = Depends(get_chatbook_service),
+    user: User = Depends(get_request_user),
+    audit_service=Depends(get_audit_service_for_user),
+):
+    """
+    Continue a truncated chatbook export using continuation tokens.
+
+    When an export is truncated (e.g. evaluation runs exceed the max row limit),
+    the manifest includes continuation tokens. This endpoint produces a new linked
+    chatbook containing the next batch of data.
+    """
+    try:
+        if not request_data.continuations:
+            raise HTTPException(status_code=400, detail="No continuation tokens provided")
+
+        rid = ensure_request_id(request)
+        ensure_traceparent(request)
+        success, message, result = await service.continue_chatbook_export(
+            export_id=request_data.export_id,
+            continuations=request_data.continuations,
+            name=request_data.name,
+            async_mode=request_data.async_mode,
+            request_id=rid,
+        )
+        if success:
+            _safe_increment_metric(
+                "chatbooks_continuation_exports_total",
+                {"user_id": str(user.id), "status": "success"},
+            )
+            if request_data.async_mode:
+                return CreateChatbookResponse(
+                    success=True, message=message, job_id=result
+                )
+            return CreateChatbookResponse(
+                success=True, message=message, file_path=result
+            )
+        raise HTTPException(status_code=500, detail=message)
+
+    except HTTPException:
+        raise
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
+        get_ps_logger(
+            request_id=ensure_request_id(request),
+            ps_component="endpoint",
+            ps_job_kind="chatbooks",
+            traceparent=ensure_traceparent(request),
+        ).exception(f"Unhandled exception continuing chatbook export for user {user.id}")
+        raise HTTPException(
+            status_code=500, detail="An error occurred while continuing the chatbook export"
+        ) from None
 
 
 @router.post("/import", response_model=ImportChatbookResponse)

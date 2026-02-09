@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from tldw_Server_API.app.services import admin_usage_service
+
+
+class _CursorStub:
+    def __init__(self, *, row: Any = None, rows: list[Any] | None = None) -> None:
+        self._row = row
+        self._rows = rows if rows is not None else ([] if row is None else [row])
+
+    async def fetchone(self) -> Any:
+        return self._row
+
+    async def fetchall(self) -> list[Any]:
+        return list(self._rows)
+
+
+class _SQLiteTxConnWithPoolHelperTraps:
+    def __init__(self) -> None:
+        self.execute_calls: list[tuple[str, Any]] = []
+        self.fetchval_called = False
+        self.fetchall_called = False
+
+    async def fetchval(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - should never run
+        self.fetchval_called = True
+        raise AssertionError("sqlite transaction path should not use db.fetchval")
+
+    async def fetchall(self, *args: Any, **kwargs: Any) -> list[Any]:  # pragma: no cover - should never run
+        self.fetchall_called = True
+        raise AssertionError("sqlite transaction path should not use db.fetchall")
+
+    async def execute(self, query: str, params: Any) -> _CursorStub:
+        q = str(query).lower()
+        self.execute_calls.append((str(query), params))
+        if "count(*)" in q:
+            return _CursorStub(row=(1,))
+        if "ifnull(bytes_in_total,0)" in q:
+            return _CursorStub(
+                rows=[
+                    {
+                        "user_id": 1,
+                        "day": "2026-02-09",
+                        "requests": 3,
+                        "errors": 0,
+                        "bytes_total": 1200,
+                        "bytes_in_total": 800,
+                        "latency_avg_ms": 42.5,
+                    }
+                ]
+            )
+        raise AssertionError(f"Unexpected query: {query!r}")
+
+
+@pytest.mark.asyncio
+async def test_fetch_usage_daily_sqlite_tx_path_ignores_pool_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_is_postgres_backend() -> bool:
+        return False
+
+    monkeypatch.setattr(admin_usage_service, "is_postgres_backend", _fake_is_postgres_backend)
+    db = _SQLiteTxConnWithPoolHelperTraps()
+
+    rows, total, has_in = await admin_usage_service.fetch_usage_daily(
+        db,
+        user_id=None,
+        org_ids=None,
+        start=None,
+        end=None,
+        page=1,
+        limit=10,
+    )
+
+    assert total == 1
+    assert has_in is True
+    assert rows and rows[0]["user_id"] == 1
+    assert rows[0]["bytes_in_total"] == 800
+    assert db.fetchval_called is False
+    assert db.fetchall_called is False
+    assert db.execute_calls, "sqlite transaction path should use execute()"
