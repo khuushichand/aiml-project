@@ -62,6 +62,14 @@ modules:
 - `MCP_MODULES_CONFIG` - override path to the YAML configuration (defaults to `tldw_Server_API/Config_Files/mcp_modules.yaml`).
 - `MCP_MODULES` - comma-separated definitions (`id=module.path:Class`), e.g. `MCP_MODULES="example=tldw_Server_API.app.core.MCP_unified.modules.implementations.template_module:TemplateModule"`.
 - Optional accelerator: `MCP_ENABLE_MEDIA_MODULE=true` registers `MediaModule` when no YAML or explicit environment configuration is provided.
+- `MCP_EXTERNAL_SERVERS_CONFIG` - optional override path for external federation server registry (used by `external_federation` module).
+
+## External Federation Module
+
+- Module id: `external_federation`
+- Purpose: expose approved upstream MCP tools through namespaced virtual tools (`ext.<server_id>.<tool_name>`).
+- Default posture: safe-by-default (`allow_writes: false`, write confirmation required when enabled).
+- Full activation and security guidance: `Docs/MCP/Unified/External_Federation.md`.
 
 ## Tool Execution Result
 
