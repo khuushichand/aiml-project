@@ -29,6 +29,183 @@ Allow-catalog semantics:
 - comma-separated exact names and/or wildcard suffix prefixes (e.g. `notes.search,media.*`)
 - invalid entries are ignored; if all entries are invalid, no tools are allowed
 
+### Non-Streaming Tool Execution: Error Handling & Data Structures
+
+#### Persisted Tool Message Schema
+
+Each executed tool call is persisted as a `role=tool` message in the
+conversation history. The schema extends the OpenAI-compatible `role=tool`
+format with diagnostic fields for observability and replay:
+
+```jsonc
+{
+  "role": "tool",
+  "tool_call_id": "call_abc123",       // provider-assigned tool call ID
+  "name": "notes.search",              // tool name (MCP tool identifier)
+  "content": "<JSON string>",          // serialized result envelope (see below)
+  // -- diagnostic fields --
+  "input": { "q": "hello" },           // arguments sent to the tool (echoed back)
+  "status": "success",                 // "success" | "failure" | "timeout"
+  "result": { ... },                   // tool output on success; null on failure/timeout
+  "error": null,                       // null on success; structured object on failure/timeout:
+                                       //   { "code": "TIMEOUT" | "CATALOG_DENIED" | "EXECUTION_ERROR",
+                                       //     "message": "human-readable description",
+                                       //     "stack": null }
+                                       // `stack` is populated only when debug logging is
+                                       // enabled; always null in production.
+  "start_time": "2026-02-08T12:00:00.000Z",  // ISO-8601 execution start
+  "end_time":   "2026-02-08T12:00:00.312Z"   // ISO-8601 execution end (or timeout instant)
+}
+```
+
+The `content` field contains a JSON-serialized envelope consumed by LLM
+follow-up turns (which read `content` as a string). Its shape mirrors the
+`_make_result_content` helper in `tool_auto_exec.py`:
+
+```jsonc
+{
+  "ok": true,             // boolean aggregate success flag
+  "name": "notes.search",
+  "result": { ... },      // tool output or null
+  "module": "notes",      // originating MCP module or null
+  "error": null,          // error string or null
+  // optional flags (present only when true):
+  "skipped": true,        // call was denied by allow-catalog or failed to parse
+  "timed_out": true       // call exceeded chat_tool_timeout_ms
+}
+```
+
+#### Extension Metadata in Completion Payload (`tldw_tool_results`)
+
+The non-streaming completion response includes two extension fields as
+top-level siblings of the standard `choices` array:
+
+- `tldw_tool_results` — array of per-call result objects.
+- `tldw_tool_execution_status` — single string summarizing the aggregate
+  outcome.
+
+```jsonc
+{
+  "choices": [ ... ],
+  "usage": { ... },
+  "tldw_conversation_id": "conv-123",
+  "tldw_tool_results": [
+    {
+      "tool_call_id": "call_abc123",
+      "status": "success",                  // "success" | "failure" | "timeout"
+      "summary": "notes.search completed",  // human-readable one-liner
+      "raw_result": { ... },                // full tool output (success) or null
+      "error": null                         // null on success; structured error on failure:
+                                            //   { "code": "...", "message": "..." }
+    },
+    {
+      "tool_call_id": "call_def456",
+      "status": "timeout",
+      "summary": "media.ingest timed out after 15000ms",
+      "raw_result": null,
+      "error": {
+        "code": "TIMEOUT",
+        "message": "Tool execution timed out after 15000ms"
+      }
+    },
+    {
+      "tool_call_id": "call_ghi789",
+      "status": "failure",
+      "summary": "notes.delete failed: Permission denied",
+      "raw_result": null,
+      "error": {
+        "code": "EXECUTION_ERROR",
+        "message": "Permission denied"
+      }
+    }
+  ],
+  "tldw_tool_execution_status": "partial_success"
+}
+```
+
+#### Execution Policy: Failure Handling
+
+**Default: continue-on-error.** When `chat_auto_execute_tools=true`, the
+executor iterates through up to `chat_max_tool_calls` calls sequentially. A
+failure (execution error, catalog denial, or timeout) on any individual call
+does **not** abort the remaining calls. All results — successes and failures
+alike — are collected into the `tldw_tool_results` array and persisted as
+`role=tool` messages.
+
+Rationale: tool calls requested by an LLM are typically independent (e.g.
+search notes + search media). Aborting the batch on the first failure would
+discard useful results from subsequent successful calls.
+
+**Configurable fail-fast option:**
+
+```
+[Chat-Module]
+chat_tool_fail_fast = false   # default: false (continue-on-error)
+```
+
+Environment override: `CHAT_TOOL_FAIL_FAST`
+
+When `chat_tool_fail_fast=true`, the executor stops processing the batch
+immediately upon the first non-success outcome (failure or timeout).
+Results already collected up to and including the failed call are still
+returned and persisted. The `ToolExecutionBatchResult.truncated` flag is
+set to `true` to indicate early termination. This mode is appropriate when
+tool calls have ordering dependencies (e.g. create-then-read) and a failed
+prerequisite makes subsequent calls meaningless.
+
+#### Timeout Handling
+
+Each tool call is subject to the per-call deadline `chat_tool_timeout_ms`
+(default `15000`, clamped to `1000..120000`). The timeout is enforced via
+`asyncio.wait_for` around the MCP `tools/call` coroutine.
+
+When a call times out:
+
+1. The `asyncio.TimeoutError` is caught; the call is **not** retried.
+2. A `ToolExecutionRecord` is created with:
+   - `ok = false`
+   - `timed_out = true`
+   - `status = "timeout"`
+   - `error = { "code": "TIMEOUT", "message": "Tool execution timed out after {timeout_ms}ms" }`
+3. The record is persisted as a `role=tool` message so the conversation
+   history accurately reflects the attempt (and the LLM can reason about
+   the failure on a follow-up turn).
+4. Under continue-on-error (default), the next tool call in the batch
+   proceeds normally. Under fail-fast, the batch terminates immediately.
+
+There is no aggregate batch-level timeout; each call receives the full
+`chat_tool_timeout_ms` budget independently. A batch of `N` calls could
+therefore take up to `N * chat_tool_timeout_ms` in the worst case.
+
+#### Mixed Success/Failure Representation
+
+When a batch contains a mix of successes and failures, **all** records are
+included in `tldw_tool_results` in their original positional order (matching
+the `tool_calls` array from the assistant message). The
+`tldw_tool_execution_status` field summarizes the aggregate outcome:
+
+| Condition | `tldw_tool_execution_status` |
+|---|---|
+| All calls succeeded | `"success"` |
+| All calls failed or timed out | `"failure"` |
+| At least one success + at least one failure/timeout | `"partial_success"` |
+| No calls attempted (empty allow-catalog, no tool_calls, feature disabled) | `"skipped"` |
+
+The `ToolExecutionBatchResult` dataclass exposes raw counts for programmatic
+consumers:
+
+- `requested_calls` — total tool calls in the assistant message
+- `processed_calls` — calls selected after applying `chat_max_tool_calls` cap
+- `execution_attempts` — calls that passed catalog/parse checks and were
+  dispatched to MCP
+- `executed_calls` — calls that completed successfully
+- `truncated` — `true` when `requested_calls > processed_calls` (cap hit) or
+  when fail-fast terminated the batch early
+
+Clients can use `tldw_tool_execution_status` for coarse-grained UX decisions
+(e.g. show a warning banner on `partial_success`) and inspect individual
+`tldw_tool_results[].status` entries for fine-grained per-call handling.
+
 ### Idempotency Key Generation
 
 **Parameter**: `chat_tool_idempotency` (bool, default `true`)

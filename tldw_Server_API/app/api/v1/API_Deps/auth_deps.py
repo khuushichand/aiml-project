@@ -1104,7 +1104,6 @@ async def get_user_org_policy(
     return await get_org_policy_from_principal(
         db=db,
         principal=principal,
-        current_user=current_user,
     )
 
 
@@ -1132,16 +1131,14 @@ async def _load_org_policy(db: Any, org_id: int) -> dict[str, Any]:
 async def get_org_policy_from_principal(
     db: Any = Depends(get_db_transaction),  # noqa: B008
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
 ) -> dict[str, Any]:
     """
-    Resolve organization policy primarily from ``AuthPrincipal``, with fallbacks.
+    Resolve organization policy from ``AuthPrincipal`` org claims.
 
     Preference order:
     1. First org_id in ``principal.org_ids`` (claim-first).
-    2. First org_id from ``current_user["org_memberships"]`` (legacy user dict).
-    3. Synthetic org_id=1 in single-user mode (for environments without orgs).
-    4. HTTP 400 when no organization can be resolved.
+    2. Synthetic org_id=1 in single-user mode (for environments without orgs).
+    3. HTTP 400 when no organization can be resolved.
 
     This helper is the principal-first counterpart to ``get_user_org_policy`` and
     is intended for new code paths that already depend on ``get_auth_principal``.
@@ -1190,11 +1187,7 @@ async def get_org_policy_from_principal(
     if org_ids:
         org_id = org_ids[0]
     else:
-        # 2) Fallback to user org_memberships for compatibility.
-        memberships = current_user.get("org_memberships") or []
-        if memberships:
-            org_id = memberships[0].get("org_id")
-        elif _should_use_synthetic_single_user_org(principal):
+        if _should_use_synthetic_single_user_org(principal):
             # Single-user environment: synthetic org_id=1 to mirror legacy behaviour.
             org_id = 1
         else:

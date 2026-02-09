@@ -1,0 +1,78 @@
+THIRD-PARTY NOTICES
+===================
+
+This file lists all third-party components bundled (committed) in the tldw_server2
+repository, along with their authors, license types, and pointers to the
+original license text.  It does not cover transitive dependencies installed at
+build time via pip or npm; consult pyproject.toml and package.json for those.
+
+The tldw_server2 project itself is licensed under the GNU General Public License
+v2.0.  All bundled components below are license-compatible with GPLv2.
+
+-------------------------------------------------------------------------------
+
+1. Reveal.js 5.2.0
+   Author/Year : Hakim El Hattab and reveal.js contributors, 2011-2024
+   License      : MIT
+   Files        : tldw_Server_API/app/core/Slides/revealjs/
+                  (reveal.js, reveal.esm.js, reveal.css, reset.css,
+                   plugin/*, theme/*.css)
+   License file : tldw_Server_API/app/core/Slides/revealjs/LICENSE.revealjs.txt
+   URL          : https://revealjs.com
+
+2. Source Sans Pro
+   Author/Year : Adobe Systems Incorporated, 2010, 2012
+   License      : SIL Open Font License v1.1
+   Files        : tldw_Server_API/app/core/Slides/revealjs/theme/fonts/source-sans-pro/
+   License file : tldw_Server_API/app/core/Slides/revealjs/theme/fonts/source-sans-pro/LICENSE
+   URL          : https://github.com/adobe-fonts/source-sans
+
+3. League Gothic
+   Author/Year : The League of Moveable Type
+   License      : SIL Open Font License
+   Files        : tldw_Server_API/app/core/Slides/revealjs/theme/fonts/league-gothic/
+   License file : tldw_Server_API/app/core/Slides/revealjs/theme/fonts/league-gothic/LICENSE
+   URL          : https://www.theleagueofmoveabletype.com/league-gothic
+
+4. Swagger UI
+   Author/Year : SmartBear Software
+   License      : Apache License 2.0
+   Files        : tldw_Server_API/app/static/swagger/
+                  (swagger-ui-bundle.js, swagger-ui-standalone-preset.js, swagger-ui.css)
+   License text : https://www.apache.org/licenses/LICENSE-2.0
+   URL          : https://github.com/swagger-api/swagger-ui
+
+5. PDF.js 4.10.38
+   Author/Year : Mozilla Foundation, 2024
+   License      : Apache License 2.0
+   Files        : apps/packages/ui/src/public/pdf.worker.min.mjs
+   License text : https://www.apache.org/licenses/LICENSE-2.0
+   URL          : https://mozilla.github.io/pdf.js/
+
+6. TinySegmenter 0.1
+   Author/Year : Taku Kudo, 2008
+   License      : BSD (new BSD licence)
+   Files        : Docs/Docs/site/assets/javascripts/lunr/tinyseg.js
+                  Docs/site/assets/javascripts/lunr/tinyseg.js
+   License text : http://chasen.org/~taku/software/TinySegmenter/LICENCE.txt
+   URL          : http://chasen.org/~taku/software/TinySegmenter/
+
+7. wordcut (lunr-languages Thai tokeniser bundle)
+   Author/Year : Vee Satayamas and contributors
+   License      : MIT (includes bundled Underscore.js 1.8.3 by Jeremy Ashkenas, also MIT)
+   Files        : Docs/Docs/site/assets/javascripts/lunr/wordcut.js
+                  Docs/site/assets/javascripts/lunr/wordcut.js
+   License text : https://opensource.org/licenses/MIT
+   URL          : https://github.com/veer66/wordcut
+
+8. Material for MkDocs (generated site bundle)
+   Author/Year : Martin Donath (squidfunk)
+   License      : MIT
+   Files        : Docs/Docs/site/assets/javascripts/bundle.f55a23d4.min.js
+                  Docs/site/assets/javascripts/bundle.f55a23d4.min.js
+                  (includes focus-visible polyfill and escape-html, both MIT)
+   License text : https://opensource.org/licenses/MIT
+   URL          : https://github.com/squidfunk/mkdocs-material
+
+-------------------------------------------------------------------------------
+END OF THIRD-PARTY NOTICES

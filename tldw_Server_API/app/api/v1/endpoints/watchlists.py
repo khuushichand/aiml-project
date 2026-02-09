@@ -319,17 +319,23 @@ def _normalize_claim_values(raw: Any) -> list[str]:
 
 
 def _is_runs_admin_user(current_user: User) -> bool:
+    """
+    Determine admin authorization from explicit claims only.
+
+    Legacy profile booleans/columns like ``is_superuser`` and ``role`` are
+    intentionally ignored for runs-gated and cross-user watchlists paths.
+    """
     try:
         if bool(getattr(current_user, "is_admin", False)):
             return True
-        if bool(getattr(current_user, "is_superuser", False)):
-            return True
-        role_value = str(getattr(current_user, "role", "")).strip().lower()
-        if role_value == "admin":
-            return True
         if "admin" in _normalize_claim_values(getattr(current_user, "roles", [])):
             return True
-        if "admin" in _normalize_claim_values(getattr(current_user, "permissions", [])):
+        permission_values = _normalize_claim_values(getattr(current_user, "permissions", []))
+        if "admin" in permission_values:
+            return True
+        if "*" in permission_values:
+            return True
+        if "system.configure" in permission_values:
             return True
         if "admin" in _normalize_claim_values(getattr(current_user, "scopes", [])):
             return True
@@ -2209,7 +2215,7 @@ async def get_job(
         r = target_db.get_job(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="job_not_found") from None
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_runs_admin_user(current_user)
     output_prefs = _normalize_output_prefs(getattr(r, "output_prefs_json", None))
     ingest_prefs = output_prefs.get("ingest") if isinstance(output_prefs, dict) else None
     return Job(
