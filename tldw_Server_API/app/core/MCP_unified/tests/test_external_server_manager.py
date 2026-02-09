@@ -23,6 +23,8 @@ class _FakeAdapter(ExternalMCPTransportAdapter):
         self.tools = tools
         self.fail_list = False
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.next_call_exception: Exception | None = None
+        self.next_call_is_error = False
 
     @property
     def transport_name(self) -> str:
@@ -50,6 +52,17 @@ class _FakeAdapter(ExternalMCPTransportAdapter):
     ) -> ExternalToolCallResult:
         del context
         self.calls.append((tool_name, dict(arguments)))
+        if self.next_call_exception is not None:
+            exc = self.next_call_exception
+            self.next_call_exception = None
+            raise exc
+        if self.next_call_is_error:
+            self.next_call_is_error = False
+            return ExternalToolCallResult(
+                content=[{"type": "text", "text": "upstream failed"}],
+                is_error=True,
+                metadata={"adapter": "fake"},
+            )
         return ExternalToolCallResult(
             content={"ok": True, "tool": tool_name, "args": dict(arguments)},
             is_error=False,
@@ -228,5 +241,77 @@ async def test_refresh_partial_failure_clears_server_tools_and_reports_degraded(
         assert row["status"] == "degraded"
         assert row["tool_count"] == 0
         assert row["last_error"] == "discovery failed"
+        telemetry = row["telemetry"]
+        assert telemetry["connect_attempts"] == 1
+        assert telemetry["connect_successes"] == 1
+        assert telemetry["discovery_attempts"] == 2
+        assert telemetry["discovery_successes"] == 1
+        assert telemetry["discovery_failures"] == 1
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_tracks_call_outcomes_and_policy_denials(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _FakeAdapter(
+        server_id="docs",
+        tools=[
+            ExternalToolDefinition(name="docs.search", description="Search"),
+            ExternalToolDefinition(
+                name="docs.update",
+                description="Update",
+                metadata={"category": "management"},
+            ),
+        ],
+    )
+    _patch_loader_and_adapter(
+        monkeypatch,
+        payload=_registry_payload(
+            policy={
+                "allow_tool_patterns": ["docs.*"],
+                "allow_writes": True,
+                "require_write_confirmation": True,
+            }
+        ),
+        adapter=adapter,
+    )
+
+    manager = ExternalServerManager()
+    try:
+        await manager.initialize()
+
+        ok = await manager.execute_virtual_tool("ext.docs.docs.search", {"q": "x"})
+        assert ok["is_error"] is False
+
+        adapter.next_call_is_error = True
+        upstream_err = await manager.execute_virtual_tool("ext.docs.docs.search", {"q": "y"})
+        assert upstream_err["is_error"] is True
+
+        adapter.next_call_exception = TimeoutError("upstream timeout")
+        with pytest.raises(TimeoutError, match="upstream timeout"):
+            await manager.execute_virtual_tool("ext.docs.docs.search", {"q": "z"})
+
+        with pytest.raises(PermissionError, match="Write confirmation required"):
+            await manager.execute_virtual_tool("ext.docs.docs.update", {"title": "no-confirm"})
+
+        servers = await manager.list_servers()
+        assert len(servers) == 1
+        telemetry = servers[0]["telemetry"]
+        assert telemetry["connect_attempts"] == 1
+        assert telemetry["connect_successes"] == 1
+        assert telemetry["connect_failures"] == 0
+        assert telemetry["discovery_attempts"] == 1
+        assert telemetry["discovery_successes"] == 1
+        assert telemetry["discovery_failures"] == 0
+        assert telemetry["call_attempts"] == 3
+        assert telemetry["call_successes"] == 2
+        assert telemetry["call_failures"] == 1
+        assert telemetry["call_timeouts"] == 1
+        assert telemetry["call_upstream_errors"] == 1
+        assert telemetry["policy_denials"] == 1
+        assert telemetry["last_discovered_tool_count"] == 2
+        assert telemetry["last_call_latency_ms"] is not None
+        assert telemetry["avg_call_latency_ms"] is not None
+        assert telemetry["last_error"] is not None
     finally:
         await manager.shutdown()

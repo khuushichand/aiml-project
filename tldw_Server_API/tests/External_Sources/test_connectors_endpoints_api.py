@@ -19,7 +19,6 @@ def connectors_client() -> Tuple[TestClient, dict]:
     os.environ["ROUTES_ENABLE"] = "connectors"
     os.environ.setdefault("AUTH_MODE", "single_user")
     os.environ.setdefault("TESTING", "true")
-    os.environ.setdefault("ORG_POLICY_SINGLE_USER_PRINCIPAL", "0")
 
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     from tldw_Server_API.app.main import app

@@ -79,6 +79,41 @@ After restart:
 2. Find tools named like `ext.docs.docs.search`
 3. Execute with `POST /api/v1/mcp/tools/execute`
 
+## Stdio Operators Quickstart
+
+Use `transport: stdio` when the upstream MCP server runs as a local process.
+
+```yaml
+servers:
+  - id: local_ci
+    name: "Local CI MCP"
+    enabled: true
+    transport: stdio
+    stdio:
+      command: "python"
+      args: ["-u", "/opt/mcp/ci_server.py"]
+      env:
+        CI_MODE: "1"
+      cwd: "/opt/mcp"
+    auth:
+      mode: none
+    policy:
+      allow_tool_patterns: ["ci.*"]
+      deny_tool_patterns: ["*.delete", "*.exec"]
+      allow_writes: true
+      require_write_confirmation: true
+    timeouts:
+      connect_seconds: 5
+      request_seconds: 20
+```
+
+Operator notes:
+
+- Stdio federation expects newline-delimited JSON-RPC on stdout and reads JSON-RPC requests from stdin.
+- Use unbuffered process output when possible (for Python, run with `-u`) to avoid delayed responses/timeouts.
+- Keep `cwd` explicit so relative paths resolve deterministically in production.
+- Use `env` only for non-secret runtime flags; put secrets in deployment environment variables.
+
 ## Write Safety Defaults
 
 - `allow_writes` defaults to `false`.
@@ -97,8 +132,20 @@ After restart:
 
 ## Operational Checks
 
-- `external.servers.list` shows per-server status, connectivity, discovery state, tool count, and last error.
+- `external.servers.list` shows per-server status, connectivity, discovery state, tool count, last error, and telemetry counters.
 - `external.tools.refresh` refreshes discovery for one server (`server_id`) or all servers.
+
+### Telemetry fields in `external.servers.list`
+
+Each server row includes a `telemetry` object with:
+
+- Connect counters: `connect_attempts`, `connect_successes`, `connect_failures`.
+- Discovery counters: `discovery_attempts`, `discovery_successes`, `discovery_failures`.
+- Call counters: `call_attempts`, `call_successes`, `call_failures`, `call_timeouts`, `call_upstream_errors`.
+- Policy counters: `policy_denials`.
+- Latency snapshots: `last_*_latency_ms` and `avg_*_latency_ms` for connect/discovery/call.
+- Most recent discovered tool count: `last_discovered_tool_count`.
+- Most recent telemetry-captured error: `last_error`.
 
 ## Troubleshooting
 
@@ -110,3 +157,6 @@ After restart:
   - Increase `timeouts.request_seconds` for that server.
 - `requires websocket/stdio config`:
   - Transport-specific section missing in `mcp_external_servers.yaml`.
+- Stdio server appears connected but tools fail:
+  - Verify upstream process writes newline-delimited JSON-RPC responses to stdout.
+  - Confirm unbuffered stdout (`python -u`) and process permissions for `cwd` and executable path.

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from loguru import logger
 
 from .config_schema import ExternalMCPServerConfig, load_external_server_registry
-from .transports import ExternalMCPTransportAdapter, build_transport_adapter
+from .transports import ExternalMCPTransportAdapter, ExternalToolCallResult, build_transport_adapter
 
 
 @dataclass(slots=True)
@@ -25,6 +26,68 @@ class VirtualExternalTool:
     is_write: bool = False
 
 
+@dataclass(slots=True)
+class ExternalServerTelemetry:
+    """Per-server operational counters and latency snapshots."""
+
+    connect_attempts: int = 0
+    connect_successes: int = 0
+    connect_failures: int = 0
+    discovery_attempts: int = 0
+    discovery_successes: int = 0
+    discovery_failures: int = 0
+    call_attempts: int = 0
+    call_successes: int = 0
+    call_failures: int = 0
+    call_timeouts: int = 0
+    call_upstream_errors: int = 0
+    policy_denials: int = 0
+    last_discovered_tool_count: int = 0
+    total_connect_latency_ms: float = 0.0
+    total_discovery_latency_ms: float = 0.0
+    total_call_latency_ms: float = 0.0
+    last_connect_latency_ms: Optional[float] = None
+    last_discovery_latency_ms: Optional[float] = None
+    last_call_latency_ms: Optional[float] = None
+    last_error: Optional[str] = None
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "connect_attempts": self.connect_attempts,
+            "connect_successes": self.connect_successes,
+            "connect_failures": self.connect_failures,
+            "discovery_attempts": self.discovery_attempts,
+            "discovery_successes": self.discovery_successes,
+            "discovery_failures": self.discovery_failures,
+            "call_attempts": self.call_attempts,
+            "call_successes": self.call_successes,
+            "call_failures": self.call_failures,
+            "call_timeouts": self.call_timeouts,
+            "call_upstream_errors": self.call_upstream_errors,
+            "policy_denials": self.policy_denials,
+            "last_discovered_tool_count": self.last_discovered_tool_count,
+            "last_connect_latency_ms": self.last_connect_latency_ms,
+            "last_discovery_latency_ms": self.last_discovery_latency_ms,
+            "last_call_latency_ms": self.last_call_latency_ms,
+            "avg_connect_latency_ms": (
+                round(self.total_connect_latency_ms / self.connect_attempts, 3)
+                if self.connect_attempts
+                else None
+            ),
+            "avg_discovery_latency_ms": (
+                round(self.total_discovery_latency_ms / self.discovery_attempts, 3)
+                if self.discovery_attempts
+                else None
+            ),
+            "avg_call_latency_ms": (
+                round(self.total_call_latency_ms / self.call_attempts, 3)
+                if self.call_attempts
+                else None
+            ),
+            "last_error": self.last_error,
+        }
+
+
 class ExternalServerManager:
     """Lifecycle and routing manager for external MCP federation.
 
@@ -38,6 +101,7 @@ class ExternalServerManager:
         self._adapters: dict[str, ExternalMCPTransportAdapter] = {}
         self._virtual_tools: dict[str, VirtualExternalTool] = {}
         self._discovery_errors: dict[str, str] = {}
+        self._telemetry: dict[str, ExternalServerTelemetry] = {}
         self._initialized = False
 
     @property
@@ -52,12 +116,16 @@ class ExternalServerManager:
         self._adapters = {}
         self._virtual_tools = {}
         self._discovery_errors = {}
+        self._telemetry = {
+            server.id: ExternalServerTelemetry()
+            for server in self._servers.values()
+        }
 
         for server in self._servers.values():
             adapter = build_transport_adapter(server)
             self._adapters[server.id] = adapter
             try:
-                await adapter.connect()
+                await self._connect_server(server.id)
                 await self._refresh_server_tools(server.id)
                 self._discovery_errors.pop(server.id, None)
             except Exception as exc:
@@ -82,6 +150,7 @@ class ExternalServerManager:
         self._adapters = {}
         self._virtual_tools = {}
         self._discovery_errors = {}
+        self._telemetry = {}
         self._initialized = False
 
     async def refresh_discovery(self, server_id: Optional[str] = None) -> dict[str, Any]:
@@ -145,6 +214,7 @@ class ExternalServerManager:
                     "discovery_ok": discovery_ok,
                     "checks": checks,
                     "last_error": self._discovery_errors.get(server.id),
+                    "telemetry": self._snapshot_telemetry(server.id),
                 }
             )
         return rows
@@ -174,6 +244,13 @@ class ExternalServerManager:
 
         server_cfg = self._servers[server_id]
         if not server_cfg.policy.allows_tool(upstream_tool_name):
+            self._mark_policy_denial(
+                server_id,
+                (
+                    f"External tool '{upstream_tool_name}' is blocked by local policy "
+                    f"for server '{server_id}'"
+                ),
+            )
             raise PermissionError(
                 f"External tool '{upstream_tool_name}' is blocked by local policy for server '{server_id}'"
             )
@@ -181,16 +258,33 @@ class ExternalServerManager:
         call_args = dict(arguments or {})
         if virtual_tool.is_write:
             if not server_cfg.policy.allow_writes:
+                self._mark_policy_denial(
+                    server_id,
+                    (
+                        f"External write tool '{upstream_tool_name}' is disabled by local policy "
+                        f"for server '{server_id}'"
+                    ),
+                )
                 raise PermissionError(
                     f"External write tool '{upstream_tool_name}' is disabled by local policy for server '{server_id}'"
                 )
             if server_cfg.policy.require_write_confirmation and not bool(call_args.get("__confirm_write")):
+                self._mark_policy_denial(
+                    server_id,
+                    "Write confirmation required. Re-run with '__confirm_write': true.",
+                )
                 raise PermissionError(
                     "Write confirmation required. Re-run with '__confirm_write': true."
                 )
             call_args.pop("__confirm_write", None)
 
-        result = await adapter.call_tool(upstream_tool_name, call_args, context=context)
+        result = await self._call_external_tool(
+            server_id=server_id,
+            adapter=adapter,
+            upstream_tool_name=upstream_tool_name,
+            call_args=call_args,
+            context=context,
+        )
         return {
             "content": result.content,
             "is_error": result.is_error,
@@ -215,30 +309,44 @@ class ExternalServerManager:
     async def _refresh_server_tools(self, server_id: str) -> None:
         """Refresh discovery cache for a single server."""
 
+        telemetry = self._get_telemetry(server_id)
+        telemetry.discovery_attempts += 1
+        started_at = time.perf_counter()
         adapter = self._adapters[server_id]
-        tools = await adapter.list_tools()
-        server_cfg = self._servers[server_id]
+        try:
+            tools = await adapter.list_tools()
+            server_cfg = self._servers[server_id]
 
-        server_tools: dict[str, VirtualExternalTool] = {}
+            server_tools: dict[str, VirtualExternalTool] = {}
 
-        for tool in tools:
-            if not server_cfg.policy.allows_tool(tool.name):
-                continue
-            virtual_name = self._virtual_tool_name(server_id, tool.name)
-            tool_metadata = dict(tool.metadata or {})
-            server_tools[virtual_name] = VirtualExternalTool(
-                virtual_name=virtual_name,
-                server_id=server_id,
-                upstream_tool_name=tool.name,
-                description=tool.description,
-                input_schema=tool.input_schema,
-                metadata=tool_metadata,
-                is_write=self._is_write_tool(tool.name, tool_metadata),
-            )
+            for tool in tools:
+                if not server_cfg.policy.allows_tool(tool.name):
+                    continue
+                virtual_name = self._virtual_tool_name(server_id, tool.name)
+                tool_metadata = dict(tool.metadata or {})
+                server_tools[virtual_name] = VirtualExternalTool(
+                    virtual_name=virtual_name,
+                    server_id=server_id,
+                    upstream_tool_name=tool.name,
+                    description=tool.description,
+                    input_schema=tool.input_schema,
+                    metadata=tool_metadata,
+                    is_write=self._is_write_tool(tool.name, tool_metadata),
+                )
 
-        # Replace only this server's tools while preserving other caches.
-        self._clear_server_tools(server_id)
-        self._virtual_tools.update(server_tools)
+            # Replace only this server's tools while preserving other caches.
+            self._clear_server_tools(server_id)
+            self._virtual_tools.update(server_tools)
+            telemetry.discovery_successes += 1
+            telemetry.last_discovered_tool_count = len(server_tools)
+        except Exception as exc:
+            telemetry.discovery_failures += 1
+            telemetry.last_error = str(exc)
+            raise
+        finally:
+            latency_ms = self._elapsed_ms(started_at)
+            telemetry.last_discovery_latency_ms = latency_ms
+            telemetry.total_discovery_latency_ms += latency_ms
 
     @staticmethod
     def _virtual_tool_name(server_id: str, tool_name: str) -> str:
@@ -253,6 +361,99 @@ class ExternalServerManager:
 
     def _count_tools_for_server(self, server_id: str) -> int:
         return sum(1 for tool in self._virtual_tools.values() if tool.server_id == server_id)
+
+    def _get_telemetry(self, server_id: str) -> ExternalServerTelemetry:
+        telemetry = self._telemetry.get(server_id)
+        if telemetry is None:
+            telemetry = ExternalServerTelemetry()
+            self._telemetry[server_id] = telemetry
+        return telemetry
+
+    def _snapshot_telemetry(self, server_id: str) -> dict[str, Any]:
+        return self._get_telemetry(server_id).snapshot()
+
+    async def _connect_server(self, server_id: str) -> None:
+        telemetry = self._get_telemetry(server_id)
+        telemetry.connect_attempts += 1
+        started_at = time.perf_counter()
+        try:
+            await self._adapters[server_id].connect()
+            telemetry.connect_successes += 1
+        except Exception as exc:
+            telemetry.connect_failures += 1
+            telemetry.last_error = str(exc)
+            raise
+        finally:
+            latency_ms = self._elapsed_ms(started_at)
+            telemetry.last_connect_latency_ms = latency_ms
+            telemetry.total_connect_latency_ms += latency_ms
+
+    async def _call_external_tool(
+        self,
+        *,
+        server_id: str,
+        adapter: ExternalMCPTransportAdapter,
+        upstream_tool_name: str,
+        call_args: dict[str, Any],
+        context: Optional[Any],
+    ) -> ExternalToolCallResult:
+        telemetry = self._get_telemetry(server_id)
+        telemetry.call_attempts += 1
+        started_at = time.perf_counter()
+        try:
+            result = await adapter.call_tool(upstream_tool_name, call_args, context=context)
+            telemetry.call_successes += 1
+            if result.is_error:
+                telemetry.call_upstream_errors += 1
+                error_text = self._extract_error_text(result)
+                if error_text:
+                    telemetry.last_error = error_text
+            return result
+        except TimeoutError as exc:
+            telemetry.call_failures += 1
+            telemetry.call_timeouts += 1
+            telemetry.last_error = str(exc)
+            raise
+        except Exception as exc:
+            telemetry.call_failures += 1
+            telemetry.last_error = str(exc)
+            raise
+        finally:
+            latency_ms = self._elapsed_ms(started_at)
+            telemetry.last_call_latency_ms = latency_ms
+            telemetry.total_call_latency_ms += latency_ms
+
+    def _mark_policy_denial(self, server_id: str, message: str) -> None:
+        telemetry = self._get_telemetry(server_id)
+        telemetry.policy_denials += 1
+        telemetry.last_error = message
+
+    @staticmethod
+    def _extract_error_text(result: ExternalToolCallResult) -> Optional[str]:
+        content = result.content
+        if isinstance(content, str):
+            text = content.strip()
+            return text or None
+        if isinstance(content, dict):
+            text = content.get("text")
+            if isinstance(text, str):
+                stripped = text.strip()
+                if stripped:
+                    return stripped
+        if isinstance(content, list):
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                text = item.get("text")
+                if isinstance(text, str):
+                    stripped = text.strip()
+                    if stripped:
+                        return stripped
+        return None
+
+    @staticmethod
+    def _elapsed_ms(started_at: float) -> float:
+        return round((time.perf_counter() - started_at) * 1000.0, 3)
 
     @staticmethod
     def _is_write_tool(tool_name: str, metadata: dict[str, Any]) -> bool:

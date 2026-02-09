@@ -39,8 +39,12 @@ servers:
     enabled: false
     transport: stdio
     stdio:
+      # Command should emit newline-delimited JSON-RPC on stdout and read stdin.
       command: "node"
       args: ["/opt/mcp/ci-server.js"]
+      # Python servers should usually run with -u to avoid stdio buffering:
+      # command: "python"
+      # args: ["-u", "/opt/mcp/ci_server.py"]
       env:
         CI_MODE: "1"
       cwd: "/opt/mcp"
@@ -52,3 +56,12 @@ servers:
       deny_tool_patterns: []
       allow_writes: true
       require_write_confirmation: true
+    timeouts:
+      connect_seconds: 5
+      request_seconds: 20
+    retries:
+      max_attempts: 1
+      backoff_seconds: 0.5
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 30

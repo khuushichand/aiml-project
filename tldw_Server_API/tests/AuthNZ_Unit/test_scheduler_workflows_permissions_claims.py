@@ -48,6 +48,24 @@ def _build_app_with_overrides(principal: AuthPrincipal) -> FastAPI:
 
     app.dependency_overrides[sched_mod._ADMIN_RESCAN_SCOPE_DEP] = _fake_require_token_scope
 
+    async def _allow_non_authz_dep() -> None:
+        # Claim tests isolate scheduler claim checks and bypass unrelated
+        # per-route token-scope/rate-limit enforcement dependencies.
+        return None
+
+    for route in app.routes:
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        for dep in getattr(dependant, "dependencies", []):
+            call = getattr(dep, "call", None)
+            if call is None:
+                continue
+            if getattr(call, "_tldw_token_scope", False):
+                app.dependency_overrides[call] = _allow_non_authz_dep
+            if getattr(call, "_tldw_rate_limit_resource", None) is not None:
+                app.dependency_overrides[call] = _allow_non_authz_dep
+
     class _FakeScheduler:
         def __init__(self) -> None:
             self.calls: Dict[str, Any] = {}

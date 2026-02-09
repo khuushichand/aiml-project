@@ -46,8 +46,6 @@ from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_l
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager, get_session_manager
 from tldw_Server_API.app.core.AuthNZ.settings import (
     get_settings,
-    is_single_user_mode,
-    is_single_user_profile_mode,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     authenticate_api_key_user,
@@ -1137,7 +1135,7 @@ async def get_org_policy_from_principal(
 
     Preference order:
     1. First org_id in ``principal.org_ids`` (claim-first).
-    2. Synthetic org_id=1 in single-user mode (for environments without orgs).
+    2. Synthetic org_id=1 for explicit single-user principals (subject=single_user).
     3. HTTP 400 when no organization can be resolved.
 
     This helper is the principal-first counterpart to ``get_user_org_policy`` and
@@ -1145,33 +1143,11 @@ async def get_org_policy_from_principal(
     """
     def _should_use_synthetic_single_user_org(p: AuthPrincipal) -> bool:
         """
-        Decide whether to fall back to a synthetic org_id=1 for single-user.
+        Decide whether to fall back to synthetic org_id=1.
 
-        Behaviour:
-        - When ORG_POLICY_SINGLE_USER_PRINCIPAL is unset/true:
-          prefer principal/profile-driven behaviour and only treat the
-          environment as single-user for org-policy purposes when:
-            * PROFILE indicates a single-user profile, and
-            * the principal is explicitly marked as the single-user profile (subject/helper).
-        - When the flag is explicitly disabled (\"0\"/\"false\"/\"off\"):
-          preserve legacy behaviour using mode/profile helpers
-          (is_single_user_mode or is_single_user_profile_mode).
+        Stage 4 claim-first tightening: org-policy fallback is derived from
+        principal identity only (no mode/profile helper branch).
         """
-        flag = os.getenv("ORG_POLICY_SINGLE_USER_PRINCIPAL", "").strip().lower()
-        if flag in {"0", "false", "off"}:
-            # Explicit compatibility mode: defer to legacy mode/profile helpers.
-            try:
-                return bool(is_single_user_mode() or is_single_user_profile_mode())
-            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
-                return False
-
-        try:
-            single_profile = is_single_user_profile_mode()
-        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
-            single_profile = False
-
-        if not single_profile:
-            return False
         # Principal-first: only explicit single-user principals qualify. For the
         # org-policy fallback, we deliberately require the principal to be
         # tagged with subject \"single_user\" instead of relying on numeric

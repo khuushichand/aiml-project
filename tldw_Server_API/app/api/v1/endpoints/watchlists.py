@@ -337,8 +337,6 @@ def _is_runs_admin_user(current_user: User) -> bool:
             return True
         if "system.configure" in permission_values:
             return True
-        if "admin" in _normalize_claim_values(getattr(current_user, "scopes", [])):
-            return True
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
         return False
     return False
