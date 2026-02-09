@@ -52,9 +52,44 @@ def _build_app_with_overrides(principal: AuthPrincipal) -> FastAPI:
         def __init__(self) -> None:
             self.calls: Dict[str, Any] = {}
             self._aps = SimpleNamespace(get_jobs=lambda: [])
+            self._schedule = SimpleNamespace(
+                id="sched-1",
+                workflow_id=123,
+                name="test",
+                cron="*/15 * * * *",
+                timezone="UTC",
+                inputs_json="{}",
+                run_mode="async",
+                validation_mode="block",
+                enabled=True,
+                tenant_id="default",
+                user_id="2",
+                concurrency_mode="skip",
+                misfire_grace_sec=300,
+                coalesce=True,
+                require_online=False,
+                last_run_at=None,
+                next_run_at=None,
+                last_status=None,
+            )
 
         async def _rescan_once(self):
             self.calls["rescan"] = True
+
+        def list(self, *, tenant_id: str, user_id: str | None, limit: int, offset: int):
+            self.calls["list"] = {
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "limit": limit,
+                "offset": offset,
+            }
+            return []
+
+        def get(self, schedule_id: str):
+            self.calls["get"] = {"schedule_id": schedule_id}
+            if schedule_id == getattr(self._schedule, "id", ""):
+                return self._schedule
+            return None
 
     fake_scheduler = _FakeScheduler()
 
@@ -159,3 +194,86 @@ async def test_scheduler_admin_rescan_allows_non_admin_with_workflows_admin_perm
     assert resp.status_code == 200
     assert resp.json().get("ok") is True
     assert getattr(app.state._fake_scheduler, "calls", {}).get("rescan") is True
+
+
+@pytest.mark.asyncio
+async def test_scheduler_list_owner_filter_allows_admin_role_claim(monkeypatch):
+    principal = _make_principal(
+        roles=["admin"],
+        permissions=[],
+        is_admin=False,
+    )
+    app = _build_app_with_overrides(principal)
+    fake_scheduler = app.state._fake_scheduler
+    monkeypatch.setattr(sched_mod, "get_workflows_scheduler", lambda: fake_scheduler)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/scheduler/workflows", params={"owner": "2"})
+    assert resp.status_code == 200
+    assert getattr(app.state._fake_scheduler, "calls", {}).get("list", {}).get("user_id") == "2"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_list_owner_filter_allows_workflows_admin_permission(monkeypatch):
+    principal = _make_principal(
+        roles=["user"],
+        permissions=[WORKFLOWS_ADMIN],
+        is_admin=False,
+    )
+    app = _build_app_with_overrides(principal)
+    fake_scheduler = app.state._fake_scheduler
+    monkeypatch.setattr(sched_mod, "get_workflows_scheduler", lambda: fake_scheduler)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/scheduler/workflows", params={"owner": "2"})
+    assert resp.status_code == 200
+    assert getattr(app.state._fake_scheduler, "calls", {}).get("list", {}).get("user_id") == "2"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_list_owner_filter_forbidden_without_admin_claims(monkeypatch):
+    principal = _make_principal(
+        roles=["user"],
+        permissions=[],
+        is_admin=False,
+    )
+    app = _build_app_with_overrides(principal)
+    fake_scheduler = app.state._fake_scheduler
+    monkeypatch.setattr(sched_mod, "get_workflows_scheduler", lambda: fake_scheduler)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/scheduler/workflows", params={"owner": "2"})
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_scheduler_get_schedule_allows_admin_role_cross_user(monkeypatch):
+    principal = _make_principal(
+        roles=["admin"],
+        permissions=[],
+        is_admin=False,
+    )
+    app = _build_app_with_overrides(principal)
+    fake_scheduler = app.state._fake_scheduler
+    monkeypatch.setattr(sched_mod, "get_workflows_scheduler", lambda: fake_scheduler)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/scheduler/workflows/sched-1")
+    assert resp.status_code == 200
+    assert resp.json().get("user_id") == "2"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_get_schedule_forbidden_without_admin_claims(monkeypatch):
+    principal = _make_principal(
+        roles=["user"],
+        permissions=[],
+        is_admin=False,
+    )
+    app = _build_app_with_overrides(principal)
+    fake_scheduler = app.state._fake_scheduler
+    monkeypatch.setattr(sched_mod, "get_workflows_scheduler", lambda: fake_scheduler)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/scheduler/workflows/sched-1")
+    assert resp.status_code == 403

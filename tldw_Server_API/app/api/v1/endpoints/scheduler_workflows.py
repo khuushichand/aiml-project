@@ -90,6 +90,35 @@ class ScheduleResponse(BaseModel):
     last_status: str | None
 
 
+def _normalize_claim_values(raw: Any) -> list[str]:
+    values = raw if isinstance(raw, (list, tuple, set)) else ([raw] if raw is not None else [])
+    out: list[str] = []
+    for value in values:
+        text = str(value).strip().lower()
+        if text:
+            out.append(text)
+    return out
+
+
+def _is_scheduler_admin_user(current_user: User) -> bool:
+    """Resolve scheduler admin authorization from explicit claims."""
+    try:
+        if bool(getattr(current_user, "is_admin", False)):
+            return True
+        if "admin" in _normalize_claim_values(getattr(current_user, "roles", [])):
+            return True
+        permission_values = _normalize_claim_values(getattr(current_user, "permissions", []))
+        if WORKFLOWS_ADMIN.lower() in permission_values:
+            return True
+        if "*" in permission_values:
+            return True
+        if "system.configure" in permission_values:
+            return True
+    except Exception:
+        return False
+    return False
+
+
 @router.post(
     "",
     response_model=dict[str, str],
@@ -168,7 +197,7 @@ async def list_schedules(
 ):
     svc = get_workflows_scheduler()
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_scheduler_admin_user(current_user)
     user_filter: str | None = None
     if owner:
         if not is_admin:
@@ -222,7 +251,7 @@ async def get_schedule(
     s = svc.get(schedule_id)
     if not s:
         raise HTTPException(status_code=404, detail="Not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_scheduler_admin_user(current_user)
     if str(current_user.id) != s.user_id and not is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
     import json
@@ -284,7 +313,7 @@ async def update_schedule(
     s = svc.get(schedule_id)
     if not s:
         raise HTTPException(status_code=404, detail="Not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_scheduler_admin_user(current_user)
     if str(current_user.id) != s.user_id and not is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
     update: dict[str, Any] = {}
@@ -328,7 +357,7 @@ async def delete_schedule(
     s = svc.get(schedule_id)
     if not s:
         return {"ok": False}
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_scheduler_admin_user(current_user)
     if str(current_user.id) != s.user_id and not is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
     ok = svc.delete(schedule_id)
@@ -348,7 +377,7 @@ async def run_now(
     s = svc.get(schedule_id)
     if not s:
         raise HTTPException(status_code=404, detail="Not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_scheduler_admin_user(current_user)
     if str(current_user.id) != s.user_id and not is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
     # Submit immediate job to core Scheduler

@@ -18,6 +18,18 @@ class _PoolStub:
         self.pool = object() if postgres else None
 
 
+class _ConnStub:
+    def __init__(self) -> None:
+        self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.executemany_calls: list[tuple[str, list[tuple[str, int]]]] = []
+
+    async def execute(self, query: str, *params: object) -> None:
+        self.execute_calls.append((query, params))
+
+    async def executemany(self, query: str, params: list[tuple[str, int]]) -> None:
+        self.executemany_calls.append((query, params))
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_rotate_byok_secrets_uses_sqlite_when_pool_has_no_asyncpg_pool(
@@ -84,3 +96,41 @@ async def test_rotate_byok_secrets_uses_postgres_when_pool_has_asyncpg_pool(
 
     assert summary.dry_run is False
     assert captured_is_postgres == [True, True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_apply_updates_sqlite_path_uses_execute_even_when_executemany_exists() -> None:
+    conn = _ConnStub()
+
+    await byok_rotation_module._apply_updates(
+        conn,
+        table="user_provider_secrets",
+        updates=[("blob-a", 1), ("blob-b", 2)],
+        is_postgres=False,
+    )
+
+    assert conn.executemany_calls == []
+    assert len(conn.execute_calls) == 2
+    assert all("?" in query for query, _ in conn.execute_calls)
+    assert all("$1" not in query for query, _ in conn.execute_calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_apply_updates_postgres_path_uses_executemany() -> None:
+    conn = _ConnStub()
+
+    await byok_rotation_module._apply_updates(
+        conn,
+        table="org_provider_secrets",
+        updates=[("blob-c", 3), ("blob-d", 4)],
+        is_postgres=True,
+    )
+
+    assert conn.execute_calls == []
+    assert len(conn.executemany_calls) == 1
+    query, params = conn.executemany_calls[0]
+    assert "$1" in query
+    assert "?" not in query
+    assert params == [("blob-c", 3), ("blob-d", 4)]

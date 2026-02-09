@@ -84,16 +84,17 @@ async def _apply_updates(
     updates: Iterable[tuple[str, int]],
     is_postgres: bool,
 ) -> None:
-    if is_postgres:
-        query = f"UPDATE {table} SET encrypted_blob = $1 WHERE id = $2"
-    else:
-        query = f"UPDATE {table} SET encrypted_blob = ? WHERE id = ?"
-
-    if hasattr(conn, "executemany"):
-        await conn.executemany(query, list(updates))
+    updates_list = list(updates)
+    if not updates_list:
         return
 
-    for params in updates:
+    if is_postgres:
+        query = f"UPDATE {table} SET encrypted_blob = $1 WHERE id = $2"
+        await conn.executemany(query, updates_list)
+        return
+
+    query = f"UPDATE {table} SET encrypted_blob = ? WHERE id = ?"
+    for params in updates_list:
         await conn.execute(query, *params)
 
 

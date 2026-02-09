@@ -15,6 +15,7 @@ from pathlib import Path as PathlibPath
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 from tldw_Server_API.app.api.v1.schemas.storage_schemas import (
     BulkDeleteRequest,
     BulkDeleteResponse,
@@ -48,6 +49,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 )
 from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import FILE_CATEGORY_VOICE_CLONE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
 
@@ -633,13 +635,9 @@ async def permanently_delete_file(
 async def set_user_quota(
     user_id: int,
     request: SetQuotaRequest,
-    user: User = Depends(get_request_user),
+    _principal: AuthPrincipal = Depends(require_roles("admin")),
 ):
     """Set storage quota for a user (admin only)."""
-    # Check admin permission
-    if not user.is_superuser and user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     service = await _get_service()
 
     try:
@@ -666,13 +664,9 @@ async def set_user_quota(
 async def set_team_quota(
     team_id: int,
     request: SetQuotaRequest,
-    user: User = Depends(get_request_user),
+    _principal: AuthPrincipal = Depends(require_roles("admin")),
 ):
     """Set storage quota for a team (admin only)."""
-    # Check admin permission
-    if not user.is_superuser and user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     service = await _get_service()
 
     await service.set_team_quota(
@@ -694,13 +688,9 @@ async def set_team_quota(
 async def set_org_quota(
     org_id: int,
     request: SetQuotaRequest,
-    user: User = Depends(get_request_user),
+    _principal: AuthPrincipal = Depends(require_roles("admin")),
 ):
     """Set storage quota for an organization (admin only)."""
-    # Check admin permission
-    if not user.is_superuser and user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     service = await _get_service()
 
     await service.set_org_quota(
@@ -721,12 +711,9 @@ async def set_org_quota(
 @router.get("/admin/quotas/team/{team_id}", response_model=TeamQuotaResponse)
 async def get_team_quota(
     team_id: int,
-    user: User = Depends(get_request_user),
+    _principal: AuthPrincipal = Depends(require_roles("admin")),
 ):
     """Get storage quota for a team (admin only)."""
-    if not user.is_superuser and user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     service = await _get_service()
     quota_status = await service.get_team_quota(team_id)
 
@@ -739,12 +726,9 @@ async def get_team_quota(
 @router.get("/admin/quotas/org/{org_id}", response_model=OrgQuotaResponse)
 async def get_org_quota(
     org_id: int,
-    user: User = Depends(get_request_user),
+    _principal: AuthPrincipal = Depends(require_roles("admin")),
 ):
     """Get storage quota for an organization (admin only)."""
-    if not user.is_superuser and user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     service = await _get_service()
     quota_status = await service.get_org_quota(org_id)
 

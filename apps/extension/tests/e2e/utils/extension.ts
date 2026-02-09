@@ -38,6 +38,58 @@ function makeTempProfileDirs() {
   return { homeDir, userDataDir }
 }
 
+function resolveChromiumExecutablePath(explicitPath?: string): string | undefined {
+  const fromEnv = String(explicitPath || '').trim()
+  if (fromEnv) {
+    return fromEnv
+  }
+
+  const userHome = process.env.HOME
+  if (!userHome) {
+    return undefined
+  }
+
+  const playwrightCacheRoot = path.join(userHome, 'Library', 'Caches', 'ms-playwright')
+  if (!fs.existsSync(playwrightCacheRoot)) {
+    return undefined
+  }
+
+  let chromiumDirs: string[] = []
+  try {
+    chromiumDirs = fs
+      .readdirSync(playwrightCacheRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('chromium-'))
+      .map((entry) => entry.name)
+      .sort((a, b) => {
+        const aVersion = Number.parseInt(a.split('-')[1] || '0', 10)
+        const bVersion = Number.parseInt(b.split('-')[1] || '0', 10)
+        return bVersion - aVersion
+      })
+  } catch {
+    return undefined
+  }
+
+  const platformDirs = ['chrome-mac-arm64', 'chrome-mac-x64', 'chrome-mac']
+  for (const chromiumDir of chromiumDirs) {
+    for (const platformDir of platformDirs) {
+      const candidate = path.join(
+        playwrightCacheRoot,
+        chromiumDir,
+        platformDir,
+        'Google Chrome for Testing.app',
+        'Contents',
+        'MacOS',
+        'Google Chrome for Testing'
+      )
+      if (fs.existsSync(candidate)) {
+        return candidate
+      }
+    }
+  }
+
+  return undefined
+}
+
 export interface LaunchWithExtensionResult {
   context: BrowserContext
   page: Page
@@ -91,7 +143,9 @@ export async function launchWithExtension(
 
   const { homeDir, userDataDir } = makeTempProfileDirs()
 
-  const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+  const executablePath = resolveChromiumExecutablePath(
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+  )
   const context = await chromium.launchPersistentContext(userDataDir, {
     headless: !!process.env.CI,
     acceptDownloads: true,
