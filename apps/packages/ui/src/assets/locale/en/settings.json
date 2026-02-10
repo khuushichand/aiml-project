@@ -19,6 +19,9 @@
   "speechSettingsNav": "Speech",
   "imageGenerationSettingsNav": "Image Generation",
   "uiCustomizationNav": "UI customization",
+  "acpPlaygroundNav": "ACP Playground",
+  "skillsNav": "Skills",
+  "splashSettingsNav": "Splash screens",
   "guardianNav": "Guardian & Monitoring",
   "guardian": {
     "title": "Guardian & Self-Monitoring",
@@ -413,6 +416,12 @@
   "chatAppearance": {
     "title": "Chat appearance",
     "description": "Customize colors, fonts, and text sizes for chat messages.",
+    "backgroundImage": {
+      "label": "Chat background image",
+      "description": "Shown behind the chat screen while you are on /chat.",
+      "upload": "Upload image",
+      "clear": "Remove background image"
+    },
     "behaviorNote": "Looking for chat behavior settings (wide mode, reasoning, copy options)?",
     "goToGeneral": "Go to General Settings",
     "userHeading": "User messages",
@@ -464,6 +473,30 @@
       "countLabel": "{{count}} of {{total}} selected",
       "reset": "Reset to default"
     }
+  },
+  "splashSettings": {
+    "title": "Splash screens",
+    "subtitle": "Control login splash behavior, choose allowed cards, and preview any splash effect.",
+    "featureLabel": "Enable splash screens after successful login",
+    "featureHelp": "When disabled, login success will not display splash overlays.",
+    "durationLabel": "Display duration",
+    "durationHelp": "Choose how long the splash overlay stays visible before it auto-closes.",
+    "secondsUnit": "seconds",
+    "enabledCount": "{{count}} enabled",
+    "searchPlaceholder": "Search splash cards by name or effect",
+    "cardsHeading": "Available splash cards",
+    "cardsHint": "Use checkboxes to control which cards can appear.",
+    "emptySelectionWarning": "No splash cards are enabled. Enable at least one card to show splash screens.",
+    "actions": {
+      "enableAll": "Enable all",
+      "disableAll": "Disable all",
+      "previewRandom": "Preview random enabled"
+    },
+    "preview": "Preview",
+    "effect": "Effect: {{effect}}",
+    "asciiArt": "ASCII art: {{name}}",
+    "effectNone": "None",
+    "searchNoResults": "No splash cards match your search."
   },
   "imageGenerationSettings": {
     "title": "Image generation",

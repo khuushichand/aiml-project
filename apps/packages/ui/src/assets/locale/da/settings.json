@@ -13,7 +13,30 @@
   "guardianNav": "Guardian og overvågning",
   "guardian": {
     "unavailableTitle": "Guardian-indstillinger er ikke tilgængelige",
-    "unavailableDescription": "Din nuværende server udstiller ikke Guardian- eller selvovervågningsendpoints."
+    "unavailableDescription": "Din nuværende server udstiller ikke Guardian- eller selvovervågningsendpoints.",
+    "title": "Guardian og selvovervågning",
+    "subtitle": "Konfigurer regler for overvågning af personligt indhold, Guardian-tilsynsforhold og adgang til kriseressourcer.",
+    "rules": {
+      "title": "Overvågningsregler"
+    },
+    "alerts": {
+      "title": "Advarsler"
+    },
+    "governance": {
+      "title": "Styringspolitikker",
+      "fields": {
+        "description": "Beskrivelse"
+      }
+    },
+    "relationships": {
+      "title": "Værgerelationer"
+    },
+    "policies": {
+      "title": "Overvågede politikker"
+    },
+    "auditLog": {
+      "title": "Revisionslog"
+    }
   },
   "chatAppearance": {
     "title": "Chat-udseende",
@@ -46,6 +69,12 @@
       "sm": "Lille",
       "md": "Mellem",
       "lg": "Stor"
+    },
+    "backgroundImage": {
+      "label": "Chat-baggrundsbillede",
+      "description": "Vises bag chat-skærmen, når du er på /chat.",
+      "upload": "Upload billede",
+      "clear": "Fjern baggrundsbillede"
     }
   },
   "generalSettings": {
@@ -140,6 +169,12 @@
         "confirmMessage": "Dette nulstiller din onboarding-status og fører dig tilbage til opsætningsflowet.",
         "toast": "Onboarding er blevet nulstillet",
         "toastBody": "Vi fører dig tilbage til velkomsttrinnet, så du kan gennemgå server-URL og API-nøgle."
+      },
+      "hideQuickChatHelper": {
+        "label": "Skjul knappen Hurtig chat-hjælper"
+      },
+      "stickyChatInput": {
+        "label": "Hold chatinput synligt under rulning"
       }
     },
     "sidepanelRag": {
@@ -242,10 +277,15 @@
         "label": "Aktiver SSML (Speech Synthesis Markup Language)"
       },
       "removeReasoningTagTTS": {
-        "label": "Fjern Ræsonnement Tag fra TTS"
+        "label": "Fjern Ræsonnement Tag fra TTS",
+        "description": "Fjern <think>...</think>-blokke før oplæsning. Holder lyden fokuseret på det endelige svar."
       },
       "responseSplitting": {
         "label": "Opdeling af svar"
+      },
+      "playbackSpeed": {
+        "label": "Afspilningshastighed",
+        "description": "Styrer hvor hurtigt lyd afspilles (påvirker ikke generering)."
       }
     },
     "stt": {
@@ -368,6 +408,9 @@
       "example2": "Styr om chats er midlertidige, hvordan store indsæt håndteres, og hvordan ræsonnement vises.",
       "primaryCta": "Konfigurer server og godkendelse",
       "secondaryCta": "Luk"
+    },
+    "chatbooks": {
+      "heading": "Chatbøger"
     }
   },
   "manageModels": {
@@ -519,7 +562,56 @@
     "copilotEmptyDescription": "Copilot-prompter er foruddefinerede skabeloner leveret af din tldw-server.",
     "copilotEmptyExample1": "Tjek din serverversion eller konfiguration, hvis du forventer Copilot-prompter.",
     "copilotEmptyExample2": "Efter opdatering af serveren skal du genindlæse udvidelsen og vende tilbage til denne fane.",
-    "copilotEmptyCta": "Åbn diagnostik"
+    "copilotEmptyCta": "Åbn diagnostik",
+    "studio": {
+      "projects": {
+        "title": "Projekter",
+        "description": "Beskrivelse"
+      },
+      "prompts": {
+        "title": "Prompter"
+      },
+      "testCases": {
+        "title": "Testcases",
+        "bulkPanel": {
+          "title": "Masseimport/-eksport"
+        },
+        "generateModal": {
+          "title": "Generer testcases"
+        },
+        "runModal": {
+          "title": "Kør testcases"
+        }
+      },
+      "evaluations": {
+        "title": "Evalueringer",
+        "wizard": {
+          "title": "Opret evaluering"
+        },
+        "detail": {
+          "title": "Evalueringsdetaljer"
+        }
+      },
+      "optimizations": {
+        "title": "Optimeringer",
+        "wizard": {
+          "title": "Start optimering"
+        },
+        "progress": {
+          "title": "Optimeringsfremdrift"
+        },
+        "compare": {
+          "title": "Sammenlign optimeringsstrategier",
+          "description": "Beskrivelse"
+        }
+      },
+      "common": {
+        "description": "Beskrivelse"
+      },
+      "queueHealth": {
+        "title": "Køstatus"
+      }
+    }
   },
   "manageShare": {
     "title": "Administrer Deling",
@@ -756,6 +848,32 @@
         "notes": "Håndtering af noter og prompts",
         "stt": "Tale-til-tekst-transkription"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "Skift godkendelsestilstand?"
+    },
+    "loginMethod": {
+      "label": "Loginmetode"
+    },
+    "magicLink": {
+      "email": {
+        "label": "E-mail",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Magic link-token",
+        "placeholder": "Indsæt tokenet fra din e-mail"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "Standard demo-API-nøgle er i brug"
+    },
+    "billing": {
+      "title": "Fakturering og brug",
+      "subtitle": "Administrer dit abonnement, faktureringscyklus og brugsgrænser.",
+      "invoices": {
+        "title": "Fakturahistorik"
+      }
     }
   },
   "manageKnowledge": {
@@ -935,7 +1053,24 @@
       "mediaTitle": "Udforsk medier og noter",
       "mediaBody": "Gå til Medier og Noter under Indstillinger for at se, hvad der er gemt og kan søges i."
     },
-    "headerShortcuts": "Vis hurtige genveje i headeren"
+    "headerShortcuts": "Vis hurtige genveje i headeren",
+    "loginMethod": {
+      "label": "Loginmetode"
+    },
+    "magicLink": {
+      "email": {
+        "label": "E-mail",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Magic link-token",
+        "placeholder": "Indsæt tokenet fra din e-mail"
+      }
+    },
+    "defaults": {
+      "title": "Angiv dine standarder",
+      "subtitle": "Vælg en standardudbyder og model til nye chats."
+    }
   },
   "manageCharacters": {
     "title": "Administrer karakterer",
@@ -1447,5 +1582,43 @@
       "methodOptionsLabel": "Metodespecifikke indstillinger",
       "notesLabel": "Noter"
     }
-  }
+  },
+  "chatbooksNav": "Chatbøger",
+  "mediaTrashNav": "Mediepapirkurv",
+  "chatSettingsNav": "Samtale",
+  "quickIngestSettingsNav": "Hurtig import",
+  "speechSettingsNav": "Tale",
+  "imageGenerationSettingsNav": "Billedgenerering",
+  "uiCustomizationNav": "Tilpasning af brugerflade",
+  "splashSettingsNav": "Opstartsskærme",
+  "speechSettings": {
+    "title": "Taleindstillinger",
+    "subtitle": "Administrer standarder for tale-til-tekst og tekst-til-tale til diktering og afspilning."
+  },
+  "uiCustomization": {
+    "title": "Tilpasning af brugerflade",
+    "subtitle": "Tilpas navigationsgenveje og standardlayout.",
+    "shortcuts": {
+      "title": "Sidebjælke-genveje",
+      "description": "Vælg op til 10 elementer til sidebjælkens ikoner og genvejsliste."
+    },
+    "headerShortcuts": {
+      "title": "Playground-genveje",
+      "description": "Vælg hvilke genveje der vises i panelet med headergenveje."
+    }
+  },
+  "splashSettings": {
+    "title": "Opstartsskærme",
+    "subtitle": "Tilpas opstartskort og effekter."
+  },
+  "imageGenerationSettings": {
+    "title": "Billedgenerering",
+    "subtitle": "Konfigurer standarder for billedgenerering pr. backend, og angiv standard for slash-kommando."
+  },
+  "quickIngestSettings": {
+    "title": "Hurtig import",
+    "subtitle": "Konfigurer standarder, forudindstillinger og adfærd for hurtig import."
+  },
+  "acpPlaygroundNav": "ACP-legeplads",
+  "skillsNav": "Færdigheder"
 }

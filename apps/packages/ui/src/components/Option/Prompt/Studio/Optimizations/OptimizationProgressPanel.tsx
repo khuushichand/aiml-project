@@ -134,6 +134,12 @@ export const OptimizationProgressPanel: React.FC<
     return new Date(dateStr).toLocaleString()
   }
 
+  const metricColor = (value: number): string => {
+    if (value >= 0.8) return "rgb(var(--color-success))"
+    if (value >= 0.5) return "rgb(var(--color-warn))"
+    return "rgb(var(--color-danger))"
+  }
+
   const progressPercent = optimization?.total_iterations
     ? Math.round(
         ((optimization.current_iteration ?? 0) /
@@ -249,12 +255,7 @@ export const OptimizationProgressPanel: React.FC<
                 precision={1}
                 suffix="%"
                 valueStyle={{
-                  color:
-                    (optimization.best_score ?? 0) >= 0.8
-                      ? "#52c41a"
-                      : (optimization.best_score ?? 0) >= 0.5
-                      ? "#faad14"
-                      : "#ff4d4f"
+                  color: metricColor(optimization.best_score ?? 0)
                 }}
               />
             </div>

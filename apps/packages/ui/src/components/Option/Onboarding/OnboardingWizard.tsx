@@ -8,6 +8,7 @@ import { tldwClient } from '@/services/tldw/TldwApiClient'
 import { getTldwServerURL, DEFAULT_TLDW_API_KEY } from '@/services/tldw-server'
 import { tldwAuth } from '@/services/tldw/TldwAuth'
 import { mapMultiUserLoginErrorMessage } from '@/services/auth-errors'
+import { emitSplashAfterSingleUserAuthSuccess } from '@/services/splash-auth'
 import {
   useConnectionState,
   useConnectionUxState
@@ -460,6 +461,8 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
         apiKey: authMode === 'single-user' ? apiKey : undefined
       })
       await useConnectionStore.getState().testConnectionFromOnboarding()
+      const latestConnection = useConnectionStore.getState().state
+      emitSplashAfterSingleUserAuthSuccess(authMode, latestConnection.isConnected)
     } catch (err) {
       // eslint-disable-next-line no-console
       console.debug(

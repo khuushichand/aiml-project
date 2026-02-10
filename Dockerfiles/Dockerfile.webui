@@ -1,0 +1,53 @@
+# Production Dockerfile for tldw Next.js WebUI
+# - Builds the WebUI in monorepo workspace mode
+# - Ships a standalone Next.js runtime artifact
+
+FROM node:20-bookworm-slim AS builder
+
+ENV NEXT_TELEMETRY_DISABLED=1
+
+WORKDIR /app/apps
+
+# Copy monorepo frontend workspace
+COPY apps /app/apps
+
+# Install all workspace dependencies needed by tldw-frontend and @tldw/ui
+RUN npm install --workspaces --include-workspace-root
+
+# Build-time API config baked into client bundle
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ARG NEXT_PUBLIC_API_VERSION=v1
+ARG NEXT_PUBLIC_X_API_KEY=
+
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV NEXT_PUBLIC_API_VERSION=${NEXT_PUBLIC_API_VERSION}
+ENV NEXT_PUBLIC_X_API_KEY=${NEXT_PUBLIC_X_API_KEY}
+
+RUN npm --workspace tldw-frontend run build
+
+
+FROM node:20-bookworm-slim AS runtime
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    HOSTNAME=0.0.0.0 \
+    PORT=3000
+
+WORKDIR /app
+
+# Standalone output contains server.js plus traced runtime deps
+COPY --from=builder /app/apps/tldw-frontend/.next/standalone /app
+COPY --from=builder /app/apps/tldw-frontend/.next/static /app/apps/tldw-frontend/.next/static
+COPY --from=builder /app/apps/tldw-frontend/public /app/apps/tldw-frontend/public
+
+RUN useradd -m -u 10002 webui && \
+    chown -R webui:webui /app
+USER webui
+
+WORKDIR /app/apps/tldw-frontend
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=5 CMD node -e "fetch('http://localhost:3000').then((r)=>process.exit(r.ok ? 0 : 1)).catch(()=>process.exit(1))"
+
+CMD ["node", "server.js"]

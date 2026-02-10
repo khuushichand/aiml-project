@@ -5,8 +5,11 @@ import { QueryClientProvider } from "@tanstack/react-query"
 import { useTheme } from "@/hooks/useTheme"
 import { PageAssistProvider } from "@/components/Common/PageAssistProvider"
 import { LocaleJsonDiagnostics } from "@/components/Common/LocaleJsonDiagnostics"
+import { SplashOverlay } from "@/components/Common/SplashScreen"
+import { useSplashScreen } from "@/hooks/useSplashScreen"
 import { FontSizeProvider } from "@/context/FontSizeProvider"
 import { getQueryClient } from "@/services/query-client"
+import { SPLASH_TRIGGER_EVENT } from "@/services/splash-events"
 
 type RouterComponent = React.ComponentType<{ children: React.ReactNode }>
 
@@ -32,6 +35,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   includeAntdApp = true
 }) => {
   const { antdTheme } = useTheme()
+  const splash = useSplashScreen()
   const portalRootRef = useRef<HTMLDivElement | null>(null)
   const getPopupContainer = React.useCallback(() => {
     if (typeof document === "undefined") return undefined
@@ -54,6 +58,19 @@ export const AppShell: React.FC<AppShellProps> = ({
       document.removeEventListener("visibilitychange", handleVisibilityChange)
     }
   }, [suspendWhenHidden])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const onSplashTrigger = (event: Event) => {
+      const detail =
+        event instanceof CustomEvent
+          ? (event as CustomEvent<{ force?: boolean }>).detail
+          : undefined
+      splash.show({ force: detail?.force === true })
+    }
+    window.addEventListener(SPLASH_TRIGGER_EVENT, onSplashTrigger)
+    return () => window.removeEventListener(SPLASH_TRIGGER_EVENT, onSplashTrigger)
+  }, [splash.show])
 
   const content = (
     <StyleProvider hashPriority="high">
@@ -83,6 +100,13 @@ export const AppShell: React.FC<AppShellProps> = ({
         direction={direction}
       >
         {includeAntdApp ? <AntdApp>{content}</AntdApp> : content}
+        {splash.visible && splash.card ? (
+          <SplashOverlay
+            card={splash.card}
+            message={splash.message}
+            onDismiss={splash.dismiss}
+          />
+        ) : null}
         <div id="tldw-portal-root" ref={portalRootRef} />
       </ConfigProvider>
     </Router>

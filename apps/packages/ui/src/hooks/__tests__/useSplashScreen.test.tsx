@@ -1,10 +1,19 @@
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it } from "vitest"
 
+import { clearSetting, setSetting } from "@/services/settings/registry"
+import {
+  SPLASH_DISABLED_SETTING,
+  SPLASH_ENABLED_CARD_NAMES_SETTING,
+  SPLASH_DURATION_SECONDS_SETTING
+} from "@/services/settings/ui-settings"
 import { useSplashScreen } from "../useSplashScreen"
 
 describe("useSplashScreen", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await clearSetting(SPLASH_DISABLED_SETTING)
+    await clearSetting(SPLASH_ENABLED_CARD_NAMES_SETTING)
+    await clearSetting(SPLASH_DURATION_SECONDS_SETTING)
     localStorage.clear()
   })
 
@@ -27,12 +36,11 @@ describe("useSplashScreen", () => {
     expect(result.current.message.length).toBeGreaterThan(0)
   })
 
-  it("respects disabled preference from localStorage", async () => {
-    localStorage.setItem("tldw_splash_disabled", "true")
+  it("blocks non-forced splash when disabled at runtime", () => {
     const { result } = renderHook(() => useSplashScreen())
 
-    await waitFor(() => {
-      expect(result.current.disabled).toBe(true)
+    act(() => {
+      result.current.setDisabled(true)
     })
 
     act(() => {
@@ -43,7 +51,22 @@ describe("useSplashScreen", () => {
     expect(result.current.card).toBeNull()
   })
 
-  it("persists disable toggle and hides an active splash", () => {
+  it("allows explicit forced splash when disabled", () => {
+    const { result } = renderHook(() => useSplashScreen())
+
+    act(() => {
+      result.current.setDisabled(true)
+    })
+
+    act(() => {
+      result.current.show({ force: true })
+    })
+
+    expect(result.current.visible).toBe(true)
+    expect(result.current.card).not.toBeNull()
+  })
+
+  it("persists disable toggle and hides an active splash", async () => {
     const { result } = renderHook(() => useSplashScreen())
 
     act(() => {
@@ -57,7 +80,9 @@ describe("useSplashScreen", () => {
 
     expect(result.current.disabled).toBe(true)
     expect(result.current.visible).toBe(false)
-    expect(localStorage.getItem("tldw_splash_disabled")).toBe("true")
+    await waitFor(() => {
+      expect(localStorage.getItem("tldw_splash_disabled")).toBe("true")
+    })
   })
 
   it("still shows splash in reduced-motion mode (static overlay path)", () => {
@@ -93,5 +118,30 @@ describe("useSplashScreen", () => {
         value: originalMatchMedia,
       })
     }
+  })
+
+  it("applies configured splash duration in seconds to card duration", async () => {
+    await setSetting(SPLASH_DURATION_SECONDS_SETTING, 7)
+    const { result } = renderHook(() => useSplashScreen())
+
+    await waitFor(() => {
+      act(() => {
+        result.current.show()
+      })
+      expect(result.current.visible).toBe(true)
+      expect(result.current.card?.duration).toBe(7000)
+    })
+  })
+
+  it("clamps configured splash duration to supported range", async () => {
+    await setSetting(SPLASH_DURATION_SECONDS_SETTING, 99 as unknown as number)
+    const { result } = renderHook(() => useSplashScreen())
+
+    await waitFor(() => {
+      act(() => {
+        result.current.show()
+      })
+      expect(result.current.card?.duration).toBe(10_000)
+    })
   })
 })

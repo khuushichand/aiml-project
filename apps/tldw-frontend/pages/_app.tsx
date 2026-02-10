@@ -16,6 +16,28 @@ const OptionLayout = dynamic(
   { ssr: false }
 )
 
+const hasEnvAuth = () => {
+  const envApiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim()
+  const envBearer = (process.env.NEXT_PUBLIC_API_BEARER || "").trim()
+  return envApiKey.length > 0 || envBearer.length > 0
+}
+
+const hasConfiguredAuth = async () => {
+  try {
+    const { tldwClient } = await import("@/services/tldw/TldwApiClient")
+    const config = await tldwClient.getConfig()
+    if (!config) return false
+
+    if (config.authMode === "multi-user") {
+      return typeof config.accessToken === "string" && config.accessToken.trim().length > 0
+    }
+
+    return typeof config.apiKey === "string" && config.apiKey.trim().length > 0
+  } catch {
+    return false
+  }
+}
+
 export default function App({ Component, pageProps }: AppProps) {
   const router = useRouter()
   const pathname = router.pathname || ""
@@ -27,6 +49,45 @@ export default function App({ Component, pageProps }: AppProps) {
   const isLoginRoute = routePath === "/login"
   const isSettingsRoute =
     routePath === "/settings" || routePath.startsWith("/settings/")
+  const [isAuthenticated, setIsAuthenticated] = React.useState(() =>
+    hasEnvAuth()
+  )
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+
+    let cancelled = false
+    const refreshAuthState = async () => {
+      const authed = hasEnvAuth() || (await hasConfiguredAuth())
+      if (!cancelled) {
+        setIsAuthenticated(authed)
+      }
+    }
+
+    void refreshAuthState()
+
+    const onConfigUpdated = () => {
+      void refreshAuthState()
+    }
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key || event.key === "tldwConfig") {
+        void refreshAuthState()
+      }
+    }
+
+    window.addEventListener("tldw:config-updated", onConfigUpdated)
+    window.addEventListener("focus", onConfigUpdated)
+    window.addEventListener("storage", onStorage)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener("tldw:config-updated", onConfigUpdated)
+      window.removeEventListener("focus", onConfigUpdated)
+      window.removeEventListener("storage", onStorage)
+    }
+  }, [router.asPath])
+
+  const hideShellNav = !isAuthenticated
 
   return (
     <AppProviders>
@@ -34,7 +95,8 @@ export default function App({ Component, pageProps }: AppProps) {
         <Component {...pageProps} />
       ) : (
         <OptionLayout
-          hideSidebar={isSettingsRoute}
+          hideHeader={hideShellNav}
+          hideSidebar={hideShellNav || isSettingsRoute}
           allowNestedHideHeader={!isSettingsRoute}
         >
           <Component {...pageProps} />

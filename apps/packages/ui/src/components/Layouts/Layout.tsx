@@ -33,6 +33,8 @@ import { EventOnlyHosts } from "@/components/Common/EventHosts"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { setSettingsReturnTo } from "@/utils/settings-return"
 import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
+import { useSetting } from "@/hooks/useSetting"
+import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
@@ -109,7 +111,18 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
   const location = useLocation()
+  const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
+  const isChatScreen = location.pathname === "/chat"
   const isDocumentWorkspace = location.pathname === DOCUMENT_WORKSPACE_PATH
+  const chatScreenBackgroundStyle =
+    isChatScreen && chatBackgroundImage
+      ? {
+          backgroundImage: `url(${chatBackgroundImage})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat"
+        }
+      : undefined
   const { clearChat, useOCR, chatMode, setChatMode, webSearch, setWebSearch } =
     useMessageOption()
   const queryClient = useQueryClient()
@@ -260,9 +273,10 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
       <OptionLayoutEffects />
       <div
         className={classNames(
-          "flex w-full",
+          "relative flex w-full",
           isDocumentWorkspace ? "h-screen min-h-0" : "min-h-screen"
         )}
+        style={chatScreenBackgroundStyle}
       >
       {/* Persistent ChatSidebar when feature flag enabled */}
       {showChatSidebar && !hideHeader && (

@@ -414,6 +414,11 @@ export const PlaygroundChat = () => {
                 isEmbedding={isEmbedding}
                 characterIdentity={selectedCharacter}
                 characterIdentityEnabled={characterIdentityEnabled}
+                speakerCharacterId={message.speakerCharacterId ?? null}
+                speakerCharacterName={message.speakerCharacterName}
+                moodLabel={message.moodLabel ?? null}
+                moodConfidence={message.moodConfidence ?? null}
+                moodTopic={message.moodTopic ?? null}
                 message_type={resolveMessageType(message, block.index)}
                 variants={message.variants}
                 activeVariantIndex={message.activeVariantIndex}
@@ -652,6 +657,11 @@ export const PlaygroundChat = () => {
                 isEmbedding={isEmbedding}
                 characterIdentity={selectedCharacter}
                 characterIdentityEnabled={characterIdentityEnabled}
+                speakerCharacterId={userMessage.speakerCharacterId ?? null}
+                speakerCharacterName={userMessage.speakerCharacterName}
+                moodLabel={userMessage.moodLabel ?? null}
+                moodConfidence={userMessage.moodConfidence ?? null}
+                moodTopic={userMessage.moodTopic ?? null}
                 message_type={resolveMessageType(userMessage, block.userIndex)}
                 variants={userMessage.variants}
                 activeVariantIndex={userMessage.activeVariantIndex}
@@ -991,6 +1001,11 @@ export const PlaygroundChat = () => {
                         isEmbedding={isEmbedding}
                         characterIdentity={selectedCharacter}
                         characterIdentityEnabled={characterIdentityEnabled}
+                        speakerCharacterId={message.speakerCharacterId ?? null}
+                        speakerCharacterName={message.speakerCharacterName}
+                        moodLabel={message.moodLabel ?? null}
+                        moodConfidence={message.moodConfidence ?? null}
+                        moodTopic={message.moodTopic ?? null}
                         message_type={resolveMessageType(message, index)}
                         compareSelectable={isSelectable}
                         compareSelected={isSelected}

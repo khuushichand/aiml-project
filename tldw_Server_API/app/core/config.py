@@ -144,10 +144,10 @@ def _load_env_files_early() -> None:
         current_file_path = Path(__file__).resolve()
         project_root = current_file_path.parent.parent.parent
         candidate_env_paths = [
-            project_root / '.env',
-            project_root / '.ENV',
             project_root / 'Config_Files' / '.env',
             project_root / 'Config_Files' / '.ENV',
+            project_root / '.env',
+            project_root / '.ENV',
         ]
         loaded_any = False
         for p in candidate_env_paths:
@@ -1801,18 +1801,18 @@ def load_comprehensive_config():
     # .parent.parent.parent -> .../tldw_Server_API (This is the project root)
     project_root = current_file_path.parent.parent.parent
 
-    # Load .env/.ENV files if they exist (API keys should be here)
-    # Support both lowercase and uppercase filenames in the project root, repo root, and Config_Files directories.
+    # Load .env/.ENV files if they exist (API keys should be here).
+    # Prefer Config_Files/.env (canonical) before root-level fallbacks.
     repo_root = project_root.parent
     candidate_env_paths = [
-        project_root / '.env',
-        project_root / '.ENV',
         project_root / 'Config_Files' / '.env',
         project_root / 'Config_Files' / '.ENV',
-        repo_root / '.env',
-        repo_root / '.ENV',
+        project_root / '.env',
+        project_root / '.ENV',
         repo_root / 'Config_Files' / '.env',
         repo_root / 'Config_Files' / '.ENV',
+        repo_root / '.env',
+        repo_root / '.ENV',
     ]
     loaded_any_env = False
     for p in candidate_env_paths:

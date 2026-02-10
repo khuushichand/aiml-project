@@ -346,7 +346,7 @@ export const GenerationPanel: React.FC = () => {
           <Progress
             percent={progress}
             status={isGenerating ? "active" : errorCount > 0 ? "exception" : "normal"}
-            strokeColor={errorCount > 0 ? undefined : { from: "#108ee9", to: "#87d068" }}
+            strokeColor={errorCount > 0 ? undefined : { from: "rgb(var(--color-primary))", to: "rgb(var(--color-success))" }}
           />
 
           {isGenerating && currentIndex >= 0 && (

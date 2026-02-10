@@ -10,10 +10,33 @@
   "chatDictionariesNav": "Chatordbøker",
   "charactersNav": "Tegn",
   "mediaNav": "Medier",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian og overvåkning",
   "guardian": {
     "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "title": "Guardian og selv-overvåkning",
+    "subtitle": "Konfigurer regler for overvåkning av personlig innhold, Guardian-tilsynsforhold og tilgang til kriseressurser.",
+    "rules": {
+      "title": "Overvåkingsregler"
+    },
+    "alerts": {
+      "title": "Varsler"
+    },
+    "governance": {
+      "title": "Styringspolicyer",
+      "fields": {
+        "description": "Beskrivelse"
+      }
+    },
+    "relationships": {
+      "title": "Vergeforhold"
+    },
+    "policies": {
+      "title": "Tilsynspolicyer"
+    },
+    "auditLog": {
+      "title": "Revisjonslogg"
+    }
   },
   "chatAppearance": {
     "title": "Chat-utseende",
@@ -46,6 +69,12 @@
       "sm": "Liten",
       "md": "Middels",
       "lg": "Stor"
+    },
+    "backgroundImage": {
+      "label": "Bakgrunnsbilde for chat",
+      "description": "Vises bak chat-skjermen når du er på /chat.",
+      "upload": "Last opp bilde",
+      "clear": "Fjern bakgrunnsbilde"
     }
   },
   "generalSettings": {
@@ -140,6 +169,12 @@
         "confirmMessage": "Dette tilbakestiller onboarding-statusen din og tar deg tilbake til oppsettflyten.",
         "toast": "Onboarding er tilbakestilt",
         "toastBody": "Vi tar deg tilbake til velkomststeget slik at du kan kontrollere server‑URL og API‑nøkkel."
+      },
+      "hideQuickChatHelper": {
+        "label": "Skjul hurtigchat-hjelperknappen"
+      },
+      "stickyChatInput": {
+        "label": "Hold chat-inndata synlig mens du blar"
       }
     },
     "sidepanelRag": {
@@ -242,10 +277,15 @@
         "label": "Aktiver SSML (Speech Synthesis Markup Language)"
       },
       "removeReasoningTagTTS": {
-        "label": "Fjern Resonneringsmerke fra TTS"
+        "label": "Fjern Resonneringsmerke fra TTS",
+        "description": "Fjerner <think>...</think>-resonneringsblokker før opplesning. Holder lyden fokusert på det endelige svaret."
       },
       "responseSplitting": {
         "label": "Oppdeling av svar"
+      },
+      "playbackSpeed": {
+        "label": "Avspillingshastighet",
+        "description": "Styrer hvor raskt lyd spilles av (påvirker ikke generering)."
       }
     },
     "stt": {
@@ -368,6 +408,9 @@
       "example2": "Kontroller om chatter er midlertidige, hvordan store innliminger håndteres og hvordan resonnement vises.",
       "primaryCta": "Konfigurer server og autentisering",
       "secondaryCta": "Avvis"
+    },
+    "chatbooks": {
+      "heading": "Chatbøker"
     }
   },
   "manageModels": {
@@ -519,7 +562,56 @@
     "copilotEmptyDescription": "Copilot-prompter er forhåndsdefinerte maler levert av tldw-serveren din.",
     "copilotEmptyExample1": "Sjekk serverversjon eller konfigurasjon hvis du forventer Copilot-prompter.",
     "copilotEmptyExample2": "Etter oppdatering av serveren, last inn utvidelsen på nytt og gå tilbake til denne fanen.",
-    "copilotEmptyCta": "Åpne diagnostikk"
+    "copilotEmptyCta": "Åpne diagnostikk",
+    "studio": {
+      "projects": {
+        "title": "Prosjekter",
+        "description": "Beskrivelse"
+      },
+      "prompts": {
+        "title": "Prompter"
+      },
+      "testCases": {
+        "title": "Testtilfeller",
+        "bulkPanel": {
+          "title": "Masseimport/-eksport"
+        },
+        "generateModal": {
+          "title": "Generer testtilfeller"
+        },
+        "runModal": {
+          "title": "Kjør testtilfeller"
+        }
+      },
+      "evaluations": {
+        "title": "Evalueringer",
+        "wizard": {
+          "title": "Opprett evaluering"
+        },
+        "detail": {
+          "title": "Evalueringsdetaljer"
+        }
+      },
+      "optimizations": {
+        "title": "Optimaliseringer",
+        "wizard": {
+          "title": "Start optimalisering"
+        },
+        "progress": {
+          "title": "Optimaliseringsfremdrift"
+        },
+        "compare": {
+          "title": "Sammenlign optimaliseringsstrategier",
+          "description": "Beskrivelse"
+        }
+      },
+      "common": {
+        "description": "Beskrivelse"
+      },
+      "queueHealth": {
+        "title": "Køstatus"
+      }
+    }
   },
   "manageShare": {
     "title": "Administrer Deling",
@@ -757,6 +849,32 @@
         "notes": "Håndtering av notater og prompt",
         "stt": "Tale-til-tekst-transkripsjon"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "Endre autentiseringsmodus?"
+    },
+    "loginMethod": {
+      "label": "Innloggingsmetode"
+    },
+    "magicLink": {
+      "email": {
+        "label": "E-post",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Magic link-token",
+        "placeholder": "Lim inn tokenet fra e-posten din"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "Standard demo-API-nøkkel er i bruk"
+    },
+    "billing": {
+      "title": "Fakturering og bruk",
+      "subtitle": "Administrer planen din, faktureringssyklus og bruksgrenser.",
+      "invoices": {
+        "title": "Fakturahistorikk"
+      }
     }
   },
   "manageKnowledge": {
@@ -936,7 +1054,24 @@
       "mediaTitle": "Utforsk medier og notater",
       "mediaBody": "Gå til Medier og Notater under Innstillinger for å se hva som er lagret og søkbart."
     },
-    "headerShortcuts": "Vis hurtige snarveier i toppfeltet"
+    "headerShortcuts": "Vis hurtige snarveier i toppfeltet",
+    "loginMethod": {
+      "label": "Innloggingsmetode"
+    },
+    "magicLink": {
+      "email": {
+        "label": "E-post",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Magic link-token",
+        "placeholder": "Lim inn tokenet fra e-posten din"
+      }
+    },
+    "defaults": {
+      "title": "Sett standardverdiene dine",
+      "subtitle": "Velg en standardleverandør og modell for nye chatter."
+    }
   },
   "manageCharacters": {
     "title": "Administrer karakterer",
@@ -1448,5 +1583,43 @@
       "methodOptionsLabel": "Metodespesifikke alternativer",
       "notesLabel": "Notater"
     }
-  }
+  },
+  "chatbooksNav": "Chatbøker",
+  "mediaTrashNav": "Mediapapirkurv",
+  "chatSettingsNav": "Samtale",
+  "quickIngestSettingsNav": "Hurtig import",
+  "speechSettingsNav": "Tale",
+  "imageGenerationSettingsNav": "Bildegenerering",
+  "uiCustomizationNav": "Tilpasning av grensesnitt",
+  "splashSettingsNav": "Oppstartsskjermer",
+  "speechSettings": {
+    "title": "Taleinnstillinger",
+    "subtitle": "Administrer standardverdier for tale-til-tekst og tekst-til-tale for diktering og avspilling."
+  },
+  "uiCustomization": {
+    "title": "Tilpasning av grensesnitt",
+    "subtitle": "Tilpass navigasjons-snarveier og standardoppsett.",
+    "shortcuts": {
+      "title": "Sidefelt-snarveier",
+      "description": "Velg opptil 10 elementer for ikonene i sidefeltet og listen over snarveier."
+    },
+    "headerShortcuts": {
+      "title": "Playground-snarveier",
+      "description": "Velg hvilke snarveier som vises i panelet for topptekstsnarveier."
+    }
+  },
+  "splashSettings": {
+    "title": "Oppstartsskjermer",
+    "subtitle": "Tilpass oppstartskort og effekter."
+  },
+  "imageGenerationSettings": {
+    "title": "Bildegenerering",
+    "subtitle": "Konfigurer standardverdier for bildegenerering per backend og sett standard for slash-kommando."
+  },
+  "quickIngestSettings": {
+    "title": "Hurtig import",
+    "subtitle": "Konfigurer standardverdier, forhåndsinnstillinger og oppførsel for hurtig import."
+  },
+  "acpPlaygroundNav": "ACP-lekeplass",
+  "skillsNav": "Ferdigheter"
 }

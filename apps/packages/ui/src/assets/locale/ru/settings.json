@@ -10,10 +10,33 @@
   "chatDictionariesNav": "Словари чата",
   "charactersNav": "Персонажи",
   "mediaNav": "Медиа",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian и мониторинг",
   "guardian": {
     "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "title": "Guardian и самомониторинг",
+    "subtitle": "Настройте правила мониторинга личного контента, отношения надзора Guardian и доступ к кризисным ресурсам.",
+    "rules": {
+      "title": "Правила мониторинга"
+    },
+    "alerts": {
+      "title": "Оповещения"
+    },
+    "governance": {
+      "title": "Политики управления",
+      "fields": {
+        "description": "Описание"
+      }
+    },
+    "relationships": {
+      "title": "Отношения опекуна"
+    },
+    "policies": {
+      "title": "Контролируемые политики"
+    },
+    "auditLog": {
+      "title": "Журнал аудита"
+    }
   },
   "chatAppearance": {
     "title": "Внешний вид чата",
@@ -46,6 +69,12 @@
       "sm": "Маленький",
       "md": "Средний",
       "lg": "Большой"
+    },
+    "backgroundImage": {
+      "label": "Фоновое изображение чата",
+      "description": "Отображается за экраном чата, когда вы находитесь на /chat.",
+      "upload": "Загрузить изображение",
+      "clear": "Удалить фоновое изображение"
     }
   },
   "generalSettings": {
@@ -140,6 +169,12 @@
         "confirmMessage": "Это сбросит состояние мастера настройки и вернёт вас к началу процесса.",
         "toast": "Мастер настройки был сброшен",
         "toastBody": "Мы вернём вас на шаг приветствия, чтобы вы могли проверить URL сервера и API‑ключ."
+      },
+      "hideQuickChatHelper": {
+        "label": "Скрыть кнопку помощника быстрого чата"
+      },
+      "stickyChatInput": {
+        "label": "Показывать поле ввода чата при прокрутке"
       }
     },
     "sidepanelRag": {
@@ -242,10 +277,15 @@
         "label": "Включить SSML (язык разметки синтеза речи)"
       },
       "removeReasoningTagTTS": {
-        "label": "Удалить тег рассуждения из TTS"
+        "label": "Удалить тег рассуждения из TTS",
+        "description": "Удаляет блоки рассуждений <think>...</think> перед озвучиванием. Это сохраняет фокус аудио на финальном ответе."
       },
       "responseSplitting": {
         "label": "Разбиение ответа"
+      },
+      "playbackSpeed": {
+        "label": "Скорость воспроизведения",
+        "description": "Управляет скоростью воспроизведения аудио (не влияет на генерацию)."
       }
     },
     "stt": {
@@ -368,6 +408,9 @@
       "example2": "Управляйте тем, являются ли чаты временными, как обрабатываются большие вставки и как показывается рассуждение.",
       "primaryCta": "Настроить сервер и авторизацию",
       "secondaryCta": "Закрыть"
+    },
+    "chatbooks": {
+      "heading": "Чатбуки"
     }
   },
   "manageModels": {
@@ -519,7 +562,56 @@
     "copilotEmptyDescription": "Промпты Copilot — это заранее заданные шаблоны, предоставляемые вашим tldw сервером.",
     "copilotEmptyExample1": "Проверьте версию или конфигурацию сервера, если ожидаете наличие промптов Copilot.",
     "copilotEmptyExample2": "После обновления сервера перезагрузите расширение и вернитесь на эту вкладку.",
-    "copilotEmptyCta": "Открыть диагностику"
+    "copilotEmptyCta": "Открыть диагностику",
+    "studio": {
+      "projects": {
+        "title": "Проекты",
+        "description": "Описание"
+      },
+      "prompts": {
+        "title": "Промпты"
+      },
+      "testCases": {
+        "title": "Тест-кейсы",
+        "bulkPanel": {
+          "title": "Массовый импорт/экспорт"
+        },
+        "generateModal": {
+          "title": "Сгенерировать тест-кейсы"
+        },
+        "runModal": {
+          "title": "Запустить тест-кейсы"
+        }
+      },
+      "evaluations": {
+        "title": "Оценки",
+        "wizard": {
+          "title": "Создать оценку"
+        },
+        "detail": {
+          "title": "Детали оценки"
+        }
+      },
+      "optimizations": {
+        "title": "Оптимизации",
+        "wizard": {
+          "title": "Запустить оптимизацию"
+        },
+        "progress": {
+          "title": "Ход оптимизации"
+        },
+        "compare": {
+          "title": "Сравнить стратегии оптимизации",
+          "description": "Описание"
+        }
+      },
+      "common": {
+        "description": "Описание"
+      },
+      "queueHealth": {
+        "title": "Состояние очереди"
+      }
+    }
   },
   "manageShare": {
     "title": "Управление обменом",
@@ -756,6 +848,32 @@
         "notes": "Управление заметками и подсказками",
         "stt": "Распознавание речи в текст"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "Изменить режим аутентификации?"
+    },
+    "loginMethod": {
+      "label": "Способ входа"
+    },
+    "magicLink": {
+      "email": {
+        "label": "Эл. почта",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Токен magic link",
+        "placeholder": "Вставьте токен из вашего письма"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "Используется демонстрационный API-ключ по умолчанию"
+    },
+    "billing": {
+      "title": "Оплата и использование",
+      "subtitle": "Управляйте тарифом, циклом выставления счетов и лимитами использования.",
+      "invoices": {
+        "title": "История счетов"
+      }
     }
   },
   "manageKnowledge": {
@@ -935,7 +1053,24 @@
       "mediaTitle": "Изучите медиа и заметки",
       "mediaBody": "Зайдите в раздел «Медиа и заметки» в настройках, чтобы увидеть, что сохранено и доступно для поиска."
     },
-    "headerShortcuts": "Показать быстрые ярлыки в заголовке"
+    "headerShortcuts": "Показать быстрые ярлыки в заголовке",
+    "loginMethod": {
+      "label": "Способ входа"
+    },
+    "magicLink": {
+      "email": {
+        "label": "Эл. почта",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Токен magic link",
+        "placeholder": "Вставьте токен из вашего письма"
+      }
+    },
+    "defaults": {
+      "title": "Задайте значения по умолчанию",
+      "subtitle": "Выберите провайдера и модель по умолчанию для новых чатов."
+    }
   },
   "manageCharacters": {
     "title": "Управление персонажами",
@@ -1447,5 +1582,43 @@
       "methodOptionsLabel": "Опции конкретного метода",
       "notesLabel": "Заметки"
     }
-  }
+  },
+  "chatbooksNav": "Чатбуки",
+  "mediaTrashNav": "Корзина медиа",
+  "chatSettingsNav": "Чат",
+  "quickIngestSettingsNav": "Быстрый импорт",
+  "speechSettingsNav": "Речь",
+  "imageGenerationSettingsNav": "Генерация изображений",
+  "uiCustomizationNav": "Настройка интерфейса",
+  "splashSettingsNav": "Заставки",
+  "speechSettings": {
+    "title": "Настройки речи",
+    "subtitle": "Управляйте параметрами по умолчанию для распознавания и синтеза речи для диктовки и воспроизведения."
+  },
+  "uiCustomization": {
+    "title": "Настройка интерфейса",
+    "subtitle": "Настройте навигационные ярлыки и макет по умолчанию.",
+    "shortcuts": {
+      "title": "Быстрые ссылки боковой панели",
+      "description": "Выберите до 10 элементов для значков боковой панели и списка быстрых ссылок."
+    },
+    "headerShortcuts": {
+      "title": "Быстрые ссылки playground",
+      "description": "Выберите, какие быстрые ссылки показывать в панели быстрых ссылок заголовка."
+    }
+  },
+  "splashSettings": {
+    "title": "Заставки",
+    "subtitle": "Настройте карточки и эффекты стартовой заставки."
+  },
+  "imageGenerationSettings": {
+    "title": "Генерация изображений",
+    "subtitle": "Настройте параметры генерации изображений по умолчанию для каждого бэкенда и задайте значение по умолчанию для slash-команды."
+  },
+  "quickIngestSettings": {
+    "title": "Быстрый импорт",
+    "subtitle": "Настройте значения по умолчанию, пресеты и поведение быстрого импорта."
+  },
+  "acpPlaygroundNav": "Песочница ACP",
+  "skillsNav": "Навыки"
 }

@@ -4,6 +4,7 @@ import { ExternalLink, Trash2, Edit } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import type { Highlight, HighlightColor } from "@/types/collections"
 
+// theme-exempt: user highlight colors
 const HIGHLIGHT_BG: Record<HighlightColor, string> = {
   yellow: "bg-yellow-100 dark:bg-yellow-900/30",
   green: "bg-green-100 dark:bg-green-900/30",

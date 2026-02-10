@@ -10,6 +10,13 @@ import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useStorage } from "@plasmohq/storage/hook"
 import { browser } from "wxt/browser"
 import { collectGreetings, pickGreeting } from "@/utils/character-greetings"
+import {
+  CHARACTER_MOOD_OPTIONS,
+  getCharacterMoodImagesFromExtensions,
+  removeCharacterMoodImage,
+  upsertCharacterMoodImage,
+  type CharacterMoodLabel
+} from "@/utils/character-mood"
 import { IconButton } from "@/components/Common/IconButton"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useAntdModal } from "@/hooks/useAntdModal"
@@ -50,6 +57,8 @@ type ImageOnlyErrorDetail = {
 }
 
 const GREETING_RETRY_DELAY_MS = 800
+const MAX_PERSONA_IMAGE_BYTES = 3 * 1024 * 1024
+const MAX_MOOD_IMAGE_BYTES = 3 * 1024 * 1024
 
 const delayWithAbort = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve) => {
@@ -97,7 +106,7 @@ export const CharacterSelect: React.FC<Props> = ({
     "characterSortMode",
     "favorites"
   )
-  const [, setSelectedCharacter] =
+  const [selectedCharacterStored, setSelectedCharacter] =
     useSelectedCharacter<StoredCharacter | null>(null)
   const clearChat = useClearChat()
   const messages = useStoreMessageOption((state) => state.messages)
@@ -106,11 +115,22 @@ export const CharacterSelect: React.FC<Props> = ({
     "chatUserDisplayName",
     ""
   )
+  const [userPersonaImage, setUserPersonaImage] = useStorage(
+    "chatUserPersonaImage",
+    ""
+  )
+  const [showCharacterPortraits, setShowCharacterPortraits] = useStorage(
+    "chatShowCharacterPortraits",
+    true
+  )
   const [searchText, setSearchText] = useState("")
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
   const searchInputRef = useRef<InputRef | null>(null)
   const importInputRef = useRef<HTMLInputElement | null>(null)
+  const personaImageInputRef = useRef<HTMLInputElement | null>(null)
+  const moodImageInputRef = useRef<HTMLInputElement | null>(null)
+  const pendingMoodUploadRef = useRef<CharacterMoodLabel | null>(null)
   const isMountedRef = useRef(true)
   const greetingRetryAbortRef = useRef<AbortController | null>(null)
   const selectedCharacterIdRef = useRef<string | null>(
@@ -251,12 +271,25 @@ export const CharacterSelect: React.FC<Props> = ({
       (char) => String(char.id) === String(selectedCharacterId)
     )
   }, [characters, selectedCharacterId])
+  const selectedCharacterMoodImages = useMemo(
+    () =>
+      getCharacterMoodImagesFromExtensions(
+        selectedCharacter?.extensions ?? selectedCharacterStored?.extensions
+      ),
+    [selectedCharacter?.extensions, selectedCharacterStored?.extensions]
+  )
   const hasActiveChat = useMemo(() => {
     if (serverChatId) return true
     return messages.some(
       (message) => message.messageType !== "character:greeting"
     )
   }, [messages, serverChatId])
+  const hasUserPersonaImage = useMemo(() => {
+    return (
+      typeof userPersonaImage === "string" &&
+      userPersonaImage.trim().length > 0
+    )
+  }, [userPersonaImage])
   const trimmedDisplayName = userDisplayName.trim()
   const displayNameInputRef = useRef(trimmedDisplayName)
 
@@ -276,8 +309,16 @@ export const CharacterSelect: React.FC<Props> = ({
         id: String(id),
         name,
         avatar_url: avatar ?? null,
+        image_base64: character.image_base64 ?? null,
+        image_mime: character.image_mime ?? null,
         tags: character.tags,
-        greeting: pickGreeting(collectGreetings(character)) || null
+        greeting: pickGreeting(collectGreetings(character)) || null,
+        extensions: character.extensions ?? null,
+        version:
+          typeof character.version === "number" &&
+          Number.isFinite(character.version)
+            ? character.version
+            : undefined
       }
     },
     []
@@ -341,6 +382,333 @@ export const CharacterSelect: React.FC<Props> = ({
     })
   }, [modal, setUserDisplayName, t, trimmedDisplayName])
 
+  const handlePersonaImageUploadClick = React.useCallback(() => {
+    if (!personaImageInputRef.current) return
+    setDropdownOpen(false)
+    personaImageInputRef.current.value = ""
+    personaImageInputRef.current.click()
+  }, [setDropdownOpen])
+
+  const handlePersonaImageFile = React.useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      if (!file) return
+
+      try {
+        if (!file.type.startsWith("image/")) {
+          notification.error({
+            message: t("settings:manageCharacters.notification.error", {
+              defaultValue: "Error"
+            }),
+            description: t("common:upload.imageRequired", {
+              defaultValue: "Please select an image file."
+            })
+          })
+          return
+        }
+
+        if (file.size > MAX_PERSONA_IMAGE_BYTES) {
+          notification.error({
+            message: t("settings:manageCharacters.notification.error", {
+              defaultValue: "Error"
+            }),
+            description: t("common:upload.imageTooLarge", {
+              defaultValue:
+                "Please choose a smaller image (around 3 MB or less)."
+            })
+          })
+          return
+        }
+
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => {
+            const result = reader.result
+            if (typeof result === "string" && result.startsWith("data:image/")) {
+              resolve(result)
+              return
+            }
+            reject(new Error("Invalid image payload"))
+          }
+          reader.onerror = () => {
+            reject(reader.error || new Error("Failed to read image"))
+          }
+          reader.readAsDataURL(file)
+        })
+
+        await setUserPersonaImage(dataUrl)
+        await setShowCharacterPortraits(true)
+        notification.success({
+          message: t("sidepanel:characterSelect.personaImageSaved", {
+            defaultValue: "Persona image updated"
+          })
+        })
+      } catch (error) {
+        const messageText =
+          error instanceof Error ? error.message : String(error)
+        notification.error({
+          message: t("settings:manageCharacters.notification.error", {
+            defaultValue: "Error"
+          }),
+          description:
+            messageText ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+      } finally {
+        event.target.value = ""
+      }
+    },
+    [notification, setShowCharacterPortraits, setUserPersonaImage, t]
+  )
+
+  const clearPersonaImage = React.useCallback(() => {
+    void setUserPersonaImage("")
+    notification.success({
+      message: t("sidepanel:characterSelect.personaImageRemoved", {
+        defaultValue: "Persona image removed"
+      })
+    })
+    setDropdownOpen(false)
+  }, [notification, setDropdownOpen, setUserPersonaImage, t])
+
+  const handleMoodImageUploadClick = React.useCallback(
+    (mood: CharacterMoodLabel) => {
+      if (!selectedCharacterId) {
+        notification.warning({
+          message: t("sidepanel:characterSelect.moodPortraitNeedsCharacter", {
+            defaultValue: "Select a character first"
+          })
+        })
+        return
+      }
+      if (!moodImageInputRef.current) return
+      pendingMoodUploadRef.current = mood
+      setDropdownOpen(false)
+      moodImageInputRef.current.value = ""
+      moodImageInputRef.current.click()
+    },
+    [notification, selectedCharacterId, setDropdownOpen, t]
+  )
+
+  const handleMoodImageFile = React.useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      const pendingMood = pendingMoodUploadRef.current
+      const activeCharacterId = selectedCharacterId
+      const moodOption = CHARACTER_MOOD_OPTIONS.find(
+        (option) => option.key === pendingMood
+      )
+      const moodLabel = moodOption?.label ?? pendingMood ?? "mood"
+
+      try {
+        if (!file || !pendingMood || !activeCharacterId) {
+          return
+        }
+
+        if (!file.type.startsWith("image/")) {
+          notification.error({
+            message: t("settings:manageCharacters.notification.error", {
+              defaultValue: "Error"
+            }),
+            description: t("common:upload.imageRequired", {
+              defaultValue: "Please select an image file."
+            })
+          })
+          return
+        }
+
+        if (file.size > MAX_MOOD_IMAGE_BYTES) {
+          notification.error({
+            message: t("settings:manageCharacters.notification.error", {
+              defaultValue: "Error"
+            }),
+            description: t("common:upload.imageTooLarge", {
+              defaultValue:
+                "Please choose a smaller image (around 3 MB or less)."
+            })
+          })
+          return
+        }
+
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => {
+            const result = reader.result
+            if (typeof result === "string" && result.startsWith("data:image/")) {
+              resolve(result)
+              return
+            }
+            reject(new Error("Invalid image payload"))
+          }
+          reader.onerror = () => {
+            reject(reader.error || new Error("Failed to read image"))
+          }
+          reader.readAsDataURL(file)
+        })
+
+        await tldwClient.initialize().catch(() => null)
+        const fetchedCharacter = (await tldwClient.getCharacter(
+          activeCharacterId
+        )) as CharacterApiResponse | null
+        const baseCharacter =
+          fetchedCharacter ||
+          selectedCharacter ||
+          selectedCharacterStored ||
+          ({ id: activeCharacterId } as CharacterApiResponse)
+        const nextExtensions = upsertCharacterMoodImage(
+          baseCharacter?.extensions,
+          pendingMood,
+          dataUrl
+        )
+        const expectedVersion =
+          typeof baseCharacter?.version === "number" &&
+          Number.isFinite(baseCharacter.version)
+            ? baseCharacter.version
+            : undefined
+        const updatedCharacter = (await tldwClient.updateCharacter(
+          activeCharacterId,
+          { extensions: nextExtensions },
+          expectedVersion
+        )) as CharacterApiResponse
+        const normalized = buildStoredCharacter(
+          updatedCharacter || {
+            ...(baseCharacter || {}),
+            extensions: nextExtensions
+          }
+        )
+        if (normalized && String(normalized.id) === String(activeCharacterId)) {
+          await setSelectedCharacter(normalized)
+        }
+        await setShowCharacterPortraits(true)
+        await refetch({ cancelRefetch: true })
+        notification.success({
+          message: t("sidepanel:characterSelect.moodPortraitSaved", {
+            defaultValue: "{{mood}} mood portrait updated",
+            mood: moodLabel
+          })
+        })
+      } catch (error) {
+        const messageText =
+          error instanceof Error ? error.message : String(error)
+        notification.error({
+          message: t("settings:manageCharacters.notification.error", {
+            defaultValue: "Error"
+          }),
+          description:
+            messageText ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+      } finally {
+        pendingMoodUploadRef.current = null
+        event.target.value = ""
+      }
+    },
+    [
+      buildStoredCharacter,
+      notification,
+      refetch,
+      selectedCharacter,
+      selectedCharacterId,
+      selectedCharacterStored,
+      setSelectedCharacter,
+      setShowCharacterPortraits,
+      t
+    ]
+  )
+
+  const clearMoodImage = React.useCallback(
+    async (mood: CharacterMoodLabel) => {
+      if (!selectedCharacterId) {
+        notification.warning({
+          message: t("sidepanel:characterSelect.moodPortraitNeedsCharacter", {
+            defaultValue: "Select a character first"
+          })
+        })
+        return
+      }
+      const moodOption = CHARACTER_MOOD_OPTIONS.find(
+        (option) => option.key === mood
+      )
+      const moodLabel = moodOption?.label ?? mood
+      try {
+        await tldwClient.initialize().catch(() => null)
+        const fetchedCharacter = (await tldwClient.getCharacter(
+          selectedCharacterId
+        )) as CharacterApiResponse | null
+        const baseCharacter =
+          fetchedCharacter ||
+          selectedCharacter ||
+          selectedCharacterStored ||
+          ({ id: selectedCharacterId } as CharacterApiResponse)
+        const currentImages = getCharacterMoodImagesFromExtensions(
+          baseCharacter?.extensions
+        )
+        if (!currentImages[mood]) return
+
+        const nextExtensions = removeCharacterMoodImage(
+          baseCharacter?.extensions,
+          mood
+        )
+        const expectedVersion =
+          typeof baseCharacter?.version === "number" &&
+          Number.isFinite(baseCharacter.version)
+            ? baseCharacter.version
+            : undefined
+        const updatedCharacter = (await tldwClient.updateCharacter(
+          selectedCharacterId,
+          { extensions: nextExtensions },
+          expectedVersion
+        )) as CharacterApiResponse
+        const normalized = buildStoredCharacter(
+          updatedCharacter || {
+            ...(baseCharacter || {}),
+            extensions: nextExtensions
+          }
+        )
+        if (normalized) {
+          await setSelectedCharacter(normalized)
+        }
+        await refetch({ cancelRefetch: true })
+        notification.success({
+          message: t("sidepanel:characterSelect.moodPortraitRemoved", {
+            defaultValue: "{{mood}} mood portrait removed",
+            mood: moodLabel
+          })
+        })
+      } catch (error) {
+        const messageText =
+          error instanceof Error ? error.message : String(error)
+        notification.error({
+          message: t("settings:manageCharacters.notification.error", {
+            defaultValue: "Error"
+          }),
+          description:
+            messageText ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+      } finally {
+        setDropdownOpen(false)
+      }
+    },
+    [
+      buildStoredCharacter,
+      notification,
+      refetch,
+      selectedCharacter,
+      selectedCharacterId,
+      selectedCharacterStored,
+      setDropdownOpen,
+      setSelectedCharacter,
+      t
+    ]
+  )
+
   const applySelection = React.useCallback(
     async (nextId: string | null, stored: StoredCharacter | null) => {
       const currentId = selectedCharacterId ?? null
@@ -371,7 +739,9 @@ export const CharacterSelect: React.FC<Props> = ({
       }
       setDropdownOpen(false)
 
-      if (stored?.greeting) return
+      const shouldHydrateGreetingOrExtensions =
+        Boolean(stored) && (!stored?.greeting || stored?.extensions == null)
+      if (!shouldHydrateGreetingOrExtensions) return
 
       const retryController = new AbortController()
       greetingRetryAbortRef.current = retryController
@@ -790,6 +1160,116 @@ export const CharacterSelect: React.FC<Props> = ({
       onClick: openDisplayNameModal
     })
 
+    items.push({
+      key: "persona-image-upload",
+      label: (
+        <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
+          <span>
+            {hasUserPersonaImage
+              ? t("sidepanel:characterSelect.personaImageReplace", {
+                  defaultValue: "Replace your persona image"
+                })
+              : t("sidepanel:characterSelect.personaImageUpload", {
+                  defaultValue: "Upload your persona image"
+                })}
+          </span>
+        </div>
+      ),
+      onClick: handlePersonaImageUploadClick
+    })
+
+    if (hasUserPersonaImage) {
+      items.push({
+        key: "persona-image-clear",
+        label: (
+          <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
+            <span>
+              {t("sidepanel:characterSelect.personaImageClear", {
+                defaultValue: "Remove your persona image"
+              })}
+            </span>
+          </div>
+        ),
+        onClick: clearPersonaImage
+      })
+    }
+
+    items.push({
+      key: "persona-portrait-toggle",
+      label: (
+        <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
+          <span>
+            {showCharacterPortraits
+              ? t("sidepanel:characterSelect.hidePortraits", {
+                  defaultValue: "Hide large portraits"
+                })
+              : t("sidepanel:characterSelect.showPortraits", {
+                  defaultValue: "Show large portraits"
+                })}
+          </span>
+        </div>
+      ),
+      onClick: () => {
+        void setShowCharacterPortraits((prev) => !prev)
+        setDropdownOpen(false)
+      }
+    })
+
+    if (selectedCharacterId) {
+      items.push({ type: "divider" })
+      items.push({
+        key: "mood-portraits-heading",
+        label: (
+          <div className="w-full text-left text-[11px] font-semibold uppercase tracking-wide text-text-subtle">
+            {t("sidepanel:characterSelect.moodPortraits", {
+              defaultValue: "Mood portraits"
+            })}
+          </div>
+        ),
+        disabled: true
+      })
+      CHARACTER_MOOD_OPTIONS.forEach((moodOption) => {
+        const hasMoodImage = Boolean(selectedCharacterMoodImages[moodOption.key])
+        items.push({
+          key: `mood-upload-${moodOption.key}`,
+          label: (
+            <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
+              <span>
+                {hasMoodImage
+                  ? t("sidepanel:characterSelect.moodPortraitReplace", {
+                      defaultValue: "Replace {{mood}} mood portrait",
+                      mood: moodOption.label
+                    })
+                  : t("sidepanel:characterSelect.moodPortraitSet", {
+                      defaultValue: "Set {{mood}} mood portrait",
+                      mood: moodOption.label
+                    })}
+              </span>
+            </div>
+          ),
+          onClick: () => handleMoodImageUploadClick(moodOption.key)
+        })
+        if (hasMoodImage) {
+          items.push({
+            key: `mood-clear-${moodOption.key}`,
+            label: (
+              <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
+                <span>
+                  {t("sidepanel:characterSelect.moodPortraitRemove", {
+                    defaultValue: "Remove {{mood}} mood portrait",
+                    mood: moodOption.label
+                  })}
+                </span>
+              </div>
+            ),
+            onClick: () => {
+              void clearMoodImage(moodOption.key)
+            }
+          })
+        }
+      })
+    }
+
     items.push(createItem, importItem)
     items.push({ type: "divider" })
 
@@ -815,8 +1295,18 @@ export const CharacterSelect: React.FC<Props> = ({
     handleSelect,
     isLoading,
     openDisplayNameModal,
+    hasUserPersonaImage,
+    handlePersonaImageUploadClick,
+    clearPersonaImage,
+    clearMoodImage,
+    handleMoodImageUploadClick,
     openCharactersWorkspace,
     searchText,
+    selectedCharacterId,
+    selectedCharacterMoodImages,
+    setShowCharacterPortraits,
+    showCharacterPortraits,
+    setDropdownOpen,
     sortedCharacters,
     sortMode,
     t,
@@ -836,7 +1326,11 @@ export const CharacterSelect: React.FC<Props> = ({
     const focusWhenReady = () => {
       if (canceled) return
       if (searchInputRef.current) {
-        searchInputRef.current.focus()
+        try {
+          searchInputRef.current.focus({ preventScroll: true } as any)
+        } catch {
+          searchInputRef.current.focus()
+        }
         return
       }
       if (attempts < 10) {
@@ -868,6 +1362,20 @@ export const CharacterSelect: React.FC<Props> = ({
         accept=".json,.yaml,.yml,.txt,.md,.png,.webp,.jpg,.jpeg"
         className="hidden"
         onChange={handleImportFile}
+      />
+      <input
+        ref={personaImageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        className="hidden"
+        onChange={handlePersonaImageFile}
+      />
+      <input
+        ref={moodImageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        className="hidden"
+        onChange={handleMoodImageFile}
       />
       <Dropdown
         open={dropdownOpen}

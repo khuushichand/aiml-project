@@ -330,6 +330,22 @@ class CharacterChatCompletionV2Request(BaseModel):
         False,
         description="Single response: force narration style for the assistant reply.",
     )
+    mood_label: Optional[str] = Field(
+        None,
+        max_length=80,
+        description="Optional mood/expression label to persist with this assistant turn.",
+    )
+    mood_confidence: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Optional confidence score for mood_label (0.0-1.0).",
+    )
+    mood_topic: Optional[str] = Field(
+        None,
+        max_length=200,
+        description="Optional short topic cue associated with the detected mood.",
+    )
     prompt_preset: Optional[str] = Field(
         None,
         description="Optional single-turn prompt preset override.",
@@ -358,6 +374,9 @@ class CharacterChatCompletionV2Response(BaseModel):
     assistant_content: str
     speaker_character_id: Optional[int] = None
     speaker_character_name: Optional[str] = None
+    mood_label: Optional[str] = None
+    mood_confidence: Optional[float] = None
+    mood_topic: Optional[str] = None
     lorebook_diagnostics: Optional[list[dict[str, Any]]] = Field(
         None,
         description="Lorebook/world book trigger diagnostics for this turn",
@@ -380,6 +399,22 @@ class CharacterChatStreamPersistRequest(BaseModel):
     speaker_character_name: Optional[str] = Field(
         None,
         description="Optional speaker character display name for multi-character chats.",
+    )
+    mood_label: Optional[str] = Field(
+        None,
+        max_length=80,
+        description="Optional mood/expression label to persist in message metadata.",
+    )
+    mood_confidence: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Optional confidence score for mood_label (0.0-1.0).",
+    )
+    mood_topic: Optional[str] = Field(
+        None,
+        max_length=200,
+        description="Optional short topic cue associated with the detected mood.",
     )
     tool_calls: Optional[list[dict[str, Any]]] = Field(None, description="Optional tool_calls metadata to store")
     usage: Optional[dict[str, int]] = Field(None, description="Optional token usage stats: prompt_tokens, completion_tokens, total_tokens")

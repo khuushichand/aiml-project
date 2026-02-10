@@ -709,7 +709,7 @@ const SortableCard = ({ card, index, group, onClick }: SortableCardProps) => {
       ref={ref}
       style={style}
       onClick={onClick}
-      className="kanban-card bg-surface rounded-md p-3 mb-2 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
+      className="kanban-card bg-elevated rounded-md p-3 mb-2 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
     >
       <KanbanCardPreview card={card} />
     </div>
@@ -729,7 +729,7 @@ const KanbanCardPreview = ({ card, isDragging }: KanbanCardPreviewProps) => {
   const overdue = isCardOverdue(card)
 
   return (
-    <div className={isDragging ? "bg-surface rounded-md p-3 shadow-lg" : ""}>
+    <div className={isDragging ? "bg-elevated rounded-md p-3 shadow-lg" : ""}>
       {/* Title */}
       <div className="text-sm font-medium mb-1">{card.title}</div>
 

@@ -281,6 +281,11 @@ export const SidePanelBody = ({
                   isEmbedding={isEmbedding}
                   characterIdentity={selectedCharacter}
                   characterIdentityEnabled={characterIdentityEnabled}
+                  speakerCharacterId={message.speakerCharacterId ?? null}
+                  speakerCharacterName={message.speakerCharacterName}
+                  moodLabel={message.moodLabel ?? null}
+                  moodConfidence={message.moodConfidence ?? null}
+                  moodTopic={message.moodTopic ?? null}
                   variants={message.variants}
                   activeVariantIndex={message.activeVariantIndex}
                   onSwipePrev={() => handleVariantSwipe(message.id, "prev")}

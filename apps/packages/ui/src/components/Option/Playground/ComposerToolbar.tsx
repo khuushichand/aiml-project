@@ -2,7 +2,6 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 import { Tooltip } from "antd"
 import {
-  BookPlus,
   Globe,
   MicIcon,
   Search,
@@ -53,8 +52,6 @@ export type ComposerToolbarProps = {
   webSearch: boolean
   onToggleWebSearch: () => void
   hasWebSearch: boolean
-  // Insert prompt
-  onOpenPromptInsert: () => void
   // Model settings
   onOpenModelSettings: () => void
   modelSummaryLabel: string
@@ -117,7 +114,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     webSearch,
     onToggleWebSearch,
     hasWebSearch,
-    onOpenPromptInsert,
     onOpenModelSettings,
     modelSummaryLabel,
     promptSummaryLabel,
@@ -208,12 +204,8 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
       type="button"
       onClick={onToggleWebSearch}
       aria-pressed={webSearch}
-      aria-label={
-        webSearch
-          ? (t("playground:actions.webSearchOn", "Web search on") as string)
-          : (t("playground:actions.webSearchOff", "Web search off") as string)
-      }
-      title={t("playground:actions.webSearchOff", "Web search") as string}
+      aria-label={t("playground:tools.webSearch", "Web search") as string}
+      title={t("playground:tools.webSearch", "Web search") as string}
       data-testid="web-search-toggle"
       className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition hover:bg-surface2 hover:text-text ${
         webSearch
@@ -222,29 +214,9 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
       }`}
     >
       <Globe className="h-3 w-3" />
-      <span>{t("playground:actions.webSearchOff", "Web")}</span>
+      <span>{t("playground:actions.webSearchShort", "Web")}</span>
     </button>
   ) : null
-
-  const insertPromptButton = (
-    <Tooltip title={t("option:promptInsert.useInChat", "Insert prompt") as string}>
-      <button
-        type="button"
-        onClick={onOpenPromptInsert}
-        aria-label={t("option:promptInsert.useInChat", "Insert prompt") as string}
-        className={`inline-flex items-center justify-center rounded-md text-xs text-text-muted transition hover:bg-surface2 hover:text-text ${
-          isProMode ? "gap-1 px-2 py-1" : "h-9 w-9"
-        }`}
-      >
-        <BookPlus className="h-4 w-4" />
-        {isProMode && (
-          <span className="hidden text-xs font-medium sm:inline">
-            {t("option:promptInsert.useInChat", "Insert prompt")}
-          </span>
-        )}
-      </button>
-    </Tooltip>
-  )
 
   const dictationButton = hasDictation ? (
     <Tooltip title={speechTooltip}>
@@ -429,7 +401,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
           </div>
           <div className={`flex items-center gap-3 ${isProMode ? "flex-wrap justify-end" : "gap-2 flex-nowrap"}`}>
             {/* Desktop: show inline; Mobile: hidden (in overflow) */}
-            {!isMobile && insertPromptButton}
             {!isMobile && dictationButton}
             {!isMobile && modelUsageBadge}
             {!isMobile && chatSettingsButton}
@@ -442,7 +413,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
                 webSearch={webSearch}
                 onToggleWebSearch={onToggleWebSearch}
                 hasWebSearch={hasWebSearch}
-                onOpenPromptInsert={onOpenPromptInsert}
                 onOpenModelSettings={onOpenModelSettings}
                 hasDictation={hasDictation}
                 speechAvailable={speechAvailable}

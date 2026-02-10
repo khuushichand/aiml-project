@@ -13,7 +13,7 @@ Choose your path based on what you want to accomplish:
 
 ```bash
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
-make quickstart
+make quickstart-install
 # Verify: curl http://localhost:8000/health
 ```
 

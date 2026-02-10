@@ -80,6 +80,12 @@ export const EvaluationDetailPanel: React.FC<EvaluationDetailPanelProps> = ({
     return new Date(dateStr).toLocaleString()
   }
 
+  const metricColor = (value: number): string => {
+    if (value >= 0.8) return "rgb(var(--color-success))"
+    if (value >= 0.5) return "rgb(var(--color-warn))"
+    return "rgb(var(--color-danger))"
+  }
+
   const formatMetricValue = (value: number | undefined, isPercent = false) => {
     if (value === undefined) return "-"
     if (isPercent) return `${(value * 100).toFixed(1)}%`
@@ -153,12 +159,7 @@ export const EvaluationDetailPanel: React.FC<EvaluationDetailPanelProps> = ({
                         precision={1}
                         suffix="%"
                         valueStyle={{
-                          color:
-                            evaluation.aggregate_metrics.accuracy >= 0.8
-                              ? "#52c41a"
-                              : evaluation.aggregate_metrics.accuracy >= 0.5
-                              ? "#faad14"
-                              : "#ff4d4f"
+                          color: metricColor(evaluation.aggregate_metrics.accuracy)
                         }}
                       />
                     </div>
@@ -176,12 +177,7 @@ export const EvaluationDetailPanel: React.FC<EvaluationDetailPanelProps> = ({
                         precision={1}
                         suffix="%"
                         valueStyle={{
-                          color:
-                            evaluation.aggregate_metrics.pass_rate >= 0.8
-                              ? "#52c41a"
-                              : evaluation.aggregate_metrics.pass_rate >= 0.5
-                              ? "#faad14"
-                              : "#ff4d4f"
+                          color: metricColor(evaluation.aggregate_metrics.pass_rate)
                         }}
                       />
                     </div>

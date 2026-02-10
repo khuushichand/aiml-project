@@ -1,16 +1,27 @@
-import { useCallback, useMemo } from "react"
-import { Select, Switch } from "antd"
+import { useCallback, useMemo, useRef, type ChangeEvent } from "react"
+import { Select, Switch, Tooltip } from "antd"
 import { useTranslation } from "react-i18next"
 import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
 import { BetaTag } from "@/components/Common/Beta"
 import { SettingRow } from "@/components/Common/SettingRow"
 import { useChatSettings } from "@/hooks/useChatSettings"
+import { useSetting } from "@/hooks/useSetting"
+import { useAntdNotification } from "@/hooks/useAntdNotification"
+import { toBase64 } from "@/libs/to-base64"
+import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
+import { RotateCcw, Upload } from "lucide-react"
 import { DiscoSkillsSettings } from "./DiscoSkillsSettings"
 
 const SELECT_CLASSNAME = "w-[200px]"
+const CHAT_BACKGROUND_MAX_BASE64_LENGTH = 3_000_000
 
 export const ChatSettings = () => {
   const { t } = useTranslation("settings")
+  const notification = useAntdNotification()
+  const [chatBackgroundImage, setChatBackgroundImage] = useSetting(
+    CHAT_BACKGROUND_IMAGE_SETTING
+  )
+  const chatBackgroundInputRef = useRef<HTMLInputElement | null>(null)
 
   const {
     copilotResumeLastChat,
@@ -136,6 +147,54 @@ export const ChatSettings = () => {
   const handleAssistantTextSizeChange = useCallback(
     (value: string) => setAssistantTextSize(value as "sm" | "md" | "lg"),
     [setAssistantTextSize]
+  )
+
+  const resetChatBackgroundImage = useCallback(() => {
+    void setChatBackgroundImage(undefined)
+  }, [setChatBackgroundImage])
+
+  const handleChatBackgroundImageUpload = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      event.target.value = ""
+      if (!file) return
+
+      if (!file.type.startsWith("image/")) {
+        notification.error({
+          message: t(
+            "systemNotifications.invalidImage",
+            "Please select a valid image file"
+          )
+        })
+        return
+      }
+
+      try {
+        const base64String = await toBase64(file)
+        if (base64String.length > CHAT_BACKGROUND_MAX_BASE64_LENGTH) {
+          notification.error({
+            message: t("chatBackground.tooLargeTitle", "Image too large"),
+            description: t(
+              "chatBackground.tooLargeDescription",
+              "Please choose a smaller image (around 3 MB or less) for the chat background. Try compressing or resizing it and upload again."
+            )
+          })
+          return
+        }
+
+        await setChatBackgroundImage(base64String)
+      } catch (error) {
+        console.error("Error uploading chat background image:", error)
+        notification.error({
+          message: t("storage.writeError", "Could not save settings"),
+          description: t(
+            "storage.writeErrorDescription",
+            "We couldn't save your settings. Please try again shortly."
+          )
+        })
+      }
+    },
+    [notification, setChatBackgroundImage, t]
   )
 
   const getResetProps = <T extends boolean | string>(
@@ -516,6 +575,62 @@ export const ChatSettings = () => {
         </p>
         <div className="border-b border-border mt-3" />
       </div>
+
+      <SettingRow
+        label={t(
+          "chatAppearance.backgroundImage.label",
+          "Chat background image"
+        )}
+        description={t(
+          "chatAppearance.backgroundImage.description",
+          "Shown behind the chat screen while you are on /chat."
+        )}
+        control={
+          <div className="flex items-center gap-2">
+            {chatBackgroundImage ? (
+              <Tooltip
+                title={t(
+                  "chatAppearance.backgroundImage.clear",
+                  "Remove background image"
+                )}
+              >
+                <button
+                  type="button"
+                  onClick={resetChatBackgroundImage}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border text-text-muted transition-colors hover:bg-surface2 hover:text-text"
+                  aria-label={t(
+                    "chatAppearance.backgroundImage.clear",
+                    "Remove background image"
+                  )}
+                >
+                  <RotateCcw className="size-4" aria-hidden="true" />
+                </button>
+              </Tooltip>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => chatBackgroundInputRef.current?.click()}
+              className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-primaryStrong"
+              aria-label={t(
+                "chatAppearance.backgroundImage.upload",
+                "Upload image"
+              )}
+            >
+              <Upload className="size-4" aria-hidden="true" />
+              <span>
+                {t("chatAppearance.backgroundImage.upload", "Upload image")}
+              </span>
+            </button>
+            <input
+              ref={chatBackgroundInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleChatBackgroundImageUpload}
+            />
+          </div>
+        }
+      />
 
       <div className="pt-4">
         <h3 className="text-sm font-semibold leading-6 text-text">

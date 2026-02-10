@@ -10,10 +10,33 @@
   "chatDictionariesNav": "チャット辞書",
   "charactersNav": "キャラクター",
   "mediaNav": "メディア",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian とモニタリング",
   "guardian": {
     "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "title": "Guardian と自己モニタリング",
+    "subtitle": "個人コンテンツ監視ルール、Guardian 監督関係、危機リソースへのアクセスを設定します。",
+    "rules": {
+      "title": "監視ルール"
+    },
+    "alerts": {
+      "title": "アラート"
+    },
+    "governance": {
+      "title": "ガバナンスポリシー",
+      "fields": {
+        "description": "説明"
+      }
+    },
+    "relationships": {
+      "title": "保護者関係"
+    },
+    "policies": {
+      "title": "監督ポリシー"
+    },
+    "auditLog": {
+      "title": "監査ログ"
+    }
   },
   "chatAppearance": {
     "title": "チャットの外観",
@@ -46,6 +69,12 @@
       "sm": "小",
       "md": "中",
       "lg": "大"
+    },
+    "backgroundImage": {
+      "label": "チャット背景画像",
+      "description": "/chat にいるときにチャット画面の背後に表示されます。",
+      "upload": "画像をアップロード",
+      "clear": "背景画像を削除"
     }
   },
   "generalSettings": {
@@ -143,6 +172,12 @@
         "confirmMessage": "オンボーディングの状態をリセットし、設定フローの最初に戻します。",
         "toast": "オンボーディングをリセットしました",
         "toastBody": "サーバー URL と API キーを確認できるよう、ようこそステップに戻ります。"
+      },
+      "hideQuickChatHelper": {
+        "label": "クイックチャットヘルパーボタンを非表示"
+      },
+      "stickyChatInput": {
+        "label": "スクロール中もチャット入力を表示する"
       }
     },
     "sidepanelRag": {
@@ -245,10 +280,15 @@
         "label": "SSML (Speech Synthesis Markup Language) を有効にする"
       },
       "removeReasoningTagTTS": {
-        "label": "テキスト読み上げから推論タグを削除"
+        "label": "テキスト読み上げから推論タグを削除",
+        "description": "読み上げ前に <think>...</think> の推論ブロックを削除します。音声は最終回答に集中します。"
       },
       "responseSplitting": {
         "label": "応答分割"
+      },
+      "playbackSpeed": {
+        "label": "再生速度",
+        "description": "音声の再生速度を制御します（生成速度には影響しません）。"
       }
     },
     "stt": {
@@ -371,6 +411,9 @@
       "example2": "チャットを一時的にするか、貼り付けの扱い、推論表示を制御します。",
       "primaryCta": "サーバーと認証を設定",
       "secondaryCta": "閉じる"
+    },
+    "chatbooks": {
+      "heading": "チャットブック"
     }
   },
   "manageModels": {
@@ -522,7 +565,56 @@
     "copilotEmptyDescription": "Copilot プロンプトは tldw サーバーが提供する定義済みテンプレートです。",
     "copilotEmptyExample1": "Copilot プロンプトがあるはずなら、サーバーバージョンや設定を確認してください。",
     "copilotEmptyExample2": "サーバーを更新した後、拡張機能を再読み込みしてこのタブに戻ってください。",
-    "copilotEmptyCta": "診断を開く"
+    "copilotEmptyCta": "診断を開く",
+    "studio": {
+      "projects": {
+        "title": "プロジェクト",
+        "description": "説明"
+      },
+      "prompts": {
+        "title": "プロンプト"
+      },
+      "testCases": {
+        "title": "テストケース",
+        "bulkPanel": {
+          "title": "一括インポート/エクスポート"
+        },
+        "generateModal": {
+          "title": "テストケースを生成"
+        },
+        "runModal": {
+          "title": "テストケースを実行"
+        }
+      },
+      "evaluations": {
+        "title": "評価",
+        "wizard": {
+          "title": "評価を作成"
+        },
+        "detail": {
+          "title": "評価の詳細"
+        }
+      },
+      "optimizations": {
+        "title": "最適化",
+        "wizard": {
+          "title": "最適化を開始"
+        },
+        "progress": {
+          "title": "最適化の進捗"
+        },
+        "compare": {
+          "title": "最適化戦略を比較",
+          "description": "説明"
+        }
+      },
+      "common": {
+        "description": "説明"
+      },
+      "queueHealth": {
+        "title": "キューの状態"
+      }
+    }
   },
   "manageShare": {
     "title": "共有を管理",
@@ -759,6 +851,32 @@
         "notes": "ノートとプロンプトの管理",
         "stt": "音声からテキストへの文字起こし"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "認証モードを変更しますか？"
+    },
+    "loginMethod": {
+      "label": "ログイン方法"
+    },
+    "magicLink": {
+      "email": {
+        "label": "メール",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "マジックリンクトークン",
+        "placeholder": "メールのトークンを貼り付けてください"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "既定のデモ API キーを使用中です"
+    },
+    "billing": {
+      "title": "請求と使用量",
+      "subtitle": "プラン、請求サイクル、使用量上限を管理します。",
+      "invoices": {
+        "title": "請求履歴"
+      }
     }
   },
   "manageKnowledge": {
@@ -938,7 +1056,24 @@
       "mediaTitle": "メディアとノートを確認する",
       "mediaBody": "オプションの「メディアとノート」を開いて保存され検索可能な項目を確認してください。"
     },
-    "headerShortcuts": "ヘッダーにクイックショートカットを表示する"
+    "headerShortcuts": "ヘッダーにクイックショートカットを表示する",
+    "loginMethod": {
+      "label": "ログイン方法"
+    },
+    "magicLink": {
+      "email": {
+        "label": "メール",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "マジックリンクトークン",
+        "placeholder": "メールのトークンを貼り付けてください"
+      }
+    },
+    "defaults": {
+      "title": "デフォルト設定を行う",
+      "subtitle": "新しいチャットの既定プロバイダーとモデルを選択します。"
+    }
   },
   "manageCharacters": {
     "title": "キャラクター管理",
@@ -1450,5 +1585,43 @@
       "methodOptionsLabel": "方式ごとのオプション",
       "notesLabel": "メモ"
     }
-  }
+  },
+  "chatbooksNav": "チャットブック",
+  "mediaTrashNav": "メディアごみ箱",
+  "chatSettingsNav": "チャット",
+  "quickIngestSettingsNav": "クイック取り込み",
+  "speechSettingsNav": "音声",
+  "imageGenerationSettingsNav": "画像生成",
+  "uiCustomizationNav": "UIカスタマイズ",
+  "splashSettingsNav": "スプラッシュ画面",
+  "speechSettings": {
+    "title": "音声設定",
+    "subtitle": "ディクテーションと再生のための音声文字起こしと音声合成の既定値を管理します。"
+  },
+  "uiCustomization": {
+    "title": "UIカスタマイズ",
+    "subtitle": "ナビゲーションショートカットと既定のレイアウトをカスタマイズします。",
+    "shortcuts": {
+      "title": "サイドバーのショートカット",
+      "description": "サイドバーのアイコンとショートカット一覧に表示する項目を最大10件まで選択します。"
+    },
+    "headerShortcuts": {
+      "title": "プレイグラウンドのショートカット",
+      "description": "ヘッダーのショートカットパネルに表示するショートカットを選択します。"
+    }
+  },
+  "splashSettings": {
+    "title": "スプラッシュ画面",
+    "subtitle": "起動時のスプラッシュカードと効果をカスタマイズします。"
+  },
+  "imageGenerationSettings": {
+    "title": "画像生成",
+    "subtitle": "各バックエンドの画像生成の既定値を設定し、スラッシュコマンドの既定を設定します。"
+  },
+  "quickIngestSettings": {
+    "title": "クイック取り込み",
+    "subtitle": "クイック取り込みの既定値、プリセット、動作を設定します。"
+  },
+  "acpPlaygroundNav": "ACPプレイグラウンド",
+  "skillsNav": "スキル"
 }

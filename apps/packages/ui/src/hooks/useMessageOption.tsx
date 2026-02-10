@@ -21,6 +21,11 @@ import type { Character } from "@/types/character"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useSetting } from "@/hooks/useSetting"
 import { CONTEXT_FILE_SIZE_MB_SETTING } from "@/services/settings/ui-settings"
+import {
+  DEFAULT_RAG_SETTINGS,
+  toRagAdvancedOptions,
+  type RagSettings
+} from "@/services/rag/unified-rag"
 
 export const useMessageOption = (
   opts: { forceCompareEnabled?: boolean } = {}
@@ -184,6 +189,10 @@ export const useMessageOption = (
     "speechToTextLanguage",
     "en-US"
   )
+  const [storedRagSettings] = useStorage<RagSettings>(
+    "ragSearchSettingsV2",
+    DEFAULT_RAG_SETTINGS
+  )
 
   const { ttsEnabled } = useWebUI()
 
@@ -325,6 +334,59 @@ export const useMessageOption = (
     storedQuickPromptRef.current = nextValue
     setStoredQuickPrompt(nextValue)
   }, [selectedQuickPrompt, setStoredQuickPrompt])
+
+  const lastHydratedRagDefaultsRef = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    if (historyId || serverChatId || messages.length > 0) {
+      lastHydratedRagDefaultsRef.current = null
+      return
+    }
+
+    const normalizedSettings = {
+      ...DEFAULT_RAG_SETTINGS,
+      ...(storedRagSettings || {})
+    }
+    const serialized = JSON.stringify(normalizedSettings)
+    if (serialized === lastHydratedRagDefaultsRef.current) {
+      return
+    }
+    lastHydratedRagDefaultsRef.current = serialized
+
+    const searchMode =
+      normalizedSettings.search_mode === "fts" ||
+      normalizedSettings.search_mode === "vector" ||
+      normalizedSettings.search_mode === "hybrid"
+        ? normalizedSettings.search_mode
+        : DEFAULT_RAG_SETTINGS.search_mode
+    const topKValue =
+      typeof normalizedSettings.top_k === "number" &&
+      Number.isFinite(normalizedSettings.top_k)
+        ? normalizedSettings.top_k
+        : DEFAULT_RAG_SETTINGS.top_k
+    const sourcesValue =
+      Array.isArray(normalizedSettings.sources) &&
+      normalizedSettings.sources.every((source) => typeof source === "string")
+        ? normalizedSettings.sources
+        : DEFAULT_RAG_SETTINGS.sources
+
+    setRagSearchMode(searchMode)
+    setRagTopK(topKValue)
+    setRagEnableGeneration(Boolean(normalizedSettings.enable_generation))
+    setRagEnableCitations(Boolean(normalizedSettings.enable_citations))
+    setRagSources(sourcesValue)
+    setRagAdvancedOptions(toRagAdvancedOptions(normalizedSettings))
+  }, [
+    historyId,
+    messages.length,
+    serverChatId,
+    setRagAdvancedOptions,
+    setRagEnableCitations,
+    setRagEnableGeneration,
+    setRagSearchMode,
+    setRagSources,
+    setRagTopK,
+    storedRagSettings
+  ])
 
   const handleFileUpload = async (file: File) => {
     try {

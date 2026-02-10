@@ -54,6 +54,20 @@ jobs:
           ok = compileall.compile_dir('tldw_Server_API/app', force=True, quiet=1)
           sys.exit(0 if ok else 1)
           PY
+  quickstart-dry-run:
+    name: Quickstart Dry-Run Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify quickstart-install target shape
+        run: |
+          make -n quickstart-install
   lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest

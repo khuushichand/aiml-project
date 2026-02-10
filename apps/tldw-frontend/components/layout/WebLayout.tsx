@@ -29,11 +29,13 @@ import { useMigration } from "@/hooks/useMigration"
 import { useStorageMigrations } from "@/hooks/useStorageMigrations"
 import { useLayoutEffectsOwner } from "@/hooks/useLayoutEffectsOwner"
 import { useChatSidebar } from "@/hooks/useFeatureFlags"
+import { useSetting } from "@/hooks/useSetting"
 import { ChatSidebar } from "@/components/Common/ChatSidebar"
 import { EventOnlyHosts } from "@/components/Common/EventHosts"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { setSettingsReturnTo } from "@/utils/settings-return"
 import { WorkflowIntegrationHost } from "@/components/Common/Workflow"
+import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
@@ -87,6 +89,17 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
   const location = useLocation()
+  const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
+  const isChatScreen = location.pathname === "/chat"
+  const chatScreenBackgroundStyle =
+    isChatScreen && chatBackgroundImage
+      ? {
+          backgroundImage: `url(${chatBackgroundImage})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat"
+        }
+      : undefined
   const { clearChat, useOCR, chatMode, setChatMode, webSearch, setWebSearch } =
     useMessageOption()
   const queryClient = useQueryClient()
@@ -212,7 +225,10 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   )
 
   return (
-    <div className="flex min-h-screen w-full">
+    <div
+      className="relative flex min-h-screen w-full"
+      style={chatScreenBackgroundStyle}
+    >
       {/* Persistent ChatSidebar when feature flag enabled */}
       {showChatSidebar && !hideHeader && !hideSidebar && (
         <ChatSidebar

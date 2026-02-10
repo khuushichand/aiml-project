@@ -10,10 +10,33 @@
   "chatDictionariesNav": "聊天词典",
   "charactersNav": "角色",
   "mediaNav": "媒体",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian 与监护",
   "guardian": {
     "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "title": "Guardian 与自我监护",
+    "subtitle": "配置个人内容监控规则、Guardian 监督关系和危机资源访问。",
+    "rules": {
+      "title": "监控规则"
+    },
+    "alerts": {
+      "title": "警报"
+    },
+    "governance": {
+      "title": "治理策略",
+      "fields": {
+        "description": "描述"
+      }
+    },
+    "relationships": {
+      "title": "监护关系"
+    },
+    "policies": {
+      "title": "受监督策略"
+    },
+    "auditLog": {
+      "title": "审计日志"
+    }
   },
   "chatAppearance": {
     "title": "聊天外观",
@@ -46,6 +69,12 @@
       "sm": "小",
       "md": "中",
       "lg": "大"
+    },
+    "backgroundImage": {
+      "label": "聊天背景图",
+      "description": "当你位于 /chat 时，显示在聊天界面后方。",
+      "upload": "上传图片",
+      "clear": "移除背景图"
     }
   },
   "generalSettings": {
@@ -143,6 +172,12 @@
         "confirmMessage": "这将重置您的引导状态，并带您返回设置流程的起始步骤。",
         "toast": "引导已重置",
         "toastBody": "我们将带您回到欢迎步骤，以便您再次检查服务器 URL 和 API 密钥。"
+      },
+      "hideQuickChatHelper": {
+        "label": "隐藏快速聊天助手按钮"
+      },
+      "stickyChatInput": {
+        "label": "滚动时保持聊天输入框可见"
       }
     },
     "sidepanelRag": {
@@ -245,10 +280,15 @@
         "label": "启用SSML(语音合成标记语言)"
       },
       "removeReasoningTagTTS": {
-        "label": "从语音合成中移除推理标签"
+        "label": "从语音合成中移除推理标签",
+        "description": "在朗读前移除 <think>...</think> 推理块。让音频聚焦最终答案。"
       },
       "responseSplitting": {
         "label": "响应拆分"
+      },
+      "playbackSpeed": {
+        "label": "播放速度",
+        "description": "控制音频播放速度（不影响生成）。"
       }
     },
     "stt": {
@@ -371,6 +411,9 @@
       "example2": "控制聊天是否为临时、如何处理大文本粘贴以及如何显示推理过程。",
       "primaryCta": "配置服务器和认证",
       "secondaryCta": "关闭"
+    },
+    "chatbooks": {
+      "heading": "聊天书"
     }
   },
   "manageModels": {
@@ -523,7 +566,56 @@
     "copilotEmptyDescription": "Copilot 提示词是由你的 tldw 服务器提供的预设模板。",
     "copilotEmptyExample1": "如果你预计有 Copilot 提示词，请检查服务器版本或配置。",
     "copilotEmptyExample2": "更新服务器后，重新加载扩展并返回此标签页。",
-    "copilotEmptyCta": "打开诊断"
+    "copilotEmptyCta": "打开诊断",
+    "studio": {
+      "projects": {
+        "title": "项目",
+        "description": "描述"
+      },
+      "prompts": {
+        "title": "提示词"
+      },
+      "testCases": {
+        "title": "测试用例",
+        "bulkPanel": {
+          "title": "批量导入/导出"
+        },
+        "generateModal": {
+          "title": "生成测试用例"
+        },
+        "runModal": {
+          "title": "运行测试用例"
+        }
+      },
+      "evaluations": {
+        "title": "评估",
+        "wizard": {
+          "title": "创建评估"
+        },
+        "detail": {
+          "title": "评估详情"
+        }
+      },
+      "optimizations": {
+        "title": "优化",
+        "wizard": {
+          "title": "开始优化"
+        },
+        "progress": {
+          "title": "优化进度"
+        },
+        "compare": {
+          "title": "比较优化策略",
+          "description": "描述"
+        }
+      },
+      "common": {
+        "description": "描述"
+      },
+      "queueHealth": {
+        "title": "队列健康"
+      }
+    }
   },
   "manageShare": {
     "title": "管理共享",
@@ -760,6 +852,32 @@
         "notes": "笔记和提示管理",
         "stt": "语音转文本"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "更改认证模式？"
+    },
+    "loginMethod": {
+      "label": "登录方式"
+    },
+    "magicLink": {
+      "email": {
+        "label": "电子邮件",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "魔法链接令牌",
+        "placeholder": "粘贴邮件中的令牌"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "正在使用默认演示 API 密钥"
+    },
+    "billing": {
+      "title": "账单与用量",
+      "subtitle": "管理你的套餐、计费周期和用量限制。",
+      "invoices": {
+        "title": "发票历史"
+      }
     }
   },
   "manageKnowledge": {
@@ -939,7 +1057,24 @@
       "mediaTitle": "探索媒体和笔记",
       "mediaBody": "访问选项中的媒体和笔记以查看存储和可搜索的内容。"
     },
-    "headerShortcuts": "在页眉显示快捷方式"
+    "headerShortcuts": "在页眉显示快捷方式",
+    "loginMethod": {
+      "label": "登录方式"
+    },
+    "magicLink": {
+      "email": {
+        "label": "电子邮件",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "魔法链接令牌",
+        "placeholder": "粘贴邮件中的令牌"
+      }
+    },
+    "defaults": {
+      "title": "设置你的默认值",
+      "subtitle": "为新聊天选择默认提供商和模型。"
+    }
   },
   "manageCharacters": {
     "title": "管理角色",
@@ -1451,5 +1586,43 @@
       "methodOptionsLabel": "方法特定选项",
       "notesLabel": "备注"
     }
-  }
+  },
+  "chatbooksNav": "聊天书",
+  "mediaTrashNav": "媒体回收站",
+  "chatSettingsNav": "聊天",
+  "quickIngestSettingsNav": "快速导入",
+  "speechSettingsNav": "语音",
+  "imageGenerationSettingsNav": "图像生成",
+  "uiCustomizationNav": "界面自定义",
+  "splashSettingsNav": "启动画面",
+  "speechSettings": {
+    "title": "语音设置",
+    "subtitle": "管理听写和播放所用的语音转文本与文本转语音默认设置。"
+  },
+  "uiCustomization": {
+    "title": "界面自定义",
+    "subtitle": "自定义导航快捷方式和默认布局。",
+    "shortcuts": {
+      "title": "侧边栏快捷方式",
+      "description": "为侧边栏图标和快捷方式列表最多选择 10 个项目。"
+    },
+    "headerShortcuts": {
+      "title": "实验场快捷方式",
+      "description": "选择在页眉快捷方式面板中显示哪些快捷方式。"
+    }
+  },
+  "splashSettings": {
+    "title": "启动画面",
+    "subtitle": "自定义启动时的闪屏卡片和效果。"
+  },
+  "imageGenerationSettings": {
+    "title": "图像生成",
+    "subtitle": "为每个后端配置图像生成默认值，并设置斜杠命令的默认项。"
+  },
+  "quickIngestSettings": {
+    "title": "快速导入",
+    "subtitle": "配置快速导入的默认值、预设和行为。"
+  },
+  "acpPlaygroundNav": "ACP 实验场",
+  "skillsNav": "技能"
 }

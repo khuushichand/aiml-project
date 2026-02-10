@@ -10,10 +10,33 @@
   "chatDictionariesNav": "Словники чату",
   "charactersNav": "Персонажі",
   "mediaNav": "Медіа",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian і моніторинг",
   "guardian": {
     "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "title": "Guardian і самомоніторинг",
+    "subtitle": "Налаштуйте правила моніторингу персонального контенту, відносини нагляду Guardian і доступ до кризових ресурсів.",
+    "rules": {
+      "title": "Правила моніторингу"
+    },
+    "alerts": {
+      "title": "Сповіщення"
+    },
+    "governance": {
+      "title": "Політики управління",
+      "fields": {
+        "description": "Опис"
+      }
+    },
+    "relationships": {
+      "title": "Стосунки опікуна"
+    },
+    "policies": {
+      "title": "Політики під наглядом"
+    },
+    "auditLog": {
+      "title": "Журнал аудиту"
+    }
   },
   "chatAppearance": {
     "title": "Вигляд чату",
@@ -46,6 +69,12 @@
       "sm": "Малий",
       "md": "Середній",
       "lg": "Великий"
+    },
+    "backgroundImage": {
+      "label": "Фонове зображення чату",
+      "description": "Показується позаду екрана чату, коли ви перебуваєте на /chat.",
+      "upload": "Завантажити зображення",
+      "clear": "Прибрати фонове зображення"
     }
   },
   "generalSettings": {
@@ -140,6 +169,12 @@
         "confirmMessage": "Це скине стан онбордингу та поверне вас на початок процесу налаштування.",
         "toast": "Онбординг було скинуто",
         "toastBody": "Ми повернемо вас до кроку привітання, щоб ви могли перевірити URL сервера та ключ API."
+      },
+      "hideQuickChatHelper": {
+        "label": "Приховати кнопку помічника швидкого чату"
+      },
+      "stickyChatInput": {
+        "label": "Тримати поле введення чату видимим під час прокрутки"
       }
     },
     "sidepanelRag": {
@@ -242,10 +277,15 @@
         "label": "Ввімкнути SSML (Мова Розмітки для Синтезу Голосу)"
       },
       "removeReasoningTagTTS": {
-        "label": "Видалити тег міркування з TTS"
+        "label": "Видалити тег міркування з TTS",
+        "description": "Видаляє блоки міркувань <think>...</think> перед озвучуванням. Це тримає аудіо сфокусованим на фінальній відповіді."
       },
       "responseSplitting": {
         "label": "Розбиття відповіді"
+      },
+      "playbackSpeed": {
+        "label": "Швидкість відтворення",
+        "description": "Керує швидкістю відтворення аудіо (не впливає на генерацію)."
       }
     },
     "stt": {
@@ -368,6 +408,9 @@
       "example2": "Керуйте тим, чи є чати тимчасовими, як обробляються великі вставки та як відображаються міркування.",
       "primaryCta": "Налаштувати сервер і автентифікацію",
       "secondaryCta": "Закрити"
+    },
+    "chatbooks": {
+      "heading": "Чатбуки"
     }
   },
   "manageModels": {
@@ -519,7 +562,56 @@
     "copilotEmptyDescription": "Запити Copilot — це заздалегідь визначені шаблони, які надає ваш tldw сервер.",
     "copilotEmptyExample1": "Перевірте версію або конфігурацію сервера, якщо очікуєте запити Copilot.",
     "copilotEmptyExample2": "Після оновлення сервера перезавантажте розширення і поверніться до цієї вкладки.",
-    "copilotEmptyCta": "Відкрити діагностику"
+    "copilotEmptyCta": "Відкрити діагностику",
+    "studio": {
+      "projects": {
+        "title": "Проєкти",
+        "description": "Опис"
+      },
+      "prompts": {
+        "title": "Промпти"
+      },
+      "testCases": {
+        "title": "Тестові кейси",
+        "bulkPanel": {
+          "title": "Масовий імпорт/експорт"
+        },
+        "generateModal": {
+          "title": "Згенерувати тестові кейси"
+        },
+        "runModal": {
+          "title": "Запустити тестові кейси"
+        }
+      },
+      "evaluations": {
+        "title": "Оцінювання",
+        "wizard": {
+          "title": "Створити оцінювання"
+        },
+        "detail": {
+          "title": "Деталі оцінювання"
+        }
+      },
+      "optimizations": {
+        "title": "Оптимізації",
+        "wizard": {
+          "title": "Почати оптимізацію"
+        },
+        "progress": {
+          "title": "Прогрес оптимізації"
+        },
+        "compare": {
+          "title": "Порівняти стратегії оптимізації",
+          "description": "Опис"
+        }
+      },
+      "common": {
+        "description": "Опис"
+      },
+      "queueHealth": {
+        "title": "Стан черги"
+      }
+    }
   },
   "manageShare": {
     "title": "Управління спільним доступом",
@@ -756,6 +848,32 @@
         "notes": "Керування нотатками та підказками",
         "stt": "Транскрипції мовлення в текст"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "Змінити режим автентифікації?"
+    },
+    "loginMethod": {
+      "label": "Спосіб входу"
+    },
+    "magicLink": {
+      "email": {
+        "label": "Ел. пошта",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Токен magic link",
+        "placeholder": "Вставте токен з вашої електронної пошти"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "Використовується демонстраційний API-ключ за замовчуванням"
+    },
+    "billing": {
+      "title": "Оплата та використання",
+      "subtitle": "Керуйте тарифом, циклом виставлення рахунків і лімітами використання.",
+      "invoices": {
+        "title": "Історія рахунків"
+      }
     }
   },
   "manageKnowledge": {
@@ -935,7 +1053,24 @@
       "mediaTitle": "Досліджуйте медіа й нотатки",
       "mediaBody": "Відвідайте Розділ медіа й нотаток в Налаштуваннях, щоб побачити те, що збережено та доступне для пошуку."
     },
-    "headerShortcuts": "Показувати швидкі ярлики в заголовку"
+    "headerShortcuts": "Показувати швидкі ярлики в заголовку",
+    "loginMethod": {
+      "label": "Спосіб входу"
+    },
+    "magicLink": {
+      "email": {
+        "label": "Ел. пошта",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Токен magic link",
+        "placeholder": "Вставте токен з вашої електронної пошти"
+      }
+    },
+    "defaults": {
+      "title": "Налаштуйте значення за замовчуванням",
+      "subtitle": "Оберіть постачальника та модель за замовчуванням для нових чатів."
+    }
   },
   "manageCharacters": {
     "title": "Керування персонажами",
@@ -1447,5 +1582,43 @@
       "methodOptionsLabel": "Параметри для конкретних методів",
       "notesLabel": "Нотатки"
     }
-  }
+  },
+  "chatbooksNav": "Чатбуки",
+  "mediaTrashNav": "Кошик медіа",
+  "chatSettingsNav": "Чат",
+  "quickIngestSettingsNav": "Швидке додавання",
+  "speechSettingsNav": "Мовлення",
+  "imageGenerationSettingsNav": "Генерація зображень",
+  "uiCustomizationNav": "Налаштування інтерфейсу",
+  "splashSettingsNav": "Екрани заставки",
+  "speechSettings": {
+    "title": "Налаштування мовлення",
+    "subtitle": "Керуйте стандартними параметрами перетворення мовлення в текст і тексту в мовлення для диктування та відтворення."
+  },
+  "uiCustomization": {
+    "title": "Налаштування інтерфейсу",
+    "subtitle": "Персоналізуйте навігаційні ярлики та стандартний макет.",
+    "shortcuts": {
+      "title": "Швидкі дії бічної панелі",
+      "description": "Виберіть до 10 елементів для іконок бічної панелі та списку швидких дій."
+    },
+    "headerShortcuts": {
+      "title": "Швидкі дії майданчика",
+      "description": "Виберіть, які швидкі дії відображати в панелі швидких дій заголовка."
+    }
+  },
+  "splashSettings": {
+    "title": "Екрани заставки",
+    "subtitle": "Налаштуйте картки та ефекти стартової заставки."
+  },
+  "imageGenerationSettings": {
+    "title": "Генерація зображень",
+    "subtitle": "Налаштуйте параметри генерації зображень за замовчуванням для кожного бекенда та виберіть стандарт для slash-команди."
+  },
+  "quickIngestSettings": {
+    "title": "Швидке додавання",
+    "subtitle": "Налаштуйте значення за замовчуванням, пресети та поведінку швидкого додавання."
+  },
+  "acpPlaygroundNav": "Пісочниця ACP",
+  "skillsNav": "Навички"
 }

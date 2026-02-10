@@ -137,6 +137,8 @@ export const EXTENDED_SPLASH_CARDS: SplashCard[] = [
 
 /** Canonical source cards + web-only extension cards. */
 export const ALL_SPLASH_CARDS: SplashCard[] = [...SOURCE_CANONICAL_SPLASH_CARDS, ...EXTENDED_SPLASH_CARDS];
+export const ALL_SPLASH_CARD_NAMES: string[] = ALL_SPLASH_CARDS.map((card) => card.name);
+export const DEFAULT_SPLASH_CARD_NAMES: string[] = SOURCE_CANONICAL_SPLASH_CARDS.map((card) => card.name);
 
 /**
  * Default splash pool is canonical source-fidelity cards.
@@ -144,8 +146,28 @@ export const ALL_SPLASH_CARDS: SplashCard[] = [...SOURCE_CANONICAL_SPLASH_CARDS,
  */
 export const SPLASH_CARDS: SplashCard[] = SOURCE_CANONICAL_SPLASH_CARDS;
 
-/** Pick a random card. */
-export function randomSplashCard(options?: { includeExtended?: boolean }): SplashCard {
+type RandomSplashCardOptions = {
+  includeExtended?: boolean;
+  enabledNames?: string[];
+};
+
+/** Resolve a splash card by name from the active pool. */
+export function getSplashCardByName(
+  name: string,
+  options?: { includeExtended?: boolean }
+): SplashCard | undefined {
   const pool = options?.includeExtended ? ALL_SPLASH_CARDS : SPLASH_CARDS;
-  return pool[Math.floor(Math.random() * pool.length)];
+  return pool.find((card) => card.name === name);
+}
+
+/** Pick a random card. */
+export function randomSplashCard(options?: RandomSplashCardOptions): SplashCard {
+  const pool = options?.includeExtended ? ALL_SPLASH_CARDS : SPLASH_CARDS;
+  const enabledNames = options?.enabledNames;
+  const filteredPool =
+    enabledNames && enabledNames.length > 0
+      ? pool.filter((card) => enabledNames.includes(card.name))
+      : pool;
+  const effectivePool = filteredPool.length > 0 ? filteredPool : pool;
+  return effectivePool[Math.floor(Math.random() * effectivePool.length)];
 }

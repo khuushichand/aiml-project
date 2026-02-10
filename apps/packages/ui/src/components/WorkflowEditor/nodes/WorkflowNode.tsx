@@ -61,7 +61,7 @@ const STATUS_COLORS: Record<StepExecutionStatus, string> = {
   cancelled: "text-text-muted"
 }
 
-// Category colors for node borders/backgrounds
+// theme-exempt: workflow category colors
 const CATEGORY_STYLES: Record<string, { border: string; bg: string; header: string }> = {
   ai: {
     border: "border-purple-500",

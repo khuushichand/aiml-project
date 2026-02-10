@@ -10,10 +10,33 @@
   "chatDictionariesNav": "ചാറ്റ് നിഘണ്ടു",
   "charactersNav": "ക്യാരക്ടേഴ്സ്",
   "mediaNav": "മീഡിയ",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian & നിരീക്ഷണം",
   "guardian": {
     "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "title": "Guardian & സ്വയംനിരീക്ഷണം",
+    "subtitle": "വ്യക്തിഗത ഉള്ളടക്ക നിരീക്ഷണ നിയമങ്ങൾ, Guardian മേൽനോട്ട ബന്ധങ്ങൾ, പ്രതിസന്ധി വിഭവങ്ങളിലേക്കുള്ള പ്രവേശനം എന്നിവ ക്രമീകരിക്കുക.",
+    "rules": {
+      "title": "നിരീക്ഷണ നിയമങ്ങൾ"
+    },
+    "alerts": {
+      "title": "അലർട്ടുകൾ"
+    },
+    "governance": {
+      "title": "ഭരണ നയങ്ങൾ",
+      "fields": {
+        "description": "വിവരണം"
+      }
+    },
+    "relationships": {
+      "title": "രക്ഷാകർതൃ ബന്ധങ്ങൾ"
+    },
+    "policies": {
+      "title": "മേൽനോട്ട നയങ്ങൾ"
+    },
+    "auditLog": {
+      "title": "ഓഡിറ്റ് ലോഗ്"
+    }
   },
   "chatAppearance": {
     "title": "ചാറ്റ് രൂപഭാവം",
@@ -46,6 +69,12 @@
       "sm": "ചെറുത്",
       "md": "ഇടത്തരം",
       "lg": "വലിയത്"
+    },
+    "backgroundImage": {
+      "label": "ചാറ്റ് പശ്ചാത്തല ചിത്രം",
+      "description": "/chat-ലിരിക്കുമ്പോൾ ചാറ്റ് സ്‌ക്രീനിന്റെ പിന്നിൽ ഇത് കാണിക്കും.",
+      "upload": "ചിത്രം അപ്‌ലോഡ് ചെയ്യുക",
+      "clear": "പശ്ചാത്തല ചിത്രം നീക്കുക"
     }
   },
   "generalSettings": {
@@ -143,6 +172,12 @@
         "confirmMessage": "ഇത് നിങ്ങളുടെ ഓൺബോർഡിംഗ് നില റീസെറ്റ് ചെയ്ത് നിങ്ങളെ സജ്ജീകരണ പ്രവാഹത്തിന്റെ തുടക്കത്തിലേക്ക് തിരികെ കൊണ്ടുപോകും.",
         "toast": "ഓൺബോർഡിംഗ് റീസെറ്റ് ചെയ്തു",
         "toastBody": "സർവർ URLയും API കീയുമെല്ലാം വീണ്ടും പരിശോധിക്കാനായി നിങ്ങളെ സ്വാഗത ഘട്ടത്തിലേക്ക് തിരികെ കൊണ്ടുപോകും."
+      },
+      "hideQuickChatHelper": {
+        "label": "ക്വിക് ചാറ്റ് ഹെൽപ്പർ ബട്ടൺ മറയ്ക്കുക"
+      },
+      "stickyChatInput": {
+        "label": "സ്ക്രോൾ ചെയ്യുമ്പോൾ ചാറ്റ് ഇൻപുട്ട് ദൃശ്യമാക്കി നിലനിർത്തുക"
       }
     },
     "sidepanelRag": {
@@ -245,10 +280,15 @@
         "label": "SSML (സ്പീച്ച് സിന്തസിസ് മാർക്കപ്പ് ലാംഗ്വേജ്) പ്രവർത്തനക്ഷമമാക്കുക"
       },
       "removeReasoningTagTTS": {
-        "label": "ടിടിഎസിൽ നിന്ന് റീസണിംഗ് ടാഗ് നീക്കം ചെയ്യുക"
+        "label": "ടിടിഎസിൽ നിന്ന് റീസണിംഗ് ടാഗ് നീക്കം ചെയ്യുക",
+        "description": "സംസാരിപ്പിക്കുന്നതിന് മുമ്പ് <think>...</think> റീസണിംഗ് ബ്ലോക്കുകൾ നീക്കുക. ഇതിലൂടെ ഓഡിയോ അന്തിമ ഉത്തരത്തിൽ കേന്ദ്രീകരിക്കും."
       },
       "responseSplitting": {
         "label": "പ്രതികരണം വിഭജിക്കൽ"
+      },
+      "playbackSpeed": {
+        "label": "പ്ലേബാക്ക് വേഗത",
+        "description": "ഓഡിയോ എത്ര വേഗത്തിൽ പ്ലേ ചെയ്യണമെന്ന് നിയന്ത്രിക്കുന്നു (ജനറേഷനെ ബാധിക്കില്ല)."
       }
     },
     "stt": {
@@ -371,6 +411,9 @@
       "example2": "ചാറ്റുകൾ താൽക്കാലികമാണോ, വലിയ പേസ്റ്റ് എങ്ങനെ കൈകാര്യം ചെയ്യണം, റീസണിംഗ് എങ്ങനെ കാണിക്കണം എന്നിവ നിയന്ത്രിക്കുക.",
       "primaryCta": "സെർവർ & ഓത് ക്രമീകരിക്കുക",
       "secondaryCta": "ഉപേക്ഷിക്കുക"
+    },
+    "chatbooks": {
+      "heading": "ചാറ്റ്ബുക്കുകൾ"
     }
   },
   "manageModels": {
@@ -522,7 +565,56 @@
     "copilotEmptyDescription": "കോപൈലറ്റ് പ്രോംപ്റ്റുകൾ നിങ്ങളുടെ tldw സെർവർ നൽകുന്ന മുൻകൂട്ടി നിർവ്വചിച്ച ടെംപ്ലേറ്റുകളാണ്.",
     "copilotEmptyExample1": "കോപൈലറ്റ് പ്രോംപ്റ്റുകൾ ലഭ്യമാകുമെന്ന് നിങ്ങൾ പ്രതീക്ഷിക്കുന്നുവെങ്കിൽ, സെർവർ പതിപ്പ് അല്ലെങ്കിൽ കോൺഫിഗറേഷൻ പരിശോധിക്കുക.",
     "copilotEmptyExample2": "സെർവർ അപ്ഡേറ്റ് ചെയ്ത ശേഷം, എക്സ്റ്റൻഷൻ റീലോഡ് ചെയ്ത് ഈ ടാബിലേക്ക് മടങ്ങുക.",
-    "copilotEmptyCta": "Diagnostics തുറക്കുക"
+    "copilotEmptyCta": "Diagnostics തുറക്കുക",
+    "studio": {
+      "projects": {
+        "title": "പ്രോജക്റ്റുകൾ",
+        "description": "വിവരണം"
+      },
+      "prompts": {
+        "title": "പ്രോംപ്റ്റുകൾ"
+      },
+      "testCases": {
+        "title": "ടെസ്റ്റ് കേസുകൾ",
+        "bulkPanel": {
+          "title": "ബൾക്ക് ഇംപോർട്ട്/എക്സ്പോർട്ട്"
+        },
+        "generateModal": {
+          "title": "ടെസ്റ്റ് കേസുകൾ സൃഷ്ടിക്കുക"
+        },
+        "runModal": {
+          "title": "ടെസ്റ്റ് കേസുകൾ പ്രവർത്തിപ്പിക്കുക"
+        }
+      },
+      "evaluations": {
+        "title": "മൂല്യനിർണയങ്ങൾ",
+        "wizard": {
+          "title": "മൂല്യനിർണയം സൃഷ്ടിക്കുക"
+        },
+        "detail": {
+          "title": "മൂല്യനിർണയ വിശദാംശങ്ങൾ"
+        }
+      },
+      "optimizations": {
+        "title": "ഓപ്റ്റിമൈസേഷനുകൾ",
+        "wizard": {
+          "title": "ഓപ്റ്റിമൈസേഷൻ ആരംഭിക്കുക"
+        },
+        "progress": {
+          "title": "ഓപ്റ്റിമൈസേഷൻ പുരോഗതി"
+        },
+        "compare": {
+          "title": "ഓപ്റ്റിമൈസേഷൻ തന്ത്രങ്ങൾ താരതമ്യം ചെയ്യുക",
+          "description": "വിവരണം"
+        }
+      },
+      "common": {
+        "description": "വിവരണം"
+      },
+      "queueHealth": {
+        "title": "ക്യൂ ആരോഗ്യനില"
+      }
+    }
   },
   "manageShare": {
     "title": "പങ്കിടുന്നത് കൈകാര്യം ചെയ്യുക",
@@ -759,6 +851,32 @@
         "notes": "കുറിപ്പുകളും പ്രോംപ്റ്റുകളും നിയന്ത്രിക്കൽ",
         "stt": "വായനയെ ടെക്സ്റ്റിലേക്ക് മാറ്റൽ"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "ഓതന്റിക്കേഷൻ മോഡ് മാറ്റണോ?"
+    },
+    "loginMethod": {
+      "label": "ലോഗിൻ രീതി"
+    },
+    "magicLink": {
+      "email": {
+        "label": "ഇമെയിൽ",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "മാജിക് ലിങ്ക് ടോക്കൺ",
+        "placeholder": "നിങ്ങളുടെ ഇമെയിലിലെ ടോക്കൺ പേസ്റ്റ് ചെയ്യുക"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "ഡീഫോൾട്ട് ഡെമോ API കീ ഉപയോഗത്തിലാണ്"
+    },
+    "billing": {
+      "title": "ബില്ലിംഗും ഉപയോഗവും",
+      "subtitle": "നിങ്ങളുടെ പ്ലാൻ, ബില്ലിംഗ് ചക്രം, ഉപയോഗപരിധികൾ എന്നിവ നിയന്ത്രിക്കുക.",
+      "invoices": {
+        "title": "ഇൻവോയ്സ് ചരിത്രം"
+      }
     }
   },
   "manageKnowledge": {
@@ -938,7 +1056,24 @@
       "mediaTitle": "മീഡിയയും നോട്ടുകളും പരിശോധിക്കുക",
       "mediaBody": "ഓപ്ഷൻസിലെ ‘Media’യും ‘Notes’ഉം സന്ദർശിച്ച് എന്തൊക്കെ സൂക്ഷിച്ചിട്ടുണ്ടെന്നും തിരയാനാവുന്നതെന്നും കാണുക."
     },
-    "headerShortcuts": "തലക്കെട്ടിൽ ദ്രുത ഷോർട്ട്‌കട്ടുകൾ കാണിക്കുക"
+    "headerShortcuts": "തലക്കെട്ടിൽ ദ്രുത ഷോർട്ട്‌കട്ടുകൾ കാണിക്കുക",
+    "loginMethod": {
+      "label": "ലോഗിൻ രീതി"
+    },
+    "magicLink": {
+      "email": {
+        "label": "ഇമെയിൽ",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "മാജിക് ലിങ്ക് ടോക്കൺ",
+        "placeholder": "നിങ്ങളുടെ ഇമെയിലിലെ ടോക്കൺ പേസ്റ്റ് ചെയ്യുക"
+      }
+    },
+    "defaults": {
+      "title": "നിങ്ങളുടെ ഡീഫോൾട്ടുകൾ സജ്ജമാക്കുക",
+      "subtitle": "പുതിയ ചാറ്റുകൾക്കായി ഡീഫോൾട്ട് പ്രൊവൈഡറും മോഡലും തിരഞ്ഞെടുക്കുക."
+    }
   },
   "manageCharacters": {
     "title": "കഥാപാത്രങ്ങൾ നിയന്ത്രിക്കുക",
@@ -1450,5 +1585,43 @@
       "methodOptionsLabel": "രീതിക്ക് പ്രത്യേകമായ ഓപ്ഷനുകൾ",
       "notesLabel": "കുറിപ്പുകൾ"
     }
-  }
+  },
+  "chatbooksNav": "ചാറ്റ്ബുക്കുകൾ",
+  "mediaTrashNav": "മീഡിയ ട്രാഷ്",
+  "chatSettingsNav": "ചാറ്റ്",
+  "quickIngestSettingsNav": "ദ്രുത ഇംപോർട്ട്",
+  "speechSettingsNav": "സംസാരം",
+  "imageGenerationSettingsNav": "ചിത്ര നിർമ്മാണം",
+  "uiCustomizationNav": "UI ഇഷ്ടാനുസൃതീകരണം",
+  "splashSettingsNav": "സ്പ്ലാഷ് സ്ക്രീനുകൾ",
+  "speechSettings": {
+    "title": "സംസാര ക്രമീകരണങ്ങൾ",
+    "subtitle": "ഡിക്റ്റേഷനും പ്ലേബാക്കിനുമായി Speech-to-Text, Text-to-Speech ഡീഫോൾട്ടുകൾ നിയന്ത്രിക്കുക."
+  },
+  "uiCustomization": {
+    "title": "UI ഇഷ്ടാനുസൃതീകരണം",
+    "subtitle": "നാവിഗേഷൻ ഷോർട്ട്കട്ടുകളും ഡീഫോൾട്ട് ലേയൗട്ടും വ്യക്തിഗതമാക്കുക.",
+    "shortcuts": {
+      "title": "സൈഡ്ബാർ ഷോർട്ട്കട്ടുകൾ",
+      "description": "സൈഡ്ബാർ ഐക്കണുകൾക്കും ഷോർട്ട്കട്ട് പട്ടികയ്ക്കുമായി പരമാവധി 10 ഇനങ്ങൾ തിരഞ്ഞെടുക്കുക."
+    },
+    "headerShortcuts": {
+      "title": "പ്ലേഗ്രൗണ്ട് ഷോർട്ട്കട്ടുകൾ",
+      "description": "ഹെഡർ ഷോർട്ട്കട്ട് പാനലിൽ കാണിക്കേണ്ട ഷോർട്ട്കട്ടുകൾ തിരഞ്ഞെടുക്കുക."
+    }
+  },
+  "splashSettings": {
+    "title": "സ്പ്ലാഷ് സ്ക്രീനുകൾ",
+    "subtitle": "സ്റ്റാർട്ടപ്പ് സ്പ്ലാഷ് കാർഡുകളും ഇഫക്റ്റുകളും ഇഷ്ടാനുസൃതമാക്കുക."
+  },
+  "imageGenerationSettings": {
+    "title": "ചിത്ര നിർമ്മാണം",
+    "subtitle": "ഓരോ ബാക്ക്എൻഡിനും ചിത്ര നിർമ്മാണ ഡീഫോൾട്ടുകൾ കോൺഫിഗർ ചെയ്ത് slash-command ഡീഫോൾട്ട് ക്രമീകരിക്കുക."
+  },
+  "quickIngestSettings": {
+    "title": "ദ്രുത ഇംപോർട്ട്",
+    "subtitle": "ദ്രുത ഇംപോർട്ടിന്റെ ഡീഫോൾട്ടുകൾ, പ്രീസെറ്റുകൾ, പെരുമാറ്റം കോൺഫിഗർ ചെയ്യുക."
+  },
+  "acpPlaygroundNav": "ACP പ്ലേഗ്രൗണ്ട്",
+  "skillsNav": "നൈപുണ്യങ്ങൾ"
 }

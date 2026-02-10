@@ -195,7 +195,7 @@ export const StudioTabContainer: React.FC = () => {
             <Badge
               count={status.processing}
               size="small"
-              style={{ backgroundColor: "#52c41a" }}
+              style={{ backgroundColor: "rgb(var(--color-success))" }}
             />
           )}
         </span>

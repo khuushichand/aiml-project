@@ -197,7 +197,7 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
               />
             )}
             {item.favorite && (
-              <Star className="h-4 w-4 flex-shrink-0 fill-yellow-400 text-yellow-400" />
+              <Star className="h-4 w-4 flex-shrink-0 fill-warn text-warn" />
             )}
             <h3 className="truncate text-base font-medium text-text">
               {item.title}
@@ -266,7 +266,7 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
                 size="small"
                 icon={
                   <Star
-                    className={`h-4 w-4 ${item.favorite ? "fill-yellow-400 text-yellow-400" : ""}`}
+                    className={`h-4 w-4 ${item.favorite ? "fill-warn text-warn" : ""}`}
                   />
                 }
                 onClick={handleToggleFavorite}

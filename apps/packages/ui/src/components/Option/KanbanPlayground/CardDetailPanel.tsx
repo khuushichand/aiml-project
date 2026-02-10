@@ -24,10 +24,10 @@ interface CardDetailPanelProps {
 }
 
 const PRIORITY_OPTIONS = [
-  { value: "low", label: "Low", color: "#3b82f6" },
-  { value: "medium", label: "Medium", color: "#eab308" },
-  { value: "high", label: "High", color: "#f97316" },
-  { value: "urgent", label: "Urgent", color: "#ef4444" }
+  { value: "low", label: "Low", color: "rgb(var(--color-primary))" },
+  { value: "medium", label: "Medium", color: "rgb(var(--color-warn))" },
+  { value: "high", label: "High", color: "rgb(var(--color-warn))" },
+  { value: "urgent", label: "Urgent", color: "rgb(var(--color-danger))" }
 ]
 
 export const CardDetailPanel = ({

@@ -2,7 +2,6 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 import { Popover } from "antd"
 import {
-  BookPlus,
   Globe,
   MicIcon,
   Search,
@@ -18,7 +17,6 @@ export type ComposerToolbarOverflowProps = {
   webSearch: boolean
   onToggleWebSearch: () => void
   hasWebSearch: boolean
-  onOpenPromptInsert: () => void
   onOpenModelSettings: () => void
   hasDictation: boolean
   speechAvailable: boolean
@@ -69,7 +67,6 @@ export const ComposerToolbarOverflow = React.memo(function ComposerToolbarOverfl
     webSearch,
     onToggleWebSearch,
     hasWebSearch,
-    onOpenPromptInsert,
     onOpenModelSettings,
     hasDictation,
     speechAvailable,
@@ -104,20 +101,12 @@ export const ComposerToolbarOverflow = React.memo(function ComposerToolbarOverfl
         <OverflowItem
           key="web"
           icon={<Globe className="w-3.5 h-3.5" />}
-          label={t("playground:actions.webSearchOff", "Web search") as string}
+          label={t("playground:tools.webSearch", "Web search") as string}
           onClick={onToggleWebSearch}
           active={webSearch}
         />
       )
     }
-    items.push(
-      <OverflowItem
-        key="insert"
-        icon={<BookPlus className="w-3.5 h-3.5" />}
-        label={t("option:promptInsert.useInChat", "Insert prompt") as string}
-        onClick={onOpenPromptInsert}
-      />
-    )
     if (hasDictation) {
       const isDictating = speechAvailable &&
         ((speechUsesServer && isServerDictating) ||
@@ -158,7 +147,7 @@ export const ComposerToolbarOverflow = React.memo(function ComposerToolbarOverfl
     return items
   }, [
     contextToolsOpen, onToggleKnowledgePanel, hasWebSearch, webSearch,
-    onToggleWebSearch, onOpenPromptInsert, hasDictation, speechAvailable,
+    onToggleWebSearch, hasDictation, speechAvailable,
     speechUsesServer, isServerDictating, isListening, voiceChatEnabled,
     onDictationToggle, onOpenModelSettings, isProMode, temporaryChat,
     isConnectionReady, onFocusConnectionCard, t

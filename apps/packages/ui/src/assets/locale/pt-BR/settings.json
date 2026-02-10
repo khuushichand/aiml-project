@@ -10,10 +10,33 @@
   "chatDictionariesNav": "Dicionários de chat",
   "charactersNav": "Personagens",
   "mediaNav": "Mídia",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian e monitoramento",
   "guardian": {
     "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "title": "Guardian e automonitoramento",
+    "subtitle": "Configure regras de monitoramento de conteúdo pessoal, relacionamentos de supervisão Guardian e acesso a recursos de crise.",
+    "rules": {
+      "title": "Regras de monitoramento"
+    },
+    "alerts": {
+      "title": "Alertas"
+    },
+    "governance": {
+      "title": "Políticas de governança",
+      "fields": {
+        "description": "Descrição"
+      }
+    },
+    "relationships": {
+      "title": "Relações de tutela"
+    },
+    "policies": {
+      "title": "Políticas supervisionadas"
+    },
+    "auditLog": {
+      "title": "Log de auditoria"
+    }
   },
   "chatAppearance": {
     "title": "Aparência do chat",
@@ -46,6 +69,12 @@
       "sm": "Pequeno",
       "md": "Médio",
       "lg": "Grande"
+    },
+    "backgroundImage": {
+      "label": "Imagem de fundo do chat",
+      "description": "Exibida atrás da tela de chat quando você estiver em /chat.",
+      "upload": "Enviar imagem",
+      "clear": "Remover imagem de fundo"
     }
   },
   "generalSettings": {
@@ -140,6 +169,12 @@
         "confirmMessage": "Isso irá redefinir o seu estado de onboarding e levá‑lo de volta ao fluxo de configuração.",
         "toast": "O onboarding foi redefinido",
         "toastBody": "Vamos levá‑lo de volta à etapa de boas‑vindas para que você possa revisar a URL do servidor e a chave de API."
+      },
+      "hideQuickChatHelper": {
+        "label": "Ocultar botão do Assistente de Chat Rápido"
+      },
+      "stickyChatInput": {
+        "label": "Manter a entrada do chat visível ao rolar"
       }
     },
     "sidepanelRag": {
@@ -242,10 +277,15 @@
         "label": "Ativar SSML (Linguagem de Marcação de Síntese de Fala)"
       },
       "removeReasoningTagTTS": {
-        "label": "Remover Tag de Raciocínio do TTS"
+        "label": "Remover Tag de Raciocínio do TTS",
+        "description": "Remove blocos de raciocínio <think>...</think> antes da fala. Mantém o áudio focado na resposta final."
       },
       "responseSplitting": {
         "label": "Divisão de resposta"
+      },
+      "playbackSpeed": {
+        "label": "Velocidade de reprodução",
+        "description": "Controla a velocidade de reprodução do áudio (não afeta a geração)."
       }
     },
     "stt": {
@@ -368,6 +408,9 @@
       "example2": "Controle se os chats são temporários, como colagens grandes são tratadas e como o raciocínio é exibido.",
       "primaryCta": "Configurar servidor e autenticação",
       "secondaryCta": "Dispensar"
+    },
+    "chatbooks": {
+      "heading": "Livros de chat"
     }
   },
   "manageModels": {
@@ -519,7 +562,56 @@
     "copilotEmptyDescription": "Prompts Copilot são modelos predefinidos fornecidos pelo seu servidor tldw.",
     "copilotEmptyExample1": "Verifique a versão ou configuração do servidor se espera prompts Copilot.",
     "copilotEmptyExample2": "Após atualizar o servidor, recarregue a extensão e volte a esta aba.",
-    "copilotEmptyCta": "Abrir diagnósticos"
+    "copilotEmptyCta": "Abrir diagnósticos",
+    "studio": {
+      "projects": {
+        "title": "Projetos",
+        "description": "Descrição"
+      },
+      "prompts": {
+        "title": "Instruções"
+      },
+      "testCases": {
+        "title": "Casos de teste",
+        "bulkPanel": {
+          "title": "Importação/exportação em massa"
+        },
+        "generateModal": {
+          "title": "Gerar casos de teste"
+        },
+        "runModal": {
+          "title": "Executar casos de teste"
+        }
+      },
+      "evaluations": {
+        "title": "Avaliações",
+        "wizard": {
+          "title": "Criar avaliação"
+        },
+        "detail": {
+          "title": "Detalhes da avaliação"
+        }
+      },
+      "optimizations": {
+        "title": "Otimizações",
+        "wizard": {
+          "title": "Iniciar otimização"
+        },
+        "progress": {
+          "title": "Progresso da otimização"
+        },
+        "compare": {
+          "title": "Comparar estratégias de otimização",
+          "description": "Descrição"
+        }
+      },
+      "common": {
+        "description": "Descrição"
+      },
+      "queueHealth": {
+        "title": "Saúde da fila"
+      }
+    }
   },
   "manageShare": {
     "title": "Gerenciar Compartilhamento",
@@ -756,6 +848,32 @@
         "notes": "Gerenciamento de notas e prompts",
         "stt": "Transcrição de voz para texto"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "Alterar modo de autenticação?"
+    },
+    "loginMethod": {
+      "label": "Método de login"
+    },
+    "magicLink": {
+      "email": {
+        "label": "E-mail",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Token de link mágico",
+        "placeholder": "Cole o token do seu e-mail"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "Chave de API de demonstração padrão em uso"
+    },
+    "billing": {
+      "title": "Cobrança e uso",
+      "subtitle": "Gerencie seu plano, ciclo de cobrança e limites de uso.",
+      "invoices": {
+        "title": "Histórico de faturas"
+      }
     }
   },
   "manageKnowledge": {
@@ -948,6 +1066,23 @@
       "forbidden": "Acesso negado. Verifique se sua conta de usuário tem permissão para fazer login.",
       "serverUnreachable": "Não foi possível alcançar seu servidor tldw. Verifique a URL do servidor ou abra Saúde e diagnósticos para mais detalhes.",
       "generic": "Falha no login. Abra Saúde e diagnósticos no cabeçalho para inspecionar os erros do servidor."
+    },
+    "loginMethod": {
+      "label": "Método de login"
+    },
+    "magicLink": {
+      "email": {
+        "label": "E-mail",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Token de link mágico",
+        "placeholder": "Cole o token do seu e-mail"
+      }
+    },
+    "defaults": {
+      "title": "Defina seus padrões",
+      "subtitle": "Escolha um provedor e modelo padrão para novos chats."
     }
   },
   "manageCharacters": {
@@ -1460,5 +1595,43 @@
       "methodOptionsLabel": "Opções específicas do método",
       "notesLabel": "Notas"
     }
-  }
+  },
+  "chatbooksNav": "Livros de chat",
+  "mediaTrashNav": "Lixeira de mídia",
+  "chatSettingsNav": "Bate-papo",
+  "quickIngestSettingsNav": "Ingestão rápida",
+  "speechSettingsNav": "Voz",
+  "imageGenerationSettingsNav": "Geração de imagens",
+  "uiCustomizationNav": "Personalização da interface",
+  "splashSettingsNav": "Telas de abertura",
+  "speechSettings": {
+    "title": "Configurações de voz",
+    "subtitle": "Gerencie os padrões de fala para texto e texto para fala para ditado e reprodução."
+  },
+  "uiCustomization": {
+    "title": "Personalização da interface",
+    "subtitle": "Personalize os atalhos de navegação e o layout padrão.",
+    "shortcuts": {
+      "title": "Atalhos da barra lateral",
+      "description": "Escolha até 10 itens para os ícones da barra lateral e a lista de atalhos."
+    },
+    "headerShortcuts": {
+      "title": "Atalhos do playground",
+      "description": "Escolha quais atalhos aparecem no painel de atalhos do cabeçalho."
+    }
+  },
+  "splashSettings": {
+    "title": "Telas de abertura",
+    "subtitle": "Personalize os cartões e efeitos da tela de abertura."
+  },
+  "imageGenerationSettings": {
+    "title": "Geração de imagens",
+    "subtitle": "Configure padrões de geração de imagens para cada backend e defina o padrão do seu comando slash."
+  },
+  "quickIngestSettings": {
+    "title": "Ingestão rápida",
+    "subtitle": "Configure padrões, predefinições e comportamento da Ingestão rápida."
+  },
+  "acpPlaygroundNav": "Laboratório ACP",
+  "skillsNav": "Habilidades"
 }

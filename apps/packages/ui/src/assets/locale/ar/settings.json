@@ -10,10 +10,33 @@
   "chatDictionariesNav": "قواميس الدردشة",
   "charactersNav": "الشخصيات",
   "mediaNav": "الوسائط",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian والمراقبة",
   "guardian": {
     "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "title": "Guardian والمراقبة الذاتية",
+    "subtitle": "اضبط قواعد مراقبة المحتوى الشخصي وعلاقات إشراف Guardian والوصول إلى موارد الأزمات.",
+    "rules": {
+      "title": "قواعد المراقبة"
+    },
+    "alerts": {
+      "title": "تنبيهات"
+    },
+    "governance": {
+      "title": "سياسات الحوكمة",
+      "fields": {
+        "description": "الوصف"
+      }
+    },
+    "relationships": {
+      "title": "علاقات الوصي"
+    },
+    "policies": {
+      "title": "سياسات خاضعة للإشراف"
+    },
+    "auditLog": {
+      "title": "سجل التدقيق"
+    }
   },
   "chatAppearance": {
     "title": "مظهر الدردشة",
@@ -46,6 +69,12 @@
       "sm": "صغير",
       "md": "متوسط",
       "lg": "كبير"
+    },
+    "backgroundImage": {
+      "label": "صورة خلفية الدردشة",
+      "description": "تظهر خلف شاشة الدردشة عندما تكون في /chat.",
+      "upload": "رفع صورة",
+      "clear": "إزالة صورة الخلفية"
     }
   },
   "generalSettings": {
@@ -140,6 +169,12 @@
         "confirmMessage": "سيؤدي هذا إلى إعادة تعيين حالة الإعداد وإعادتك إلى مسار الإعداد من جديد.",
         "toast": "تمت إعادة تعيين عملية الإعداد",
         "toastBody": "سنرجعك إلى خطوة الترحيب حتى تتمكن من مراجعة عنوان خادمك (URL) ومفتاح الـ API."
+      },
+      "hideQuickChatHelper": {
+        "label": "إخفاء زر مساعد الدردشة السريعة"
+      },
+      "stickyChatInput": {
+        "label": "إبقاء حقل إدخال الدردشة مرئيًا أثناء التمرير"
       }
     },
     "sidepanelRag": {
@@ -242,10 +277,15 @@
         "label": "تمكين SSML (لغة ترميز توليف الكلام)"
       },
       "removeReasoningTagTTS": {
-        "label": "إزالة علامة التفكير من تحويل النص إلى كلام"
+        "label": "إزالة علامة التفكير من تحويل النص إلى كلام",
+        "description": "أزل مقاطع التفكير <think>...</think> قبل النطق. يحافظ ذلك على تركيز الصوت على الإجابة النهائية."
       },
       "responseSplitting": {
         "label": "تقسيم الرد"
+      },
+      "playbackSpeed": {
+        "label": "سرعة التشغيل",
+        "description": "يتحكم في سرعة تشغيل الصوت (لا يؤثر على التوليد)."
       }
     },
     "stt": {
@@ -368,6 +408,9 @@
       "example2": "تحكم فيما إذا كانت الدردشات مؤقتة وكيفية التعامل مع اللصق الكبير وكيفية عرض التفكير.",
       "primaryCta": "تهيئة الخادم والمصادقة",
       "secondaryCta": "تجاهل"
+    },
+    "chatbooks": {
+      "heading": "دفاتر الدردشة"
     }
   },
   "manageModels": {
@@ -519,7 +562,56 @@
     "copilotEmptyDescription": "إرشادات Copilot هي قوالب محددة مسبقاً يوفرها خادم tldw.",
     "copilotEmptyExample1": "تحقق من إصدار الخادم أو إعداداته إذا كنت تتوقع توفر إرشادات Copilot.",
     "copilotEmptyExample2": "بعد تحديث الخادم، أعد تحميل الإضافة وارجع إلى هذا التبويب.",
-    "copilotEmptyCta": "فتح التشخيصات"
+    "copilotEmptyCta": "فتح التشخيصات",
+    "studio": {
+      "projects": {
+        "title": "المشاريع",
+        "description": "الوصف"
+      },
+      "prompts": {
+        "title": "المطالبات"
+      },
+      "testCases": {
+        "title": "حالات الاختبار",
+        "bulkPanel": {
+          "title": "استيراد/تصدير مجمّع"
+        },
+        "generateModal": {
+          "title": "إنشاء حالات اختبار"
+        },
+        "runModal": {
+          "title": "تشغيل حالات الاختبار"
+        }
+      },
+      "evaluations": {
+        "title": "التقييمات",
+        "wizard": {
+          "title": "إنشاء تقييم"
+        },
+        "detail": {
+          "title": "تفاصيل التقييم"
+        }
+      },
+      "optimizations": {
+        "title": "عمليات التحسين",
+        "wizard": {
+          "title": "بدء التحسين"
+        },
+        "progress": {
+          "title": "تقدم التحسين"
+        },
+        "compare": {
+          "title": "مقارنة استراتيجيات التحسين",
+          "description": "الوصف"
+        }
+      },
+      "common": {
+        "description": "الوصف"
+      },
+      "queueHealth": {
+        "title": "صحة قائمة الانتظار"
+      }
+    }
   },
   "manageShare": {
     "title": "إدارة المشاركة",
@@ -756,6 +848,32 @@
         "notes": "إدارة الملاحظات والمحفزات",
         "stt": "تحويل الكلام إلى نص"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "تغيير وضع المصادقة؟"
+    },
+    "loginMethod": {
+      "label": "طريقة تسجيل الدخول"
+    },
+    "magicLink": {
+      "email": {
+        "label": "البريد الإلكتروني",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "رمز رابط سحري",
+        "placeholder": "الصق الرمز من بريدك الإلكتروني"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "يتم استخدام مفتاح API التجريبي الافتراضي"
+    },
+    "billing": {
+      "title": "الفوترة والاستخدام",
+      "subtitle": "أدر خطتك ودورة الفوترة وحدود الاستخدام.",
+      "invoices": {
+        "title": "سجل الفواتير"
+      }
     }
   },
   "manageKnowledge": {
@@ -935,7 +1053,24 @@
       "mediaTitle": "استكشف الوسائط والملاحظات",
       "mediaBody": "انتقل إلى «الوسائط» و«الملاحظات» في صفحة الخيارات لمعرفة ما هو مخزَّن وقابل للبحث."
     },
-    "headerShortcuts": "إظهار الاختصارات السريعة في الشريط العلوي"
+    "headerShortcuts": "إظهار الاختصارات السريعة في الشريط العلوي",
+    "loginMethod": {
+      "label": "طريقة تسجيل الدخول"
+    },
+    "magicLink": {
+      "email": {
+        "label": "البريد الإلكتروني",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "رمز رابط سحري",
+        "placeholder": "الصق الرمز من بريدك الإلكتروني"
+      }
+    },
+    "defaults": {
+      "title": "اضبط إعداداتك الافتراضية",
+      "subtitle": "اختر موفرًا ونموذجًا افتراضيين للمحادثات الجديدة."
+    }
   },
   "manageCharacters": {
     "title": "إدارة الشخصيات",
@@ -1447,5 +1582,43 @@
       "methodOptionsLabel": "خيارات خاصة بالطريقة",
       "notesLabel": "ملاحظات"
     }
-  }
+  },
+  "chatbooksNav": "دفاتر الدردشة",
+  "mediaTrashNav": "سلة وسائط",
+  "chatSettingsNav": "الدردشة",
+  "quickIngestSettingsNav": "الإدخال السريع",
+  "speechSettingsNav": "الكلام",
+  "imageGenerationSettingsNav": "توليد الصور",
+  "uiCustomizationNav": "تخصيص الواجهة",
+  "splashSettingsNav": "شاشات البداية",
+  "speechSettings": {
+    "title": "إعدادات الكلام",
+    "subtitle": "أدر الإعدادات الافتراضية لتحويل الكلام إلى نص وتحويل النص إلى كلام للإملاء والتشغيل."
+  },
+  "uiCustomization": {
+    "title": "تخصيص الواجهة",
+    "subtitle": "خصص اختصارات التنقل والتخطيط الافتراضي.",
+    "shortcuts": {
+      "title": "اختصارات الشريط الجانبي",
+      "description": "اختر حتى 10 عناصر لأيقونات الشريط الجانبي وقائمة الاختصارات."
+    },
+    "headerShortcuts": {
+      "title": "اختصارات ساحة التجارب",
+      "description": "اختر الاختصارات التي تظهر في لوحة اختصارات الترويسة."
+    }
+  },
+  "splashSettings": {
+    "title": "شاشات البداية",
+    "subtitle": "خصص بطاقات وتأثيرات شاشة البداية."
+  },
+  "imageGenerationSettings": {
+    "title": "توليد الصور",
+    "subtitle": "اضبط القيم الافتراضية لتوليد الصور لكل خلفية وحدد الافتراضي لأمر الشّرطة المائلة."
+  },
+  "quickIngestSettings": {
+    "title": "الإدخال السريع",
+    "subtitle": "اضبط القيم الافتراضية والإعدادات المسبقة وسلوك الإدخال السريع."
+  },
+  "acpPlaygroundNav": "ساحة ACP",
+  "skillsNav": "المهارات"
 }

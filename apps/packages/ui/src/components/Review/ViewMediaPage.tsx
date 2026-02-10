@@ -2001,7 +2001,7 @@ const MediaPageContent: React.FC = () => {
             }}
           />
 
-          {/* Results */}
+          {/* Results + pagination flow */}
           <div className="flex-1 overflow-y-auto min-h-0" style={{ minHeight: '325px' }}>
             <ResultsList
               results={displayResults}
@@ -2028,37 +2028,35 @@ const MediaPageContent: React.FC = () => {
               favorites={favoritesSet}
               onToggleFavorite={toggleFavorite}
             />
-          </div>
-
-          {/* Pagination - Sticky at bottom */}
-          <div className="flex-shrink-0 bg-surface border-t border-border">
-            <Pagination
-              currentPage={page}
-              totalPages={totalPages}
-              onPageChange={setPage}
-              totalItems={
-                kinds.media && kinds.notes
-                  ? combinedTotal
-                  : kinds.notes
-                    ? notesTotal
-                    : mediaTotal
-              }
-              itemsPerPage={pageSize}
-              currentItemsCount={results.length}
-            />
-            {/* Keyboard shortcuts hint */}
-            <div className="px-4 py-1.5 border-t border-border flex items-center justify-center">
-              <button
-                type="button"
-                onClick={() => setShortcutsOverlayOpen(true)}
-                className="inline-flex items-center gap-1.5 text-xs text-text-muted hover:text-text transition-colors"
-                title={t('review:shortcuts.pressForHelp', { defaultValue: 'Press ? for keyboard shortcuts' })}
-              >
-                <kbd className="inline-flex items-center justify-center min-w-[18px] h-5 px-1 text-[10px] font-mono bg-surface2 border border-border rounded text-text-muted">
-                  ?
-                </kbd>
-                <span>{t('review:shortcuts.forKeyboardShortcuts', { defaultValue: 'for shortcuts' })}</span>
-              </button>
+            <div className="bg-surface border-t border-border">
+              <Pagination
+                currentPage={page}
+                totalPages={totalPages}
+                onPageChange={setPage}
+                totalItems={
+                  kinds.media && kinds.notes
+                    ? combinedTotal
+                    : kinds.notes
+                      ? notesTotal
+                      : mediaTotal
+                }
+                itemsPerPage={pageSize}
+                currentItemsCount={results.length}
+              />
+              {/* Keyboard shortcuts hint */}
+              <div className="px-4 py-1.5 border-t border-border flex items-center justify-center">
+                <button
+                  type="button"
+                  onClick={() => setShortcutsOverlayOpen(true)}
+                  className="inline-flex items-center gap-1.5 text-xs text-text-muted hover:text-text transition-colors"
+                  title={t('review:shortcuts.pressForHelp', { defaultValue: 'Press ? for keyboard shortcuts' })}
+                >
+                  <kbd className="inline-flex items-center justify-center min-w-[18px] h-5 px-1 text-[10px] font-mono bg-surface2 border border-border rounded text-text-muted">
+                    ?
+                  </kbd>
+                  <span>{t('review:shortcuts.forKeyboardShortcuts', { defaultValue: 'for shortcuts' })}</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

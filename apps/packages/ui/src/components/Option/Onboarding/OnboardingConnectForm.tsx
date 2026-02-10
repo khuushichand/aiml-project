@@ -25,6 +25,7 @@ import { DOCUMENTATION_URL } from "@/config/constants"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { tldwAuth } from "@/services/tldw/TldwAuth"
 import { mapMultiUserLoginErrorMessage } from "@/services/auth-errors"
+import { emitSplashAfterSingleUserAuthSuccess } from "@/services/splash-auth"
 import {
   getTldwServerURL,
   DEFAULT_TLDW_API_KEY,
@@ -559,6 +560,8 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
       try {
         await actions.testConnectionFromOnboarding()
+        const latestConnection = useConnectionStore.getState().state
+        emitSplashAfterSingleUserAuthSuccess(authMode, latestConnection.isConnected)
       } catch (error) {
         // If full connection test fails, reflect auth error if we're still in that phase
         dispatchUi({

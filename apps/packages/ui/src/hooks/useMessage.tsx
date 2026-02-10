@@ -17,6 +17,7 @@ import { useTranslation } from "react-i18next"
 import { usePageAssist } from "@/context"
 import { formatDocs } from "@/utils/format-docs"
 import { buildAssistantErrorContent } from "@/utils/chat-error-message"
+import { detectCharacterMood } from "@/utils/character-mood"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useStoreChatModelSettings } from "@/store/model"
 import { getAllDefaultModelSettings } from "@/services/model-settings"
@@ -999,6 +1000,7 @@ export const useMessage = () => {
     let contentToSave = ""
     const resolvedAssistantMessageId = generateID()
     const resolvedUserMessageId = !isRegenerate ? generateID() : undefined
+    let persistedUserServerMessageId: string | undefined
     let generateMessageId = resolvedAssistantMessageId
     const fallbackParentMessageId = getLastUserMessageId(messages)
     const resolvedAssistantParentMessageId = isRegenerate
@@ -1161,6 +1163,8 @@ export const useMessage = () => {
           chatId,
           payload
         )) as TldwChatMessage | null
+        persistedUserServerMessageId =
+          createdUser?.id != null ? String(createdUser.id) : undefined
         setMessages((prev) => {
           const updated = [...prev] as ServerBackedMessage[]
           const serverMessageId =
@@ -1264,23 +1268,114 @@ export const useMessage = () => {
 
       // Persist assistant reply on server
       try {
-        const createdAsst = (await tldwClient.addChatMessage(chatId, {
-          role: "assistant",
-          content: fullText
-        })) as { id?: string | number; version?: number } | null
+        const fallbackSpeakerId = Number.parseInt(
+          String(selectedCharacter.id),
+          10
+        )
+        const speakerCharacterId =
+          Number.isFinite(fallbackSpeakerId) && fallbackSpeakerId > 0
+            ? fallbackSpeakerId
+            : undefined
+        const detectedMood = detectCharacterMood({
+          assistantText: fullText,
+          userText: message
+        })
+        const resolvedMoodLabel = detectedMood.label
+        const resolvedMoodConfidence =
+          typeof detectedMood.confidence === "number" &&
+          Number.isFinite(detectedMood.confidence)
+            ? detectedMood.confidence
+            : undefined
+        const resolvedMoodTopic =
+          typeof detectedMood.topic === "string" && detectedMood.topic.trim()
+            ? detectedMood.topic.trim()
+            : undefined
+        const persistPayload: Record<string, unknown> = {
+          assistant_content: fullText,
+          speaker_character_id: speakerCharacterId,
+          speaker_character_name: characterName
+        }
+        if (resolvedMoodLabel) {
+          persistPayload.mood_label = resolvedMoodLabel
+        }
+        if (typeof resolvedMoodConfidence === "number") {
+          persistPayload.mood_confidence = resolvedMoodConfidence
+        }
+        if (resolvedMoodTopic) {
+          persistPayload.mood_topic = resolvedMoodTopic
+        }
+        if (persistedUserServerMessageId) {
+          persistPayload.user_message_id = persistedUserServerMessageId
+        }
+        const persisted = (await tldwClient.persistCharacterCompletion(
+          chatId,
+          persistPayload
+        )) as
+          | {
+              assistant_message_id?: string | number
+              message_id?: string | number
+              id?: string | number
+              version?: number
+            }
+          | null
+        const createdAsstServerId =
+          persisted?.assistant_message_id ??
+          persisted?.message_id ??
+          persisted?.id
+        const createdAsstVersion = persisted?.version
+        const metadataExtra = {
+          speaker_character_id: speakerCharacterId ?? null,
+          speaker_character_name: characterName,
+          mood_label: resolvedMoodLabel,
+          mood_confidence: resolvedMoodConfidence ?? null,
+          mood_topic: resolvedMoodTopic ?? null
+        }
         setMessages((prev) =>
           ((prev as ServerBackedMessage[]).map((m) => {
             if (m.id !== generateMessageId) return m
             const serverMessageId =
-              createdAsst?.id != null ? String(createdAsst.id) : undefined
+              createdAsstServerId != null
+                ? String(createdAsstServerId)
+                : undefined
             return updateActiveVariant(m, {
               serverMessageId,
-              serverMessageVersion: createdAsst?.version
+              serverMessageVersion: createdAsstVersion,
+              metadataExtra,
+              speakerCharacterId: speakerCharacterId ?? null,
+              speakerCharacterName: characterName,
+              moodLabel: resolvedMoodLabel,
+              moodConfidence: resolvedMoodConfidence ?? null,
+              moodTopic: resolvedMoodTopic ?? null
             })
           }) as Message[])
         )
       } catch (e) {
-        console.error("Failed to persist assistant message to server:", e)
+        console.error(
+          "Failed to persist assistant message via completions/persist:",
+          e
+        )
+        try {
+          const createdAsst = (await tldwClient.addChatMessage(chatId, {
+            role: "assistant",
+            content: fullText
+          })) as { id?: string | number; version?: number } | null
+          setMessages((prev) =>
+            ((prev as ServerBackedMessage[]).map((m) => {
+              if (m.id !== generateMessageId) return m
+              const serverMessageId =
+                createdAsst?.id != null ? String(createdAsst.id) : undefined
+              return updateActiveVariant(m, {
+                serverMessageId,
+                serverMessageVersion: createdAsst?.version
+              })
+            }) as Message[])
+          )
+        } catch (fallbackError) {
+          console.error(
+            "Failed fallback assistant persistence with addChatMessage:",
+            fallbackError
+          )
+        }
       }
 
       // Update local history as well (keeps local features consistent)

@@ -10,10 +10,33 @@
   "chatDictionariesNav": "Dizionari chat",
   "charactersNav": "Personaggi",
   "mediaNav": "Contenuti",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian e monitoraggio",
   "guardian": {
     "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "title": "Guardian e automonitoraggio",
+    "subtitle": "Configura regole di monitoraggio dei contenuti personali, relazioni di supervisione Guardian e accesso alle risorse di crisi.",
+    "rules": {
+      "title": "Regole di monitoraggio"
+    },
+    "alerts": {
+      "title": "Avvisi"
+    },
+    "governance": {
+      "title": "Politiche di governance",
+      "fields": {
+        "description": "Descrizione"
+      }
+    },
+    "relationships": {
+      "title": "Relazioni tutore"
+    },
+    "policies": {
+      "title": "Politiche supervisionate"
+    },
+    "auditLog": {
+      "title": "Registro di controllo"
+    }
   },
   "chatAppearance": {
     "title": "Aspetto della chat",
@@ -46,6 +69,12 @@
       "sm": "Piccolo",
       "md": "Medio",
       "lg": "Grande"
+    },
+    "backgroundImage": {
+      "label": "Immagine di sfondo della chat",
+      "description": "Viene mostrata dietro la schermata chat quando sei su /chat.",
+      "upload": "Carica immagine",
+      "clear": "Rimuovi immagine di sfondo"
     }
   },
   "generalSettings": {
@@ -140,6 +169,12 @@
         "confirmMessage": "Questo reimposterà lo stato di onboarding e ti riporterà al flusso di configurazione.",
         "toast": "Onboarding è stato reimpostato",
         "toastBody": "Ti riporteremo al passaggio di benvenuto così puoi rivedere l'URL del server e la chiave API."
+      },
+      "hideQuickChatHelper": {
+        "label": "Nascondi il pulsante Assistente Chat Rapida"
+      },
+      "stickyChatInput": {
+        "label": "Mantieni visibile l’input della chat durante lo scorrimento"
       }
     },
     "sidepanelRag": {
@@ -242,10 +277,15 @@
         "label": "Abilita SSML (Speech Synthesis Markup Language)"
       },
       "removeReasoningTagTTS": {
-        "label": "Rimuovi Tag di Ragionamento dal TTS"
+        "label": "Rimuovi Tag di Ragionamento dal TTS",
+        "description": "Rimuove i blocchi di ragionamento <think>...</think> prima della riproduzione vocale. Mantiene l’audio focalizzato sulla risposta finale."
       },
       "responseSplitting": {
         "label": "Suddivisione della risposta"
+      },
+      "playbackSpeed": {
+        "label": "Velocità di riproduzione",
+        "description": "Controlla la velocità di riproduzione audio (non influisce sulla generazione)."
       }
     },
     "stt": {
@@ -368,6 +408,9 @@
       "example2": "Controlla se le chat sono temporanee, come vengono gestiti gli incolli grandi e come viene mostrato il ragionamento.",
       "primaryCta": "Configura server e autenticazione",
       "secondaryCta": "Chiudi"
+    },
+    "chatbooks": {
+      "heading": "Quaderni chat"
     }
   },
   "manageModels": {
@@ -519,7 +562,56 @@
     "copilotEmptyDescription": "I prompt Copilot sono modelli predefiniti forniti dal server tldw.",
     "copilotEmptyExample1": "Controlla versione o configurazione del server se ti aspetti prompt Copilot.",
     "copilotEmptyExample2": "Dopo l’aggiornamento del server, ricarica l’estensione e torna a questa scheda.",
-    "copilotEmptyCta": "Apri diagnostica"
+    "copilotEmptyCta": "Apri diagnostica",
+    "studio": {
+      "projects": {
+        "title": "Progetti",
+        "description": "Descrizione"
+      },
+      "prompts": {
+        "title": "Istruzioni"
+      },
+      "testCases": {
+        "title": "Casi di test",
+        "bulkPanel": {
+          "title": "Importazione/esportazione massiva"
+        },
+        "generateModal": {
+          "title": "Genera casi di test"
+        },
+        "runModal": {
+          "title": "Esegui casi di test"
+        }
+      },
+      "evaluations": {
+        "title": "Valutazioni",
+        "wizard": {
+          "title": "Crea valutazione"
+        },
+        "detail": {
+          "title": "Dettagli valutazione"
+        }
+      },
+      "optimizations": {
+        "title": "Ottimizzazioni",
+        "wizard": {
+          "title": "Avvia ottimizzazione"
+        },
+        "progress": {
+          "title": "Avanzamento ottimizzazione"
+        },
+        "compare": {
+          "title": "Confronta strategie di ottimizzazione",
+          "description": "Descrizione"
+        }
+      },
+      "common": {
+        "description": "Descrizione"
+      },
+      "queueHealth": {
+        "title": "Stato coda"
+      }
+    }
   },
   "manageShare": {
     "title": "Gestione Condivisioni",
@@ -756,6 +848,32 @@
         "notes": "Gestione di note e prompt",
         "stt": "Trascrizione da voce a testo"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "Cambiare modalità di autenticazione?"
+    },
+    "loginMethod": {
+      "label": "Metodo di accesso"
+    },
+    "magicLink": {
+      "email": {
+        "label": "Posta elettronica",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Token link magico",
+        "placeholder": "Incolla il token ricevuto via email"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "È in uso la chiave API demo predefinita"
+    },
+    "billing": {
+      "title": "Fatturazione e utilizzo",
+      "subtitle": "Gestisci piano, ciclo di fatturazione e limiti di utilizzo.",
+      "invoices": {
+        "title": "Cronologia fatture"
+      }
     }
   },
   "manageKnowledge": {
@@ -946,6 +1064,23 @@
       "forbidden": "Accesso negato. Verifica che il tuo account utente abbia l’autorizzazione per accedere.",
       "serverUnreachable": "Impossibile raggiungere il server tldw. Controlla l’URL del server oppure apri \"Health & diagnostics\" per maggiori dettagli.",
       "generic": "Accesso non riuscito. Apri \"Health & diagnostics\" dall’intestazione per esaminare gli errori del server."
+    },
+    "loginMethod": {
+      "label": "Metodo di accesso"
+    },
+    "magicLink": {
+      "email": {
+        "label": "Posta elettronica",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Token link magico",
+        "placeholder": "Incolla il token ricevuto via email"
+      }
+    },
+    "defaults": {
+      "title": "Imposta i tuoi valori predefiniti",
+      "subtitle": "Scegli provider e modello predefiniti per le nuove chat."
     }
   },
   "manageCharacters": {
@@ -1458,5 +1593,43 @@
       "methodOptionsLabel": "Opzioni specifiche del metodo",
       "notesLabel": "Note"
     }
-  }
+  },
+  "chatbooksNav": "Quaderni chat",
+  "mediaTrashNav": "Cestino media",
+  "chatSettingsNav": "Conversazione",
+  "quickIngestSettingsNav": "Importazione rapida",
+  "speechSettingsNav": "Voce",
+  "imageGenerationSettingsNav": "Generazione immagini",
+  "uiCustomizationNav": "Personalizzazione interfaccia",
+  "splashSettingsNav": "Schermate iniziali",
+  "speechSettings": {
+    "title": "Impostazioni vocali",
+    "subtitle": "Gestisci i valori predefiniti di sintesi e trascrizione vocale per dettatura e riproduzione."
+  },
+  "uiCustomization": {
+    "title": "Personalizzazione interfaccia",
+    "subtitle": "Personalizza le scorciatoie di navigazione e il layout predefinito.",
+    "shortcuts": {
+      "title": "Scorciatoie barra laterale",
+      "description": "Scegli fino a 10 elementi per le icone della barra laterale e l’elenco scorciatoie."
+    },
+    "headerShortcuts": {
+      "title": "Scorciatoie playground",
+      "description": "Scegli quali scorciatoie compaiono nel pannello scorciatoie dell’intestazione."
+    }
+  },
+  "splashSettings": {
+    "title": "Schermate iniziali",
+    "subtitle": "Personalizza le schede splash e gli effetti di avvio."
+  },
+  "imageGenerationSettings": {
+    "title": "Generazione immagini",
+    "subtitle": "Configura i valori predefiniti di generazione immagini per ciascun backend e imposta il predefinito del comando slash."
+  },
+  "quickIngestSettings": {
+    "title": "Importazione rapida",
+    "subtitle": "Configura valori predefiniti, preset e comportamento di Importazione rapida."
+  },
+  "acpPlaygroundNav": "Area ACP",
+  "skillsNav": "Competenze"
 }

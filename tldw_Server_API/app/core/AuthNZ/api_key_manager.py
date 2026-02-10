@@ -7,7 +7,9 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import os
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional, Union
@@ -39,6 +41,27 @@ from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
+
+
+_DEFAULT_API_KEY_USAGE_TOUCH_INTERVAL_SECONDS = 1.0
+_MAX_API_KEY_USAGE_TOUCH_CACHE_SIZE = 4096
+
+
+def _read_usage_touch_interval_seconds() -> float:
+    """Read per-process API key usage write throttle interval."""
+    raw = os.getenv("API_KEY_USAGE_TOUCH_INTERVAL_SECONDS", "").strip()
+    if not raw:
+        return _DEFAULT_API_KEY_USAGE_TOUCH_INTERVAL_SECONDS
+    try:
+        parsed = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid API_KEY_USAGE_TOUCH_INTERVAL_SECONDS={!r}; using default={}",
+            raw,
+            _DEFAULT_API_KEY_USAGE_TOUCH_INTERVAL_SECONDS,
+        )
+        return _DEFAULT_API_KEY_USAGE_TOUCH_INTERVAL_SECONDS
+    return max(parsed, 0.0)
 
 
 def _compute_hmac_fingerprint(settings: Settings) -> str:
@@ -237,6 +260,40 @@ class APIKeyManager:
         self.key_prefix = "tldw_"  # Prefix for identifying our API keys
         # Fingerprint the HMAC key material to detect settings changes (e.g., JWT_SECRET_KEY)
         self._hmac_key_fingerprint = _compute_hmac_fingerprint(self.settings)
+        self._usage_touch_interval_seconds = _read_usage_touch_interval_seconds()
+        self._usage_touch_cache: dict[int, float] = {}
+        self._usage_touch_cache_guard = threading.Lock()
+
+    def _should_skip_usage_touch(self, key_id: int) -> bool:
+        """Return True when usage write for this key should be throttled."""
+        interval_seconds = self._usage_touch_interval_seconds
+        if interval_seconds <= 0:
+            return False
+
+        now_mono = time.monotonic()
+        with self._usage_touch_cache_guard:
+            last_touch = self._usage_touch_cache.get(key_id)
+            if last_touch is not None and (now_mono - last_touch) < interval_seconds:
+                return True
+
+            self._usage_touch_cache[key_id] = now_mono
+            if len(self._usage_touch_cache) > _MAX_API_KEY_USAGE_TOUCH_CACHE_SIZE:
+                cutoff = now_mono - interval_seconds
+                stale_keys = [
+                    candidate_key
+                    for candidate_key, touched_at in self._usage_touch_cache.items()
+                    if touched_at < cutoff
+                ]
+                for stale_key in stale_keys:
+                    self._usage_touch_cache.pop(stale_key, None)
+        return False
+
+    def _clear_usage_touch(self, key_id: int) -> None:
+        """Clear a key's touch cache entry so the next request can retry a usage write."""
+        if self._usage_touch_interval_seconds <= 0:
+            return
+        with self._usage_touch_cache_guard:
+            self._usage_touch_cache.pop(key_id, None)
 
     @property
     def db_pool(self) -> Optional[DatabasePool]:
@@ -1062,10 +1119,13 @@ class APIKeyManager:
 
     async def _update_usage(self, key_id: int, ip_address: Optional[str] = None) -> None:
         """Update usage statistics for a key"""
+        if self._should_skip_usage_touch(key_id):
+            return
         try:
             repo = self._get_repo()
             await repo.increment_usage(key_id=key_id, ip_address=ip_address)
         except Exception:  # noqa: BLE001 - usage updates must not break requests
+            self._clear_usage_touch(key_id)
             logger.opt(exception=True).warning(
                 "Failed to update API key usage (key_id={})",
                 key_id,

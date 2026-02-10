@@ -57,11 +57,24 @@ export function useModelSelector({
   }, [composerModels, selectedModel])
 
   const modelContextLength = React.useMemo(() => {
-    const value =
-      selectedModelMeta?.context_length ??
-      selectedModelMeta?.contextLength ??
-      selectedModelMeta?.details?.context_length
-    return typeof value === "number" && Number.isFinite(value) ? value : null
+    const candidates = [
+      selectedModelMeta?.context_length,
+      selectedModelMeta?.contextLength,
+      (selectedModelMeta as any)?.context_window,
+      selectedModelMeta?.details?.context_length,
+      (selectedModelMeta as any)?.details?.contextLength,
+      (selectedModelMeta as any)?.details?.context_window,
+      (selectedModelMeta as any)?.max_input_tokens,
+      (selectedModelMeta as any)?.details?.max_input_tokens,
+      (selectedModelMeta as any)?.max_context_tokens,
+      (selectedModelMeta as any)?.details?.max_context_tokens
+    ]
+    for (const candidate of candidates) {
+      if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+        return candidate
+      }
+    }
+    return null
   }, [selectedModelMeta])
 
   const modelCapabilities = React.useMemo(() => {
@@ -72,16 +85,25 @@ export function useModelSelector({
   }, [selectedModelMeta])
 
   const numCtx = useStoreChatModelSettings((state) => state.numCtx)
+  const requestedNumCtx = React.useMemo(() => {
+    if (typeof numCtx !== "number" || !Number.isFinite(numCtx) || numCtx <= 0) {
+      return null
+    }
+    return numCtx
+  }, [numCtx])
 
   const resolvedMaxContext = React.useMemo(() => {
-    if (typeof numCtx === "number" && Number.isFinite(numCtx) && numCtx > 0) {
-      return numCtx
+    if (typeof requestedNumCtx === "number") {
+      if (typeof modelContextLength === "number" && modelContextLength > 0) {
+        return Math.min(requestedNumCtx, modelContextLength)
+      }
+      return requestedNumCtx
     }
     if (typeof modelContextLength === "number" && modelContextLength > 0) {
       return modelContextLength
     }
     return null
-  }, [modelContextLength, numCtx])
+  }, [modelContextLength, requestedNumCtx])
 
   const resolvedProviderKey = React.useMemo(() => {
     const fromOverride = typeof apiProvider === "string" ? apiProvider.trim() : ""

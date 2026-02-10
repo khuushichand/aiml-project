@@ -43,6 +43,12 @@ import {
   buildSkillPrompt,
   createSkillComment
 } from "@/utils/disco-skill-check"
+import {
+  detectCharacterMood,
+  normalizeCharacterMoodLabel,
+  resolveCharacterBaseAvatarUrl,
+  resolveCharacterMoodImageUrl
+} from "@/utils/character-mood"
 import { useStoreMessage } from "@/store"
 import { updateMessageDiscoSkillComment } from "@/db/dexie/helpers"
 import type { MessageSteeringMode } from "@/types/message-steering"
@@ -146,6 +152,11 @@ type Props = {
   pinned?: boolean
   characterIdentity?: Character | null
   characterIdentityEnabled?: boolean
+  speakerCharacterId?: number | null
+  speakerCharacterName?: string
+  moodLabel?: string | null
+  moodConfidence?: number | null
+  moodTopic?: string | null
   messageSteeringMode?: MessageSteeringMode
   onMessageSteeringModeChange?: (mode: MessageSteeringMode) => void
   messageSteeringForceNarrate?: boolean
@@ -171,6 +182,8 @@ export const PlaygroundMessage = (props: Props) => {
   const [userTextSize] = useStorage("chatUserTextSize", "md")
   const [assistantTextSize] = useStorage("chatAssistantTextSize", "md")
   const [userDisplayName] = useStorage("chatUserDisplayName", "")
+  const [showCharacterPortraits] = useStorage("chatShowCharacterPortraits", true)
+  const [userPersonaImage] = useStorage("chatUserPersonaImage", "")
   const [ttsProvider] = useStorage("ttsProvider", "browser")
   const { t } = useTranslation(["common", "playground"])
   const { capabilities } = useServerCapabilities()
@@ -277,11 +290,28 @@ export const PlaygroundMessage = (props: Props) => {
     resolvedVariantIndex < variantCount - 1
   const resolvedRole = props.role ?? (props.isBot ? "assistant" : "user")
   const isSystemMessage = resolvedRole === "system"
+  const speakerMatchesCharacterIdentity =
+    props.speakerCharacterId == null ||
+    !props.characterIdentity?.id ||
+    String(props.speakerCharacterId) === String(props.characterIdentity.id)
   const shouldUseCharacterIdentity =
     props.isBot &&
     Boolean(props.characterIdentityEnabled) &&
-    Boolean(props.characterIdentity?.id)
-  const characterAvatar = props.characterIdentity?.avatar_url || ""
+    Boolean(props.characterIdentity?.id) &&
+    speakerMatchesCharacterIdentity
+  const explicitMoodLabel = normalizeCharacterMoodLabel(props.moodLabel)
+  const inferredMoodLabel = React.useMemo(() => {
+    if (!props.isBot || isSystemMessage) return null
+    return detectCharacterMood({ assistantText: props.message }).label
+  }, [isSystemMessage, props.isBot, props.message])
+  const resolvedMoodLabel = explicitMoodLabel || inferredMoodLabel
+  const baseCharacterAvatar = resolveCharacterBaseAvatarUrl(
+    props.characterIdentity
+  )
+  const moodCharacterAvatar = shouldUseCharacterIdentity
+    ? resolveCharacterMoodImageUrl(props.characterIdentity, resolvedMoodLabel)
+    : ""
+  const characterAvatar = moodCharacterAvatar || baseCharacterAvatar
   const resolvedModelImage =
     shouldUseCharacterIdentity && characterAvatar
       ? characterAvatar
@@ -290,6 +320,37 @@ export const PlaygroundMessage = (props: Props) => {
     shouldUseCharacterIdentity && props.characterIdentity?.name
       ? props.characterIdentity.name
       : props.modelName || props.name
+  const resolvedUserPersonaImage = React.useMemo(() => {
+    const raw =
+      typeof userPersonaImage === "string" ? userPersonaImage.trim() : ""
+    if (!raw) return ""
+    if (
+      raw.startsWith("data:image/") ||
+      raw.startsWith("http://") ||
+      raw.startsWith("https://")
+    ) {
+      return raw
+    }
+    return ""
+  }, [userPersonaImage])
+  const portraitImage = isSystemMessage
+    ? ""
+    : props.isBot
+      ? resolvedModelImage || ""
+      : resolvedUserPersonaImage
+  const portraitSide: "left" | "right" = props.isBot ? "left" : "right"
+  const shouldShowPortrait =
+    Boolean(showCharacterPortraits) && Boolean(portraitImage)
+  const shouldShowAvatarColumn = !shouldShowPortrait
+  const userAvatarNode = props.userAvatar ? (
+    props.userAvatar
+  ) : resolvedUserPersonaImage ? (
+    <Avatar
+      src={resolvedUserPersonaImage}
+      alt={userDisplayName.trim() || t("common:you", "You")}
+      className="size-8"
+    />
+  ) : null
   const shouldPreviewAvatar =
     shouldUseCharacterIdentity && Boolean(characterAvatar)
   const ttsClipMeta = React.useMemo<TtsClipMeta>(
@@ -901,7 +962,12 @@ export const PlaygroundMessage = (props: Props) => {
     total: props.totalMessages
   }) as string
 
-  if (isUserChatBubble && !props.isBot && !isSystemMessage) {
+  if (
+    isUserChatBubble &&
+    !props.isBot &&
+    !isSystemMessage &&
+    !showCharacterPortraits
+  ) {
     return (
       <PlaygroundUserMessageBubble
         {...props}
@@ -922,6 +988,28 @@ export const PlaygroundMessage = (props: Props) => {
     : props.isBot
       ? `flex flex-col rounded-2xl border border-border/50 bg-surface/60 shadow-sm border-l-2 border-l-primary/20 ${messageSpacing}`
       : `flex flex-col rounded-2xl border border-border/50 bg-surface2/60 shadow-sm ${messageSpacing}`
+  const portraitPanel = shouldShowPortrait ? (
+    <button
+      type="button"
+      onClick={() => setIsAvatarPreviewOpen(true)}
+      className="relative hidden h-40 w-28 shrink-0 overflow-hidden rounded-2xl border border-border/60 bg-surface/30 shadow-sm transition hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-focus sm:block md:h-52 md:w-36"
+      aria-label={t("playground:previewCharacterAvatar", {
+        defaultValue: "Preview character avatar"
+      }) as string}
+    >
+      <img
+        src={portraitImage}
+        alt={
+          props.isBot
+            ? resolvedModelName || props.name
+            : userDisplayName.trim() || t("common:you", "You")
+        }
+        className="h-full w-full object-cover"
+        loading="lazy"
+      />
+      <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-transparent" />
+    </button>
+  ) : null
   return (
     <article
       data-testid="chat-message"
@@ -956,14 +1044,15 @@ export const PlaygroundMessage = (props: Props) => {
         className={`flex flex-row m-auto w-full ${
           isProMode ? "gap-4 md:gap-6 my-2" : "gap-3 md:gap-4 my-1.5"
         }`}>
-        <div className="w-8 flex flex-col relative items-end">
-          {props.isBot ? (
-            !resolvedModelImage ? (
-              <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
-                <div className="absolute h-8 w-8 rounded-full bg-gradient-to-r from-green-300 to-purple-400"></div>
-              </div>
-            ) : shouldPreviewAvatar ? (
-              <>
+        {portraitSide === "left" ? portraitPanel : null}
+        {shouldShowAvatarColumn && (
+          <div className="w-8 flex flex-col relative items-end">
+            {props.isBot ? (
+              !resolvedModelImage ? (
+                <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
+                  <div className="absolute h-8 w-8 rounded-full bg-gradient-to-r from-green-300 to-purple-400"></div>
+                </div>
+              ) : shouldPreviewAvatar ? (
                 <button
                   type="button"
                   onClick={() => setIsAvatarPreviewOpen(true)}
@@ -978,42 +1067,27 @@ export const PlaygroundMessage = (props: Props) => {
                     className="size-8"
                   />
                 </button>
-                {isAvatarPreviewOpen && (
-                  <Modal
-                    open
-                    onCancel={() => setIsAvatarPreviewOpen(false)}
-                    footer={null}
-                    centered
-                  >
-                    <Image
-                      src={resolvedModelImage}
-                      alt={resolvedModelName || props.name}
-                      preview={false}
-                      className="w-full"
-                    />
-                  </Modal>
-                )}
-              </>
+              ) : (
+                <Avatar
+                  src={resolvedModelImage}
+                  alt={resolvedModelName || props.name}
+                  className="size-8"
+                />
+              )
+            ) : isSystemMessage ? (
+              <div className="relative h-7 w-7 p-1 rounded-sm text-warn flex items-center justify-center text-opacity-100">
+                <div className="absolute h-8 w-8 rounded-full border border-warn/40 bg-warn/10"></div>
+              </div>
+            ) : !userAvatarNode ? (
+              <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
+                <div className="absolute h-8 w-8 rounded-full from-primary/60 to-primary bg-gradient-to-r"></div>
+              </div>
             ) : (
-              <Avatar
-                src={resolvedModelImage}
-                alt={resolvedModelName || props.name}
-                className="size-8"
-              />
-            )
-          ) : isSystemMessage ? (
-            <div className="relative h-7 w-7 p-1 rounded-sm text-warn flex items-center justify-center text-opacity-100">
-              <div className="absolute h-8 w-8 rounded-full border border-warn/40 bg-warn/10"></div>
-            </div>
-          ) : !props.userAvatar ? (
-            <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
-              <div className="absolute h-8 w-8 rounded-full from-primary/60 to-primary bg-gradient-to-r"></div>
-            </div>
-          ) : (
-            props.userAvatar
-          )}
-        </div>
-        <div className="flex w-[calc(100%-50px)] flex-col gap-2 lg:w-[calc(100%-115px)]">
+              userAvatarNode
+            )}
+          </div>
+        )}
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className={messageCardClass}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
@@ -1377,7 +1451,27 @@ export const PlaygroundMessage = (props: Props) => {
           )}
           </div>
         </div>
+        {portraitSide === "right" ? portraitPanel : null}
       </div>
+      {isAvatarPreviewOpen && portraitImage && (
+        <Modal
+          open
+          onCancel={() => setIsAvatarPreviewOpen(false)}
+          footer={null}
+          centered
+        >
+          <Image
+            src={portraitImage}
+            alt={
+              props.isBot
+                ? resolvedModelName || props.name
+                : userDisplayName.trim() || t("common:you", "You")
+            }
+            preview={false}
+            className="w-full"
+          />
+        </Modal>
+      )}
       {/* </div> */}
       {showFeedbackControls && (
         <FeedbackModal

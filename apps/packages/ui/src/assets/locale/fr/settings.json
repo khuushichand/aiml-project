@@ -13,7 +13,30 @@
   "guardianNav": "Guardian et surveillance",
   "guardian": {
     "unavailableTitle": "Paramètres Guardian indisponibles",
-    "unavailableDescription": "Votre serveur actuel n'expose pas les points de terminaison Guardian ou d'auto-surveillance."
+    "unavailableDescription": "Votre serveur actuel n'expose pas les points de terminaison Guardian ou d'auto-surveillance.",
+    "title": "Guardian et auto-surveillance",
+    "subtitle": "Configurez des règles de surveillance de contenu personnel, des relations de supervision Guardian et l'accès aux ressources de crise.",
+    "rules": {
+      "title": "Règles de surveillance"
+    },
+    "alerts": {
+      "title": "Alertes"
+    },
+    "governance": {
+      "title": "Politiques de gouvernance",
+      "fields": {
+        "description": "Descriptif"
+      }
+    },
+    "relationships": {
+      "title": "Relations de tuteur"
+    },
+    "policies": {
+      "title": "Politiques supervisées"
+    },
+    "auditLog": {
+      "title": "Journal d’audit"
+    }
   },
   "chatAppearance": {
     "title": "Apparence du chat",
@@ -46,6 +69,12 @@
       "sm": "Petite",
       "md": "Moyenne",
       "lg": "Grande"
+    },
+    "backgroundImage": {
+      "label": "Image d'arrière-plan du chat",
+      "description": "Affichée derrière l'écran de chat lorsque vous êtes sur /chat.",
+      "upload": "Téléverser une image",
+      "clear": "Retirer l'image de fond"
     }
   },
   "generalSettings": {
@@ -140,6 +169,12 @@
         "confirmMessage": "Cela réinitialisera votre état de parcours d’accueil et vous ramènera au flux de configuration.",
         "toast": "Le parcours d’accueil a été réinitialisé",
         "toastBody": "Nous vous ramènerons à l’étape de bienvenue pour que vous puissiez vérifier l’URL de votre serveur et votre clé API."
+      },
+      "hideQuickChatHelper": {
+        "label": "Masquer le bouton d’assistant de chat rapide"
+      },
+      "stickyChatInput": {
+        "label": "Garder la saisie du chat visible pendant le défilement"
       }
     },
     "sidepanelRag": {
@@ -245,7 +280,12 @@
         "label": "Fractionnement de la réponse"
       },
       "removeReasoningTagTTS": {
-        "label": "Supprimer la balise de raisonnement de la synthèse vocale"
+        "label": "Supprimer la balise de raisonnement de la synthèse vocale",
+        "description": "Supprime les blocs de raisonnement <think>...</think> avant la lecture vocale. L’audio reste centré sur la réponse finale."
+      },
+      "playbackSpeed": {
+        "label": "Vitesse de lecture",
+        "description": "Contrôle la vitesse de lecture audio (n’affecte pas la génération)."
       }
     },
     "stt": {
@@ -368,6 +408,9 @@
       "example2": "Contrôlez les chats temporaires, le collage de gros textes et l’affichage du raisonnement.",
       "primaryCta": "Configurer le serveur et l’authentification",
       "secondaryCta": "Fermer"
+    },
+    "chatbooks": {
+      "heading": "Carnets de chat"
     }
   },
   "manageModels": {
@@ -519,7 +562,56 @@
     "copilotEmptyDescription": "Les prompts Copilot sont des modèles prédéfinis fournis par votre serveur tldw.",
     "copilotEmptyExample1": "Vérifiez la version ou la configuration du serveur si vous vous attendez à des prompts Copilot.",
     "copilotEmptyExample2": "Après une mise à jour du serveur, rechargez l’extension et revenez sur cet onglet.",
-    "copilotEmptyCta": "Ouvrir Diagnostics"
+    "copilotEmptyCta": "Ouvrir Diagnostics",
+    "studio": {
+      "projects": {
+        "title": "Projets",
+        "description": "Descriptif"
+      },
+      "prompts": {
+        "title": "Invites"
+      },
+      "testCases": {
+        "title": "Cas de test",
+        "bulkPanel": {
+          "title": "Import/Export en masse"
+        },
+        "generateModal": {
+          "title": "Générer des cas de test"
+        },
+        "runModal": {
+          "title": "Exécuter les cas de test"
+        }
+      },
+      "evaluations": {
+        "title": "Évaluations",
+        "wizard": {
+          "title": "Créer une évaluation"
+        },
+        "detail": {
+          "title": "Détails de l’évaluation"
+        }
+      },
+      "optimizations": {
+        "title": "Optimisations",
+        "wizard": {
+          "title": "Démarrer l’optimisation"
+        },
+        "progress": {
+          "title": "Progression de l’optimisation"
+        },
+        "compare": {
+          "title": "Comparer les stratégies d’optimisation",
+          "description": "Descriptif"
+        }
+      },
+      "common": {
+        "description": "Descriptif"
+      },
+      "queueHealth": {
+        "title": "Santé de la file"
+      }
+    }
   },
   "manageShare": {
     "title": "Gérer le partage",
@@ -756,6 +848,32 @@
         "notes": "Gestion des notes et des prompts",
         "stt": "Transcription de la parole en texte"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "Changer le mode d’authentification ?"
+    },
+    "loginMethod": {
+      "label": "Méthode de connexion"
+    },
+    "magicLink": {
+      "email": {
+        "label": "E-mail",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Jeton de lien magique",
+        "placeholder": "Collez le jeton reçu par e-mail"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "La clé API de démonstration par défaut est utilisée"
+    },
+    "billing": {
+      "title": "Facturation et utilisation",
+      "subtitle": "Gérez votre forfait, le cycle de facturation et les limites d’utilisation.",
+      "invoices": {
+        "title": "Historique des factures"
+      }
     }
   },
   "manageKnowledge": {
@@ -937,7 +1055,24 @@
       "mediaTitle": "Explorer les médias et les notes",
       "mediaBody": "Visitez Médias et Notes dans Options pour voir ce qui est stocké et consultable."
     },
-    "headerShortcuts": "Afficher les raccourcis rapides dans l’en-tête"
+    "headerShortcuts": "Afficher les raccourcis rapides dans l’en-tête",
+    "loginMethod": {
+      "label": "Méthode de connexion"
+    },
+    "magicLink": {
+      "email": {
+        "label": "E-mail",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Jeton de lien magique",
+        "placeholder": "Collez le jeton reçu par e-mail"
+      }
+    },
+    "defaults": {
+      "title": "Définissez vos valeurs par défaut",
+      "subtitle": "Choisissez un fournisseur et un modèle par défaut pour les nouveaux chats."
+    }
   },
   "manageCharacters": {
     "title": "Gérer les personnages",
@@ -1428,7 +1563,7 @@
       "matchFilenameLabel": "Nom de fichier",
       "learnNameLabel": "Nom du modèle",
       "learnExampleLabel": "Texte d’exemple",
-      "learnDescriptionLabel": "Description",
+      "learnDescriptionLabel": "Descriptif",
       "learnSaveLabel": "Enregistrer le modèle",
       "learnClassifierLabel": "Classifieur (JSON)",
       "jsonError": "JSON invalide. Veuillez corriger et réessayer.",
@@ -1448,5 +1583,43 @@
       "methodOptionsLabel": "Options spécifiques à la méthode",
       "notesLabel": "Notes"
     }
-  }
+  },
+  "chatbooksNav": "Carnets de chat",
+  "mediaTrashNav": "Corbeille des médias",
+  "chatSettingsNav": "Discussion",
+  "quickIngestSettingsNav": "Ingestion rapide",
+  "speechSettingsNav": "Voix",
+  "imageGenerationSettingsNav": "Génération d'images",
+  "uiCustomizationNav": "Personnalisation de l'interface",
+  "splashSettingsNav": "Écrans de démarrage",
+  "speechSettings": {
+    "title": "Paramètres de la voix",
+    "subtitle": "Gérez les paramètres par défaut de transcription et de synthèse vocale pour la dictée et la lecture."
+  },
+  "uiCustomization": {
+    "title": "Personnalisation de l'interface",
+    "subtitle": "Personnalisez les raccourcis de navigation et les dispositions par défaut.",
+    "shortcuts": {
+      "title": "Raccourcis de la barre latérale",
+      "description": "Choisissez jusqu’à 10 éléments pour les icônes de la barre latérale et la liste des raccourcis."
+    },
+    "headerShortcuts": {
+      "title": "Raccourcis du playground",
+      "description": "Choisissez les raccourcis affichés dans le panneau des raccourcis d’en-tête."
+    }
+  },
+  "splashSettings": {
+    "title": "Écrans de démarrage",
+    "subtitle": "Personnalisez les cartes et effets de l'écran de démarrage."
+  },
+  "imageGenerationSettings": {
+    "title": "Génération d'images",
+    "subtitle": "Configurez les paramètres par défaut de génération d'images pour chaque backend et définissez votre valeur par défaut pour la commande slash."
+  },
+  "quickIngestSettings": {
+    "title": "Ingestion rapide",
+    "subtitle": "Configurez les valeurs par défaut, les préréglages et le comportement d'Ingestion rapide."
+  },
+  "acpPlaygroundNav": "Atelier ACP",
+  "skillsNav": "Compétences"
 }

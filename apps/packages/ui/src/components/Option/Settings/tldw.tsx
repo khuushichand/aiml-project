@@ -25,6 +25,7 @@ import type { PathOrUrl } from "@/services/tldw/openapi-guard"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useConnectionStore } from "@/store/connection"
 import { mapMultiUserLoginErrorMessage } from "@/services/auth-errors"
+import { emitSplashAfterSingleUserAuthSuccess } from "@/services/splash-auth"
 import { ServerOverviewHint } from "@/components/Common/ServerOverviewHint"
 import { requestOptionalHostPermission } from "@/utils/extension-permissions"
 
@@ -479,7 +480,9 @@ export const TldwSettings = () => {
       message.success(t("settings:savedSuccessfully"))
       
       // Test connection after saving
-      await testConnection()
+      await testConnection({
+        triggerSplashOnSuccess: values.authMode === "single-user"
+      })
     } catch (error) {
       message.error(t("settings:saveFailed"))
       console.error('Failed to save config:', error)
@@ -604,7 +607,7 @@ export const TldwSettings = () => {
     }
   }, [authMode, isLoggedIn])
 
-  const testConnection = async () => {
+  const testConnection = async (options?: { triggerSplashOnSuccess?: boolean }) => {
     setTestingConnection(true)
     setConnectionStatus(null)
     setConnectionDetail("")
@@ -704,6 +707,9 @@ export const TldwSettings = () => {
       
       if (success) {
         message.success(t('settings:tldw.connection.success', 'Connection successful!'))
+        if (options?.triggerSplashOnSuccess) {
+          emitSplashAfterSingleUserAuthSuccess(values.authMode, true)
+        }
         if (
           values.authMode === 'single-user' &&
           typeof values.apiKey === 'string' &&

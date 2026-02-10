@@ -5,6 +5,7 @@
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
 from dotenv import load_dotenv
@@ -30,11 +31,18 @@ DEFAULT_LLM_PROVIDER = "openai"
 model_config = ConfigDict(extra="allow", from_attributes=True)
 
 # Config Loading
-# Load standard .env, then also try uppercase .ENV for environments that use it.
+# Prefer the canonical Config_Files/.env location, then fall back to local .env variants.
 try:
-    load_dotenv()
-    # Attempt to load from an uppercase filename as well (non-standard but requested)
-    load_dotenv(dotenv_path=".ENV", override=False)
+    api_root = Path(__file__).resolve().parents[4]
+    candidate_env_paths = [
+        api_root / "Config_Files" / ".env",
+        api_root / "Config_Files" / ".ENV",
+        Path(".env").resolve(),
+        Path(".ENV").resolve(),
+    ]
+    for env_path in candidate_env_paths:
+        if env_path.exists():
+            load_dotenv(dotenv_path=str(env_path), override=False)
 except Exception:
     # Fall back silently if dotenv loading fails; environment may be pre-populated
     pass

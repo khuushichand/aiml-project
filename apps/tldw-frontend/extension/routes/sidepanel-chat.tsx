@@ -1833,11 +1833,11 @@ const SidepanelChat = () => {
                 <div className="w-full max-w-3xl space-y-4">
                   {[1, 2, 3].map((i) => (
                     <div key={i} className="flex gap-4 animate-pulse">
-                      <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex-shrink-0"></div>
+                      <div className="w-8 h-8 rounded-full bg-surface2 flex-shrink-0"></div>
                       <div className="flex-1 space-y-2">
-                        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-1/4"></div>
-                        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-full"></div>
-                        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-3/4"></div>
+                        <div className="h-4 bg-surface2 rounded w-1/4"></div>
+                        <div className="h-4 bg-surface2 rounded w-full"></div>
+                        <div className="h-4 bg-surface2 rounded w-3/4"></div>
                       </div>
                     </div>
                   ))}
@@ -1875,8 +1875,8 @@ const SidepanelChat = () => {
                 aria-label={t("playground:composer.scrollToLatest", "Scroll to latest messages")}
                 title={t("playground:composer.scrollToLatest", "Scroll to latest messages") as string}
                 data-testid="chat-scroll-latest"
-                className="bg-gray-50 shadow border border-gray-200 dark:border-none dark:bg-white/20 p-1.5 rounded-full pointer-events-auto hover:bg-gray-100 dark:hover:bg-white/30 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-warn">
-                <ChevronDown className="size-4 text-gray-600 dark:text-gray-300" aria-hidden="true" />
+                className="bg-surface shadow border border-border p-1.5 rounded-full pointer-events-auto hover:bg-elevated transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-warn">
+                <ChevronDown className="size-4 text-text-muted" aria-hidden="true" />
               </button>
             </div>
           )}

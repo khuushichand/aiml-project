@@ -3631,6 +3631,20 @@ async def character_chat_completion(
         if not assistant_text:
             assistant_text = ""
 
+        resolved_mood_label = (
+            body.mood_label.strip()
+            if isinstance(body.mood_label, str) and body.mood_label.strip()
+            else None
+        )
+        resolved_mood_confidence = (
+            float(body.mood_confidence) if body.mood_confidence is not None else None
+        )
+        resolved_mood_topic = (
+            body.mood_topic.strip()
+            if isinstance(body.mood_topic, str) and body.mood_topic.strip()
+            else None
+        )
+
         saved = False
         assistant_msg_id: Optional[str] = None
         if will_persist:
@@ -3670,6 +3684,12 @@ async def character_chat_completion(
                 "speaker_character_name": char_label,
                 "turn_taking_mode": turn_context.get("turn_taking_mode", "single"),
             }
+            if resolved_mood_label:
+                metadata_extra["mood_label"] = resolved_mood_label
+            if resolved_mood_confidence is not None:
+                metadata_extra["mood_confidence"] = resolved_mood_confidence
+            if resolved_mood_topic:
+                metadata_extra["mood_topic"] = resolved_mood_topic
             if turn_lorebook_diagnostics:
                 metadata_extra["lorebook_diagnostics"] = turn_lorebook_diagnostics
             validated_tool_calls = (
@@ -3698,6 +3718,9 @@ async def character_chat_completion(
             assistant_content=assistant_text,
             speaker_character_id=active_character_id,
             speaker_character_name=char_label,
+            mood_label=resolved_mood_label,
+            mood_confidence=resolved_mood_confidence,
+            mood_topic=resolved_mood_topic,
             lorebook_diagnostics=turn_lorebook_diagnostics,
         )
 
@@ -4488,6 +4511,16 @@ async def persist_streamed_assistant_message(
                 "speaker_character_name": resolved_speaker_name,
                 "turn_taking_mode": resolved_turn_mode,
             }
+            if isinstance(body.mood_label, str):
+                mood_label = body.mood_label.strip()
+                if mood_label:
+                    metadata_extra["mood_label"] = mood_label
+            if body.mood_confidence is not None:
+                metadata_extra["mood_confidence"] = float(body.mood_confidence)
+            if isinstance(body.mood_topic, str):
+                mood_topic = body.mood_topic.strip()
+                if mood_topic:
+                    metadata_extra["mood_topic"] = mood_topic
             if getattr(body, 'usage', None) is not None:
                 metadata_extra["usage"] = body.usage
             validated_tool_calls = _validate_and_truncate_tool_calls(getattr(body, 'tool_calls', None))

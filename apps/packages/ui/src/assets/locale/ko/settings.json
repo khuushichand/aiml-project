@@ -10,10 +10,33 @@
   "chatDictionariesNav": "채팅 사전",
   "charactersNav": "캐릭터",
   "mediaNav": "미디어",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian 및 모니터링",
   "guardian": {
     "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "title": "Guardian 및 자기 모니터링",
+    "subtitle": "개인 콘텐츠 모니터링 규칙, Guardian 감독 관계, 위기 리소스 접근을 설정합니다.",
+    "rules": {
+      "title": "모니터링 규칙"
+    },
+    "alerts": {
+      "title": "알림"
+    },
+    "governance": {
+      "title": "거버넌스 정책",
+      "fields": {
+        "description": "설명"
+      }
+    },
+    "relationships": {
+      "title": "보호자 관계"
+    },
+    "policies": {
+      "title": "감독 정책"
+    },
+    "auditLog": {
+      "title": "감사 로그"
+    }
   },
   "chatAppearance": {
     "title": "채팅 모양",
@@ -46,6 +69,12 @@
       "sm": "작게",
       "md": "보통",
       "lg": "크게"
+    },
+    "backgroundImage": {
+      "label": "채팅 배경 이미지",
+      "description": "/chat에 있을 때 채팅 화면 뒤에 표시됩니다.",
+      "upload": "이미지 업로드",
+      "clear": "배경 이미지 제거"
     }
   },
   "generalSettings": {
@@ -143,6 +172,12 @@
         "confirmMessage": "온보딩 상태가 초기화되고 설정 흐름의 처음으로 돌아갑니다.",
         "toast": "온보딩이 초기화되었습니다",
         "toastBody": "서버 URL과 API 키를 다시 확인할 수 있도록 환영 단계로 돌아갑니다."
+      },
+      "hideQuickChatHelper": {
+        "label": "빠른 채팅 도우미 버튼 숨기기"
+      },
+      "stickyChatInput": {
+        "label": "스크롤 중에도 채팅 입력창 표시"
       }
     },
     "sidepanelRag": {
@@ -245,10 +280,15 @@
         "label": "SSML (Speech Synthesis Markup Language) 활성화"
       },
       "removeReasoningTagTTS": {
-        "label": "TTS에서 추론 태그 제거"
+        "label": "TTS에서 추론 태그 제거",
+        "description": "음성 재생 전에 <think>...</think> 추론 블록을 제거합니다. 오디오는 최종 답변에 집중됩니다."
       },
       "responseSplitting": {
         "label": "응답 분할"
+      },
+      "playbackSpeed": {
+        "label": "재생 속도",
+        "description": "오디오 재생 속도를 제어합니다(생성에는 영향 없음)."
       }
     },
     "stt": {
@@ -371,6 +411,9 @@
       "example2": "임시 채팅 여부, 큰 붙여넣기 처리, 추론 표시 방식을 제어하세요.",
       "primaryCta": "서버 및 인증 설정",
       "secondaryCta": "닫기"
+    },
+    "chatbooks": {
+      "heading": "채팅북"
     }
   },
   "manageModels": {
@@ -522,7 +565,56 @@
     "copilotEmptyDescription": "Copilot 프롬프트는 tldw 서버에서 제공하는 미리 정의된 템플릿입니다.",
     "copilotEmptyExample1": "Copilot 프롬프트가 있어야 한다면 서버 버전 또는 구성을 확인하세요.",
     "copilotEmptyExample2": "서버를 업데이트한 뒤 확장 프로그램을 새로고침하고 이 탭으로 돌아오세요.",
-    "copilotEmptyCta": "진단 열기"
+    "copilotEmptyCta": "진단 열기",
+    "studio": {
+      "projects": {
+        "title": "프로젝트",
+        "description": "설명"
+      },
+      "prompts": {
+        "title": "프롬프트"
+      },
+      "testCases": {
+        "title": "테스트 케이스",
+        "bulkPanel": {
+          "title": "대량 가져오기/내보내기"
+        },
+        "generateModal": {
+          "title": "테스트 케이스 생성"
+        },
+        "runModal": {
+          "title": "테스트 케이스 실행"
+        }
+      },
+      "evaluations": {
+        "title": "평가",
+        "wizard": {
+          "title": "평가 만들기"
+        },
+        "detail": {
+          "title": "평가 세부정보"
+        }
+      },
+      "optimizations": {
+        "title": "최적화",
+        "wizard": {
+          "title": "최적화 시작"
+        },
+        "progress": {
+          "title": "최적화 진행 상황"
+        },
+        "compare": {
+          "title": "최적화 전략 비교",
+          "description": "설명"
+        }
+      },
+      "common": {
+        "description": "설명"
+      },
+      "queueHealth": {
+        "title": "큐 상태"
+      }
+    }
   },
   "manageShare": {
     "title": "공유 관리",
@@ -759,6 +851,32 @@
         "notes": "노트 및 프롬프트 관리",
         "stt": "음성-텍스트 변환"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "인증 모드를 변경하시겠습니까?"
+    },
+    "loginMethod": {
+      "label": "로그인 방식"
+    },
+    "magicLink": {
+      "email": {
+        "label": "이메일",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "매직 링크 토큰",
+        "placeholder": "이메일의 토큰을 붙여넣으세요"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "기본 데모 API 키가 사용 중입니다"
+    },
+    "billing": {
+      "title": "결제 및 사용량",
+      "subtitle": "요금제, 결제 주기 및 사용량 한도를 관리합니다.",
+      "invoices": {
+        "title": "청구서 기록"
+      }
     }
   },
   "manageKnowledge": {
@@ -938,7 +1056,24 @@
       "mediaTitle": "미디어 및 노트 둘러보기",
       "mediaBody": "옵션에서 미디어와 노트를 열어 저장된 내용과 검색 가능한 항목을 확인하세요."
     },
-    "headerShortcuts": "헤더에 빠른 바로가기를 표시하기"
+    "headerShortcuts": "헤더에 빠른 바로가기를 표시하기",
+    "loginMethod": {
+      "label": "로그인 방식"
+    },
+    "magicLink": {
+      "email": {
+        "label": "이메일",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "매직 링크 토큰",
+        "placeholder": "이메일의 토큰을 붙여넣으세요"
+      }
+    },
+    "defaults": {
+      "title": "기본값 설정",
+      "subtitle": "새 채팅의 기본 제공자와 모델을 선택하세요."
+    }
   },
   "manageCharacters": {
     "title": "캐릭터 관리",
@@ -1450,5 +1585,43 @@
       "methodOptionsLabel": "방법별 옵션",
       "notesLabel": "메모"
     }
-  }
+  },
+  "chatbooksNav": "채팅북",
+  "mediaTrashNav": "미디어 휴지통",
+  "chatSettingsNav": "채팅",
+  "quickIngestSettingsNav": "빠른 가져오기",
+  "speechSettingsNav": "음성",
+  "imageGenerationSettingsNav": "이미지 생성",
+  "uiCustomizationNav": "UI 사용자 지정",
+  "splashSettingsNav": "스플래시 화면",
+  "speechSettings": {
+    "title": "음성 설정",
+    "subtitle": "받아쓰기와 재생을 위한 음성-텍스트 및 텍스트-음성 기본값을 관리합니다."
+  },
+  "uiCustomization": {
+    "title": "UI 사용자 지정",
+    "subtitle": "탐색 바로가기와 기본 레이아웃을 개인화합니다.",
+    "shortcuts": {
+      "title": "사이드바 바로가기",
+      "description": "사이드바 아이콘과 바로가기 목록에 표시할 항목을 최대 10개까지 선택하세요."
+    },
+    "headerShortcuts": {
+      "title": "플레이그라운드 바로가기",
+      "description": "헤더 바로가기 패널에 표시할 바로가기를 선택하세요."
+    }
+  },
+  "splashSettings": {
+    "title": "스플래시 화면",
+    "subtitle": "시작 화면 카드와 효과를 사용자 지정합니다."
+  },
+  "imageGenerationSettings": {
+    "title": "이미지 생성",
+    "subtitle": "각 백엔드의 이미지 생성 기본값을 설정하고 슬래시 명령 기본값을 지정합니다."
+  },
+  "quickIngestSettings": {
+    "title": "빠른 가져오기",
+    "subtitle": "빠른 가져오기의 기본값, 프리셋, 동작을 설정합니다."
+  },
+  "acpPlaygroundNav": "ACP 플레이그라운드",
+  "skillsNav": "스킬"
 }

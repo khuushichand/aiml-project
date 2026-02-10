@@ -32,7 +32,9 @@
 - [Highlights](#highlights)
 - [Feature Status](#feature-status)
 - [Quickstart](#quickstart)
-  - [Run the API](#run-the-api)
+  - [At-a-Glance Commands](#at-a-glance-commands)
+  - [No-Docker Path (Makefile)](#no-docker-path-makefile)
+  - [Manual Setup](#manual-setup)
   - [Run the Web UI (WIP)](#run-the-web-ui-wip)
   - [Docker Compose](#docker-compose)
   - [Supporting Services via Docker](#supporting-services-via-docker)
@@ -168,21 +170,53 @@ See the full [Feature Status Matrix at `Docs/Published/Overview/Feature_Status.m
 
 ## Quickstart
 
-### Fastest Path (One Command)
+`pip install tldw_server` is not generally available yet (PyPI publishing is in progress).
+For now, use this repository checkout with the Makefile targets below.
+
+### At-a-Glance Commands
+
+```bash
+# No Docker: installs deps, initializes auth, starts API
+git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
+make quickstart-install
+
+# Docker: API only
+make quickstart-docker
+
+# Docker: API + WebUI
+make quickstart-docker-webui
+```
+
+### No-Docker Path (Makefile)
 
 ```bash
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
-make quickstart
+make quickstart-install
 ```
 
-This creates a minimal `.env`, initializes auth, and starts the server. Verify with:
+This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts the server. Verify with:
 ```bash
 curl http://localhost:8000/health  # No auth needed!
 ```
 
+Already have dependencies installed locally? Use `make quickstart`.
+
 ### Manual Setup
 
-Prerequisites: Python 3.11+ and ffmpeg (`brew install ffmpeg` or `apt install ffmpeg`)
+Prerequisites: Python 3.11+, ffmpeg, and (for audio capture paths) PyAudio/PortAudio.
+
+Platform setup examples:
+```bash
+# macOS (Homebrew)
+brew install ffmpeg portaudio
+
+# Ubuntu/Debian
+sudo apt update
+sudo apt install -y ffmpeg portaudio19-dev python3-pyaudio
+
+# Fedora/RHEL (RPM Fusion may be needed for ffmpeg)
+sudo dnf install -y ffmpeg portaudio-devel python3-pyaudio
+```
 
 1) **Install**
 ```bash
@@ -190,9 +224,9 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-2) **Configure** (minimal .env)
+2) **Configure** (minimal `tldw_Server_API/Config_Files/.env`)
 ```bash
-cat > .env << 'EOF'
+cat > tldw_Server_API/Config_Files/.env << 'EOF'
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=my-secure-key-at-least-16-chars
 DATABASE_URL=sqlite:///./Databases/users.db
@@ -227,8 +261,9 @@ pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
 pip install -e ".[dev]"           # tests, linters, tooling
 pip install -e ".[otel]"          # OpenTelemetry metrics/tracing
 
-# pyaudio (needed for audio processing)
-# Linux: sudo apt install python3-pyaudio
+# pyaudio (needed for audio capture and some processing paths)
+# Linux (Ubuntu/Debian): sudo apt install -y portaudio19-dev python3-pyaudio
+# Linux (Fedora/RHEL):   sudo dnf install -y portaudio-devel python3-pyaudio
 # macOS: brew install portaudio && pip install pyaudio
 ```
 
@@ -237,11 +272,11 @@ when MCP runs with local-only defaults (loopback IP/origin restrictions).
 These ephemeral secrets do not persist across restarts.
 
 For shared or production deployments (when MCP is accessible beyond localhost),
-set these explicitly in `.env` and rotate regularly.
-Run these commands in your shell and paste the resulting values into your `.env`
+set these explicitly in `tldw_Server_API/Config_Files/.env` and rotate regularly.
+Run these commands in your shell and paste the resulting values into `tldw_Server_API/Config_Files/.env`
 (do not paste the command templates themselves):
 ```bash
-# Generate secure secrets — run each command, then copy the output into .env
+# Generate secure secrets — run each command, then copy the output into tldw_Server_API/Config_Files/.env
 openssl rand -base64 32   # paste the output as the value for MCP_JWT_SECRET
 openssl rand -base64 32   # paste the output as the value for MCP_API_KEY_SALT
 ```
@@ -275,8 +310,16 @@ In-process workers are fine for light dev use, but SQLite + multiple Uvicorn wor
 ### Run the Web UI (WIP)
 
 The current Next.js UI is a work in progress and may be unstable, buggy, or rough around the edges.
-Make sure the API from the section above is running.
 Requires Node.js and npm (or yarn/pnpm).
+
+Quickest full-stack path (containerized API + WebUI):
+```bash
+make quickstart-docker-webui
+# API:   http://localhost:8000
+# WebUI: http://localhost:8080
+```
+
+Local WebUI development (API should already be running, for example via `make quickstart`):
 
 1) From the repo root:
 ```bash
@@ -308,13 +351,26 @@ make quickstart-docker
 curl http://localhost:8000/health  # Verify
 ```
 
+Quick start with Docker + containerized WebUI:
+```bash
+make quickstart-docker-webui
+# API:   http://localhost:8000
+# WebUI: http://localhost:8080
+```
+
 Or manually:
 ```bash
 # Single-user mode (simplest)
-docker compose -f Dockerfiles/docker-compose.yml up -d --build
-docker compose -f Dockerfiles/docker-compose.yml exec app \
-  python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml up -d --build
 curl http://localhost:8000/health  # Verify
+```
+
+On first start in `single_user` mode, the app container now:
+- Ensures `SINGLE_USER_API_KEY` is secure (generates one if missing/placeholder).
+- Runs `AuthNZ.initialize --non-interactive` once per persisted Docker data volume.
+- View the configured key with:
+```bash
+grep '^SINGLE_USER_API_KEY=' tldw_Server_API/Config_Files/.env
 ```
 
 <details>
@@ -328,6 +384,9 @@ docker compose -f Dockerfiles/docker-compose.postgres.yml up -d
 
 # Dev overlay — unified streaming (non-prod)
 docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build
+
+# WebUI overlay (Next.js container on :8080)
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.webui.yml up -d --build
 
 # Check status
 docker compose -f Dockerfiles/docker-compose.yml ps
@@ -344,7 +403,8 @@ docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.p
 
 Notes
 - Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
-- The primary UI is the Next.js WebUI in `apps/tldw-frontend/` (run separately).
+- The primary UI is the Next.js WebUI in `apps/tldw-frontend/`.
+  - Run it separately for development, or use `Dockerfiles/docker-compose.webui.yml` for a containerized WebUI.
   - For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.
 
 ### Supporting Services via Docker
@@ -787,6 +847,8 @@ Run locally
 - `Docs/Documentation.md` - documentation index and developer guide links
 - `Docs/About.md` - project background and philosophy
 - Module deep dives: `Docs/Development/AuthNZ-Developer-Guide.md`, `Docs/Development/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
+- Packaging and releases: `Docs/Development/PyPI_Publishing.md`
+- Distribution strategy (API + WebUI): `Docs/Development/Packaging_and_Distribution_Strategy.md`
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
 - Deployment/Monitoring: `Docs/Published/Deployment/First_Time_Production_Setup.md`, `Docs/Published/Deployment/Reverse_Proxy_Examples.md`, `Docs/Deployment/Monitoring/`
 - TTS onboarding: `Docs/User_Guides/TTS_Getting_Started.md` – hosted/local provider setup, verification, and troubleshooting

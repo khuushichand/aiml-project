@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseLockError
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 
 
@@ -40,6 +41,39 @@ class _DummyRequest:
         self.method = "GET"
         self.url = SimpleNamespace(path="/test")
         self.headers: dict[str, str] = {}
+
+
+class _LockingTxnCM:
+    def __init__(self, pool: "_LockingPool") -> None:
+        self._pool = pool
+
+    async def __aenter__(self) -> object:
+        self._pool.enter_calls += 1
+        if self._pool.lock_on_enter_remaining > 0:
+            self._pool.lock_on_enter_remaining -= 1
+            raise DatabaseLockError()
+        return self._pool.conn
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        self._pool.exit_calls += 1
+        if self._pool.raise_lock_on_exit:
+            raise DatabaseLockError()
+        return False
+
+
+class _LockingPool:
+    def __init__(self, *, lock_on_enter_count: int = 0, raise_lock_on_exit: bool = False) -> None:
+        self.lock_on_enter_remaining = lock_on_enter_count
+        self.raise_lock_on_exit = raise_lock_on_exit
+        self.enter_calls = 0
+        self.exit_calls = 0
+        self.conn = object()
+
+    def transaction(self) -> _LockingTxnCM:
+        return _LockingTxnCM(self)
+
+    def acquire(self) -> object:
+        raise AssertionError("adapter path should not be used for lock retry tests")
 
 
 @pytest.mark.asyncio
@@ -497,6 +531,106 @@ async def test_get_db_transaction_requires_explicit_test_mode(monkeypatch: pytes
         assert conn is sentinel
     finally:
         await agen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_db_transaction_retries_lock_contention_on_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_MAX_RETRIES", "2")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_RETRY_BASE_SECONDS", "0")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_RETRY_MAX_SECONDS", "0")
+
+    pool = _LockingPool(lock_on_enter_count=1, raise_lock_on_exit=False)
+
+    async def _fake_get_db_pool() -> _LockingPool:
+        return pool
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(auth_deps, "get_db_pool", _fake_get_db_pool)
+    monkeypatch.setattr(auth_deps.asyncio, "sleep", _fake_sleep)
+
+    agen = auth_deps.get_db_transaction()
+    try:
+        conn = await agen.__anext__()
+        assert conn is pool.conn
+    finally:
+        await agen.aclose()
+
+    assert pool.enter_calls == 2
+    assert pool.exit_calls == 1
+    assert sleep_calls == [0.0]
+
+
+@pytest.mark.asyncio
+async def test_get_db_transaction_returns_503_when_lock_retries_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_MAX_RETRIES", "1")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_RETRY_BASE_SECONDS", "0")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_RETRY_MAX_SECONDS", "0")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_RETRY_AFTER_SECONDS", "7")
+
+    pool = _LockingPool(lock_on_enter_count=5, raise_lock_on_exit=False)
+
+    async def _fake_get_db_pool() -> _LockingPool:
+        return pool
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(auth_deps, "get_db_pool", _fake_get_db_pool)
+    monkeypatch.setattr(auth_deps.asyncio, "sleep", _fake_sleep)
+
+    agen = auth_deps.get_db_transaction()
+    with pytest.raises(HTTPException) as exc_info:
+        await agen.__anext__()
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.headers is not None
+    assert exc_info.value.headers.get("Retry-After") == "7"
+    assert pool.enter_calls == 2
+    assert pool.exit_calls == 0
+    assert sleep_calls == [0.0]
+
+
+@pytest.mark.asyncio
+async def test_get_db_transaction_maps_cleanup_lock_error_to_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("AUTHNZ_SQLITE_LOCK_RETRY_AFTER_SECONDS", "3")
+
+    pool = _LockingPool(lock_on_enter_count=0, raise_lock_on_exit=True)
+
+    async def _fake_get_db_pool() -> _LockingPool:
+        return pool
+
+    monkeypatch.setattr(auth_deps, "get_db_pool", _fake_get_db_pool)
+
+    agen = auth_deps.get_db_transaction()
+    conn = await agen.__anext__()
+    assert conn is pool.conn
+
+    with pytest.raises(HTTPException) as exc_info:
+        await agen.__anext__()
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.headers is not None
+    assert exc_info.value.headers.get("Retry-After") == "3"
+    assert pool.enter_calls == 1
+    assert pool.exit_calls == 1
 
 
 @pytest.mark.asyncio

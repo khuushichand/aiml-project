@@ -10,10 +10,33 @@
   "chatDictionariesNav": "聊天字典",
   "charactersNav": "角色",
   "mediaNav": "媒體",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian 與監護",
   "guardian": {
     "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "title": "Guardian 與自我監護",
+    "subtitle": "設定個人內容監控規則、Guardian 監督關係與危機資源存取。",
+    "rules": {
+      "title": "監控規則"
+    },
+    "alerts": {
+      "title": "警示"
+    },
+    "governance": {
+      "title": "治理政策",
+      "fields": {
+        "description": "描述"
+      }
+    },
+    "relationships": {
+      "title": "監護關係"
+    },
+    "policies": {
+      "title": "受監督政策"
+    },
+    "auditLog": {
+      "title": "稽核記錄"
+    }
   },
   "chatAppearance": {
     "title": "聊天外觀",
@@ -46,6 +69,12 @@
       "sm": "小",
       "md": "中",
       "lg": "大"
+    },
+    "backgroundImage": {
+      "label": "聊天背景圖片",
+      "description": "當你位於 /chat 時，會顯示在聊天畫面後方。",
+      "upload": "上傳圖片",
+      "clear": "移除背景圖片"
     }
   },
   "generalSettings": {
@@ -140,6 +169,12 @@
         "confirmMessage": "這會重設你的引導狀態，並將你帶回設定流程的起始步驟。",
         "toast": "引導已重設",
         "toastBody": "我們會帶你回到歡迎步驟，好讓你再次檢查伺服器 URL 和 API 金鑰。"
+      },
+      "hideQuickChatHelper": {
+        "label": "隱藏快速聊天助手按鈕"
+      },
+      "stickyChatInput": {
+        "label": "捲動時保持聊天輸入框可見"
       }
     },
     "sidepanelRag": {
@@ -260,7 +295,12 @@
         "label": "回應拆分"
       },
       "removeReasoningTagTTS": {
-        "label": "從 TTS 中刪除推理標籤"
+        "label": "從 TTS 中刪除推理標籤",
+        "description": "在語音播放前移除 <think>...</think> 推理區塊。讓音訊聚焦於最終答案。"
+      },
+      "playbackSpeed": {
+        "label": "播放速度",
+        "description": "控制音訊播放速度（不影響生成）。"
       }
     },
     "stt": {
@@ -383,6 +423,9 @@
       "example2": "控制聊天是否為暫時、如何處理大量貼上內容，以及推理顯示方式。",
       "primaryCta": "設定伺服器與驗證",
       "secondaryCta": "關閉"
+    },
+    "chatbooks": {
+      "heading": "聊天書"
     }
   },
   "manageModels": {
@@ -534,7 +577,56 @@
     "copilotEmptyDescription": "Copilot 提示詞是由 tldw 伺服器提供的預設模板。",
     "copilotEmptyExample1": "若預期有 Copilot 提示詞，請檢查伺服器版本或設定。",
     "copilotEmptyExample2": "更新伺服器後，請重新載入擴充功能並回到此分頁。",
-    "copilotEmptyCta": "開啟診斷"
+    "copilotEmptyCta": "開啟診斷",
+    "studio": {
+      "projects": {
+        "title": "專案",
+        "description": "描述"
+      },
+      "prompts": {
+        "title": "提示詞"
+      },
+      "testCases": {
+        "title": "測試案例",
+        "bulkPanel": {
+          "title": "批次匯入/匯出"
+        },
+        "generateModal": {
+          "title": "產生測試案例"
+        },
+        "runModal": {
+          "title": "執行測試案例"
+        }
+      },
+      "evaluations": {
+        "title": "評估",
+        "wizard": {
+          "title": "建立評估"
+        },
+        "detail": {
+          "title": "評估詳情"
+        }
+      },
+      "optimizations": {
+        "title": "最佳化",
+        "wizard": {
+          "title": "開始最佳化"
+        },
+        "progress": {
+          "title": "最佳化進度"
+        },
+        "compare": {
+          "title": "比較最佳化策略",
+          "description": "描述"
+        }
+      },
+      "common": {
+        "description": "描述"
+      },
+      "queueHealth": {
+        "title": "佇列健康"
+      }
+    }
   },
   "manageShare": {
     "title": "分享管理",
@@ -771,6 +863,32 @@
         "notes": "筆記與提示管理",
         "stt": "語音轉文字"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "變更驗證模式？"
+    },
+    "loginMethod": {
+      "label": "登入方式"
+    },
+    "magicLink": {
+      "email": {
+        "label": "電子郵件",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "魔法連結權杖",
+        "placeholder": "貼上電子郵件中的權杖"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "目前使用預設示範 API 金鑰"
+    },
+    "billing": {
+      "title": "帳單與用量",
+      "subtitle": "管理你的方案、計費週期與用量限制。",
+      "invoices": {
+        "title": "發票歷史"
+      }
     }
   },
   "manageKnowledge": {
@@ -950,7 +1068,24 @@
       "mediaTitle": "探索媒體與筆記",
       "mediaBody": "造訪選項中的媒體與筆記，查看已儲存和可搜尋的內容。"
     },
-    "headerShortcuts": "在標頭顯示快速捷徑"
+    "headerShortcuts": "在標頭顯示快速捷徑",
+    "loginMethod": {
+      "label": "登入方式"
+    },
+    "magicLink": {
+      "email": {
+        "label": "電子郵件",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "魔法連結權杖",
+        "placeholder": "貼上電子郵件中的權杖"
+      }
+    },
+    "defaults": {
+      "title": "設定你的預設值",
+      "subtitle": "為新聊天選擇預設供應商與模型。"
+    }
   },
   "manageCharacters": {
     "title": "管理角色",
@@ -1462,5 +1597,43 @@
       "methodOptionsLabel": "方法特定選項",
       "notesLabel": "備註"
     }
-  }
+  },
+  "chatbooksNav": "聊天書",
+  "mediaTrashNav": "媒體垃圾桶",
+  "chatSettingsNav": "聊天",
+  "quickIngestSettingsNav": "快速匯入",
+  "speechSettingsNav": "語音",
+  "imageGenerationSettingsNav": "影像生成",
+  "uiCustomizationNav": "介面自訂",
+  "splashSettingsNav": "啟動畫面",
+  "speechSettings": {
+    "title": "語音設定",
+    "subtitle": "管理聽寫與播放所用的語音轉文字與文字轉語音預設值。"
+  },
+  "uiCustomization": {
+    "title": "介面自訂",
+    "subtitle": "自訂導覽捷徑與預設版面配置。",
+    "shortcuts": {
+      "title": "側邊欄快捷方式",
+      "description": "最多可為側邊欄圖示與快捷清單選擇 10 個項目。"
+    },
+    "headerShortcuts": {
+      "title": "實驗場快捷方式",
+      "description": "選擇要顯示在頁首快捷面板中的快捷方式。"
+    }
+  },
+  "splashSettings": {
+    "title": "啟動畫面",
+    "subtitle": "自訂啟動時的 splash 卡片與效果。"
+  },
+  "imageGenerationSettings": {
+    "title": "影像生成",
+    "subtitle": "為各後端設定影像生成預設值，並設定斜線命令的預設。"
+  },
+  "quickIngestSettings": {
+    "title": "快速匯入",
+    "subtitle": "設定快速匯入的預設值、預設集與行為。"
+  },
+  "acpPlaygroundNav": "ACP 實驗場",
+  "skillsNav": "技能"
 }

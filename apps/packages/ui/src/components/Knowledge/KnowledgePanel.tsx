@@ -271,6 +271,18 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     return () => window.removeEventListener("tldw:toggle-rag", handler)
   }, [isOpen, setOpenState])
 
+  const handleApplyAndSearch = React.useCallback(() => {
+    if (activeTab === "file-search") {
+      void fileSearch.runSearch({ applyFirst: true })
+      return
+    }
+
+    void qaSearch.runQASearch({ applyFirst: true })
+    if (activeTab !== "qa-search") {
+      handleTabChange("qa-search")
+    }
+  }, [activeTab, fileSearch.runSearch, handleTabChange, qaSearch.runQASearch])
+
   // Don't render if closed
   if (!isOpen) {
     if (showToggle) {
@@ -293,18 +305,6 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
       : "panel-card mb-2 relative"
 
   const showApplyActions = settings.isDirty
-
-  const handleApplyAndSearch = React.useCallback(() => {
-    if (activeTab === "file-search") {
-      void fileSearch.runSearch({ applyFirst: true })
-      return
-    }
-
-    void qaSearch.runQASearch({ applyFirst: true })
-    if (activeTab !== "qa-search") {
-      handleTabChange("qa-search")
-    }
-  }, [activeTab, fileSearch.runSearch, handleTabChange, qaSearch.runQASearch])
 
   return (
     <div className={wrapperClassName}>

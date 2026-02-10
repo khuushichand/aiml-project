@@ -219,6 +219,35 @@ export const useServerChatLoader = ({
           const mappedMessages = list.map((m) => {
             const meta = m as unknown as Record<string, unknown>
             const createdAt = Date.parse(m.created_at)
+            const metadataExtraCandidate =
+              (m as unknown as { metadata_extra?: unknown }).metadata_extra ??
+              (meta?.metadata_extra as unknown)
+            const metadataExtra =
+              metadataExtraCandidate &&
+              typeof metadataExtraCandidate === "object" &&
+              !Array.isArray(metadataExtraCandidate)
+                ? (metadataExtraCandidate as Record<string, unknown>)
+                : undefined
+            const speakerCharacterIdRaw = metadataExtra?.speaker_character_id
+            const speakerCharacterId =
+              typeof speakerCharacterIdRaw === "number" &&
+              Number.isFinite(speakerCharacterIdRaw)
+                ? speakerCharacterIdRaw
+                : typeof speakerCharacterIdRaw === "string" &&
+                    speakerCharacterIdRaw.trim().length > 0 &&
+                    Number.isFinite(Number(speakerCharacterIdRaw))
+                  ? Number(speakerCharacterIdRaw)
+                  : null
+            const moodConfidenceRaw = metadataExtra?.mood_confidence
+            const moodConfidence =
+              typeof moodConfidenceRaw === "number" &&
+              Number.isFinite(moodConfidenceRaw)
+                ? moodConfidenceRaw
+                : typeof moodConfidenceRaw === "string" &&
+                    moodConfidenceRaw.trim().length > 0 &&
+                    Number.isFinite(Number(moodConfidenceRaw))
+                  ? Number(moodConfidenceRaw)
+                  : null
             const senderName =
               typeof (m as any).sender === "string"
                 ? String((m as any).sender).trim()
@@ -259,10 +288,24 @@ export const useServerChatLoader = ({
               modelImage:
                 (meta?.model_image as string | undefined) ??
                 (meta?.modelImage as string | undefined),
+              metadataExtra,
+              speakerCharacterId,
+              speakerCharacterName:
+                typeof metadataExtra?.speaker_character_name === "string"
+                  ? metadataExtra.speaker_character_name
+                  : undefined,
+              moodLabel:
+                typeof metadataExtra?.mood_label === "string"
+                  ? metadataExtra.mood_label
+                  : undefined,
+              moodConfidence,
+              moodTopic:
+                typeof metadataExtra?.mood_topic === "string"
+                  ? metadataExtra.mood_topic
+                  : null,
               pinned: Boolean(
                 (meta?.pinned as boolean | undefined) ??
-                  ((meta?.metadata_extra as Record<string, unknown> | undefined)
-                    ?.pinned as boolean | undefined)
+                  (metadataExtra?.pinned as boolean | undefined)
               )
             }
           })

@@ -5,6 +5,7 @@ import {
   coerceString,
   defineSetting
 } from "@/services/settings/registry"
+import { DEFAULT_SPLASH_CARD_NAMES } from "@/data/splash-cards"
 import {
   normalizeMediaChatHandoffPayload,
   type MediaChatHandoffPayload
@@ -85,6 +86,73 @@ export const CHAT_BACKGROUND_IMAGE_SETTING = defineSetting(
   "chatBackgroundImage",
   undefined as string | undefined,
   coerceOptionalString
+)
+
+const SPLASH_CARD_NAME_SET = new Set(DEFAULT_SPLASH_CARD_NAMES)
+
+const coerceSplashCardNameArray = (value: unknown): string[] => {
+  const normalized = coerceStringArray(value, DEFAULT_SPLASH_CARD_NAMES)
+  const seen = new Set<string>()
+  const next: string[] = []
+  for (const name of normalized) {
+    if (!SPLASH_CARD_NAME_SET.has(name) || seen.has(name)) continue
+    seen.add(name)
+    next.push(name)
+  }
+  return next
+}
+
+export const SPLASH_DISABLED_SETTING = defineSetting(
+  "tldw:splash:disabled",
+  false,
+  (value) => coerceBoolean(value, false),
+  {
+    area: "local",
+    localStorageKey: "tldw_splash_disabled",
+    mirrorToLocalStorage: true
+  }
+)
+
+export const SPLASH_ENABLED_CARD_NAMES_SETTING = defineSetting(
+  "tldw:splash:enabledCards",
+  DEFAULT_SPLASH_CARD_NAMES,
+  (value) => coerceSplashCardNameArray(value),
+  {
+    area: "local",
+    validate: (value) =>
+      Array.isArray(value) &&
+      value.every((name) => SPLASH_CARD_NAME_SET.has(name)),
+    localStorageKey: "tldw:splash:enabledCards",
+    mirrorToLocalStorage: true
+  }
+)
+
+export const SPLASH_DURATION_SECONDS_MIN = 1
+export const SPLASH_DURATION_SECONDS_MAX = 10
+export const SPLASH_DURATION_SECONDS_DEFAULT = 3
+
+const coerceSplashDurationSeconds = (value: unknown): number => {
+  const parsed = Math.round(coerceNumber(value, SPLASH_DURATION_SECONDS_DEFAULT))
+  if (!Number.isFinite(parsed)) return SPLASH_DURATION_SECONDS_DEFAULT
+  return Math.min(
+    SPLASH_DURATION_SECONDS_MAX,
+    Math.max(SPLASH_DURATION_SECONDS_MIN, parsed)
+  )
+}
+
+export const SPLASH_DURATION_SECONDS_SETTING = defineSetting(
+  "tldw:splash:durationSeconds",
+  SPLASH_DURATION_SECONDS_DEFAULT,
+  (value) => coerceSplashDurationSeconds(value),
+  {
+    area: "local",
+    validate: (value) =>
+      Number.isInteger(value) &&
+      value >= SPLASH_DURATION_SECONDS_MIN &&
+      value <= SPLASH_DURATION_SECONDS_MAX,
+    localStorageKey: "tldw:splash:durationSeconds",
+    mirrorToLocalStorage: true
+  }
 )
 
 export const CONTEXT_FILE_SIZE_MB_SETTING = defineSetting(

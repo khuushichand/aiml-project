@@ -23,25 +23,15 @@ The fastest way to get a persistent tldw_server running:
 git clone https://github.com/rmusser01/tldw_server.git
 cd tldw_server
 
-# Create .env with your API key
-cat > .env << 'EOF'
-AUTH_MODE=single_user
-SINGLE_USER_API_KEY=your-secure-api-key-at-least-16-chars
-DATABASE_URL=sqlite:///./Databases/users.db
-EOF
-
-# Start the stack
-docker compose -f Dockerfiles/docker-compose.yml up -d --build
-
-# Initialize authentication
-docker compose -f Dockerfiles/docker-compose.yml exec app \
-  python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
+# Start the stack with first-use bootstrap
+make quickstart-docker
 
 # Verify
 curl http://localhost:8000/health
 ```
 
 The server is now running on port 8000.
+On first start in `single_user` mode, this flow ensures a secure `SINGLE_USER_API_KEY` is set and runs `AuthNZ.initialize --non-interactive` automatically once.
 
 ---
 
@@ -61,10 +51,10 @@ The default `docker-compose.yml` starts:
 
 ### Adding LLM Providers
 
-Edit your `.env` file to add provider API keys:
+Edit your `tldw_Server_API/Config_Files/.env` file to add provider API keys:
 
 ```bash
-# .env
+# tldw_Server_API/Config_Files/.env
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=your-secure-api-key-at-least-16-chars
 DATABASE_URL=sqlite:///./Databases/users.db
@@ -98,7 +88,7 @@ services:
 For better performance with multiple users:
 
 ```bash
-# .env
+# tldw_Server_API/Config_Files/.env
 DATABASE_URL=postgresql://tldw:your-secure-password@postgres:5432/tldw
 ```
 
@@ -111,7 +101,7 @@ The postgres service in docker-compose.yml will be used automatically.
 For shared access with individual accounts:
 
 ```bash
-# .env
+# tldw_Server_API/Config_Files/.env
 AUTH_MODE=multi_user
 JWT_SECRET_KEY=your-jwt-secret-at-least-32-chars
 DATABASE_URL=postgresql://tldw:your-secure-password@postgres:5432/tldw
@@ -124,6 +114,8 @@ docker compose -f Dockerfiles/docker-compose.yml exec app \
   python -m tldw_Server_API.app.core.AuthNZ.initialize
 # Follow prompts to create admin account
 ```
+
+Note: auto-initialize on container start is only for the `single_user` bootstrap path. For `multi_user`, run initialization explicitly so you can create an admin account.
 
 ---
 
@@ -206,7 +198,7 @@ git pull
 # Rebuild and restart
 docker compose -f Dockerfiles/docker-compose.yml up -d --build
 
-# Run any migrations
+# Run auth setup (recommended for multi-user; single-user quickstart does this automatically)
 docker compose -f Dockerfiles/docker-compose.yml exec app \
   python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
 ```

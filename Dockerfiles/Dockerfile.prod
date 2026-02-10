@@ -1,45 +1,59 @@
 # Production Dockerfile for tldw_server API
-# - Minimal, non-root, multi-stage build
-# - Includes ffmpeg for media processing and libmagic for file type detection
+# - Multi-stage build keeps compiler/dev packages out of runtime image.
+# - Runtime includes ffmpeg + libmagic + PortAudio runtime libs.
 
-FROM python:3.12-slim AS base
+FROM python:3.12-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-# System deps: ffmpeg (media), libmagic (python-magic), curl (health/debug)
-# Also install python3-pyaudio to avoid runtime failures when audio capture is enabled.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        libmagic1 \
-        portaudio19-dev \
-        python3-pyaudio \
         build-essential \
         python3-dev \
+        portaudio19-dev \
         ca-certificates \
-        curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install project using pyproject (editable not needed in production)
-# Copy only metadata first for better layer caching
+# Copy packaging metadata and source to build/install python deps.
 COPY pyproject.toml README.md /app/
+COPY tldw_Server_API /app/tldw_Server_API
 
-# Install runtime deps (no dev extras)
 RUN pip install --upgrade pip && \
-    pip install .
+    pip install --prefix=/install .
 
-# Now copy the full source
+
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libmagic1 \
+        libportaudio2 \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Bring in installed Python deps from the builder image.
+COPY --from=builder /install /usr/local
+
+# Runtime source/docs/scripts expected by server routes and helpers.
 COPY tldw_Server_API /app/tldw_Server_API
 COPY apps/tldw-frontend /app/apps/tldw-frontend
 COPY Docs /app/Docs
 COPY Helper_Scripts /app/Helper_Scripts
 COPY Databases /app/Databases
+COPY Dockerfiles/entrypoints/tldw-app-first-run.sh /usr/local/bin/tldw-app-first-run
 
 # Create a non-root user
-RUN useradd -m -u 10001 appuser && \
+RUN chmod +x /usr/local/bin/tldw-app-first-run && \
+    useradd -m -u 10001 appuser && \
     chown -R appuser:appuser /app
 USER appuser
 
@@ -51,8 +65,10 @@ ENV PYTHONPATH=/app/tldw_Server_API \
 
 EXPOSE 8000
 
-# Basic healthcheck using the readiness probe
-HEALTHCHECK --interval=30s --timeout=5s --retries=5 CMD curl -fsS http://localhost:8000/ready || exit 1
+# Basic healthcheck using the readiness probe (avoid extra curl dependency).
+HEALTHCHECK --interval=30s --timeout=5s --retries=5 CMD python -c "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/ready', timeout=3).status == 200 else 1)"
+
+ENTRYPOINT ["/usr/local/bin/tldw-app-first-run"]
 
 # Start the server
 CMD ["python", "-m", "uvicorn", "tldw_Server_API.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--log-level", "info", "--proxy-headers"]

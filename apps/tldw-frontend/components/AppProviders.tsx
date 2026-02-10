@@ -56,7 +56,13 @@ export const AppProviders: React.FC<AppProvidersProps> = ({ children }) => {
 
   useEffect(() => {
     if (typeof window === "undefined") return
-    const onSplashTrigger = () => splash.show()
+    const onSplashTrigger = (event: Event) => {
+      const detail =
+        event instanceof CustomEvent
+          ? (event as CustomEvent<{ force?: boolean }>).detail
+          : undefined
+      splash.show({ force: detail?.force === true })
+    }
     window.addEventListener(SPLASH_TRIGGER_EVENT, onSplashTrigger)
     return () => window.removeEventListener(SPLASH_TRIGGER_EVENT, onSplashTrigger)
   }, [splash.show])

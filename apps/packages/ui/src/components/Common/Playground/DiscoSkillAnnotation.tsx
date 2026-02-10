@@ -44,7 +44,7 @@ export const DiscoSkillAnnotation: React.FC<DiscoSkillAnnotationProps> = ({
   const categoryColor =
     DISCO_CATEGORY_COLORS[comment.category] || comment.color
 
-  // Background color with low opacity based on category
+  // theme-exempt: skill category colors
   const bgColorMap: Record<string, string> = {
     intellect: "bg-blue-50 dark:bg-blue-950/30",
     psyche: "bg-purple-50 dark:bg-purple-950/30",

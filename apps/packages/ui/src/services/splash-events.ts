@@ -6,6 +6,9 @@ export const SPLASH_TRIGGER_EVENT = "tldw:splash:show-after-login-success"
  */
 export function emitSplashAfterLoginSuccess(): void {
   if (typeof window === "undefined") return
-  window.dispatchEvent(new CustomEvent(SPLASH_TRIGGER_EVENT))
+  window.dispatchEvent(
+    new CustomEvent(SPLASH_TRIGGER_EVENT, {
+      detail: { force: true, source: "login-success" as const }
+    })
+  )
 }
-

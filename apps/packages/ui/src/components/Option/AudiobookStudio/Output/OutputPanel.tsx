@@ -405,7 +405,7 @@ export const OutputPanel: React.FC = () => {
           <Progress
             percent={combineProgress}
             status="active"
-            strokeColor={{ from: "#108ee9", to: "#87d068" }}
+            strokeColor={{ from: "rgb(var(--color-primary))", to: "rgb(var(--color-success))" }}
             className="mb-4"
           />
         )}

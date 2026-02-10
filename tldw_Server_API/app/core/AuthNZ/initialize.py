@@ -24,6 +24,13 @@ from dotenv import dotenv_values, load_dotenv
 from loguru import logger
 
 TEST_SETUP_API_KEY = "THIS-IS-NOT-A-SECURE-KEY-123-CHANGE-ME"
+SINGLE_USER_API_KEY_PLACEHOLDERS = {
+    "CHANGE_ME_TO_SECURE_API_KEY",
+    "default-secret-key-for-single-user",
+    "change-me-in-production",
+    "CHANGE-ME-to-a-secure-key-at-least-16-chars",
+    "THIS-IS-A-SECURE-KEY-123-FAKE-KEY",
+}
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
@@ -133,14 +140,11 @@ def _resolve_env_locations() -> tuple[list[Path], list[Path], Path]:
     env_candidates = [
         cfg_dir / ".env",
         cfg_dir / ".ENV",
-        Path(".env").resolve(),
-        Path(".ENV").resolve(),
     ]
     template_candidates = [
+        cfg_dir / ".env.quickstart",
         cfg_dir / ".env.authnz.template",
         cfg_dir / ".env.template",
-        Path(".env.authnz.template").resolve(),
-        Path(".env.template").resolve(),
     ]
     return env_candidates, template_candidates, cfg_dir
 
@@ -177,11 +181,6 @@ def _detect_env_issues(auth_mode: str, env_values: dict[str, str]) -> tuple[set[
         issues.append(f"AUTH_MODE must be 'single_user' or 'multi_user' (found: {auth_mode})")
         return missing_keys, issues
 
-    single_user_placeholders = {
-        "CHANGE_ME_TO_SECURE_API_KEY",
-        "default-secret-key-for-single-user",
-        "change-me-in-production",
-    }
     jwt_placeholders = {
         "CHANGE_ME_TO_SECURE_RANDOM_KEY_MIN_32_CHARS",
     }
@@ -194,7 +193,7 @@ def _detect_env_issues(auth_mode: str, env_values: dict[str, str]) -> tuple[set[
         if not single_key:
             missing_keys.add("SINGLE_USER_API_KEY")
             issues.append("SINGLE_USER_API_KEY is required for single-user mode")
-        elif single_key in single_user_placeholders:
+        elif single_key in SINGLE_USER_API_KEY_PLACEHOLDERS:
             missing_keys.add("SINGLE_USER_API_KEY")
             issues.append("SINGLE_USER_API_KEY still uses the default placeholder")
         elif len(single_key) < 16:
@@ -326,7 +325,6 @@ def check_environment():
 
     Preference order for .env resolution:
       1) tldw_Server_API/Config_Files/.env (project Config_Files directory)
-      2) ./.env (current working directory)
     The first found file is loaded into process env (non-overriding).
     """
     print("📋 Checking environment configuration...")
@@ -336,7 +334,7 @@ def check_environment():
 
     if selected_env is None:
         selected_env = env_candidates[0]
-        print("❌ No .env file found in Config_Files/ or current directory!")
+        print("❌ No .env file found in Config_Files!")
         print(f"   Creating at: {selected_env}")
         created = _create_env_from_template(selected_env, template_candidates)
         if created:

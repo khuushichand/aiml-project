@@ -70,7 +70,6 @@ const createProps = (
   webSearch: false,
   onToggleWebSearch: vi.fn(),
   hasWebSearch: true,
-  onOpenPromptInsert: vi.fn(),
   onOpenModelSettings: vi.fn(),
   modelSummaryLabel: "Model",
   promptSummaryLabel: "Prompt",

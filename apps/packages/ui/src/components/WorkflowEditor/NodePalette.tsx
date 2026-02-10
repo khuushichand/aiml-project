@@ -93,7 +93,7 @@ const buildStepSearchText = (
     .toLowerCase()
 }
 
-// Category colors
+// theme-exempt: workflow category colors
 const CATEGORY_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   purple: {
     bg: "bg-purple-100 dark:bg-purple-900/30",

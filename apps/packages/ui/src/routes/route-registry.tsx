@@ -33,7 +33,8 @@ import {
   ImageIcon,
   SlidersHorizontal,
   FileText,
-  Zap
+  Zap,
+  Sparkles
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import OptionLayout from "~/components/Layouts/Layout"
@@ -165,6 +166,10 @@ const OptionUiCustomization = createSettingsRoute(
   () => import("~/components/Option/Settings/ui-customization"),
   "UiCustomizationSettings"
 )
+const OptionSplashSettings = createSettingsRoute(
+  () => import("~/components/Option/Settings/splash"),
+  "SplashSettings"
+)
 const OptionQuickIngestSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/QuickIngestSettings"),
   "QuickIngestSettings"
@@ -284,6 +289,17 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "settings:uiCustomizationNav",
       icon: SlidersHorizontal,
       order: 3.5
+    }
+  },
+  {
+    kind: "options",
+    path: "/settings/splash",
+    element: <OptionSplashSettings />,
+    nav: {
+      group: "server",
+      labelToken: "settings:splashSettingsNav",
+      icon: Sparkles,
+      order: 3.6
     }
   },
   {
@@ -605,7 +621,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     element: <OptionACPPlayground />,
     nav: {
       group: "workspace",
-      labelToken: "option:header.acpPlayground",
+      labelToken: "settings:acpPlaygroundNav",
       icon: Bot,
       order: 12,
       beta: true
@@ -617,7 +633,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     element: <OptionSkills />,
     nav: {
       group: "workspace",
-      labelToken: "option:header.skills",
+      labelToken: "settings:skillsNav",
       icon: Zap,
       order: 13,
       beta: true

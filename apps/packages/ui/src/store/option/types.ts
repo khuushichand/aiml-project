@@ -75,6 +75,14 @@ export type Message = {
   discoSkillComment?: DiscoSkillComment
   // Character message pin state (server metadata-backed)
   pinned?: boolean
+  // Full metadata payload (if provided by server)
+  metadataExtra?: Record<string, unknown>
+  // Character turn metadata (multi-character + mood scaffolding)
+  speakerCharacterId?: number | null
+  speakerCharacterName?: string
+  moodLabel?: string
+  moodConfidence?: number | null
+  moodTopic?: string | null
 }
 
 export type ChatHistory = {

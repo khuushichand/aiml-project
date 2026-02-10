@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
+    DatabaseLockError,
     InvalidTokenError,
     RegistrationError,
     TokenExpiredError,
@@ -98,6 +99,79 @@ _SENSITIVE_USER_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _AUTH_DEPS_RG_DIAGNOSTICS_ONLY_LOGGED: set[str] = set()
+
+
+def _read_non_negative_int_env(name: str, default: int) -> int:
+    """Read an integer environment variable and clamp to non-negative."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid integer env for {}: {!r}; using default={}",
+            name,
+            raw,
+            default,
+        )
+        return default
+    return max(parsed, 0)
+
+
+def _read_non_negative_float_env(name: str, default: float) -> float:
+    """Read a float environment variable and clamp to non-negative."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        parsed = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid float env for {}: {!r}; using default={}",
+            name,
+            raw,
+            default,
+        )
+        return default
+    return max(parsed, 0.0)
+
+
+def _authnz_sqlite_lock_retry_config() -> tuple[int, float, float, int]:
+    """Return retry/backoff config for transient AuthNZ SQLite lock contention."""
+    max_retries = _read_non_negative_int_env(
+        "AUTHNZ_SQLITE_LOCK_MAX_RETRIES",
+        2,
+    )
+    retry_after_seconds = _read_non_negative_int_env(
+        "AUTHNZ_SQLITE_LOCK_RETRY_AFTER_SECONDS",
+        1,
+    )
+    base_backoff_seconds = _read_non_negative_float_env(
+        "AUTHNZ_SQLITE_LOCK_RETRY_BASE_SECONDS",
+        0.05,
+    )
+    max_backoff_seconds = _read_non_negative_float_env(
+        "AUTHNZ_SQLITE_LOCK_RETRY_MAX_SECONDS",
+        0.25,
+    )
+    if max_backoff_seconds < base_backoff_seconds:
+        max_backoff_seconds = base_backoff_seconds
+    return (
+        max_retries,
+        base_backoff_seconds,
+        max_backoff_seconds,
+        retry_after_seconds,
+    )
+
+
+def _authnz_busy_http_exception(retry_after_seconds: int) -> HTTPException:
+    """Create a consistent 503 response for temporary AuthNZ DB contention."""
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Authentication database is busy. Please retry shortly.",
+        headers={"Retry-After": str(max(retry_after_seconds, 0))},
+    )
 
 
 def _public_user_dict(user: Mapping[str, Any]) -> dict[str, Any]:
@@ -415,9 +489,49 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
         finally:
             await conn_cm.__aexit__(None, None, None)
     else:
-        # Default: yield a request-scoped transaction so writes commit reliably
-        async with db_pool.transaction() as conn:
+        # Default: yield a request-scoped transaction so writes commit reliably.
+        # For SQLite lock contention, retry only transaction-entry failures.
+        max_retries, backoff_base, backoff_max, retry_after = _authnz_sqlite_lock_retry_config()
+        entry_attempt = 0
+        txn_cm = None
+        conn = None
+
+        while True:
+            txn_cm = db_pool.transaction()
+            try:
+                conn = await txn_cm.__aenter__()
+                break
+            except DatabaseLockError as lock_exc:
+                if entry_attempt >= max_retries:
+                    logger.warning(
+                        "AuthNZ DB lock contention exhausted entry retries (attempts={})",
+                        entry_attempt + 1,
+                    )
+                    raise _authnz_busy_http_exception(retry_after) from lock_exc
+                sleep_seconds = min(backoff_base * (2 ** entry_attempt), backoff_max)
+                logger.debug(
+                    "AuthNZ DB lock contention on transaction entry; retrying (attempt={} sleep={}s)",
+                    entry_attempt + 1,
+                    sleep_seconds,
+                )
+                entry_attempt += 1
+                await asyncio.sleep(sleep_seconds)
+
+        assert txn_cm is not None
+
+        try:
             yield conn
+        except BaseException as exc:
+            try:
+                await txn_cm.__aexit__(type(exc), exc, exc.__traceback__)
+            except DatabaseLockError as lock_exc:
+                raise _authnz_busy_http_exception(retry_after) from lock_exc
+            raise
+        else:
+            try:
+                await txn_cm.__aexit__(None, None, None)
+            except DatabaseLockError as lock_exc:
+                raise _authnz_busy_http_exception(retry_after) from lock_exc
 
 
 async def get_password_service_dep() -> PasswordService:

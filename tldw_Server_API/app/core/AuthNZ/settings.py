@@ -92,6 +92,14 @@ SINGLE_USER_KEY_PRODUCTION_WEAK = (
     "In production (tldw_production=true), SINGLE_USER_API_KEY must be set to a secure value (>=24 chars) "
     f"and must not use defaults.\n{SECURE_KEY_GUIDANCE}"
 )
+SINGLE_USER_API_KEY_PLACEHOLDERS = {
+    "CHANGE_ME_TO_SECURE_API_KEY",
+    "default-secret-key-for-single-user",
+    "change-me-in-production",
+    "CHANGE-ME-to-a-secure-key-at-least-16-chars",
+    "THIS-IS-A-SECURE-KEY-123-FAKE-KEY",
+}
+AUTHNZ_DEFAULT_ENV_FILE = Path(__file__).resolve().parents[3] / "Config_Files" / ".env"
 
 #######################################################################################################################
 #
@@ -778,14 +786,12 @@ class Settings(BaseSettings):
                 else:
                     raise ValueError(SINGLE_USER_KEY_MISSING)
             # In test contexts, normalize known placeholder keys to a deterministic test key
-            elif in_test_context and (
-                self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "default-secret-key-for-single-user", "change-me-in-production"}
-            ):
+            elif in_test_context and self.SINGLE_USER_API_KEY in SINGLE_USER_API_KEY_PLACEHOLDERS:
                 test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
                 if test_key:
                     self.SINGLE_USER_API_KEY = test_key
                     logger.debug("Normalized SINGLE_USER_API_KEY to SINGLE_USER_TEST_API_KEY for pytest context")
-            elif self.SINGLE_USER_API_KEY == "change-me-in-production":
+            elif self.SINGLE_USER_API_KEY in SINGLE_USER_API_KEY_PLACEHOLDERS:
                 raise ValueError(SINGLE_USER_KEY_DEFAULT)
             elif len(self.SINGLE_USER_API_KEY) < 16:
                 # Allow short keys in explicit test contexts to avoid brittle fixtures
@@ -815,7 +821,7 @@ class Settings(BaseSettings):
             if prod_flag:
                 weak = (
                     not self.SINGLE_USER_API_KEY
-                    or self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "test-api-key-12345", "change-me-in-production"}
+                    or self.SINGLE_USER_API_KEY in SINGLE_USER_API_KEY_PLACEHOLDERS.union({"test-api-key-12345"})
                     or len(self.SINGLE_USER_API_KEY) < 24
                 )
                 if weak:
@@ -949,7 +955,7 @@ class Settings(BaseSettings):
         return v
 
     model_config = {
-        "env_file": ".env",
+        "env_file": str(AUTHNZ_DEFAULT_ENV_FILE),
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
         "extra": "allow"  # Allow extra fields for backward compatibility

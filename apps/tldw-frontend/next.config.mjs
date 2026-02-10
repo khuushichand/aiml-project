@@ -9,6 +9,8 @@ const paTesseractPath = path.resolve(__dirname, 'node_modules/pa-tesseract.js');
 const nextConfig = {
   reactStrictMode: true,
   reactCompiler: false,
+  // Emit a standalone server bundle for distribution via Docker or tarball artifacts.
+  output: 'standalone',
   // Skip TypeScript errors during build - packages/ui was developed with
   // Vite/WXT type definitions that Next.js doesn't provide.
   // Runtime works correctly; these are type-definition mismatches.

@@ -175,6 +175,9 @@ def test_persist_streamed_message_preserves_active_speaker_identity(test_client:
             "assistant_content": "secondary streamed response",
             "speaker_character_id": secondary_id,
             "speaker_character_name": secondary_name,
+            "mood_label": "happy",
+            "mood_confidence": 0.92,
+            "mood_topic": "celebration",
             "usage": {
                 "prompt_tokens": 12,
                 "completion_tokens": 8,
@@ -206,6 +209,9 @@ def test_persist_streamed_message_preserves_active_speaker_identity(test_client:
     assert metadata_extra.get("speaker_character_id") == secondary_id
     assert metadata_extra.get("speaker_character_name") == secondary_name
     assert metadata_extra.get("turn_taking_mode") == "round_robin"
+    assert metadata_extra.get("mood_label") == "happy"
+    assert metadata_extra.get("mood_confidence") == pytest.approx(0.92)
+    assert metadata_extra.get("mood_topic") == "celebration"
     assert metadata_extra.get("usage") == {
         "prompt_tokens": 12,
         "completion_tokens": 8,

@@ -581,7 +581,7 @@ export const ModerationPlayground: React.FC = () => {
     if (checked) {
       Modal.confirm({
         title: "Save Settings to Disk?",
-        icon: <WarningOutlined style={{ color: "#faad14" }} />,
+        icon: <WarningOutlined style={{ color: "rgb(var(--color-warn))" }} />,
         content: "This will permanently save your moderation settings to disk. Changes will persist after server restarts. Are you sure?",
         okText: "Yes, persist settings",
         cancelText: "Cancel",

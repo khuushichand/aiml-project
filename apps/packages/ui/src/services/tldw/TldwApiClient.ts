@@ -692,6 +692,9 @@ export class TldwApiClient {
     await this.storage.set('tldwConfig', newConfig)
     this.config = newConfig
     await this.initialize().catch(() => null)
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("tldw:config-updated"))
+    }
   }
 
   async healthCheck(): Promise<boolean> {

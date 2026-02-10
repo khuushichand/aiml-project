@@ -3,9 +3,15 @@ Tests for production guardrails in single-user mode.
 """
 
 import os
+from pathlib import Path
 import pytest
 
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, reset_settings
+from tldw_Server_API.app.core.AuthNZ.settings import (
+    AUTHNZ_DEFAULT_ENV_FILE,
+    Settings,
+    get_settings,
+    reset_settings,
+)
 from tldw_Server_API.app.core.AuthNZ.api_key_crypto import format_api_key
 
 
@@ -149,3 +155,11 @@ def test_get_settings_does_not_use_pytest_module_presence_for_test_context(
 
     assert settings.AUTH_MODE == "single_user"
     assert not hasattr(settings, "RATE_LIMIT_ENABLED")
+
+
+def test_authnz_settings_env_file_points_to_config_files() -> None:
+    env_file = Path(Settings.model_config.get("env_file", ""))
+
+    assert env_file == AUTHNZ_DEFAULT_ENV_FILE
+    assert env_file.name == ".env"
+    assert "Config_Files" in str(env_file)

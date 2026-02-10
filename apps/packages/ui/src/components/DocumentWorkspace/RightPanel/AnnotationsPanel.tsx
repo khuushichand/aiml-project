@@ -36,7 +36,7 @@ import type { Annotation, AnnotationColor, AnnotationType, DocumentType } from "
 
 const { TextArea } = Input
 
-// Color badges for annotations
+// theme-exempt: user annotation colors
 const COLOR_BADGES: Record<AnnotationColor, { bg: string; border: string; label: string }> = {
   yellow: { bg: "bg-yellow-100 dark:bg-yellow-900/30", border: "border-yellow-300 dark:border-yellow-700", label: "Yellow" },
   green: { bg: "bg-green-100 dark:bg-green-900/30", border: "border-green-300 dark:border-green-700", label: "Green" },

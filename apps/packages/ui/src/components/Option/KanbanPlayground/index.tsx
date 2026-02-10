@@ -130,7 +130,7 @@ export const KanbanPlayground = () => {
             count={boards.length}
             showZero
             styles={{
-              indicator: { backgroundColor: "#60a5fa", color: "#0b1f4b" }
+              indicator: { backgroundColor: "rgb(var(--color-primary))", color: "rgb(var(--color-text))" }
             }}
           />
         </div>

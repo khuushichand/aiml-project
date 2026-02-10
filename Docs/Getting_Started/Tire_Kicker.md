@@ -14,17 +14,19 @@ This guide gets you from zero to a running tldw_server with working API calls. N
 
 ## Fastest Path (30 Seconds)
 
-If you have Python 3.10+ and ffmpeg already installed:
+If you have Python 3.10+:
 
 ```bash
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
-make quickstart
+make quickstart-install
 ```
 
-This creates a `.env`, initializes auth, and starts the server. Verify with:
+This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts the server. Verify with:
 ```bash
 curl http://localhost:8000/health
 ```
+
+Already have dependencies installed? Use `make quickstart`.
 
 **Not working?** Continue with the step-by-step options below.
 
@@ -35,10 +37,21 @@ curl http://localhost:8000/health
 | Requirement | Check Command | Install |
 |-------------|---------------|---------|
 | Python 3.10+ | `python3 --version` | [python.org](https://www.python.org/downloads/) |
-| ffmpeg | `ffmpeg -version` | `brew install ffmpeg` (macOS) or `apt install ffmpeg` (Linux) |
+| ffmpeg | `ffmpeg -version` | `brew install ffmpeg` (macOS) or your Linux package manager |
+| PyAudio/PortAudio (Linux audio capture) | `python3 -c "import pyaudio"` | `apt install portaudio19-dev python3-pyaudio` (Ubuntu/Debian) |
 | pip | `pip --version` | Comes with Python |
 
 **Don't have Python/ffmpeg?** Use [Docker instead](#option-b-docker) (requires Docker Desktop or Docker Engine).
+
+Linux package examples:
+```bash
+# Ubuntu/Debian
+sudo apt update
+sudo apt install -y ffmpeg portaudio19-dev python3-pyaudio
+
+# Fedora/RHEL (RPM Fusion may be required for ffmpeg)
+sudo dnf install -y ffmpeg portaudio-devel python3-pyaudio
+```
 
 ---
 
@@ -67,13 +80,13 @@ pip install -e .
 
 ```bash
 # Copy the minimal config template
-cp tldw_Server_API/Config_Files/.env.quickstart .env
+cp tldw_Server_API/Config_Files/.env.quickstart tldw_Server_API/Config_Files/.env
 ```
 
-Now edit `.env` and change the API key:
+Now edit `tldw_Server_API/Config_Files/.env` and change the API key:
 
 ```bash
-# .env
+# tldw_Server_API/Config_Files/.env
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=my-super-secret-key-at-least-16-chars   # <-- Change this!
 DATABASE_URL=sqlite:///./Databases/users.db
@@ -139,18 +152,18 @@ If you prefer Docker or don't want to install Python.
 git clone https://github.com/rmusser01/tldw_server.git
 cd tldw_server
 
-# Create .env with your API key
-cat > .env << 'EOF'
+# Create tldw_Server_API/Config_Files/.env with your API key
+cat > tldw_Server_API/Config_Files/.env << 'EOF'
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=my-super-secret-key-at-least-16-chars
 DATABASE_URL=sqlite:///./Databases/users.db
 EOF
 
 # Start with Docker Compose (takes 3-5 minutes first time)
-docker compose -f Dockerfiles/docker-compose.yml up -d --build
+docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml up -d --build
 
 # Initialize auth
-docker compose -f Dockerfiles/docker-compose.yml exec app \
+docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml exec app \
   python -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
 
 # Verify
@@ -173,7 +186,7 @@ Expected: `{"status":"ok",...}`
 ### 2. Authentication Test
 
 ```bash
-# Replace YOUR_KEY with your SINGLE_USER_API_KEY from .env
+# Replace YOUR_KEY with your SINGLE_USER_API_KEY from tldw_Server_API/Config_Files/.env
 curl -H "X-API-KEY: YOUR_KEY" http://localhost:8000/api/v1/llm/providers
 ```
 Expected: `{"providers":[...]}`

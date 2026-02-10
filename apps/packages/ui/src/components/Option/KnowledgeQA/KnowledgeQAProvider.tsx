@@ -12,6 +12,7 @@ import React, {
   useRef,
   type ReactNode,
 } from "react"
+import { useStorage } from "@plasmohq/storage/hook"
 import type {
   KnowledgeQAState,
   KnowledgeQAActions,
@@ -83,6 +84,10 @@ type Action =
   | { type: "SET_THREADS"; payload: KnowledgeQAThread[] }
   | { type: "ADD_THREAD"; payload: KnowledgeQAThread }
   | { type: "SET_PRESET"; payload: RagPresetName }
+  | {
+      type: "HYDRATE_DEFAULTS"
+      payload: { preset: RagPresetName; settings: RagSettings }
+    }
   | { type: "SET_SETTINGS"; payload: RagSettings }
   | { type: "UPDATE_SETTING"; payload: { key: keyof RagSettings; value: unknown } }
   | { type: "TOGGLE_EXPERT_MODE" }
@@ -140,6 +145,12 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
               },
       }
     }
+    case "HYDRATE_DEFAULTS":
+      return {
+        ...state,
+        preset: action.payload.preset,
+        settings: action.payload.settings,
+      }
     case "SET_SETTINGS":
       return { ...state, settings: action.payload, preset: "custom" }
     case "UPDATE_SETTING":
@@ -188,6 +199,12 @@ function parseCitations(answer: string, results: RagResult[]): CitationRef[] {
 // Provider component
 export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState)
+  const [storedPreset] = useStorage<RagPresetName>("ragSearchPreset", "balanced")
+  const [storedSettings] = useStorage<RagSettings>(
+    "ragSearchSettingsV2",
+    DEFAULT_RAG_SETTINGS
+  )
+  const hydratedDefaultsRef = useRef<string | null>(null)
   const message = useAntdMessage()
   const defaultCharacterIdRef = useRef<number | null>(null)
   const defaultCharacterPromiseRef = useRef<Promise<number | null> | null>(null)
@@ -196,6 +213,44 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     tldwClient.initialize().catch(console.error)
   }, [])
+
+  useEffect(() => {
+    if (state.currentThreadId || state.messages.length > 0) {
+      hydratedDefaultsRef.current = null
+      return
+    }
+
+    const normalizedSettings: RagSettings = {
+      ...DEFAULT_RAG_SETTINGS,
+      ...(storedSettings || {}),
+      ...KNOWLEDGE_QA_SETTINGS_OVERRIDES,
+      enable_web_fallback:
+        typeof storedSettings?.enable_web_fallback === "boolean"
+          ? storedSettings.enable_web_fallback
+          : true,
+    }
+    const serialized = JSON.stringify({
+      preset: storedPreset,
+      settings: normalizedSettings,
+    })
+    if (serialized === hydratedDefaultsRef.current) {
+      return
+    }
+    hydratedDefaultsRef.current = serialized
+
+    dispatch({
+      type: "HYDRATE_DEFAULTS",
+      payload: {
+        preset: storedPreset,
+        settings: normalizedSettings,
+      },
+    })
+  }, [
+    state.currentThreadId,
+    state.messages.length,
+    storedPreset,
+    storedSettings,
+  ])
 
   const resolveDefaultCharacterId = useCallback(async (): Promise<number | null> => {
     if (defaultCharacterIdRef.current != null) {

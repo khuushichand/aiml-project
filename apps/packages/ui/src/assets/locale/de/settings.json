@@ -10,10 +10,33 @@
   "chatDictionariesNav": "Chat‑Wörterbücher",
   "charactersNav": "Charaktere",
   "mediaNav": "Medien",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian und Überwachung",
   "guardian": {
     "unavailableTitle": "Guardian-Einstellungen nicht verfügbar",
-    "unavailableDescription": "Ihr aktueller Server stellt keine Guardian- oder Self-Monitoring-Endpunkte bereit."
+    "unavailableDescription": "Ihr aktueller Server stellt keine Guardian- oder Self-Monitoring-Endpunkte bereit.",
+    "title": "Guardian und Selbstüberwachung",
+    "subtitle": "Konfigurieren Sie Regeln zur Überwachung persönlicher Inhalte, Guardian-Betreuungsbeziehungen und den Zugang zu Krisenressourcen.",
+    "rules": {
+      "title": "Überwachungsregeln"
+    },
+    "alerts": {
+      "title": "Warnungen"
+    },
+    "governance": {
+      "title": "Governance-Richtlinien",
+      "fields": {
+        "description": "Beschreibung"
+      }
+    },
+    "relationships": {
+      "title": "Vormundschaftsbeziehungen"
+    },
+    "policies": {
+      "title": "Beaufsichtigte Richtlinien"
+    },
+    "auditLog": {
+      "title": "Prüfprotokoll"
+    }
   },
   "chatAppearance": {
     "title": "Chat‑Erscheinungsbild",
@@ -46,6 +69,12 @@
       "sm": "Klein",
       "md": "Mittel",
       "lg": "Groß"
+    },
+    "backgroundImage": {
+      "label": "Chat-Hintergrundbild",
+      "description": "Wird hinter dem Chat-Bildschirm angezeigt, wenn Sie sich auf /chat befinden.",
+      "upload": "Bild hochladen",
+      "clear": "Hintergrundbild entfernen"
     }
   },
   "generalSettings": {
@@ -140,6 +169,12 @@
         "confirmMessage": "Dadurch wird dein Onboarding-Status zurückgesetzt und du kehrst zum Einrichtungsablauf zurück.",
         "toast": "Onboarding wurde zurückgesetzt",
         "toastBody": "Wir führen dich zurück zum Willkommensschritt, damit du Server-URL und API-Schlüssel überprüfen kannst."
+      },
+      "hideQuickChatHelper": {
+        "label": "Schaltfläche „Quick Chat Helper“ ausblenden"
+      },
+      "stickyChatInput": {
+        "label": "Chat-Eingabe beim Scrollen sichtbar halten"
       }
     },
     "sidepanelRag": {
@@ -242,10 +277,15 @@
         "label": "SSML (Speech Synthesis Markup Language) aktivieren"
       },
       "removeReasoningTagTTS": {
-        "label": "Reasoning-Tag aus Text-zu-Sprache entfernen"
+        "label": "Reasoning-Tag aus Text-zu-Sprache entfernen",
+        "description": "Entfernt <think>...</think>-Blöcke vor der Sprachausgabe. So bleibt das Audio auf die finale Antwort fokussiert."
       },
       "responseSplitting": {
         "label": "Antwortaufteilung"
+      },
+      "playbackSpeed": {
+        "label": "Wiedergabegeschwindigkeit",
+        "description": "Steuert, wie schnell Audio abgespielt wird (beeinflusst die Generierung nicht)."
       }
     },
     "stt": {
@@ -368,6 +408,9 @@
       "example2": "Steuern Sie, ob Chats temporär sind, wie große Einfügungen behandelt werden und wie Reasoning angezeigt wird.",
       "primaryCta": "Server & Authentifizierung konfigurieren",
       "secondaryCta": "Schließen"
+    },
+    "chatbooks": {
+      "heading": "Chatbücher"
     }
   },
   "manageModels": {
@@ -519,7 +562,56 @@
     "copilotEmptyDescription": "Copilot-Prompts sind vordefinierte Vorlagen, die Ihr tldw-Server bereitstellt.",
     "copilotEmptyExample1": "Prüfen Sie Ihre Serverversion oder Konfiguration, wenn Sie Copilot-Prompts erwarten.",
     "copilotEmptyExample2": "Nach einem Server-Update laden Sie die Erweiterung neu und kehren Sie zu diesem Tab zurück.",
-    "copilotEmptyCta": "Diagnose öffnen"
+    "copilotEmptyCta": "Diagnose öffnen",
+    "studio": {
+      "projects": {
+        "title": "Projekte",
+        "description": "Beschreibung"
+      },
+      "prompts": {
+        "title": "Eingabeaufforderungen"
+      },
+      "testCases": {
+        "title": "Testfälle",
+        "bulkPanel": {
+          "title": "Massenimport/-export"
+        },
+        "generateModal": {
+          "title": "Testfälle generieren"
+        },
+        "runModal": {
+          "title": "Testfälle ausführen"
+        }
+      },
+      "evaluations": {
+        "title": "Bewertungen",
+        "wizard": {
+          "title": "Bewertung erstellen"
+        },
+        "detail": {
+          "title": "Bewertungsdetails"
+        }
+      },
+      "optimizations": {
+        "title": "Optimierungen",
+        "wizard": {
+          "title": "Optimierung starten"
+        },
+        "progress": {
+          "title": "Optimierungsfortschritt"
+        },
+        "compare": {
+          "title": "Optimierungsstrategien vergleichen",
+          "description": "Beschreibung"
+        }
+      },
+      "common": {
+        "description": "Beschreibung"
+      },
+      "queueHealth": {
+        "title": "Warteschlangenstatus"
+      }
+    }
   },
   "manageShare": {
     "title": "Freigabe verwalten",
@@ -756,6 +848,32 @@
         "notes": "Verwaltung von Notizen und Prompts",
         "stt": "Sprach-zu-Text-Transkription"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "Authentifizierungsmodus ändern?"
+    },
+    "loginMethod": {
+      "label": "Anmeldemethode"
+    },
+    "magicLink": {
+      "email": {
+        "label": "E-Mail",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Magic-Link-Token",
+        "placeholder": "Füge das Token aus deiner E-Mail ein"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "Standard-Demo-API-Schlüssel wird verwendet"
+    },
+    "billing": {
+      "title": "Abrechnung und Nutzung",
+      "subtitle": "Verwalte deinen Plan, Abrechnungszyklus und Nutzungsgrenzen.",
+      "invoices": {
+        "title": "Rechnungsverlauf"
+      }
     }
   },
   "manageKnowledge": {
@@ -945,6 +1063,23 @@
       "forbidden": "Zugriff verweigert. Prüfe, ob dein Benutzerkonto berechtigt ist, sich anzumelden.",
       "serverUnreachable": "Dein tldw-Server konnte nicht erreicht werden. Überprüfe die Server-URL oder öffne „Health & Diagnostics“ für weitere Details.",
       "generic": "Anmeldung fehlgeschlagen. Öffne „Health & Diagnostics“ in der Kopfzeile, um Serverfehler zu prüfen."
+    },
+    "loginMethod": {
+      "label": "Anmeldemethode"
+    },
+    "magicLink": {
+      "email": {
+        "label": "E-Mail",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Magic-Link-Token",
+        "placeholder": "Füge das Token aus deiner E-Mail ein"
+      }
+    },
+    "defaults": {
+      "title": "Standardwerte festlegen",
+      "subtitle": "Wähle einen Standardanbieter und ein Standardmodell für neue Chats."
     }
   },
   "manageCharacters": {
@@ -1457,5 +1592,43 @@
       "methodOptionsLabel": "Methodenspezifische Optionen",
       "notesLabel": "Notizen"
     }
-  }
+  },
+  "chatbooksNav": "Chatbücher",
+  "mediaTrashNav": "Medien-Papierkorb",
+  "chatSettingsNav": "Chats",
+  "quickIngestSettingsNav": "Schnellimport",
+  "speechSettingsNav": "Sprache",
+  "imageGenerationSettingsNav": "Bildgenerierung",
+  "uiCustomizationNav": "UI-Anpassung",
+  "splashSettingsNav": "Startbildschirme",
+  "speechSettings": {
+    "title": "Spracheinstellungen",
+    "subtitle": "Verwalten Sie Standardwerte für Sprache-zu-Text und Text-zu-Sprache für Diktat und Wiedergabe."
+  },
+  "uiCustomization": {
+    "title": "UI-Anpassung",
+    "subtitle": "Passen Sie Navigationskürzel und Standard-Layout an.",
+    "shortcuts": {
+      "title": "Seitenleisten-Shortcuts",
+      "description": "Wähle bis zu 10 Elemente für die Seitenleisten-Symbole und die Shortcut-Liste."
+    },
+    "headerShortcuts": {
+      "title": "Playground-Shortcuts",
+      "description": "Wähle, welche Shortcuts im Header-Shortcut-Panel angezeigt werden."
+    }
+  },
+  "splashSettings": {
+    "title": "Startbildschirme",
+    "subtitle": "Passen Sie Splash-Karten und Effekte beim Start an."
+  },
+  "imageGenerationSettings": {
+    "title": "Bildgenerierung",
+    "subtitle": "Konfigurieren Sie Standardwerte für die Bildgenerierung pro Backend und legen Sie den Standard für Ihren Slash-Befehl fest."
+  },
+  "quickIngestSettings": {
+    "title": "Schnellimport",
+    "subtitle": "Konfigurieren Sie Standardwerte, Presets und Verhalten für den Schnellimport."
+  },
+  "acpPlaygroundNav": "ACP-Spielplatz",
+  "skillsNav": "Fähigkeiten"
 }

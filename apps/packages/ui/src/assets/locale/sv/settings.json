@@ -10,10 +10,33 @@
   "chatDictionariesNav": "Chatordböcker",
   "charactersNav": "Tecken",
   "mediaNav": "Medier",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian och övervakning",
   "guardian": {
     "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "title": "Guardian och självövervakning",
+    "subtitle": "Konfigurera regler för övervakning av personligt innehåll, Guardian-övervakningsrelationer och åtkomst till krisresurser.",
+    "rules": {
+      "title": "Övervakningsregler"
+    },
+    "alerts": {
+      "title": "Aviseringar"
+    },
+    "governance": {
+      "title": "Styrningspolicyer",
+      "fields": {
+        "description": "Beskrivning"
+      }
+    },
+    "relationships": {
+      "title": "Vårdnadsrelationer"
+    },
+    "policies": {
+      "title": "Övervakade policyer"
+    },
+    "auditLog": {
+      "title": "Revisionslogg"
+    }
   },
   "chatAppearance": {
     "title": "Chattutseende",
@@ -46,6 +69,12 @@
       "sm": "Liten",
       "md": "Mellan",
       "lg": "Stor"
+    },
+    "backgroundImage": {
+      "label": "Bakgrundsbild för chatt",
+      "description": "Visas bakom chattskärmen när du är på /chat.",
+      "upload": "Ladda upp bild",
+      "clear": "Ta bort bakgrundsbild"
     }
   },
   "generalSettings": {
@@ -140,6 +169,12 @@
         "confirmMessage": "Detta återställer din onboarding‑status och tar dig tillbaka till installationsflödet.",
         "toast": "Onboarding har återställts",
         "toastBody": "Vi tar dig tillbaka till välkomststeget så att du kan granska server‑URL och API‑nyckel."
+      },
+      "hideQuickChatHelper": {
+        "label": "Dölj knappen Snabbchatt-hjälpare"
+      },
+      "stickyChatInput": {
+        "label": "Håll chattinmatningen synlig medan du rullar"
       }
     },
     "sidepanelRag": {
@@ -242,10 +277,15 @@
         "label": "Aktivera SSML (Speech Synthesis Markup Language)"
       },
       "removeReasoningTagTTS": {
-        "label": "Ta bort resonemangstagg från Text till Tal"
+        "label": "Ta bort resonemangstagg från Text till Tal",
+        "description": "Tar bort <think>...</think>-resonemangsblock före uppläsning. Håller ljudet fokuserat på det slutliga svaret."
       },
       "responseSplitting": {
         "label": "Uppdelning av svar"
+      },
+      "playbackSpeed": {
+        "label": "Uppspelningshastighet",
+        "description": "Styr hur snabbt ljud spelas upp (påverkar inte generering)."
       }
     },
     "stt": {
@@ -368,6 +408,9 @@
       "example2": "Styr om chattar är tillfälliga, hur stora inklistringar hanteras och hur resonemang visas.",
       "primaryCta": "Konfigurera server och autentisering",
       "secondaryCta": "Stäng"
+    },
+    "chatbooks": {
+      "heading": "Chattböcker"
     }
   },
   "manageModels": {
@@ -519,7 +562,56 @@
     "copilotEmptyDescription": "Copilot‑prompter är fördefinierade mallar som tillhandahålls av din tldw‑server.",
     "copilotEmptyExample1": "Kontrollera serverversionen eller konfigurationen om du förväntar dig Copilot‑prompter.",
     "copilotEmptyExample2": "Efter att du uppdaterat servern, ladda om tillägget och återvänd till den här fliken.",
-    "copilotEmptyCta": "Öppna diagnostik"
+    "copilotEmptyCta": "Öppna diagnostik",
+    "studio": {
+      "projects": {
+        "title": "Projekt",
+        "description": "Beskrivning"
+      },
+      "prompts": {
+        "title": "Uppmaningar"
+      },
+      "testCases": {
+        "title": "Testfall",
+        "bulkPanel": {
+          "title": "Massimport/-export"
+        },
+        "generateModal": {
+          "title": "Generera testfall"
+        },
+        "runModal": {
+          "title": "Kör testfall"
+        }
+      },
+      "evaluations": {
+        "title": "Utvärderingar",
+        "wizard": {
+          "title": "Skapa utvärdering"
+        },
+        "detail": {
+          "title": "Utvärderingsdetaljer"
+        }
+      },
+      "optimizations": {
+        "title": "Optimeringar",
+        "wizard": {
+          "title": "Starta optimering"
+        },
+        "progress": {
+          "title": "Optimeringsförlopp"
+        },
+        "compare": {
+          "title": "Jämför optimeringsstrategier",
+          "description": "Beskrivning"
+        }
+      },
+      "common": {
+        "description": "Beskrivning"
+      },
+      "queueHealth": {
+        "title": "Köstatus"
+      }
+    }
   },
   "manageShare": {
     "title": "Hantera Delningar",
@@ -756,6 +848,32 @@
         "notes": "Hantering av anteckningar och prompts",
         "stt": "Tal-till-text-transkribering"
       }
+    },
+    "authModeChangeWarning": {
+      "title": "Ändra autentiseringsläge?"
+    },
+    "loginMethod": {
+      "label": "Inloggningsmetod"
+    },
+    "magicLink": {
+      "email": {
+        "label": "E-post",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Magic link-token",
+        "placeholder": "Klistra in token från din e-post"
+      }
+    },
+    "defaultKeyWarning": {
+      "title": "Standard demo-API-nyckel används"
+    },
+    "billing": {
+      "title": "Fakturering och användning",
+      "subtitle": "Hantera din plan, faktureringscykel och användningsgränser.",
+      "invoices": {
+        "title": "Fakturahistorik"
+      }
     }
   },
   "manageKnowledge": {
@@ -935,7 +1053,24 @@
       "mediaTitle": "Utforska media och anteckningar",
       "mediaBody": "Gå till Media och Anteckningar i Alternativ för att se vad som är sparat och sökbart."
     },
-    "headerShortcuts": "Visa snabba genvägar i sidhuvudet"
+    "headerShortcuts": "Visa snabba genvägar i sidhuvudet",
+    "loginMethod": {
+      "label": "Inloggningsmetod"
+    },
+    "magicLink": {
+      "email": {
+        "label": "E-post",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Magic link-token",
+        "placeholder": "Klistra in token från din e-post"
+      }
+    },
+    "defaults": {
+      "title": "Ställ in dina standardvärden",
+      "subtitle": "Välj en standardleverantör och modell för nya chattar."
+    }
   },
   "manageCharacters": {
     "title": "Hantera karaktärer",
@@ -1447,5 +1582,43 @@
       "methodOptionsLabel": "Metodspecifika alternativ",
       "notesLabel": "Anteckningar"
     }
-  }
+  },
+  "chatbooksNav": "Chattböcker",
+  "mediaTrashNav": "Mediapapperskorg",
+  "chatSettingsNav": "Chatt",
+  "quickIngestSettingsNav": "Snabb import",
+  "speechSettingsNav": "Tal",
+  "imageGenerationSettingsNav": "Bildgenerering",
+  "uiCustomizationNav": "Anpassning av gränssnitt",
+  "splashSettingsNav": "Startskärmar",
+  "speechSettings": {
+    "title": "Talinställningar",
+    "subtitle": "Hantera standardinställningar för tal-till-text och text-till-tal för diktering och uppspelning."
+  },
+  "uiCustomization": {
+    "title": "Anpassning av gränssnitt",
+    "subtitle": "Anpassa navigeringsgenvägar och standardlayout.",
+    "shortcuts": {
+      "title": "Sidofältsgenvägar",
+      "description": "Välj upp till 10 objekt för sidofältets ikoner och genvägslista."
+    },
+    "headerShortcuts": {
+      "title": "Playground-genvägar",
+      "description": "Välj vilka genvägar som visas i panelen för huvudgenvägar."
+    }
+  },
+  "splashSettings": {
+    "title": "Startskärmar",
+    "subtitle": "Anpassa startkort och effekter."
+  },
+  "imageGenerationSettings": {
+    "title": "Bildgenerering",
+    "subtitle": "Konfigurera standardvärden för bildgenerering per backend och ange standard för slash-kommandot."
+  },
+  "quickIngestSettings": {
+    "title": "Snabb import",
+    "subtitle": "Konfigurera standardvärden, förinställningar och beteende för snabb import."
+  },
+  "acpPlaygroundNav": "ACP-lekplats",
+  "skillsNav": "Färdigheter"
 }

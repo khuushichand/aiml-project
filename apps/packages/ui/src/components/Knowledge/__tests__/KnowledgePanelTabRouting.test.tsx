@@ -126,6 +126,33 @@ describe("KnowledgePanel tab routing", () => {
     setupMocks()
   })
 
+  it("keeps hook ordering stable when rerendering from closed to open", () => {
+    const { rerender } = render(
+      <KnowledgePanel
+        open={false}
+        showToggle={false}
+        onInsert={vi.fn()}
+        onAsk={vi.fn()}
+      />
+    )
+
+    expect(() =>
+      rerender(
+        <KnowledgePanel
+          open
+          showToggle={false}
+          onInsert={vi.fn()}
+          onAsk={vi.fn()}
+        />
+      )
+    ).not.toThrow()
+
+    expect(screen.getByRole("tab", { name: "QA Search" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
+  })
+
   it("maps backward-compat openTab=search to QA Search", () => {
     render(
       <KnowledgePanel

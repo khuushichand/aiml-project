@@ -158,6 +158,31 @@ const mapServerChatMessages = (
     const createdAt = Date.parse(m.created_at)
     const normalizedRole = normalizeRole(m.role)
     const normalizedId = normalizeServerChatMessageId(m.id)
+    const metadataExtra =
+      m.metadata_extra &&
+      typeof m.metadata_extra === "object" &&
+      !Array.isArray(m.metadata_extra)
+        ? (m.metadata_extra as Record<string, unknown>)
+        : undefined
+    const speakerCharacterIdRaw = metadataExtra?.speaker_character_id
+    const speakerCharacterId =
+      typeof speakerCharacterIdRaw === "number" &&
+      Number.isFinite(speakerCharacterIdRaw)
+        ? speakerCharacterIdRaw
+        : typeof speakerCharacterIdRaw === "string" &&
+            speakerCharacterIdRaw.trim().length > 0 &&
+            Number.isFinite(Number(speakerCharacterIdRaw))
+          ? Number(speakerCharacterIdRaw)
+          : null
+    const moodConfidenceRaw = metadataExtra?.mood_confidence
+    const moodConfidence =
+      typeof moodConfidenceRaw === "number" && Number.isFinite(moodConfidenceRaw)
+        ? moodConfidenceRaw
+        : typeof moodConfidenceRaw === "string" &&
+            moodConfidenceRaw.trim().length > 0 &&
+            Number.isFinite(Number(moodConfidenceRaw))
+          ? Number(moodConfidenceRaw)
+          : null
     return {
       createdAt: Number.isNaN(createdAt) ? undefined : createdAt,
       isBot: normalizedRole === "assistant",
@@ -193,7 +218,22 @@ const mapServerChatMessages = (
         "Assistant",
       modelImage:
         (meta?.model_image as string | undefined) ??
-        (meta?.modelImage as string | undefined)
+        (meta?.modelImage as string | undefined),
+      metadataExtra,
+      speakerCharacterId,
+      speakerCharacterName:
+        typeof metadataExtra?.speaker_character_name === "string"
+          ? metadataExtra.speaker_character_name
+          : undefined,
+      moodLabel:
+        typeof metadataExtra?.mood_label === "string"
+          ? metadataExtra.mood_label
+          : undefined,
+      moodConfidence,
+      moodTopic:
+        typeof metadataExtra?.mood_topic === "string"
+          ? metadataExtra.mood_topic
+          : null
     }
   })
 
@@ -1394,7 +1434,8 @@ const SidepanelChat = () => {
       try {
         await tldwClient.initialize().catch(() => null)
         const list = await tldwClient.listChatMessages(chatId, {
-          include_deleted: "false"
+          include_deleted: "false",
+          include_metadata: "true"
         })
         const messageList: ServerChatMessageInput[] = list
         const { history, mappedMessages } = mapServerChatMessages(

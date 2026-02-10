@@ -255,3 +255,44 @@ async def test_validate_api_key_enforces_allowed_ips(monkeypatch):
     assert allowed is not None
     assert allowed["id"] == 6
     assert "key_hash" not in allowed
+
+
+class _UsageRepo:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, str | None]] = []
+
+    async def increment_usage(self, key_id: int, ip_address: str | None = None) -> None:
+        self.calls.append((key_id, ip_address))
+
+
+@pytest.mark.asyncio
+async def test_update_usage_throttles_hot_key_writes(monkeypatch):
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+
+    monkeypatch.setenv("API_KEY_USAGE_TOUCH_INTERVAL_SECONDS", "30")
+    manager = APIKeyManager()
+    repo = _UsageRepo()
+    monkeypatch.setattr(manager, "_get_repo", lambda: repo, raising=True)
+
+    await manager._update_usage(99, "203.0.113.10")
+    await manager._update_usage(99, "203.0.113.10")
+
+    assert repo.calls == [(99, "203.0.113.10")]
+
+
+@pytest.mark.asyncio
+async def test_update_usage_no_throttle_when_interval_disabled(monkeypatch):
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+
+    monkeypatch.setenv("API_KEY_USAGE_TOUCH_INTERVAL_SECONDS", "0")
+    manager = APIKeyManager()
+    repo = _UsageRepo()
+    monkeypatch.setattr(manager, "_get_repo", lambda: repo, raising=True)
+
+    await manager._update_usage(99, "203.0.113.10")
+    await manager._update_usage(99, "203.0.113.10")
+
+    assert repo.calls == [
+        (99, "203.0.113.10"),
+        (99, "203.0.113.10"),
+    ]

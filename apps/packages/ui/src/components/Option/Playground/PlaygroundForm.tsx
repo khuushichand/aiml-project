@@ -22,7 +22,6 @@ import {
   ChevronDown,
   ChevronRight,
   EraserIcon,
-  BookPlus,
   GitBranch,
   ImageIcon,
   Globe,
@@ -67,10 +66,6 @@ import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { ActorPopout } from "@/components/Common/Settings/ActorPopout"
 import { PromptSelect } from "@/components/Common/PromptSelect"
-import {
-  PromptInsertModal,
-  type PromptInsertItem
-} from "@/components/Common/PromptInsertModal"
 import { useConnectionState } from "@/hooks/useConnectionState"
 import { ConnectionPhase } from "@/types/connection"
 import { Link, useNavigate } from "react-router-dom"
@@ -203,6 +198,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const setSystemPrompt = useStoreChatModelSettings(
     (state) => state.setSystemPrompt
   )
+  const numCtx = useStoreChatModelSettings((state) => state.numCtx)
+  const updateChatModelSetting = useStoreChatModelSettings(
+    (state) => state.updateSetting
+  )
   const {
     voiceChatEnabled,
     setVoiceChatEnabled,
@@ -304,12 +303,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const [documentGeneratorOpen, setDocumentGeneratorOpen] =
     React.useState(false)
   const [voiceModeSelectorOpen, setVoiceModeSelectorOpen] = React.useState(false)
-  const [promptInsertOpen, setPromptInsertOpen] = React.useState(false)
+  const [contextWindowModalOpen, setContextWindowModalOpen] =
+    React.useState(false)
+  const [contextWindowDraftValue, setContextWindowDraftValue] = React.useState<
+    number | undefined
+  >(undefined)
   const [toolsPopoverOpen, setToolsPopoverOpen] = React.useState(false)
   const [attachmentMenuOpen, setAttachmentMenuOpen] = React.useState(false)
   const [sendMenuOpen, setSendMenuOpen] = React.useState(false)
-  const [promptInsertChoice, setPromptInsertChoice] =
-    React.useState<PromptInsertItem | null>(null)
   const [documentGeneratorSeed, setDocumentGeneratorSeed] = React.useState<{
     conversationId?: string | null
     message?: string | null
@@ -700,6 +701,62 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const tokenUsageDisplay = isProMode
     ? tokenUsageLabel
     : tokenUsageCompactLabel
+  const contextWindowFormatter = React.useMemo(() => new Intl.NumberFormat(), [])
+  const formatContextWindowValue = React.useCallback(
+    (value: number | null | undefined) => {
+      if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+        return t("common:unknown", "Unknown")
+      }
+      return contextWindowFormatter.format(Math.round(value))
+    },
+    [contextWindowFormatter, t]
+  )
+  const isContextWindowOverrideActive =
+    typeof numCtx === "number" && Number.isFinite(numCtx) && numCtx > 0
+  const requestedContextWindowOverride = isContextWindowOverrideActive
+    ? Math.round(numCtx)
+    : null
+  const isContextWindowOverrideClamped =
+    typeof requestedContextWindowOverride === "number" &&
+    typeof modelContextLength === "number" &&
+    modelContextLength > 0 &&
+    requestedContextWindowOverride > modelContextLength
+  const openContextWindowModal = React.useCallback(() => {
+    const startingValue =
+      typeof numCtx === "number" && Number.isFinite(numCtx) && numCtx > 0
+        ? Math.round(numCtx)
+        : typeof resolvedMaxContext === "number" &&
+            Number.isFinite(resolvedMaxContext) &&
+            resolvedMaxContext > 0
+          ? Math.round(resolvedMaxContext)
+          : undefined
+    setContextWindowDraftValue(startingValue)
+    setContextWindowModalOpen(true)
+  }, [numCtx, resolvedMaxContext])
+  const saveContextWindowSetting = React.useCallback(() => {
+    if (
+      typeof contextWindowDraftValue === "number" &&
+      Number.isFinite(contextWindowDraftValue) &&
+      contextWindowDraftValue > 0
+    ) {
+      updateChatModelSetting("numCtx", Math.round(contextWindowDraftValue))
+    } else {
+      updateChatModelSetting("numCtx", undefined)
+    }
+    setContextWindowModalOpen(false)
+  }, [contextWindowDraftValue, updateChatModelSetting])
+  const resetContextWindowSetting = React.useCallback(() => {
+    updateChatModelSetting("numCtx", undefined)
+    if (
+      typeof modelContextLength === "number" &&
+      Number.isFinite(modelContextLength) &&
+      modelContextLength > 0
+    ) {
+      setContextWindowDraftValue(Math.round(modelContextLength))
+      return
+    }
+    setContextWindowDraftValue(undefined)
+  }, [modelContextLength, updateChatModelSetting])
 
   const {
     imageBackendDefault: imageBackendDefaultTrimmed,
@@ -803,6 +860,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       maxTokens={resolvedMaxContext}
       modelLabel={isProMode ? apiModelLabel : undefined}
       compact={!isProMode}
+      onClick={openContextWindowModal}
     />
   )
   const imageProviderControl = (
@@ -1635,146 +1693,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     t,
     textareaRef
   ])
-
-  const applySystemPrompt = React.useCallback(
-    (nextPrompt: string) => {
-      setSelectedSystemPrompt(null)
-      setSystemPrompt(nextPrompt)
-    },
-    [setSelectedSystemPrompt, setSystemPrompt]
-  )
-
-  const insertMessageAtCaret = React.useCallback(
-    (text: string) => {
-      if (!text) return
-      const currentValue = form.values.message || ""
-      if (isMessageCollapsed && collapsedRange) {
-        const meta = getCollapsedDisplayMeta(currentValue, collapsedRange)
-        const textarea = textareaRef.current
-        const rawStart = textarea?.selectionStart ?? meta.labelEnd
-        const rawEnd = textarea?.selectionEnd ?? rawStart
-        const displayStart = Math.min(rawStart, rawEnd)
-        const displayEnd = Math.max(rawStart, rawEnd)
-        const hasSelection = displayStart !== displayEnd
-        const selectionTouchesLabel =
-          displayStart < meta.labelEnd && displayEnd > meta.labelStart
-        if (hasSelection) {
-          const startPrefer =
-            displayStart > meta.labelStart && displayStart < meta.labelEnd
-              ? "before"
-              : undefined
-          const endPrefer =
-            displayEnd > meta.labelStart && displayEnd < meta.labelEnd
-              ? "after"
-              : undefined
-          let editStart = getMessageCaretFromDisplay(displayStart, meta, {
-            prefer: startPrefer
-          })
-          let editEnd = getMessageCaretFromDisplay(displayEnd, meta, {
-            prefer: endPrefer
-          })
-          if (editStart > editEnd) {
-            ;[editStart, editEnd] = [editEnd, editStart]
-          }
-          if (selectionTouchesLabel) {
-            editStart = Math.min(editStart, meta.rangeStart)
-            editEnd = Math.max(editEnd, meta.rangeEnd)
-          }
-          replaceCollapsedRange(currentValue, meta, editStart, editEnd, text)
-          return
-        }
-        const caretPrefer =
-          rawStart > meta.labelStart && rawStart < meta.labelEnd
-            ? (pendingCaretRef.current !== null &&
-              pendingCaretRef.current <= meta.rangeStart
-                ? "before"
-                : "after")
-            : undefined
-        let caret = getMessageCaretFromDisplay(rawStart, meta, {
-          prefer: caretPrefer
-        })
-        if (caret > meta.rangeStart && caret < meta.rangeEnd) {
-          caret = meta.rangeEnd
-        }
-        const insertAt =
-          caret <= meta.rangeStart
-            ? caret
-            : caret >= meta.rangeEnd
-              ? caret
-              : meta.rangeEnd
-        replaceCollapsedRange(currentValue, meta, insertAt, insertAt, text)
-        return
-      }
-      const textarea = textareaRef.current
-      const selectionStart = textarea?.selectionStart ?? currentValue.length
-      const selectionEnd = textarea?.selectionEnd ?? selectionStart
-      const nextValue =
-        currentValue.slice(0, selectionStart) +
-        text +
-        currentValue.slice(selectionEnd)
-      if (nextValue.length > PASTED_TEXT_CHAR_LIMIT) {
-        const blockRange = {
-          start: selectionStart,
-          end: selectionStart + text.length
-        }
-        pendingCaretRef.current = blockRange.end
-        pendingCollapsedStateRef.current = {
-          message: nextValue,
-          range: blockRange,
-          caret: blockRange.end
-        }
-        setMessageValue(nextValue, {
-          collapseLarge: true,
-          forceCollapse: true,
-          collapsedRange: blockRange
-        })
-        return
-      }
-      setMessageValue(nextValue, { collapseLarge: true })
-      requestAnimationFrame(() => {
-        const el = textareaRef.current
-        if (!el) return
-        const nextCaret = selectionStart + text.length
-        el.focus()
-        el.setSelectionRange(nextCaret, nextCaret)
-      })
-    },
-    [
-      collapsedRange,
-      form.values.message,
-      getCollapsedDisplayMeta,
-      getMessageCaretFromDisplay,
-      isMessageCollapsed,
-      replaceCollapsedRange,
-      setMessageValue,
-      textareaRef
-    ]
-  )
-
-  const handlePromptInsert = React.useCallback(
-    (prompt: PromptInsertItem) => {
-      setPromptInsertOpen(false)
-      const hasSystem = Boolean(prompt.systemPrompt?.trim())
-      const hasUser = Boolean(prompt.userPrompt?.trim())
-      if (hasSystem && hasUser) {
-        setPromptInsertChoice(prompt)
-        return
-      }
-      if (hasSystem && prompt.systemPrompt) {
-        applySystemPrompt(prompt.systemPrompt)
-        return
-      }
-      if (hasUser && prompt.userPrompt) {
-        insertMessageAtCaret(prompt.userPrompt)
-      }
-    },
-    [
-      applySystemPrompt,
-      insertMessageAtCaret,
-      setPromptInsertChoice,
-      setPromptInsertOpen
-    ]
-  )
 
   const queryClient = useQueryClient()
   const invalidateServerChatHistory = React.useCallback(() => {
@@ -3328,8 +3246,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   const externalPinSources =
     contextToolsOpen ||
-    promptInsertOpen ||
-    Boolean(promptInsertChoice) ||
+    contextWindowModalOpen ||
     mcpSettingsOpen ||
     openModelSettings ||
     openActorSettings ||
@@ -4054,7 +3971,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           webSearch={webSearch}
                           onToggleWebSearch={handleToggleWebSearch}
                           hasWebSearch={!!capabilities?.hasWebSearch}
-                          onOpenPromptInsert={() => setPromptInsertOpen(true)}
                           onOpenModelSettings={() => setOpenModelSettings(true)}
                           modelSummaryLabel={modelSummaryLabel}
                           promptSummaryLabel={promptSummaryLabel}
@@ -4194,62 +4110,87 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           </div>
         </div>
       </div>
-      <PromptInsertModal
-        open={promptInsertOpen}
-        onClose={() => setPromptInsertOpen(false)}
-        onInsertPrompt={handlePromptInsert}
-      />
       <Modal
-        title={t("option:promptInsert.confirmTitle", {
-          defaultValue: "Use prompt in chat?"
-        })}
-        open={Boolean(promptInsertChoice)}
-        onCancel={() => setPromptInsertChoice(null)}
-        footer={null}
-        centered
+        title={t(
+          "common:modelSettings.form.numCtx.label",
+          "Context Window Size (num_ctx)"
+        )}
+        open={contextWindowModalOpen}
+        onCancel={() => setContextWindowModalOpen(false)}
+        onOk={saveContextWindowSetting}
+        okText={t("common:save", "Save")}
         destroyOnHidden
-      >
-        <div className="space-y-3">
-          <p className="text-sm text-text">
-            {t("option:promptInsert.choiceDescription", {
-              defaultValue:
-                "This prompt includes both a system prompt and a user prompt. Choose how you want to use it."
-            })}
-          </p>
-          {promptInsertChoice?.title && (
-            <div className="rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium">
-              {promptInsertChoice.title}
-            </div>
-          )}
+        footer={
           <div className="flex flex-wrap justify-end gap-2">
-            <Button onClick={() => setPromptInsertChoice(null)}>
+            <Button onClick={() => setContextWindowModalOpen(false)}>
               {t("common:cancel", "Cancel")}
             </Button>
-            <Button
-              onClick={() => {
-                if (promptInsertChoice?.userPrompt) {
-                  insertMessageAtCaret(promptInsertChoice.userPrompt)
-                }
-                setPromptInsertChoice(null)
-              }}
-            >
-              {t("option:promptInsert.insertUser", {
-                defaultValue: "Insert user prompt"
-              })}
+            <Button onClick={resetContextWindowSetting}>
+              {t("playground:tokens.useModelDefault", "Use model default")}
             </Button>
-            <Button
-              type="primary"
-              onClick={() => {
-                if (promptInsertChoice?.systemPrompt) {
-                  applySystemPrompt(promptInsertChoice.systemPrompt)
-                }
-                setPromptInsertChoice(null)
-              }}
-            >
-              {t("option:promptInsert.applySystem", {
-                defaultValue: "Apply system prompt"
-              })}
+            <Button type="primary" onClick={saveContextWindowSetting}>
+              {t("common:save", "Save")}
             </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-text-muted">
+            {t(
+              "playground:tokens.contextWindowOverrideDescription",
+              "Set a chat-level context window override. Leave empty to use the model default."
+            )}
+          </p>
+          <InputNumber
+            style={{ width: "100%" }}
+            min={1}
+            step={256}
+            value={contextWindowDraftValue}
+            placeholder={t(
+              "common:modelSettings.form.numCtx.placeholder",
+              "e.g. 4096"
+            )}
+            onChange={(value) => {
+              setContextWindowDraftValue(
+                typeof value === "number" && Number.isFinite(value)
+                  ? value
+                  : undefined
+              )
+            }}
+          />
+          <div className="space-y-1 text-xs text-text-muted">
+            <p>
+              {t("playground:tokens.effectiveContextWindow", "Effective context window")}:
+              {" "}
+              {formatContextWindowValue(resolvedMaxContext)}{" "}
+              {t("playground:tokens.tokenUnit", "tokens")}
+            </p>
+            <p>
+              {t("playground:tokens.requestedContextWindow", "Requested context window")}:
+              {" "}
+              {formatContextWindowValue(requestedContextWindowOverride)}{" "}
+              {t("playground:tokens.tokenUnit", "tokens")}
+            </p>
+            <p>
+              {t("playground:tokens.modelDefaultContextWindow", "Model default context window")}:
+              {" "}
+              {formatContextWindowValue(modelContextLength)}{" "}
+              {t("playground:tokens.tokenUnit", "tokens")}
+            </p>
+            <p>
+              {t("playground:tokens.chatOverrideStatus", "Chat override")}:{" "}
+              {isContextWindowOverrideActive
+                ? t("common:enabled", "Enabled")
+                : t("common:disabled", "Disabled")}
+            </p>
+            {isContextWindowOverrideClamped && (
+              <p className="text-warn">
+                {t(
+                  "playground:tokens.contextWindowClamped",
+                  "Requested override exceeds the model maximum. Effective value is clamped to the model limit."
+                )}
+              </p>
+            )}
           </div>
         </div>
       </Modal>
