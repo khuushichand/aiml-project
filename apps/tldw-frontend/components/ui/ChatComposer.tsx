@@ -39,10 +39,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(
     };
 
     return (
-      <div className="flex items-end gap-2 border-t bg-white p-3">
+      <div className="flex items-end gap-2 border-t bg-surface p-3">
         <textarea
           ref={textareaRef}
-          className="flex-1 resize-none rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100"
+          className="flex-1 resize-none rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:bg-surface"
           placeholder={placeholder}
           value={text}
           onChange={(e) => onChange?.(e.target.value)}

@@ -361,7 +361,7 @@ export const SourcesTab: React.FC = () => {
                 href={record.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-zinc-400 hover:text-zinc-600"
+                className="text-text-subtle hover:text-text-muted"
                 onClick={(e) => e.stopPropagation()}
               >
                 <ExternalLink className="h-3.5 w-3.5" />
@@ -407,11 +407,11 @@ export const SourcesTab: React.FC = () => {
       width: 150,
       render: (date: string | null) =>
         date ? (
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm text-text-muted">
             {formatRelativeTime(date, t)}
           </span>
         ) : (
-          <span className="text-sm text-zinc-400">
+          <span className="text-sm text-text-subtle">
             {t("watchlists:sources.never", "Never")}
           </span>
         )
@@ -544,8 +544,8 @@ export const SourcesTab: React.FC = () => {
       </div>
 
       {selectedRowKeys.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-zinc-200 dark:border-zinc-700 p-3 text-sm">
-          <span className="text-zinc-600 dark:text-zinc-300">
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border p-3 text-sm">
+          <span className="text-text-muted">
             {t("watchlists:sources.selectedCount", "{{count}} selected", { count: selectedRowKeys.length })}
           </span>
           <Button size="small" onClick={() => handleBulkToggle(true)} loading={bulkWorking}>

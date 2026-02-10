@@ -124,7 +124,7 @@ export const QuickIngestTabs: React.FC<QuickIngestTabsProps> = ({
         if (badges.optionsModified) {
           return (
             <span
-              className="ml-1.5 inline-flex h-2 w-2 rounded-full bg-amber-500"
+              className="ml-1.5 inline-flex h-2 w-2 rounded-full bg-warn"
               aria-hidden="true"
             />
           )

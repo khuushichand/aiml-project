@@ -83,12 +83,25 @@ def _shared_storage_enabled() -> bool:
 
 def _principal_is_admin(principal: AuthPrincipal) -> bool:
     try:
-        if bool(getattr(principal, "is_admin", False)):
+        roles = {
+            str(role).strip().lower()
+            for role in (principal.roles or [])
+            if str(role).strip()
+        }
+        permissions = {
+            str(perm).strip().lower()
+            for perm in (principal.permissions or [])
+            if str(perm).strip()
+        }
+        if "admin" in roles:
             return True
-        roles = list(getattr(principal, "roles", []) or [])
-        return any(str(role).strip().lower() == "admin" for role in roles)
+        if "*" in permissions:
+            return True
+        if "system.configure" in permissions:
+            return True
     except Exception:
         return False
+    return False
 
 
 def _resolve_request_user_id(principal: AuthPrincipal, current_user: User) -> str:

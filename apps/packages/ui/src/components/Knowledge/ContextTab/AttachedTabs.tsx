@@ -63,7 +63,7 @@ export const AttachedTabs: React.FC<AttachedTabsProps> = ({
             <button
               type="button"
               onClick={onClear}
-              className="p-1 text-text-muted hover:text-red-500 transition-colors rounded hover:bg-surface3"
+              className="p-1 text-text-muted hover:text-danger transition-colors rounded hover:bg-surface3"
               aria-label={t("sidepanel:rag.clearTabs", "Clear all tabs")}
               title={t("sidepanel:rag.clearTabs", "Clear all tabs")}
             >
@@ -104,7 +104,7 @@ export const AttachedTabs: React.FC<AttachedTabsProps> = ({
                 <button
                   type="button"
                   onClick={() => onRemove(tab.id)}
-                  className="p-0.5 text-text-muted hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                  className="p-0.5 text-text-muted hover:text-danger transition-colors opacity-0 group-hover:opacity-100"
                   aria-label={t("sidepanel:rag.removeTab", "Remove tab")}
                 >
                   <X className="h-3.5 w-3.5" />

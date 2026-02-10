@@ -8122,9 +8122,9 @@ pip<span class="w"> </span>install<span class="w"> </span>locust<span class="w">
 <span class="nb">export</span><span class="w"> </span><span class="nv">API_KEY</span><span class="o">=</span><span class="k">$(</span>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">32</span><span class="k">)</span>
 
 <span class="c1"># Rate limiting</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">RATE_LIMIT_ENABLED</span><span class="o">=</span><span class="nb">true</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">RATE_LIMIT_PER_MINUTE</span><span class="o">=</span><span class="m">10</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">RATE_LIMIT_BURST</span><span class="o">=</span><span class="m">20</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">RG_ENABLED</span><span class="o">=</span><span class="nb">true</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">requests.rpm</span><span class="o">=</span><span class="m">10</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">requests.burst</span><span class="o">=</span><span class="m">20</span>
 
 <span class="c1"># Monitoring</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">METRICS_ENABLED</span><span class="o">=</span><span class="nb">true</span>
@@ -8557,7 +8557,7 @@ curl<span class="w"> </span>http://localhost:8000/api/v1/health/evaluations
 <td>/var/lib/tldw/databases</td>
 </tr>
 <tr>
-<td>RATE_LIMIT_ENABLED</td>
+<td>RG_ENABLED</td>
 <td>Enable rate limiting</td>
 <td>false</td>
 <td>true</td>

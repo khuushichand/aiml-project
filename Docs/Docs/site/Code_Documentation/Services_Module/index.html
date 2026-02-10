@@ -7200,7 +7200,7 @@
 <li>Core workers: Chatbooks Jobs worker, Jobs metrics gauges worker, Claims rebuild worker</li>
 <li>Aggregators: API request usage aggregator, LLM usage aggregator</li>
 <li>Quotas: User storage quota service (filesystem + DB)</li>
-<li>Web scraping: Enhanced scraping service (Playwright-based) with legacy fallback</li>
+<li>Web scraping: Enhanced scraping service (Playwright-based) with compatibility fallback behavior</li>
 <li>Placeholders (non-production): document/ebook/podcast/XML processors, in-memory ephemeral store</li>
 </ul>
 <h2 id="startupshutdown">Startup/Shutdown<a class="headerlink" href="#startupshutdown" title="Permanent link">&para;</a></h2>
@@ -7260,7 +7260,7 @@
 <li>File: <code>tldw_Server_API/app/services/enhanced_web_scraping_service.py</code></li>
 <li>Purpose: Production scraping pipeline with queueing, rate limiting, cookie/session support, and rich progress.</li>
 <li>Notes:</li>
-<li>Uses Playwright if available; otherwise raises to trigger legacy fallback (<code>services/web_scraping_service.py</code>).</li>
+<li>Uses Playwright if available; otherwise raises to trigger compatibility fallback behavior (<code>services/web_scraping_service.py</code>).</li>
 <li>Persists scraped content into Media DB with chunk-level FTS.</li>
 <li>Ephemeral mode stores results in an in-memory store (dev-only; see “Known Gaps”).</li>
 </ul>

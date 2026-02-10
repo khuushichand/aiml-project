@@ -181,7 +181,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
                 href={record.url}
                 target="_blank"
                 rel="noreferrer"
-                className="text-blue-600 hover:underline"
+                className="text-primary hover:underline"
               >
                 {title || record.url}
               </a>
@@ -190,7 +190,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
             )}
           </div>
           {record.summary && (
-            <div className="text-xs text-zinc-500 line-clamp-2">{record.summary}</div>
+            <div className="text-xs text-text-muted line-clamp-2">{record.summary}</div>
           )}
         </div>
       )
@@ -234,11 +234,11 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       width: 150,
       render: (date: string | null) =>
         date ? (
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm text-text-muted">
             {formatRelativeTime(date, t)}
           </span>
         ) : (
-          <span className="text-sm text-zinc-400">-</span>
+          <span className="text-sm text-text-subtle">-</span>
         )
     },
     {
@@ -247,7 +247,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       key: "created_at",
       width: 150,
       render: (date: string) => (
-        <span className="text-sm text-zinc-500">
+        <span className="text-sm text-text-muted">
           {formatRelativeTime(date, t)}
         </span>
       )
@@ -291,10 +291,10 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
 
           {data?.error_msg && (
             <div className="mt-4">
-              <div className="text-sm font-medium mb-2 text-red-600">
+              <div className="text-sm font-medium mb-2 text-danger">
                 Error Message
               </div>
-              <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-sm text-red-700 dark:text-red-300 font-mono">
+              <div className="p-3 bg-danger/10 border border-danger/30 rounded text-sm text-danger font-mono">
                 {data.error_msg}
               </div>
             </div>
@@ -340,11 +340,11 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
             />
           )}
           {data?.log_text ? (
-            <pre className="bg-zinc-900 text-zinc-100 p-4 rounded-lg font-mono text-xs max-h-96 overflow-auto whitespace-pre-wrap">
+            <pre className="bg-bg text-text p-4 rounded-lg font-mono text-xs max-h-96 overflow-auto whitespace-pre-wrap border border-border">
               {data.log_text}
             </pre>
           ) : data?.log_path ? (
-            <div className="text-sm text-zinc-500">
+            <div className="text-sm text-text-muted">
               {t("watchlists:runs.detail.logsPath", "Logs stored at {{path}}", { path: data.log_path })}
             </div>
           ) : (
@@ -405,7 +405,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
           <Spin size="large" />
         </div>
       ) : error ? (
-        <div className="text-center py-12 text-red-500">{error}</div>
+        <div className="text-center py-12 text-danger">{error}</div>
       ) : data ? (
         <Tabs items={tabItems} />
       ) : null}

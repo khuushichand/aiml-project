@@ -35,7 +35,6 @@ def _isolate_app_state_per_test(monkeypatch, request):
     # Ensure test-mode environment prior to app import/reload
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("TESTING", "true")
-    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
 
     # Disable CSRF through global settings before app import
     try:

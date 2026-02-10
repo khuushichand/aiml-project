@@ -24,9 +24,9 @@ def test_policy_bypass_claim_first_prefers_admin_role_on_principal():
 
 
 @pytest.mark.unit
-def test_policy_bypass_falls_back_to_user_admin_when_principal_absent():
+def test_policy_bypass_requires_principal_when_user_only_has_legacy_admin_flag():
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_mod
 
     user = User(id=10, username="u2", email="u2@example.com", is_active=True, is_admin=True)
 
-    assert emb_mod._is_policy_bypass_admin(principal=None, user=user) is True
+    assert emb_mod._is_policy_bypass_admin(principal=None, user=user) is False

@@ -97,6 +97,29 @@ async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, floa
     return (max(depths) if depths else 0, max(ages) if ages else 0.0)
 
 
+def _principal_has_admin_claims(principal: AuthPrincipal) -> bool:
+    try:
+        roles = {
+            str(role).strip().lower()
+            for role in (principal.roles or [])
+            if str(role).strip()
+        }
+        permissions = {
+            str(perm).strip().lower()
+            for perm in (principal.permissions or [])
+            if str(perm).strip()
+        }
+        if "admin" in roles:
+            return True
+        if "*" in permissions:
+            return True
+        if "system.configure" in permissions:
+            return True
+    except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS:
+        return False
+    return False
+
+
 def _should_enforce_ingest_tenant_rps(request: Request, current_user: User) -> bool:
     """
     Decide whether to enforce per-tenant RPS quotas for ingestion.
@@ -106,6 +129,7 @@ def _should_enforce_ingest_tenant_rps(request: Request, current_user: User) -> b
       for admin principals to keep local/dev runs free of tenant-style 429s.
     - Otherwise, enforce quotas when a positive RPS limit is configured.
     """
+    _ = current_user
     try:
         ctx = getattr(request.state, "auth", None)
         principal: AuthPrincipal | None = ctx.principal if isinstance(ctx, AuthContext) else None
@@ -113,16 +137,7 @@ def _should_enforce_ingest_tenant_rps(request: Request, current_user: User) -> b
         logger.debug("Failed to extract principal from request.state.auth: {}", exc)
         principal = None
 
-    # Prefer principal admin flag when available, but fall back to the
-    # current_user model when principal context is missing.
-    is_admin = False
-    if principal is not None:
-        is_admin = bool(getattr(principal, "is_admin", False))
-    else:
-        try:
-            is_admin = bool(getattr(current_user, "is_admin", False))
-        except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Failed to determine admin status from current_user: {}", exc)
+    is_admin = _principal_has_admin_claims(principal) if principal is not None else False
 
     try:
         single_profile = is_single_user_profile_mode()

@@ -1,6 +1,4 @@
-import { useDarkMode } from "~/hooks/useDarkmode"
 import { Alert, Modal, Select, Switch } from "antd"
-import { MoonIcon, SunIcon } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { SearchModeSettings } from "./search-mode"
 import { useTranslation } from "react-i18next"
@@ -8,6 +6,7 @@ import { useI18n } from "@/hooks/useI18n"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { SystemSettings } from "./system-settings"
+import { ThemePicker } from "@/components/Common/Settings/ThemePicker"
 import { getDefaultOcrLanguage, ocrLanguages } from "@/data/ocr-language"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useConnectionActions } from "@/hooks/useConnectionState"
@@ -44,7 +43,6 @@ export const GeneralSettings = () => {
     false
   )
 
-  const { mode, toggleDarkMode } = useDarkMode()
   const { t } = useTranslation("settings")
   const notification = useAntdNotification()
   const { changeLocale, locale, supportLanguage } = useI18n()
@@ -348,25 +346,7 @@ export const GeneralSettings = () => {
         />
       </div>
 
-      <div className="flex flex-row justify-between">
-        <span className="text-text">
-          {t("generalSettings.settings.darkMode.label")}
-        </span>
-
-        <button
-          onClick={toggleDarkMode}
-          className="mt-4 inline-flex items-center rounded-md border border-transparent bg-primary px-2 py-2 text-sm font-medium leading-4 text-white shadow-sm hover:bg-primaryStrong focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50 whitespace-nowrap"
-        >
-          {mode === "dark" ? (
-            <SunIcon className="w-4 h-4 mr-2" />
-          ) : (
-            <MoonIcon className="w-4 h-4 mr-2" />
-          )}
-          {mode === "dark"
-            ? t("generalSettings.settings.darkMode.options.light")
-            : t("generalSettings.settings.darkMode.options.dark")}
-        </button>
-      </div>
+      <ThemePicker />
       <SearchModeSettings />
       <SystemSettings />
     </dl>

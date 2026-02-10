@@ -36,7 +36,7 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     list_active_team_memberships_for_user,
     list_org_memberships_for_user,
 )
-from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE, SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import (
     get_settings,
@@ -606,10 +606,21 @@ def _principal_has_admin_claims(principal: Optional[AuthPrincipal]) -> bool:
     if principal is None:
         return False
     try:
-        if bool(getattr(principal, "is_admin", False)):
+        roles = {
+            str(role).strip().lower()
+            for role in (getattr(principal, "roles", []) or [])
+            if str(role).strip()
+        }
+        permissions = {
+            str(perm).strip().lower()
+            for perm in (getattr(principal, "permissions", []) or [])
+            if str(perm).strip()
+        }
+        if "admin" in roles:
             return True
-        roles = list(getattr(principal, "roles", []) or [])
-        if any(str(role).lower() == "admin" for role in roles):
+        if "*" in permissions:
+            return True
+        if SYSTEM_CONFIGURE in permissions:
             return True
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         return False

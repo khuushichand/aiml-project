@@ -147,6 +147,38 @@ def _utcnow_iso() -> str:
     return _dt.datetime.utcnow().isoformat()
 
 
+def _normalize_claim_values(raw: Any) -> list[str]:
+    values = raw if isinstance(raw, (list, tuple, set)) else ([raw] if raw is not None else [])
+    out: list[str] = []
+    for value in values:
+        text = str(value).strip().lower()
+        if text:
+            out.append(text)
+    return out
+
+
+def _is_workflows_admin_user(current_user: User) -> bool:
+    """
+    Resolve workflows admin authorization from explicit role/permission claims.
+
+    Legacy profile booleans/columns like ``is_admin`` are intentionally not
+    trusted for cross-user workflows access.
+    """
+    try:
+        if "admin" in _normalize_claim_values(getattr(current_user, "roles", [])):
+            return True
+        permission_values = _normalize_claim_values(getattr(current_user, "permissions", []))
+        if WORKFLOWS_ADMIN.lower() in permission_values:
+            return True
+        if "*" in permission_values:
+            return True
+        if "system.configure" in permission_values:
+            return True
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
+        return False
+    return False
+
+
 router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
 
 
@@ -1147,7 +1179,7 @@ async def create_new_version(
     d0 = db.get_definition(workflow_id)
     if not d0 or d0.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(d0.owner_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Workflow not found")
     try:
@@ -1204,7 +1236,7 @@ async def delete_definition(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if not d or d.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(d.owner_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Workflow not found")
     ok = db.soft_delete_definition(workflow_id)
@@ -1244,7 +1276,7 @@ async def workflows_auth_check(current_user: User = Depends(get_request_user)):
             "ok": True,
             "user_id": str(current_user.id),
             "username": getattr(current_user, "username", None),
-            "is_admin": bool(getattr(current_user, "is_admin", False)),
+            "is_admin": _is_workflows_admin_user(current_user),
             "tenant_id": getattr(current_user, "tenant_id", None),
         }
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
@@ -1296,10 +1328,12 @@ async def workflows_virtual_key(
     try:
         from datetime import datetime, timedelta
         svc = JWTService(settings)
+        role_claims = _normalize_claim_values(getattr(current_user, "roles", []))
+        token_role = role_claims[0] if role_claims else ("admin" if _is_workflows_admin_user(current_user) else "user")
         token = svc.create_virtual_access_token(
             user_id=user_id,
             username=str(getattr(current_user, "username", "user")),
-            role=(current_user.roles[0] if getattr(current_user, "roles", None) else ("admin" if getattr(current_user, "is_admin", False) else "user")),
+            role=token_role,
             scope=str(body.scope or "workflows"),
             ttl_minutes=int(body.ttl_minutes),
             schedule_id=(str(body.schedule_id) if body.schedule_id else None),
@@ -1342,7 +1376,7 @@ async def run_saved(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if d.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(d.owner_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Workflow not found")
     # Idempotency: reuse existing run if key matches
@@ -1595,7 +1629,7 @@ async def list_runs(
     audit_service=Depends(get_audit_service_for_user),
 ):
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     user_id = None
     if owner and is_admin:
         user_id = str(owner)
@@ -1957,7 +1991,7 @@ async def get_run(
             logger.debug(f"Workflows get_run: audit tenant_mismatch failed: {e}")
         raise HTTPException(status_code=404, detail="Run not found")
     # Owner or admin (if attribute available)
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         try:
             if audit_service:
@@ -2030,7 +2064,7 @@ async def get_run_events(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
     # Normalize types to lower-case for consistency with UI filter chips
@@ -2120,7 +2154,7 @@ async def get_run_webhook_deliveries(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
     events = db.get_events(run_id, types=["webhook_delivery"]) or []
@@ -2447,7 +2481,7 @@ async def get_run_artifacts(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
     arts = db.list_artifacts_for_run(run_id)
@@ -2486,7 +2520,7 @@ async def get_run_artifacts_manifest(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
 
@@ -2566,7 +2600,7 @@ async def verify_artifacts_batch(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
 
@@ -2672,7 +2706,7 @@ async def download_artifact(
         except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             pass
         raise HTTPException(status_code=404, detail="Artifact not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         try:
             if audit_service:
@@ -2835,7 +2869,7 @@ async def download_run_artifacts_zip(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
 
@@ -2963,14 +2997,14 @@ async def control_run(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
     engine = WorkflowEngine(db)
     # Admin impersonation audit trail (header opt-in)
     try:
         imp = str(request.headers.get("x-impersonate-user", "")).strip()
-        is_admin = bool(getattr(current_user, "is_admin", False))
+        is_admin = _is_workflows_admin_user(current_user)
         if imp and is_admin and str(imp) != str(current_user.id):
             db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "admin_impersonation", {"actor": str(current_user.id), "target_user_id": imp, "action": action})
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
@@ -3613,7 +3647,7 @@ async def retry_run(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
     engine = WorkflowEngine(db)
@@ -3649,7 +3683,7 @@ async def get_definition(
     if d.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Workflow not found")
     # Owner/admin check for definition read (tighten RBAC)
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     if str(d.owner_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Workflow not found")
     try:
@@ -3691,7 +3725,7 @@ async def approve_step(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     step_run = db.get_latest_step_run(run_id=run_id, step_id=step_id)
     if not step_run:
         raise HTTPException(status_code=404, detail="Step run not found")
@@ -3758,7 +3792,7 @@ async def reject_step(
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_admin = _is_workflows_admin_user(current_user)
     step_run = db.get_latest_step_run(run_id=run_id, step_id=step_id)
     if not step_run:
         raise HTTPException(status_code=404, detail="Step run not found")

@@ -9139,9 +9139,9 @@ curl<span class="w"> </span>-X<span class="w"> </span>GET<span class="w"> </span
 <h2 id="rate-limiting-performance">Rate Limiting &amp; Performance<a class="headerlink" href="#rate-limiting-performance" title="Permanent link">&para;</a></h2>
 <h3 id="rate-limits">Rate Limits<a class="headerlink" href="#rate-limits" title="Permanent link">&para;</a></h3>
 <p>Defaults are configured via AuthNZ settings and enforced per client/IP (token bucket):
-- RATE_LIMIT_ENABLED: true
-- RATE_LIMIT_PER_MINUTE: 60
-- RATE_LIMIT_BURST: 10</p>
+- RG_ENABLED: true
+- requests.rpm: 60
+- requests.burst: 10</p>
 <p>Notes:
 - Endpoints apply a general <code>check_rate_limit</code> dependency; administrators can tune settings via environment or config.
 - Health endpoints may be left open or gated by global policies per deployment.</p>

@@ -79,7 +79,7 @@ export const SourceFeedback = ({
             title={t("feedback.sourceHelpful", "Helpful source")}
             className={`${buttonBase} ${
               selected === "up"
-                ? "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                ? "border-success/30 bg-success/10 text-success"
                 : "border-border text-text-subtle hover:bg-surface2"
             } ${isDisabled ? "cursor-not-allowed opacity-50" : ""}`}>
             <ThumbsUp className="h-3 w-3" />
@@ -95,7 +95,7 @@ export const SourceFeedback = ({
             title={t("feedback.sourceUnhelpful", "Unhelpful source")}
             className={`${buttonBase} ${
               selected === "down"
-                ? "border-rose-200 bg-rose-50 text-rose-600 dark:border-rose-700 dark:bg-rose-900/30 dark:text-rose-300"
+                ? "border-danger/30 bg-danger/10 text-danger"
                 : "border-border text-text-subtle hover:bg-surface2"
             } ${isDisabled ? "cursor-not-allowed opacity-50" : ""}`}>
             <ThumbsDown className="h-3 w-3" />

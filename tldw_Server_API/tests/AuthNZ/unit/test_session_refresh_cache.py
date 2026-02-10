@@ -61,6 +61,9 @@ class StubTransaction:
 class StubPool:
     def __init__(self, conn):
         self.conn = conn
+        # Sessions repo backend routing keys off db_pool.pool presence.
+        # Use a truthy sentinel so this stub follows the Postgres fetchrow path.
+        self.pool = object()
 
     def transaction(self):
 
@@ -398,7 +401,6 @@ async def test_refresh_session_concurrent_rotation_allows_single_winner(isolated
         JWT_SECRET_KEY="session-refresh-concurrency-secret-1234567890",
         ENABLE_REGISTRATION=True,
         REQUIRE_REGISTRATION_CODE=False,
-        RATE_LIMIT_ENABLED=False,
         ROTATE_REFRESH_TOKENS=True,
     )
 
@@ -576,7 +578,6 @@ async def test_refresh_session_survives_hmac_rotation(isolated_test_environment,
         JWT_SECRET_KEY=old_secret,
         ENABLE_REGISTRATION=True,
         REQUIRE_REGISTRATION_CODE=False,
-        RATE_LIMIT_ENABLED=False,
     )
 
     pool = DatabasePool(old_settings)
@@ -631,7 +632,6 @@ async def test_refresh_session_survives_hmac_rotation(isolated_test_environment,
             JWT_SECONDARY_SECRET=old_secret,
             ENABLE_REGISTRATION=True,
             REQUIRE_REGISTRATION_CODE=False,
-            RATE_LIMIT_ENABLED=False,
         )
 
         manager_rotated = SessionManager(db_pool=pool, settings=rotated_settings)
@@ -685,7 +685,6 @@ async def test_validate_session_persists_last_activity(isolated_test_environment
         JWT_SECRET_KEY="session-last-activity-secret-1234567890abcd",
         ENABLE_REGISTRATION=True,
         REQUIRE_REGISTRATION_CODE=False,
-        RATE_LIMIT_ENABLED=False,
     )
 
     pool = DatabasePool(settings)

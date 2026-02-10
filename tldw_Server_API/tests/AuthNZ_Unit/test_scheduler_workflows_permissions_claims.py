@@ -181,9 +181,9 @@ async def test_scheduler_admin_rescan_allows_for_admin_principal(monkeypatch):
 async def test_scheduler_admin_rescan_allows_service_admin_principal(monkeypatch):
     principal = _make_principal(
         kind="service",
-        roles=["worker"],
+        roles=["admin"],
         permissions=[],
-        is_admin=True,
+        is_admin=False,
     )
     app = _build_app_with_overrides(principal)
     fake_scheduler = app.state._fake_scheduler
@@ -265,6 +265,22 @@ async def test_scheduler_list_owner_filter_forbidden_without_admin_claims(monkey
 
 
 @pytest.mark.asyncio
+async def test_scheduler_list_owner_filter_forbidden_for_is_admin_boolean_without_claims(monkeypatch):
+    principal = _make_principal(
+        roles=["user"],
+        permissions=[],
+        is_admin=True,
+    )
+    app = _build_app_with_overrides(principal)
+    fake_scheduler = app.state._fake_scheduler
+    monkeypatch.setattr(sched_mod, "get_workflows_scheduler", lambda: fake_scheduler)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/scheduler/workflows", params={"owner": "2"})
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_scheduler_get_schedule_allows_admin_role_cross_user(monkeypatch):
     principal = _make_principal(
         roles=["admin"],
@@ -287,6 +303,22 @@ async def test_scheduler_get_schedule_forbidden_without_admin_claims(monkeypatch
         roles=["user"],
         permissions=[],
         is_admin=False,
+    )
+    app = _build_app_with_overrides(principal)
+    fake_scheduler = app.state._fake_scheduler
+    monkeypatch.setattr(sched_mod, "get_workflows_scheduler", lambda: fake_scheduler)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/scheduler/workflows/sched-1")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_scheduler_get_schedule_forbidden_for_is_admin_boolean_without_claims(monkeypatch):
+    principal = _make_principal(
+        roles=["worker"],
+        permissions=[],
+        is_admin=True,
     )
     app = _build_app_with_overrides(principal)
     fake_scheduler = app.state._fake_scheduler

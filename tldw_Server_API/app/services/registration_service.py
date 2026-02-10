@@ -66,9 +66,8 @@ class RegistrationService:
         Return True when this service is operating on a PostgreSQL backend.
 
         Backend selection is derived from DatabasePool state instead of probing
-        connection capabilities (for example ``hasattr(conn, "fetchval")``),
-        because shim connections can expose methods that do not reflect the
-        active backend.
+        connection method presence, because shim connections can expose methods
+        that do not reflect the active backend.
         """
         if not self.db_pool:
             return False

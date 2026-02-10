@@ -42,6 +42,7 @@ router = APIRouter()
 MAX_CACHED_JOB_MANAGER_INSTANCES = 4
 _job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
 _job_manager_lock = threading.Lock()
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
 def get_job_manager() -> JobManager:
@@ -175,6 +176,22 @@ def _resolve_media_ingest_queue(form_data: AddMediaForm) -> str:
     # Keep fallback within JobManager standard queue names unless explicitly overridden.
     heavy_queue = (os.getenv("MEDIA_INGEST_JOBS_HEAVY_QUEUE") or "low").strip() or "low"
     return heavy_queue
+
+
+def _principal_has_admin_claims(principal: AuthPrincipal) -> bool:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 def _job_to_status(job: dict[str, Any]) -> MediaIngestJobStatus:
@@ -385,7 +402,7 @@ async def get_media_ingest_job(
         raise HTTPException(status_code=404, detail="Job not found")
 
     owner = str(job.get("owner_user_id") or "")
-    if not (principal.is_admin or owner == str(current_user.id)):
+    if not (_principal_has_admin_claims(principal) or owner == str(current_user.id)):
         raise HTTPException(status_code=403, detail="Not authorized for this job")
 
     return _job_to_status(job)
@@ -405,7 +422,7 @@ async def list_media_ingest_jobs(
     _: None = Depends(check_rate_limit),
     jm: JobManager = Depends(get_job_manager),
 ) -> MediaIngestJobListResponse:
-    owner_filter = None if principal.is_admin else str(current_user.id)
+    owner_filter = None if _principal_has_admin_claims(principal) else str(current_user.id)
     # Fetch in larger batches internally (100-500) to reduce DB round-trips
     # while still respecting the user limit for the final result set.
     page_limit = min(500, max(limit, 100))
@@ -466,7 +483,7 @@ async def cancel_media_ingest_job(
         raise HTTPException(status_code=404, detail="Job not found")
 
     owner = str(job.get("owner_user_id") or "")
-    if not (principal.is_admin or owner == str(current_user.id)):
+    if not (_principal_has_admin_claims(principal) or owner == str(current_user.id)):
         raise HTTPException(status_code=403, detail="Not authorized for this job")
 
     status_val = str(job.get("status") or "").lower()

@@ -26,7 +26,7 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
 
 ## New endpoints checklist (AuthNZ + RG)
 
-- Always authenticate via `get_auth_principal` and enforce authorization with `require_permissions(...)` / `require_roles(...)` (and `require_service_principal()` for service-only routes). Avoid introducing new usages of `require_admin`, raw `request.state.user_id` checks, or ad-hoc `is_single_user_mode()` branches for access control.
+- Always authenticate via `get_auth_principal` and enforce authorization with `require_permissions(...)` / `require_roles(...)` (and `require_service_principal()` for service-only routes). `require_admin`/`require_role` API-dependency shims are removed; avoid raw `request.state.user_id` checks or ad-hoc `is_single_user_mode()` branches for access control.
 - For latency/cost-sensitive or user-facing endpoints (chat, audio, embeddings, evaluations, MCP, workflows, tools, media ingestion, etc.), verify whether they should be governed by Resource Governor:
   - If yes, ensure there is a policy entry (`resource_governor_policies.yaml` or DB-backed `rg_policies`) and a `route_map` entry mapping the endpoint’s path/tag to an appropriate policy id.
   - Confirm tests exercise the RG-enforced behavior where limits are important (429/Retry-After headers, tokens/streams limits, etc.).
@@ -112,7 +112,7 @@ from fastapi import APIRouter, Depends
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_current_user,           # Resolves single-user, API-key, or JWT
     get_current_active_user,    # Adds active status check
-    check_rate_limit,           # General rate limit helper
+    check_rate_limit,           # Diagnostics-only ingress compatibility helper
     require_permissions,        # Claim-first permission gate (preferred)
 )
 
@@ -156,16 +156,13 @@ async def run_workflow(user=Depends(get_current_user)):
 
 Notes:
 - `get_current_user` handles single-user mode first, then API key, then JWT.
-- `check_rate_limit` uses a token bucket; see Rate Limiting below.
+- `check_rate_limit` dependency is diagnostics-only (it does not enforce fallback 429s); see Rate Limiting below for enforcement paths.
 
 Legacy compatibility DI (existing endpoints only):
 - `get_optional_current_user` – legacy shim, kept for older optional-auth routes that
   need to behave differently when a user is present. New endpoints should prefer
   claim-first patterns (e.g., `AuthPrincipal` + explicit permissions/roles) rather
   than introducing fresh optional-auth behaviors.
-- `require_role("role")` – legacy shim around `get_current_active_user` user dicts.
-  New routes must use `require_roles(...)` / `require_permissions(...)` together with
-  `get_auth_principal` instead of adding new usages of `require_role`.
 
 Examples (modern, claim-first):
 ```python
@@ -260,7 +257,7 @@ Notes:
 - **Removed legacy helpers (historical only)**:
   - Earlier versions exposed FastAPI dependencies `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, and `AllPermissionsChecker` from `permissions.py`. These have now been removed; endpoints must use `get_auth_principal` together with `require_permissions` / `require_roles` instead.
   - Existing admin and control surfaces that once used these helpers (media add, tools execute, workflows runs/events/artifacts/control/DLQ, sandbox admin) have been migrated to claim-first dependencies. Tests such as `test_media_add_permissions_claims.py`, `test_tools_permissions_claims.py`, `test_workflows_runs_permissions_claims.py`, `test_workflows_artifacts_permissions_claims.py`, `test_workflows_webhook_dlq_permissions_claims.py`, `test_workflows_control_permissions_claims.py`, and `test_sandbox_admin_permissions_claims.py` lock in the new behavior and ensure the claim-first dependencies are the true authorization gates.
-  - `require_admin` in `evaluations_auth.py` remains as an admin-only guard for heavy evaluations flows; new admin surfaces should prefer `require_roles("admin")` / `require_permissions(...)` on top of `get_auth_principal`.
+  - Heavy evaluations admin paths use claim-first checks via `enforce_heavy_evaluations_admin(AuthPrincipal)` together with `require_roles("admin")` / `require_permissions(...)` on top of `get_auth_principal`.
   - A repository layer exists for AuthNZ and MUST be used instead of ad-hoc SQL for core tables:
     - `AuthnzUsersRepo` (`app/core/AuthNZ/repos/users_repo.py`) wraps `UsersDB` for user lookups; exercised against both SQLite and Postgres in AuthNZ tests.
     - `AuthnzApiKeysRepo` (`app/core/AuthNZ/repos/api_keys_repo.py`) centralizes `api_keys` read/write paths and is used by `APIKeyManager` and single-user bootstrap.
@@ -306,7 +303,7 @@ When adding a new FastAPI endpoint that needs AuthNZ and guardrails:
    - Gate the route with claim-first dependencies on the router or endpoint:
      - `dependencies=[Depends(require_permissions(MY_PERMISSION))]`
      - and/or `dependencies=[Depends(require_roles("admin"))]`.
-   - Do **not** introduce new `require_admin`-style helpers or mode-based gates; always build on `get_auth_principal` + `require_permissions` / `require_roles`.
+   - Do **not** introduce mode-based gates or legacy admin shims; always build on `get_auth_principal` + `require_permissions` / `require_roles`.
 
 3. **Wire ResourceGovernor / rate limits if needed**
    - For rate-limited endpoints, reuse shared helpers instead of new per-module limiters:
@@ -333,10 +330,10 @@ When adding a new FastAPI endpoint that needs AuthNZ and guardrails:
 - Governance facade: `AuthGovernor` (`auth_governor.py`) is the canonical entry point for AuthNZ guardrails. It wraps the shared `RateLimiter` and virtual-key budget helpers so core flows no longer talk to those primitives directly:
   - `check_llm_budget_for_api_key(principal, api_key_id)` decorates `is_key_over_budget(...)` with `AuthPrincipal` metadata and is used by `llm_budget_guard` and `llm_budget_middleware`.
   - `check_lockout(identifier, attempt_type="login", rate_limiter=...)` and `record_auth_failure(identifier, attempt_type, rate_limiter=...)` mediate login lockout and suspicious-activity tracking and are used by the `/auth/login` endpoint.
-  - `check_rate_limit(identifier, endpoint, limit=None, window_minutes=None, rate_limiter=...)` remains available for compatibility/testing and non-RG fallback flows where explicitly used.
+  - `check_rate_limit(identifier, endpoint, limit=None, window_minutes=None, rate_limiter=...)` remains available for compatibility/testing and direct limiter call sites where explicitly used.
 - Endpoint helpers:
-  - `check_rate_limit` is diagnostics-only (no legacy fallback limiter enforcement).
-  - `check_auth_rate_limit` is diagnostics-only (no legacy fallback limiter enforcement).
+  - `check_rate_limit` is diagnostics-only (no fallback 429 enforcement).
+  - `check_auth_rate_limit` is diagnostics-only (no fallback 429 enforcement).
   - Route abuse protection should come from RG ingress policies and endpoint-local RG checks.
 - LLM budgets: `llm_budget_middleware.py` and `llm_budget_guard.py` enforce endpoint/provider/model quotas when configured, always via `AuthGovernor.check_llm_budget_for_api_key`. Settings are `LLM_BUDGET_ENFORCE` (on/off) and `LLM_BUDGET_ENDPOINTS` (paths). Virtual key features are gated by `VIRTUAL_KEYS_ENABLED` (defaults true).
 
@@ -349,7 +346,7 @@ References:
 - `tldw_Server_API/app/core/AuthNZ/auth_governor.py#AuthGovernor`
 
 RBAC-aware selector (logging-only for now):
-- `auth_deps.rbac_rate_limit(resource)` logs the strictest configured limit selected for a user/role-resource pair; it does not enforce yet (use `check_rate_limit` for enforcement).
+- `auth_deps.rbac_rate_limit(resource)` logs the strictest configured limit selected for a user/role-resource pair; it does not enforce yet (use `AuthGovernor`/`RateLimiter` call paths for enforcement).
 
 Example: RBAC resource-aware logging (no enforcement)
 ```python

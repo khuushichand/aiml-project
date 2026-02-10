@@ -167,14 +167,14 @@ const QuickChatPopout: React.FC = () => {
     })
 
   return (
-    <div className="flex flex-col h-screen bg-white dark:bg-gray-900">
+    <div className="flex flex-col h-screen bg-bg">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
-        <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-surface">
+        <h1 className="text-lg font-semibold text-text">
           {title}
         </h1>
       </div>
-      <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
+      <div className="px-4 py-2 border-b border-border bg-bg">
         <Select
           className="w-full"
           size="small"
@@ -194,7 +194,7 @@ const QuickChatPopout: React.FC = () => {
         />
         {showModelsError && (
           <div
-            className="mt-2 flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400"
+            className="mt-2 flex items-center gap-2 text-xs text-warn"
             id={modelsErrorHintId}>
             <AlertCircle className="h-4 w-4" />
             <span>
@@ -214,10 +214,10 @@ const QuickChatPopout: React.FC = () => {
         aria-live="polite"
         aria-label={t("common:chatMessages", "Chat messages")}>
         {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-500 dark:text-gray-400 text-center px-4">
+          <div className="flex flex-col items-center justify-center h-full text-text-muted text-center px-4">
             <p className="text-sm">{emptyState}</p>
             {!hasModel && (
-              <div className="mt-3 flex items-center gap-2 text-amber-600 dark:text-amber-400 text-xs">
+              <div className="mt-3 flex items-center gap-2 text-warn text-xs">
                 <AlertCircle className="h-4 w-4" />
                 <span>
                   {t(
@@ -244,7 +244,7 @@ const QuickChatPopout: React.FC = () => {
       </div>
 
       {/* Input area */}
-      <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+      <div className="px-4 py-3 border-t border-border bg-surface">
         <QuickChatInput
           onSend={sendMessage}
           onCancel={cancelStream}

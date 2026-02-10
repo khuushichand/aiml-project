@@ -40,9 +40,16 @@ def client_with_user(monkeypatch, tmp_path):
 @pytest.fixture()
 def admin_client_with_user(monkeypatch, tmp_path):
     async def override_user():
-        user = User(id=920, username="wl-phase3-admin", email=None, is_active=True)
-        setattr(user, "is_admin", True)
-        return user
+        return User(
+            id=920,
+            username="wl-phase3-admin",
+            email=None,
+            role="user",
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=False,
+            is_active=True,
+        )
 
     base_dir = tmp_path / "watchlists_phase3_dbs_admin"
     base_dir.mkdir(parents=True, exist_ok=True)

@@ -77,10 +77,10 @@ const StatusIndicator: React.FC<{ status: ConversationStatus }> = ({
   if (!status) return null
 
   const icons: Record<string, React.ReactNode> = {
-    in_progress: <Circle className="size-2 fill-blue-500 text-blue-500" />,
-    resolved: <CheckCircle2 className="size-2.5 text-green-500" />,
-    backlog: <Clock className="size-2.5 text-gray-400" />,
-    non_viable: <XCircle className="size-2.5 text-red-400" />
+    in_progress: <Circle className="size-2 fill-primary text-primary" />,
+    resolved: <CheckCircle2 className="size-2.5 text-success" />,
+    backlog: <Clock className="size-2.5 text-text-subtle" />,
+    non_viable: <XCircle className="size-2.5 text-danger" />
   }
 
   return (
@@ -126,7 +126,7 @@ const SidebarMetaRow: React.FC<{
       {folders.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {folders.slice(0, 3).map((folder) => {
-            const color = uiPrefs[folder.id]?.color || "#6b7280"
+            const color = uiPrefs[folder.id]?.color || "rgb(var(--color-muted))"
             return (
               <span
                 key={folder.id}
@@ -956,7 +956,7 @@ export const SidepanelChatSidebar = ({
             <button
               type="button"
               onClick={openBulkDeleteConfirm}
-              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-red-600 hover:bg-surface2"
+              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-danger hover:bg-surface2"
               disabled={selectedTabIds.length === 0}
               aria-label={t("sidepanel:multiSelect.deleteConfirmOk", "Move to trash")}
               title={t("sidepanel:multiSelect.deleteConfirmOk", "Move to trash")}

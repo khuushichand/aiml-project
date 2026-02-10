@@ -320,14 +320,13 @@ def _normalize_claim_values(raw: Any) -> list[str]:
 
 def _is_runs_admin_user(current_user: User) -> bool:
     """
-    Determine admin authorization from explicit claims only.
+    Determine admin authorization from explicit role/permission claims only.
 
     Legacy profile booleans/columns like ``is_superuser`` and ``role`` are
-    intentionally ignored for runs-gated and cross-user watchlists paths.
+    intentionally ignored for runs-gated and cross-user watchlists paths, and
+    ``is_admin`` booleans are not trusted unless represented as claims.
     """
     try:
-        if bool(getattr(current_user, "is_admin", False)):
-            return True
         if "admin" in _normalize_claim_values(getattr(current_user, "roles", [])):
             return True
         permission_values = _normalize_claim_values(getattr(current_user, "permissions", []))

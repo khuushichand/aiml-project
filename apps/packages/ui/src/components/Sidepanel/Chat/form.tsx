@@ -1334,7 +1334,7 @@ export const SidepanelForm = ({
 
   const voiceChatToneClass = React.useMemo(() => {
     if (voiceChat.state === "error") {
-      return "border-red-500 text-red-600"
+      return "border-danger text-danger"
     }
     if (voiceChatEnabled && voiceChat.state !== "idle") {
       return "border-primary text-primaryStrong"
@@ -1814,7 +1814,7 @@ export const SidepanelForm = ({
                   <div
                     className={`w-full flex flex-col px-1 ${
                       !isConnectionReady
-                        ? "rounded-md border border-dashed border-amber-400 bg-amber-50/50 dark:border-amber-600 dark:bg-amber-900/10"
+                        ? "rounded-md border border-dashed border-warn bg-warn/10"
                         : ""
                     }`}>
                     {/* Connection status indicator when disconnected */}
@@ -1986,7 +1986,7 @@ export const SidepanelForm = ({
                         role="alert"
                         aria-live="assertive"
                         aria-atomic="true"
-                        className="flex items-center justify-between gap-2 px-2 py-1 text-xs text-red-600 dark:text-red-400 animate-shake"
+                        className="flex items-center justify-between gap-2 px-2 py-1 text-xs text-danger animate-shake"
                       >
                         <div className="flex items-center gap-2">
                           <svg className="h-3.5 w-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
@@ -1997,7 +1997,7 @@ export const SidepanelForm = ({
                         <button
                           type="button"
                           onClick={() => form.clearFieldError("message")}
-                          className="flex-shrink-0 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300"
+                          className="flex-shrink-0 text-danger hover:text-danger"
                           aria-label={t("common:dismiss", "Dismiss")}
                           title={t("common:dismiss", "Dismiss")}
                         >

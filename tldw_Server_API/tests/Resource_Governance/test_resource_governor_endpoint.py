@@ -61,6 +61,14 @@ def _reset_rg_state(app) -> None:
                 setattr(app.state, attr, None)
         except Exception:
             continue
+    # Daily-cap helpers cache a process-global ledger instance. Clear it so this
+    # module's per-test DATABASE_URL fixtures always apply deterministically.
+    try:
+        from tldw_Server_API.app.core.Resource_Governance import daily_caps as _daily_caps
+
+        _daily_caps._daily_ledger = None
+    except Exception:
+        pass
 
 
 @pytest.mark.asyncio

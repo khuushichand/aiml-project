@@ -2930,7 +2930,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                   disabled={!voiceChatAvailable || isSending}
                   className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
                     voiceChat.state === "error"
-                      ? "text-red-600"
+                      ? "text-danger"
                       : voiceChatEnabled && voiceChat.state !== "idle"
                         ? "bg-surface2 text-primaryStrong"
                         : "text-text hover:bg-surface2"
@@ -2970,7 +2970,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           onClick={handleClearContext}
           disabled={history.length === 0}
           title={t("tooltip.clearContext") as string}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-red-600 transition hover:bg-red-50 dark:hover:bg-red-900/20 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted disabled:hover:bg-transparent"
+          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-danger transition hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted disabled:hover:bg-transparent"
         >
           <span>{t("playground:actions.clearConversation", "Clear conversation")}</span>
           <EraserIcon className="h-4 w-4" />
@@ -3452,7 +3452,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         data-testid="voice-chat-button"
         className={`flex items-center gap-1.5 rounded-full px-2 py-1.5 text-sm transition ${
           voiceChat.state === "error"
-            ? "bg-red-100 text-red-600 dark:bg-red-900/30"
+            ? "bg-danger/10 text-danger"
             : voiceChatEnabled && voiceChat.state !== "idle"
               ? "bg-primary/10 text-primary animate-pulse"
               : "hover:bg-surface2 text-text-muted"
@@ -3987,7 +3987,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         role="alert"
                         aria-live="assertive"
                         aria-atomic="true"
-                        className="flex items-center justify-between gap-2 px-2 py-1 text-xs text-red-600 dark:text-red-400 animate-shake"
+                        className="flex items-center justify-between gap-2 px-2 py-1 text-xs text-danger animate-shake"
                       >
                         <div className="flex items-center gap-2">
                           <svg className="h-3.5 w-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
@@ -3998,7 +3998,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         <button
                           type="button"
                           onClick={() => form.clearFieldError("message")}
-                          className="flex-shrink-0 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300"
+                          className="flex-shrink-0 text-danger hover:text-danger"
                           aria-label={t("common:dismiss", "Dismiss") as string}
                           title={t("common:dismiss", "Dismiss") as string}
                         >
@@ -4080,7 +4080,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                       </div>
                     ) : null}
                     {showConnectBanner && !isConnectionReady && (
-                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500 dark:bg-[#2a2310] dark:text-amber-100">
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
                         <p className="max-w-xs text-left">
                           {t(
                             "playground:composer.connectNotice",
@@ -4090,13 +4090,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         <div className="flex flex-wrap items-center gap-2">
                           <Link
                             to="/settings/tldw"
-                            className="text-xs font-medium text-amber-900 underline hover:text-amber-700 dark:text-amber-100 dark:hover:text-amber-300"
+                            className="text-xs font-medium text-warn underline hover:text-warn"
                           >
                             {t("settings:tldw.setupLink", "Set up server")}
                           </Link>
                           <Link
                             to="/settings/health"
-                            className="text-xs font-medium text-amber-900 underline hover:text-amber-700 dark:text-amber-100 dark:hover:text-amber-300"
+                            className="text-xs font-medium text-warn underline hover:text-warn"
                           >
                             {t(
                               "settings:healthSummary.diagnostics",
@@ -4106,7 +4106,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           <button
                             type="button"
                             onClick={() => setShowConnectBanner(false)}
-                            className="inline-flex items-center rounded-full p-1 text-amber-700 hover:bg-amber-100 dark:text-amber-200 dark:hover:bg-[#3a2b10]"
+                            className="inline-flex items-center rounded-full p-1 text-warn hover:bg-warn/10"
                             aria-label={t("common:close", "Dismiss")}
                             title={t("common:close", "Dismiss") as string}
                           >
@@ -4116,7 +4116,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                       </div>
                     )}
                     {queuedMessages.length > 0 && showQueuedBanner && (
-                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900 dark:border-green-500 dark:bg-[#102a10] dark:text-green-100">
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
                         <p className="max-w-xs text-left">
                           <span className="block font-medium">
                             {t(
@@ -4132,7 +4132,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         <div className="flex flex-wrap items-center gap-2">
                           <button
                             type="button"
-                            className={`rounded-md border border-green-300 bg-white px-2 py-1 text-xs font-medium text-green-900 hover:bg-green-100 dark:bg-[#163816] dark:text-green-50 dark:hover:bg-[#194419] ${
+                            className={`rounded-md border border-success/30 bg-surface px-2 py-1 text-xs font-medium text-success hover:bg-success/10 ${
                               !isConnectionReady ? "cursor-not-allowed opacity-60" : ""
                             }`}
                             title={t(
@@ -4154,7 +4154,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           </button>
                           <button
                             type="button"
-                            className="text-xs font-medium text-green-900 underline hover:text-green-700 dark:text-green-100 dark:hover:text-green-300"
+                            className="text-xs font-medium text-success underline hover:text-success"
                             title={t(
                               "playground:composer.queuedBanner.clear",
                               "Clear queue"
@@ -4169,7 +4169,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           </button>
                           <Link
                             to="/settings/health"
-                            className="text-xs font-medium text-green-900 underline hover:text-green-700 dark:text-green-100 dark:hover:text-green-300"
+                            className="text-xs font-medium text-success underline hover:text-success"
                           >
                             {t(
                               "settings:healthSummary.diagnostics",
@@ -4179,7 +4179,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           <button
                             type="button"
                             onClick={() => setShowQueuedBanner(false)}
-                            className="inline-flex items-center rounded-full p-1 text-green-700 hover:bg-green-100 dark:text-green-200 dark:hover:bg-[#163816]"
+                            className="inline-flex items-center rounded-full p-1 text-success hover:bg-success/10"
                             aria-label={t("common:close", "Dismiss")}
                             title={t("common:close", "Dismiss") as string}>
                             <X className="h-3 w-3" />

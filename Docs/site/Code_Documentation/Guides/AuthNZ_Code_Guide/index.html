@@ -7448,7 +7448,7 @@
 </ul>
 <h2 id="new-endpoints-checklist-authnz-rg">New endpoints checklist (AuthNZ + RG)<a class="headerlink" href="#new-endpoints-checklist-authnz-rg" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Always authenticate via <code>get_auth_principal</code> and enforce authorization with <code>require_permissions(...)</code> / <code>require_roles(...)</code> (and <code>require_service_principal()</code> for service-only routes). Avoid introducing new usages of <code>require_admin</code>, raw <code>request.state.user_id</code> checks, or ad-hoc <code>is_single_user_mode()</code> branches for access control.</li>
+<li>Always authenticate via <code>get_auth_principal</code> and enforce authorization with <code>require_permissions(...)</code> / <code>require_roles(...)</code> (and <code>require_service_principal()</code> for service-only routes). <code>require_admin</code>/<code>require_role</code> API-dependency shims are removed; avoid raw <code>request.state.user_id</code> checks or ad-hoc <code>is_single_user_mode()</code> branches for access control.</li>
 <li>For latency/cost-sensitive or user-facing endpoints (chat, audio, embeddings, evaluations, MCP, workflows, tools, media ingestion, etc.), verify whether they should be governed by Resource Governor:</li>
 <li>If yes, ensure there is a policy entry (<code>resource_governor_policies.yaml</code> or DB-backed <code>rg_policies</code>) and a <code>route_map</code> entry mapping the endpoint’s path/tag to an appropriate policy id.</li>
 <li>Confirm tests exercise the RG-enforced behavior where limits are important (429/Retry-After headers, tokens/streams limits, etc.).</li>
@@ -7580,9 +7580,7 @@
   need to behave differently when a user is present. New endpoints should prefer
   claim-first patterns (e.g., <code>AuthPrincipal</code> + explicit permissions/roles) rather
   than introducing fresh optional-auth behaviors.
-- <code>require_role("role")</code> – legacy shim around <code>get_current_active_user</code> user dicts.
-  New routes must use <code>require_roles(...)</code> / <code>require_permissions(...)</code> together with
-  <code>get_auth_principal</code> instead of adding new usages of <code>require_role</code>.</p>
+- API-dependency legacy shims <code>require_admin</code>/<code>require_role</code> are removed; routes should use <code>require_roles(...)</code> / <code>require_permissions(...)</code> together with <code>get_auth_principal</code>.</p>
 <p>Examples (modern, claim-first):
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">fastapi</span><span class="w"> </span><span class="kn">import</span> <span class="n">Depends</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">tldw_Server_API.app.api.v1.API_Deps.auth_deps</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
@@ -7681,7 +7679,7 @@
 <li><strong>Removed legacy helpers (historical only)</strong>:</li>
 <li>Earlier versions exposed FastAPI dependencies <code>PermissionChecker</code>, <code>RoleChecker</code>, <code>AnyPermissionChecker</code>, and <code>AllPermissionsChecker</code> from <code>permissions.py</code>. These have now been removed; endpoints must use <code>get_auth_principal</code> together with <code>require_permissions</code> / <code>require_roles</code> instead.</li>
 <li>Existing admin and control surfaces that once used these helpers (media add, tools execute, workflows runs/events/artifacts/control/DLQ, sandbox admin) have been migrated to claim-first dependencies. Tests such as <code>test_media_add_permissions_claims.py</code>, <code>test_tools_permissions_claims.py</code>, <code>test_workflows_runs_permissions_claims.py</code>, <code>test_workflows_artifacts_permissions_claims.py</code>, <code>test_workflows_webhook_dlq_permissions_claims.py</code>, <code>test_workflows_control_permissions_claims.py</code>, and <code>test_sandbox_admin_permissions_claims.py</code> lock in the new behavior and ensure the claim-first dependencies are the true authorization gates.</li>
-<li><code>require_admin</code> in <code>evaluations_auth.py</code> remains as an admin-only guard for heavy evaluations flows; new admin surfaces should prefer <code>require_roles("admin")</code> / <code>require_permissions(...)</code> on top of <code>get_auth_principal</code>.</li>
+<li>Heavy evaluations admin paths use claim-first checks via <code>enforce_heavy_evaluations_admin(AuthPrincipal)</code> together with <code>require_roles("admin")</code> / <code>require_permissions(...)</code> on top of <code>get_auth_principal</code>.</li>
 <li>A repository layer exists for AuthNZ and MUST be used instead of ad-hoc SQL for core tables:<ul>
 <li><code>AuthnzUsersRepo</code> (<code>app/core/AuthNZ/repos/users_repo.py</code>) wraps <code>UsersDB</code> for user lookups; exercised against both SQLite and Postgres in AuthNZ tests.</li>
 <li><code>AuthnzApiKeysRepo</code> (<code>app/core/AuthNZ/repos/api_keys_repo.py</code>) centralizes <code>api_keys</code> read/write paths and is used by <code>APIKeyManager</code> and single-user bootstrap.</li>
@@ -7754,7 +7752,7 @@
 </ul>
 </li>
 <li>
-<p>Do <strong>not</strong> introduce new <code>require_admin</code>-style helpers or mode-based gates; always build on <code>get_auth_principal</code> + <code>require_permissions</code> / <code>require_roles</code>.</p>
+<p>Do <strong>not</strong> introduce mode-based gates or legacy admin shims; always build on <code>get_auth_principal</code> + <code>require_permissions</code> / <code>require_roles</code>.</p>
 </li>
 <li>
 <p><strong>Wire ResourceGovernor / rate limits if needed</strong></p>

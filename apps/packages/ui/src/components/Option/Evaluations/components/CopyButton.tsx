@@ -39,7 +39,7 @@ export const CopyButton: React.FC<CopyButtonProps> = ({
       onClick={handleCopy}
       icon={
         copied ? (
-          <Check className="h-3 w-3 text-green-500" />
+          <Check className="h-3 w-3 text-success" />
         ) : (
           <Copy className="h-3 w-3" />
         )

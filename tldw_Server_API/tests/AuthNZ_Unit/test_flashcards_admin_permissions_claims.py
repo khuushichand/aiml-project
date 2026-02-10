@@ -107,6 +107,20 @@ def test_flashcards_import_overrides_forbidden_without_permission():
 
 
 @pytest.mark.unit
+def test_flashcards_import_overrides_rejects_boolean_admin_without_claims():
+    principal = _make_principal(roles=["user"], permissions=[], is_admin=True)
+    app = _build_app_with_flashcards(principal)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/flashcards/import",
+            params={"max_lines": 10},
+            json={"content": "Deck\tFront\tBack\tTags\tNotes\nD\tF\tB\tT\tN\n", "has_header": True},
+        )
+        assert resp.status_code == 403
+
+
+@pytest.mark.unit
 def test_flashcards_import_overrides_allowed_with_flashcards_admin_permission():
     principal = _make_principal(roles=["user"], permissions=[FLASHCARDS_ADMIN], is_admin=False)
     app = _build_app_with_flashcards(principal)

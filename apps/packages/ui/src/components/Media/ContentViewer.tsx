@@ -33,6 +33,18 @@ import { useConfirmDanger } from '@/components/Common/confirm-danger'
 import { bgRequest } from '@/services/background-proxy'
 import type { MediaResultItem } from './types'
 import { getTextStats } from '@/utils/text-stats'
+import {
+  type MediaNavigationFormat,
+  MEDIA_DISPLAY_MODE_FORMAT_TO_LABEL
+} from '@/utils/media-navigation-scope'
+import { resolveMediaRenderMode } from '@/utils/media-render-mode'
+import { sanitizeMediaRichHtmlWithStats } from '@/utils/media-rich-html-sanitizer'
+import { trackMediaNavigationTelemetry } from '@/utils/media-navigation-telemetry'
+import {
+  describeMediaNavigationTarget,
+  type MediaNavigationTargetLike
+} from '@/utils/media-navigation-target'
+import { applyMediaNavigationTarget } from '@/utils/media-navigation-target-actions'
 import { useSetting } from '@/hooks/useSetting'
 import { MEDIA_COLLAPSED_SECTIONS_SETTING } from '@/services/settings/ui-settings'
 
@@ -68,10 +80,172 @@ const firstNonEmptyString = (...vals: any[]): string => {
   return ''
 }
 
+const normalizeComparableText = (value: string): string =>
+  value.replace(/\s+/g, ' ').trim().toLowerCase()
+
+const findHeadingMatchInContent = (
+  root: HTMLElement | null,
+  title: string,
+  options?: { preferLast?: boolean }
+): HTMLElement | null => {
+  if (!root) return null
+  const normalizedTitle = normalizeComparableText(title)
+  if (!normalizedTitle) return null
+  const preferLast = Boolean(options?.preferLast)
+
+  const headings = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6'))
+  const headingCandidates = preferLast ? [...headings].reverse() : headings
+  for (const candidate of headingCandidates) {
+    if (!(candidate instanceof HTMLElement)) continue
+    const text = normalizeComparableText(candidate.textContent || '')
+    if (!text) continue
+    if (text === normalizedTitle || text.includes(normalizedTitle)) {
+      return candidate
+    }
+  }
+
+  const allBroaderCandidates = Array.from(
+    root.querySelectorAll('p,li,blockquote,div,span')
+  )
+  const broaderCandidates = preferLast
+    ? allBroaderCandidates.slice(-1200).reverse()
+    : allBroaderCandidates.slice(0, 1200)
+  for (const candidate of broaderCandidates) {
+    if (!(candidate instanceof HTMLElement)) continue
+    const text = normalizeComparableText(candidate.textContent || '')
+    if (!text) continue
+    if (text === normalizedTitle || text.includes(normalizedTitle)) {
+      return candidate
+    }
+  }
+
+  return null
+}
+
+const focusNavigationMatch = (element: HTMLElement): void => {
+  element.scrollIntoView({
+    behavior: 'smooth',
+    block: 'start',
+    inline: 'nearest'
+  })
+  const priorOutline = element.style.outline
+  const priorOutlineOffset = element.style.outlineOffset
+  const priorTransition = element.style.transition
+  element.style.outline = '2px solid rgba(59, 130, 246, 0.45)'
+  element.style.outlineOffset = '2px'
+  element.style.transition = priorTransition
+    ? `${priorTransition}, outline 0.2s ease`
+    : 'outline 0.2s ease'
+  window.setTimeout(() => {
+    element.style.outline = priorOutline
+    element.style.outlineOffset = priorOutlineOffset
+    element.style.transition = priorTransition
+  }, 1300)
+}
+
+const scrollToCharOffset = (
+  container: HTMLElement,
+  targetStart: number,
+  contentLength: number
+): boolean => {
+  if (!Number.isFinite(targetStart) || targetStart < 0) return false
+  if (!Number.isFinite(contentLength) || contentLength <= 0) return false
+
+  const ratio = Math.min(
+    1,
+    Math.max(0, targetStart / Math.max(1, contentLength - 1))
+  )
+  const containerMaxScroll = container.scrollHeight - container.clientHeight
+  if (Number.isFinite(containerMaxScroll) && containerMaxScroll > 0) {
+    const top = Math.round(containerMaxScroll * ratio)
+    if (typeof container.scrollTo === 'function') {
+      container.scrollTo({ top, behavior: 'smooth' })
+    } else {
+      container.scrollTop = top
+    }
+    return true
+  }
+
+  // Some media layouts scroll the document viewport instead of the local container.
+  if (typeof document === 'undefined') return false
+  const docScroller =
+    document.scrollingElement instanceof HTMLElement
+      ? document.scrollingElement
+      : document.documentElement instanceof HTMLElement
+        ? document.documentElement
+        : null
+  if (!docScroller) return false
+
+  const docMaxScroll = docScroller.scrollHeight - docScroller.clientHeight
+  if (!Number.isFinite(docMaxScroll) || docMaxScroll <= 0) return false
+  const top = Math.round(docMaxScroll * ratio)
+
+  if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+    window.scrollTo({ top, behavior: 'smooth' })
+  } else if (typeof docScroller.scrollTo === 'function') {
+    docScroller.scrollTo({ top, behavior: 'smooth' })
+  } else {
+    docScroller.scrollTop = top
+  }
+  return true
+}
+
+const scrollToPageNumber = (
+  container: HTMLElement,
+  pageNumber: number,
+  pageCountHint: number
+): boolean => {
+  if (!Number.isFinite(pageNumber) || pageNumber < 1) return false
+  if (!Number.isFinite(pageCountHint) || pageCountHint < 1) return false
+
+  const ratio = Math.min(
+    1,
+    Math.max(0, (pageNumber - 1) / Math.max(1, pageCountHint - 1))
+  )
+  const containerMaxScroll = container.scrollHeight - container.clientHeight
+  if (Number.isFinite(containerMaxScroll) && containerMaxScroll > 0) {
+    const top = Math.round(containerMaxScroll * ratio)
+    if (typeof container.scrollTo === 'function') {
+      container.scrollTo({ top, behavior: 'smooth' })
+    } else {
+      container.scrollTop = top
+    }
+    return true
+  }
+
+  // Some media layouts scroll the document viewport instead of the local container.
+  if (typeof document === 'undefined') return false
+  const docScroller =
+    document.scrollingElement instanceof HTMLElement
+      ? document.scrollingElement
+      : document.documentElement instanceof HTMLElement
+        ? document.documentElement
+        : null
+  if (!docScroller) return false
+
+  const docMaxScroll = docScroller.scrollHeight - docScroller.clientHeight
+  if (!Number.isFinite(docMaxScroll) || docMaxScroll <= 0) return false
+  const top = Math.round(docMaxScroll * ratio)
+
+  if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+    window.scrollTo({ top, behavior: 'smooth' })
+  } else if (typeof docScroller.scrollTo === 'function') {
+    docScroller.scrollTo({ top, behavior: 'smooth' })
+  } else {
+    docScroller.scrollTop = top
+  }
+  return true
+}
+
 interface ContentViewerProps {
   selectedMedia: MediaResultItem | null
   content: string
   mediaDetail?: any
+  contentDisplayMode?: MediaNavigationFormat
+  resolvedContentFormat?: MediaNavigationFormat | null
+  showContentDisplayModeSelector?: boolean
+  allowRichRendering?: boolean
+  onContentDisplayModeChange?: (mode: MediaNavigationFormat) => void
   isDetailLoading?: boolean
   onPrevious?: () => void
   onNext?: () => void
@@ -88,6 +262,10 @@ interface ContentViewerProps {
   onSendAnalysisToChat?: (text: string) => void
   contentRef?: (node: HTMLDivElement | null) => void
   onDeleteItem?: (item: MediaResultItem, detail: any | null) => Promise<void>
+  navigationTarget?: MediaNavigationTargetLike | null
+  navigationNodeTitle?: string | null
+  navigationPageCountHint?: number | null
+  navigationSelectionNonce?: number
 }
 
 
@@ -95,6 +273,11 @@ export function ContentViewer({
   selectedMedia,
   content,
   mediaDetail,
+  contentDisplayMode = 'auto',
+  resolvedContentFormat = null,
+  showContentDisplayModeSelector = false,
+  allowRichRendering = false,
+  onContentDisplayModeChange,
   isDetailLoading = false,
   onPrevious,
   onNext,
@@ -110,7 +293,11 @@ export function ContentViewer({
   onOpenInMultiReview,
   onSendAnalysisToChat,
   contentRef,
-  onDeleteItem
+  onDeleteItem,
+  navigationTarget = null,
+  navigationNodeTitle = null,
+  navigationPageCountHint = null,
+  navigationSelectionNonce = 0
 }: ContentViewerProps) {
   const { t } = useTranslation(['review', 'common'])
   const confirmDanger = useConfirmDanger()
@@ -138,6 +325,14 @@ export function ContentViewer({
   const [editingContentText, setEditingContentText] = useState('')
   const [deletingItem, setDeletingItem] = useState(false)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  const lastSanitizationTelemetryKeyRef = useRef<string>('')
+  const lastAppliedNavigationTargetKeyRef = useRef<string>('')
+  const lastAppliedNavigationTitleKeyRef = useRef<string>('')
+  const lastAppliedNavigationPageKeyRef = useRef<string>('')
+  const titleRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pageRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const contentBodyRef = useRef<HTMLDivElement | null>(null)
+  const contentScrollContainerRef = useRef<HTMLDivElement | null>(null)
 
   // Content length threshold for collapse (2500 chars)
   const CONTENT_COLLAPSE_THRESHOLD = 2500
@@ -151,10 +346,276 @@ export function ContentViewer({
     }
     return normalized.replace(/\n/g, '  \n')
   }, [content, selectedMedia?.kind, selectedMedia?.meta?.type])
+  const effectiveRenderMode = useMemo(
+    () =>
+      resolveMediaRenderMode({
+        requestedMode: contentDisplayMode,
+        resolvedContentFormat,
+        allowRichRendering
+      }),
+    [allowRichRendering, contentDisplayMode, resolvedContentFormat]
+  )
+  const richSanitization = useMemo(() => {
+    if (effectiveRenderMode !== 'html' || !content) {
+      return {
+        html: '',
+        removed_node_count: 0,
+        removed_attribute_count: 0,
+        blocked_url_schemes: [] as string[]
+      }
+    }
+    return sanitizeMediaRichHtmlWithStats(content)
+  }, [content, effectiveRenderMode])
+  const sanitizedRichContent = richSanitization.html
+  const navigationTargetDescription = useMemo(
+    () => describeMediaNavigationTarget(navigationTarget),
+    [navigationTarget]
+  )
+  const displayModeOptions = useMemo(() => {
+    const baseModes: MediaNavigationFormat[] = ['auto', 'plain', 'markdown']
+    if (allowRichRendering) baseModes.push('html')
+    return baseModes.map((mode) => ({
+      value: mode,
+      label: MEDIA_DISPLAY_MODE_FORMAT_TO_LABEL[mode]
+    }))
+  }, [allowRichRendering])
 
   const selectedMediaId = selectedMedia?.id != null ? String(selectedMedia.id) : null
   const isAwaitingSelectionUpdate =
     !!pendingDeleteId && !!selectedMediaId && pendingDeleteId === selectedMediaId
+
+  useEffect(() => {
+    if (!selectedMediaId || !navigationTarget) {
+      lastAppliedNavigationTargetKeyRef.current = ''
+      return
+    }
+    const targetKey = [
+      selectedMediaId,
+      navigationTarget.target_type,
+      navigationTarget.target_start ?? 'null',
+      navigationTarget.target_end ?? 'null',
+      navigationTarget.target_href ?? 'null',
+      content.length,
+      navigationSelectionNonce
+    ].join(':')
+    if (lastAppliedNavigationTargetKeyRef.current === targetKey) return
+    lastAppliedNavigationTargetKeyRef.current = targetKey
+
+    applyMediaNavigationTarget(navigationTarget, {
+      root: contentBodyRef.current,
+      mediaId: selectedMediaId
+    })
+  }, [content.length, navigationSelectionNonce, navigationTarget, selectedMediaId])
+
+  useEffect(() => {
+    if (titleRetryTimerRef.current) {
+      clearTimeout(titleRetryTimerRef.current)
+      titleRetryTimerRef.current = null
+    }
+    if (!selectedMediaId || !navigationTarget) {
+      lastAppliedNavigationTitleKeyRef.current = ''
+      return
+    }
+    if (
+      navigationTarget.target_type !== 'char_range' &&
+      navigationTarget.target_type !== 'page'
+    ) {
+      return
+    }
+    const title = String(navigationNodeTitle || '').trim()
+    if (!title) return
+
+    const key = [
+      selectedMediaId,
+      navigationTarget.target_type,
+      title.toLowerCase(),
+      content.length,
+      navigationTarget.target_start ?? 'null',
+      navigationTarget.target_end ?? 'null',
+      navigationSelectionNonce
+    ].join(':')
+    if (lastAppliedNavigationTitleKeyRef.current === key) return
+
+    let attempts = 0
+    const attemptNavigationTitleJump = (): boolean => {
+      const match = findHeadingMatchInContent(contentBodyRef.current, title, {
+        preferLast: navigationTarget.target_type === 'page'
+      })
+      if (match) {
+        lastAppliedNavigationTitleKeyRef.current = key
+        focusNavigationMatch(match)
+        return true
+      }
+
+      if (navigationTarget.target_type === 'page') {
+        return false
+      }
+
+      const start = navigationTarget.target_start
+      if (
+        typeof start === 'number' &&
+        Number.isFinite(start) &&
+        contentScrollContainerRef.current
+      ) {
+        const didScroll = scrollToCharOffset(
+          contentScrollContainerRef.current,
+          start,
+          content.length
+        )
+        if (didScroll) {
+          lastAppliedNavigationTitleKeyRef.current = key
+          return true
+        }
+      }
+      return false
+    }
+
+    const runAttempt = () => {
+      if (attemptNavigationTitleJump()) return
+      if (attempts >= 10) return
+      attempts += 1
+      titleRetryTimerRef.current = setTimeout(runAttempt, 120)
+    }
+    runAttempt()
+
+    return () => {
+      if (titleRetryTimerRef.current) {
+        clearTimeout(titleRetryTimerRef.current)
+        titleRetryTimerRef.current = null
+      }
+    }
+  }, [
+    content.length,
+    navigationNodeTitle,
+    navigationSelectionNonce,
+    navigationTarget,
+    selectedMediaId
+  ])
+
+  useEffect(() => {
+    if (pageRetryTimerRef.current) {
+      clearTimeout(pageRetryTimerRef.current)
+      pageRetryTimerRef.current = null
+    }
+    if (!selectedMediaId || !navigationTarget) {
+      lastAppliedNavigationPageKeyRef.current = ''
+      return
+    }
+    if (navigationTarget.target_type !== 'page') return
+
+    const pageStart = navigationTarget.target_start
+    if (typeof pageStart !== 'number' || !Number.isFinite(pageStart) || pageStart < 1) {
+      return
+    }
+    if (!contentScrollContainerRef.current) return
+
+    const pageCountHint =
+      typeof navigationPageCountHint === 'number' &&
+      Number.isFinite(navigationPageCountHint) &&
+      navigationPageCountHint > 0
+        ? Math.trunc(navigationPageCountHint)
+        : Math.max(1, Math.trunc(pageStart))
+
+    const key = [
+      selectedMediaId,
+      Math.trunc(pageStart),
+      pageCountHint,
+      content.length,
+      navigationSelectionNonce
+    ].join(':')
+    if (lastAppliedNavigationPageKeyRef.current === key) return
+
+    const container = contentScrollContainerRef.current
+    if (!container) return
+
+    let attempts = 0
+    const attemptNavigationPageJump = (): boolean => {
+      const didScroll = scrollToPageNumber(
+        container,
+        pageStart,
+        pageCountHint
+      )
+      if (didScroll) {
+        lastAppliedNavigationPageKeyRef.current = key
+        return true
+      }
+      return false
+    }
+
+    const runAttempt = () => {
+      if (attemptNavigationPageJump()) return
+      if (attempts >= 10) return
+      attempts += 1
+      pageRetryTimerRef.current = setTimeout(runAttempt, 120)
+    }
+    runAttempt()
+
+    return () => {
+      if (pageRetryTimerRef.current) {
+        clearTimeout(pageRetryTimerRef.current)
+        pageRetryTimerRef.current = null
+      }
+    }
+  }, [
+    content.length,
+    navigationPageCountHint,
+    navigationSelectionNonce,
+    navigationTarget,
+    selectedMediaId
+  ])
+
+  useEffect(() => {
+    return () => {
+      if (titleRetryTimerRef.current) {
+        clearTimeout(titleRetryTimerRef.current)
+      }
+      if (pageRetryTimerRef.current) {
+        clearTimeout(pageRetryTimerRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (effectiveRenderMode !== 'html') return
+    const removedNodeCount = richSanitization.removed_node_count
+    const removedAttributeCount = richSanitization.removed_attribute_count
+    const blockedSchemes = richSanitization.blocked_url_schemes
+      .map((scheme) => String(scheme || '').trim().toLowerCase())
+      .filter(Boolean)
+
+    if (
+      removedNodeCount <= 0 &&
+      removedAttributeCount <= 0 &&
+      blockedSchemes.length === 0
+    ) {
+      return
+    }
+
+    const dedupeKey = [
+      selectedMediaId || 'none',
+      content.length,
+      removedNodeCount,
+      removedAttributeCount,
+      blockedSchemes.join(',')
+    ].join(':')
+    if (lastSanitizationTelemetryKeyRef.current === dedupeKey) return
+    lastSanitizationTelemetryKeyRef.current = dedupeKey
+
+    void trackMediaNavigationTelemetry({
+      type: 'media_rich_sanitization_applied',
+      removed_node_count: removedNodeCount,
+      removed_attribute_count: removedAttributeCount,
+      blocked_url_count: blockedSchemes.length
+    })
+
+    const uniqueSchemes = new Set(blockedSchemes)
+    for (const scheme of uniqueSchemes) {
+      void trackMediaNavigationTelemetry({
+        type: 'media_rich_sanitization_blocked_url',
+        scheme
+      })
+    }
+  }, [content.length, effectiveRenderMode, richSanitization, selectedMediaId])
 
   useEffect(() => {
     if (!pendingDeleteId) return
@@ -647,8 +1108,8 @@ export function ContentViewer({
       <div className="flex-1 flex items-center justify-center bg-bg">
         <div className="text-center max-w-md px-6">
           <div className="mb-6 flex justify-center">
-            <div className="w-32 h-32 rounded-full bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-blue-900/20 dark:to-indigo-900/20 flex items-center justify-center">
-              <FileSearch className="w-16 h-16 text-blue-400 dark:text-blue-500" />
+            <div className="w-32 h-32 rounded-full bg-gradient-to-br from-primary/10 to-primary/20 flex items-center justify-center">
+              <FileSearch className="w-16 h-16 text-primary" />
             </div>
           </div>
           <h2 className="mb-2 text-xl font-semibold text-text">
@@ -761,7 +1222,7 @@ export function ContentViewer({
       </div>
 
       {/* Content Area */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div ref={contentScrollContainerRef} className="flex-1 overflow-y-auto p-4">
         {isDetailLoading ? (
           <div
             className="flex flex-col items-center justify-center h-64 text-text-muted"
@@ -855,6 +1316,26 @@ export function ContentViewer({
                 )}
               </button>
               <div className="flex items-center gap-1">
+                {navigationTargetDescription ? (
+                  <span className="rounded bg-surface px-2 py-0.5 text-[11px] text-text-muted">
+                    {navigationTargetDescription}
+                  </span>
+                ) : null}
+                {showContentDisplayModeSelector && onContentDisplayModeChange ? (
+                  <Select
+                    size="small"
+                    value={contentDisplayMode}
+                    options={displayModeOptions}
+                    onChange={(value) =>
+                      onContentDisplayModeChange(value as MediaNavigationFormat)
+                    }
+                    className="min-w-[132px]"
+                    popupMatchSelectWidth={false}
+                    aria-label={t('review:mediaPage.displayMode', {
+                      defaultValue: 'Display mode'
+                    })}
+                  />
+                ) : null}
                 {!isNote && content && (
                   <button
                     onClick={() => {
@@ -899,19 +1380,44 @@ export function ContentViewer({
             {!collapsedSections.content && (
               <div className="p-3 bg-surface animate-in fade-in slide-in-from-top-1 duration-150">
                 <div
+                  ref={contentBodyRef}
                   className={`text-sm text-text leading-relaxed ${
                     !contentExpanded && shouldShowExpandToggle ? 'max-h-64 overflow-hidden relative' : ''
                   }`}
                 >
-                  <MarkdownPreview
-                    content={
-                      contentForPreview ||
-                      t('review:mediaPage.noContent', {
-                        defaultValue: 'No content available'
-                      })
-                    }
-                    size="sm"
-                  />
+                  {effectiveRenderMode === 'plain' ? (
+                    <pre className="whitespace-pre-wrap text-xs leading-relaxed text-text font-mono m-0">
+                      {content ||
+                        t('review:mediaPage.noContent', {
+                          defaultValue: 'No content available'
+                        })}
+                    </pre>
+                  ) : effectiveRenderMode === 'html' ? (
+                    content ? (
+                      <div
+                        className="prose prose-sm break-words dark:prose-invert max-w-none prose-p:leading-relaxed"
+                        dangerouslySetInnerHTML={{
+                          __html: sanitizedRichContent
+                        }}
+                      />
+                    ) : (
+                      <p className="m-0 text-sm text-text-muted">
+                        {t('review:mediaPage.noContent', {
+                          defaultValue: 'No content available'
+                        })}
+                      </p>
+                    )
+                  ) : (
+                    <MarkdownPreview
+                      content={
+                        contentForPreview ||
+                        t('review:mediaPage.noContent', {
+                          defaultValue: 'No content available'
+                        })
+                      }
+                      size="sm"
+                    />
+                  )}
                   {/* Fade overlay when collapsed */}
                   {!contentExpanded && shouldShowExpandToggle && (
                     <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-surface to-transparent" />

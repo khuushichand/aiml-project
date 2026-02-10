@@ -248,8 +248,8 @@ export const ToolCallBlock: React.FC<ToolCallBlockProps> = ({
                   className={classNames(
                     "ml-auto text-xs px-1.5 py-0.5 rounded",
                     result.error
-                      ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"
-                      : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"
+                      ? "bg-danger/10 text-danger"
+                      : "bg-success/10 text-success"
                   )}
                 >
                   {result.error ? t("common:error", "Error") : t("common:done", "Done")}
@@ -280,7 +280,7 @@ export const ToolCallBlock: React.FC<ToolCallBlockProps> = ({
                       className={classNames(
                         "text-xs rounded p-2 overflow-x-auto max-h-48",
                         result.error
-                          ? "bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200"
+                          ? "bg-danger/10 text-danger"
                           : "bg-surface"
                       )}
                     >

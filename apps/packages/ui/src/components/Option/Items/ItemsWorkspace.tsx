@@ -220,7 +220,7 @@ export const ItemsWorkspace: React.FC = () => {
                   {`${actionLabel} completed. ${response.succeeded} succeeded, ${response.failed} failed.`}
                 </p>
                 {failureLines.length > 0 && (
-                  <div className="max-h-52 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-xs dark:border-zinc-700 dark:bg-zinc-900">
+                  <div className="max-h-52 overflow-auto rounded border border-border bg-surface p-2 text-xs">
                     {failureLines.map((line) => (
                       <div key={line}>{line}</div>
                     ))}
@@ -369,7 +369,7 @@ export const ItemsWorkspace: React.FC = () => {
                   {`${actionLabel} completed. ${response.succeeded} succeeded, ${response.failed} failed.`}
                 </p>
                 {failureLines.length > 0 && (
-                  <div className="max-h-52 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-xs dark:border-zinc-700 dark:bg-zinc-900">
+                  <div className="max-h-52 overflow-auto rounded border border-border bg-surface p-2 text-xs">
                     {failureLines.map((line) => (
                       <div key={line}>{line}</div>
                     ))}
@@ -575,8 +575,8 @@ export const ItemsWorkspace: React.FC = () => {
   return (
     <PageShell className="py-6 space-y-4" maxWidthClassName="max-w-6xl">
       <div className="space-y-1">
-        <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">Items</h1>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+        <h1 className="text-2xl font-semibold text-text">Items</h1>
+        <p className="text-sm text-text-muted">
           Manage shared items with bulk actions and output generation.
         </p>
       </div>
@@ -607,7 +607,7 @@ export const ItemsWorkspace: React.FC = () => {
         <div className="flex flex-1 items-center gap-2 sm:max-w-md">
           <Input
             placeholder="Search items..."
-            prefix={<Search className="h-4 w-4 text-gray-400" />}
+            prefix={<Search className="h-4 w-4 text-text-subtle" />}
             value={itemsSearch}
             onChange={(e) => {
               setItemsSearch(e.target.value)
@@ -620,8 +620,8 @@ export const ItemsWorkspace: React.FC = () => {
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
-          <Filter className="h-4 w-4 text-gray-500" />
-          <span className="text-sm text-gray-500">Filters:</span>
+          <Filter className="h-4 w-4 text-text-muted" />
+          <span className="text-sm text-text-muted">Filters:</span>
         </div>
 
         <Select
@@ -701,7 +701,7 @@ export const ItemsWorkspace: React.FC = () => {
       </div>
 
       {selectionMode && (
-        <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
+        <div className="rounded-lg border border-border bg-surface p-3">
           <div className="flex flex-wrap items-center gap-3">
             <Checkbox
               checked={allPageSelected}
@@ -716,7 +716,7 @@ export const ItemsWorkspace: React.FC = () => {
             >
               Select all on this page
             </Checkbox>
-            <span className="text-sm text-zinc-600 dark:text-zinc-300">
+            <span className="text-sm text-text-muted">
               {`${selectedCount} selected`}
             </span>
             <Button
@@ -815,7 +815,7 @@ export const ItemsWorkspace: React.FC = () => {
             return (
               <div
                 key={item.id}
-                className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900"
+                className="rounded-lg border border-border bg-surface p-4"
               >
                 <div className="flex items-start gap-3">
                   {selectionMode && (
@@ -836,7 +836,7 @@ export const ItemsWorkspace: React.FC = () => {
                   )}
                   <div className="min-w-0 flex-1 space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-base font-medium text-zinc-900 dark:text-zinc-100">
+                      <h3 className="text-base font-medium text-text">
                         {item.title || "Untitled"}
                       </h3>
                       {item.type && (
@@ -844,7 +844,7 @@ export const ItemsWorkspace: React.FC = () => {
                       )}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
                       {item.domain && <span>{item.domain}</span>}
                       {publishedLabel && <span>{publishedLabel}</span>}
                       {item.url && (
@@ -852,14 +852,14 @@ export const ItemsWorkspace: React.FC = () => {
                           href={item.url}
                           target="_blank"
                           rel="noreferrer"
-                          className="underline hover:text-blue-500"
+                          className="underline hover:text-primary"
                         >
                           Open source
                         </a>
                       )}
                     </div>
 
-                    <p className="line-clamp-3 text-sm text-zinc-700 dark:text-zinc-300">
+                    <p className="line-clamp-3 text-sm text-text">
                       {item.summary || "No summary available."}
                     </p>
 
@@ -935,7 +935,7 @@ export const ItemsWorkspace: React.FC = () => {
             onChange={(e) => setOutputTitle(e.target.value)}
             placeholder="Optional output title"
           />
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          <p className="text-xs text-text-muted">
             {`Selected items: ${selectedItemIds.length}`}
           </p>
         </div>

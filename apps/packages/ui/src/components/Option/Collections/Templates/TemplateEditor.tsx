@@ -305,7 +305,7 @@ This concludes today's reading digest.`
             }
           ]}
           extra={
-            <span className="text-xs text-zinc-500">
+            <span className="text-xs text-text-muted">
               {t(
                 "collections:templates.bodyHint",
                 "Use Jinja2 syntax. Available variables: items (array of reading items), now (current datetime)"

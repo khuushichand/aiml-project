@@ -723,7 +723,7 @@ export function ServerChatList({
             disabled={renameLoading}
           />
           {renameError && (
-            <div className="mt-1 text-xs text-red-500">{renameError}</div>
+            <div className="mt-1 text-xs text-danger">{renameError}</div>
           )}
         </Modal>
       )}
@@ -804,7 +804,7 @@ export function ServerChatList({
             <button
               type="button"
               onClick={openBulkDeleteConfirm}
-              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-red-600 hover:bg-surface2"
+              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-danger hover:bg-surface2"
               disabled={selectedChatIds.length === 0}
             >
               <Trash2 className="size-3.5" />

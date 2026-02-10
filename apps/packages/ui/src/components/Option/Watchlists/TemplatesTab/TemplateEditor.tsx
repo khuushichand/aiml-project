@@ -206,8 +206,8 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       label: t("watchlists:templates.editor.tab", "Editor"),
       children: (
         <div className="space-y-3">
-          <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
-            <div className="mb-2 text-xs font-medium text-zinc-500">
+          <div className="rounded-lg border border-border p-3">
+            <div className="mb-2 text-xs font-medium text-text-muted">
               {t("watchlists:templates.quickInsert", "Quick insert snippets")}
             </div>
             <div className="flex flex-wrap gap-2">
@@ -256,11 +256,11 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
           />
           {previewHtml ? (
             <div
-              className="prose dark:prose-invert max-w-none p-4 bg-white dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-auto max-h-96"
+              className="prose dark:prose-invert max-w-none p-4 bg-surface rounded-lg border border-border overflow-auto max-h-96"
               dangerouslySetInnerHTML={{ __html: previewHtml }}
             />
           ) : (
-            <div className="text-sm text-zinc-500">
+            <div className="text-sm text-text-muted">
               {t("watchlists:templates.preview.empty", "Nothing to preview yet.")}
             </div>
           )}
@@ -278,23 +278,23 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
             type="info"
             showIcon
           />
-          <div className="bg-zinc-50 dark:bg-zinc-900 rounded-lg p-4 font-mono text-xs space-y-2 max-h-80 overflow-auto">
-            <div><span className="text-blue-600">{"{{ job }}"}</span> - Job object with name, description, filters</div>
-            <div><span className="text-blue-600">{"{{ run }}"}</span> - Run object with status, stats, timestamps</div>
-            <div><span className="text-blue-600">{"{{ items }}"}</span> - List of scraped items</div>
-            <div className="ml-4"><span className="text-green-600">item.title</span> - Item title</div>
-            <div className="ml-4"><span className="text-green-600">item.url</span> - Source URL</div>
-            <div className="ml-4"><span className="text-green-600">item.content</span> - Full content text</div>
-            <div className="ml-4"><span className="text-green-600">item.summary</span> - AI-generated summary</div>
-            <div className="ml-4"><span className="text-green-600">item.author</span> - Author name</div>
-            <div className="ml-4"><span className="text-green-600">item.published_at</span> - Publish date</div>
-            <div className="ml-4"><span className="text-green-600">item.source</span> - Source object</div>
-            <div className="ml-4"><span className="text-green-600">item.filter_matches</span> - Matched filter names</div>
-            <div><span className="text-blue-600">{"{{ filter_tallies }}"}</span> - Dict of filter name → count</div>
-            <div><span className="text-blue-600">{"{{ generated_at }}"}</span> - Generation timestamp</div>
+          <div className="bg-surface rounded-lg p-4 font-mono text-xs space-y-2 max-h-80 overflow-auto">
+            <div><span className="text-primary">{"{{ job }}"}</span> - Job object with name, description, filters</div>
+            <div><span className="text-primary">{"{{ run }}"}</span> - Run object with status, stats, timestamps</div>
+            <div><span className="text-primary">{"{{ items }}"}</span> - List of scraped items</div>
+            <div className="ml-4"><span className="text-success">item.title</span> - Item title</div>
+            <div className="ml-4"><span className="text-success">item.url</span> - Source URL</div>
+            <div className="ml-4"><span className="text-success">item.content</span> - Full content text</div>
+            <div className="ml-4"><span className="text-success">item.summary</span> - AI-generated summary</div>
+            <div className="ml-4"><span className="text-success">item.author</span> - Author name</div>
+            <div className="ml-4"><span className="text-success">item.published_at</span> - Publish date</div>
+            <div className="ml-4"><span className="text-success">item.source</span> - Source object</div>
+            <div className="ml-4"><span className="text-success">item.filter_matches</span> - Matched filter names</div>
+            <div><span className="text-primary">{"{{ filter_tallies }}"}</span> - Dict of filter name → count</div>
+            <div><span className="text-primary">{"{{ generated_at }}"}</span> - Generation timestamp</div>
           </div>
 
-          <div className="text-zinc-500 text-xs">
+          <div className="text-text-muted text-xs">
             {t("watchlists:templates.docs.hint", "Use Jinja2 syntax: {% for item in items %}, {{ item.title }}, {% if condition %}, etc.")}
           </div>
         </div>
@@ -359,7 +359,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
         {isEditing && (
           <>
             <Divider className="my-3" />
-            <div className="mb-4 rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+            <div className="mb-4 rounded-lg border border-border p-3">
               <div className="mb-2 text-sm font-medium">
                 {t("watchlists:templates.versionTools", "Version tools")}
               </div>
@@ -391,7 +391,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
                 </Button>
               </div>
               {typeof loadedVersion === "number" && (
-                <div className="mt-2 text-xs text-zinc-500">
+                <div className="mt-2 text-xs text-text-muted">
                   {t(
                     "watchlists:templates.loadedVersionHint",
                     "Currently loaded: v{{version}}. Saving restores this content as a new latest version.",

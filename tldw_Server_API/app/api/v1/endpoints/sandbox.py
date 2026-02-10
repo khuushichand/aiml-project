@@ -147,13 +147,21 @@ _service = SandboxService()
 
 def _is_admin_user(user: User) -> bool:
     try:
-        if bool(getattr(user, "is_admin", False)):
+        roles = {
+            str(role).strip().lower()
+            for role in (getattr(user, "roles", []) or [])
+            if str(role).strip()
+        }
+        permissions = {
+            str(perm).strip().lower()
+            for perm in (getattr(user, "permissions", []) or [])
+            if str(perm).strip()
+        }
+        if "admin" in roles:
             return True
-    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-        pass
-    try:
-        roles = getattr(user, "roles", None)
-        if roles and "admin" in roles:
+        if "*" in permissions:
+            return True
+        if "system.configure" in permissions:
             return True
     except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         pass

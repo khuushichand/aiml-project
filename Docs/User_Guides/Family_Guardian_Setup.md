@@ -186,9 +186,8 @@ Notes:
 ### 3) Global rate limits (all users)
 
 ```bash
-RATE_LIMIT_ENABLED=true
-RATE_LIMIT_PER_MINUTE=60
-RATE_LIMIT_BURST=10
+RG_ENABLED=true
+# Tune requests.rpm / requests.burst in Config_Files/resource_governor_policies.yaml
 ```
 
 ### 4) Disable BYOK for kids

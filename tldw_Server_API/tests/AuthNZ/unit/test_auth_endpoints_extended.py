@@ -159,7 +159,6 @@ async def test_forgot_password_rate_limited_returns_generic_message(monkeypatch)
 async def test_reserve_auth_rg_requests_uses_diagnostics_only_shim_when_governor_missing(monkeypatch):
     reset_settings()
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
-    monkeypatch.setattr(auth, "_auth_rg_rate_limits_enabled", lambda: True)
 
     async def _no_governor(_request):
         return None
@@ -193,7 +192,6 @@ async def test_reserve_auth_rg_requests_uses_diagnostics_only_shim_when_governor
 async def test_reserve_auth_rg_requests_uses_diagnostics_only_shim_when_policy_missing(monkeypatch):
     reset_settings()
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
-    monkeypatch.setattr(auth, "_auth_rg_rate_limits_enabled", lambda: True)
 
     class _StubGovernor:
         async def reserve(self, *_args, **_kwargs):  # pragma: no cover
@@ -233,7 +231,6 @@ async def test_reserve_auth_rg_requests_uses_diagnostics_only_shim_when_policy_m
 async def test_reserve_auth_rg_requests_uses_diagnostics_only_shim_when_rg_reserve_fails(monkeypatch):
     reset_settings()
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
-    monkeypatch.setattr(auth, "_auth_rg_rate_limits_enabled", lambda: True)
 
     class _BrokenGovernor:
         async def reserve(self, *_args, **_kwargs):
@@ -336,7 +333,6 @@ async def test_reserve_auth_rg_requests_ignores_untrusted_forwarded_ip(monkeypat
     reset_settings()
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
-    monkeypatch.setattr(auth, "_auth_rg_rate_limits_enabled", lambda: True)
 
     class _StubGovernor:
         def __init__(self):

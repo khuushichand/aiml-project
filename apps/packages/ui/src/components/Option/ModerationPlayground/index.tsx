@@ -523,7 +523,7 @@ export const ModerationPlayground: React.FC = () => {
       content: (
         <div>
           <p>Remove this rule from the blocklist?</p>
-          <code className="block mt-2 p-2 bg-gray-100 rounded text-sm">{line}</code>
+          <code className="block mt-2 p-2 bg-surface rounded text-sm">{line}</code>
         </div>
       ),
       okText: "Delete",
@@ -1386,11 +1386,11 @@ export const ModerationPlayground: React.FC = () => {
                     {testResult.sample && (
                       <div>
                         <Text className="text-text-muted text-sm">Matched pattern: </Text>
-                        <code className="bg-gray-100 px-2 py-1 rounded text-sm">{testResult.sample}</code>
+                        <code className="bg-surface px-2 py-1 rounded text-sm">{testResult.sample}</code>
                       </div>
                     )}
                     {testResult.redacted_text && (
-                      <div className="mt-2 p-2 bg-gray-50 rounded border">
+                      <div className="mt-2 p-2 bg-bg rounded border">
                         <Text className="text-text-muted text-xs block mb-1">Redacted output:</Text>
                         <Text code className="whitespace-pre-wrap">{testResult.redacted_text}</Text>
                       </div>

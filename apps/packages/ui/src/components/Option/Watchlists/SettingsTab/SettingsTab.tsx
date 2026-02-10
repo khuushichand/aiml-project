@@ -160,7 +160,7 @@ export const SettingsTab: React.FC = () => {
           <div className="font-medium text-sm">
             {record.summary || record.canonical_claim_text || `#${record.id}`}
           </div>
-          <div className="text-xs text-zinc-500">
+          <div className="text-xs text-text-muted">
             {t("watchlists:settings.clusters.idLabel", "ID {{id}}", { id: record.id })}
           </div>
         </div>
@@ -180,11 +180,11 @@ export const SettingsTab: React.FC = () => {
       width: 140,
       render: (date: string | null | undefined) =>
         date ? (
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm text-text-muted">
             {formatRelativeTime(date, t)}
           </span>
         ) : (
-          <span className="text-sm text-zinc-400">-</span>
+          <span className="text-sm text-text-subtle">-</span>
         )
     },
     {
@@ -227,7 +227,7 @@ export const SettingsTab: React.FC = () => {
       </div>
 
       {/* Description */}
-      <div className="text-sm text-zinc-500">
+      <div className="text-sm text-text-muted">
         {t("watchlists:settings.description", "Server configuration and retention settings for the watchlists module.")}
       </div>
 

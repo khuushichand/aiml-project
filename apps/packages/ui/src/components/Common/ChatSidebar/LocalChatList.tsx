@@ -470,7 +470,7 @@ export function LocalChatList({
   if (status === "error") {
     return (
       <div className={cn("flex justify-center items-center py-8", className)}>
-        <span className="text-red-500">
+        <span className="text-danger">
           {t("common:chatSidebar.loadError", "Failed to load chats")}
         </span>
       </div>
@@ -531,7 +531,7 @@ export function LocalChatList({
           status={renameError ? "error" : undefined}
         />
         {renameError && (
-          <div className="mt-1 text-xs text-red-500">{renameError}</div>
+          <div className="mt-1 text-xs text-danger">{renameError}</div>
         )}
       </Modal>
       {chatHistories.map((group) => (
@@ -576,7 +576,7 @@ export function LocalChatList({
                   className={cn(
                     "flex py-2 px-2 items-start gap-2 relative rounded-md group transition-opacity duration-300 ease-in-out border",
                     effectiveSelectedChatId === chat.id
-                      ? "bg-surface2 border-borderStrong text-text"
+                      ? "bg-surface2 border-border-strong text-text"
                       : "bg-surface text-text border-border hover:bg-surface2"
                   )}
                 >

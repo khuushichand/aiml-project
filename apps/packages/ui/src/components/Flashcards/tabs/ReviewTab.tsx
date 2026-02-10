@@ -99,7 +99,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         }),
         interval: intervals?.again ?? "< 1 min",
         // WCAG AA compliant: 5.6:1 contrast ratio
-        bgClass: "bg-red-700 hover:bg-red-800 border-red-700 text-white",
+        bgClass: "bg-danger hover:bg-danger/90 border-danger text-white",
         icon: X
       },
       {
@@ -111,7 +111,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         }),
         interval: intervals?.hard ?? "< 10 min",
         // WCAG AA compliant: 9.3:1 contrast ratio (dark text on light bg)
-        bgClass: "bg-amber-100 hover:bg-amber-200 border-amber-300 !text-amber-900",
+        bgClass: "bg-warn/10 hover:bg-warn/20 border-warn/30 !text-warn",
         icon: Minus
       },
       {
@@ -123,7 +123,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         }),
         interval: intervals?.good ?? "1 day",
         // WCAG AA compliant: 4.8:1 contrast ratio
-        bgClass: "bg-green-700 hover:bg-green-800 border-green-700 text-white",
+        bgClass: "bg-success hover:bg-success/90 border-success text-white",
         primary: true,
         icon: Check
       },
@@ -136,7 +136,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         }),
         interval: intervals?.easy ?? "4 days",
         // WCAG AA compliant: 5.8:1 contrast ratio
-        bgClass: "bg-blue-700 hover:bg-blue-800 border-blue-700 text-white",
+        bgClass: "bg-primary hover:bg-primaryStrong border-primary text-white",
         icon: Star
       }
     ],

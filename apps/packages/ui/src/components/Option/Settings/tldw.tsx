@@ -1322,9 +1322,9 @@ export const TldwSettings = () => {
                 loading={testingConnection}
                 icon={
                   connectionStatus === 'success' ? (
-                    <CheckIcon className="w-4 h-4 text-green-500" />
+                    <CheckIcon className="w-4 h-4 text-success" />
                   ) : connectionStatus === 'error' ? (
-                    <XMarkIcon className="w-4 h-4 text-red-500" />
+                    <XMarkIcon className="w-4 h-4 text-danger" />
                   ) : null
                 }
               >
@@ -1351,8 +1351,8 @@ export const TldwSettings = () => {
                 <span
                   className={`text-sm ${
                     connectionStatus === "success"
-                      ? "text-green-500"
-                      : "text-red-500"
+                      ? "text-success"
+                      : "text-danger"
                   }`}>
                   {connectionStatus === "success"
                     ? t(

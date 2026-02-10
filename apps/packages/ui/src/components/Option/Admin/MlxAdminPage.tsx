@@ -363,7 +363,7 @@ export const MlxAdminPage: React.FC = () => {
                 </div>
 
                 {/* Basic Settings - Always Visible */}
-                <div className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+                <div className="rounded-lg border border-border p-4">
                   <Text strong className="mb-3 block">
                     {t("settings:admin.mlxBasicSettings", "Basic Settings")}
                   </Text>

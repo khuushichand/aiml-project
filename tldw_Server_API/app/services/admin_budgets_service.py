@@ -39,6 +39,24 @@ _BUDGET_KEYS = {
     "budget_day_tokens",
     "budget_month_tokens",
 }
+_PLATFORM_ADMIN_ROLES = frozenset({"admin", "owner", "super_admin"})
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _normalized_claim_values(values: list[Any] | tuple[Any, ...] | set[Any] | None) -> set[str]:
+    return {
+        str(value).strip().lower()
+        for value in (values or [])
+        if str(value).strip()
+    }
+
+
+def _principal_has_platform_admin_claims(principal: AuthPrincipal) -> bool:
+    roles = _normalized_claim_values(principal.roles)
+    permissions = _normalized_claim_values(principal.permissions)
+    if roles & _PLATFORM_ADMIN_ROLES:
+        return True
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 def _parse_json_payload(raw: Any) -> dict[str, Any]:
@@ -386,7 +404,7 @@ async def upsert_budget(
 
     actor_role = None
     try:
-        if principal.is_admin:
+        if _principal_has_platform_admin_claims(principal):
             actor_role = "admin"
         elif principal.roles:
             actor_role = principal.roles[0]

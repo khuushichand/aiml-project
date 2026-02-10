@@ -34,10 +34,10 @@ export const PdfPage: React.FC<PdfPageProps> = ({
     <div
       ref={onSetRef}
       data-page-number={pageNumber}
-      className="group relative bg-white shadow-lg"
+      className="group relative bg-surface shadow-lg"
     >
       {loading && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80">
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-surface/80">
           <Spin size="small" />
         </div>
       )}

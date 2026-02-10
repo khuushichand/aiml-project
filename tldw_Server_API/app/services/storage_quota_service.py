@@ -68,8 +68,8 @@ class StorageQuotaService:
         Return True when the underlying DatabasePool is using PostgreSQL.
 
         Backend detection should key off DatabasePool state rather than probing
-        connection attributes (for example ``hasattr(conn, "fetchval")``),
-        which can be misleading with shimmed connections.
+        connection method presence, which can be misleading with shimmed
+        connections.
         """
         if not self.db_pool:
             return False

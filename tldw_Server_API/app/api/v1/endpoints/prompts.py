@@ -226,15 +226,25 @@ def _is_prompts_admin_user(user: Optional[User]) -> bool:
     if user is None:
         return False
     try:
-        if bool(getattr(user, "is_admin", False) or getattr(user, "is_superuser", False)):
+        roles = {
+            str(role).strip().lower()
+            for role in (getattr(user, "roles", []) or [])
+            if str(role).strip()
+        }
+        permissions = {
+            str(perm).strip().lower()
+            for perm in (getattr(user, "permissions", []) or [])
+            if str(perm).strip()
+        }
+        if "admin" in roles:
             return True
-        role_value = str(getattr(user, "role", "")).strip().lower()
-        if role_value == "admin":
+        if "*" in permissions:
             return True
-        roles = [str(r).strip().lower() for r in (getattr(user, "roles", []) or []) if str(r).strip()]
-        return "admin" in roles
+        if "system.configure" in permissions:
+            return True
     except _PROMPTS_LOOKUP_EXCEPTIONS:
         return False
+    return False
 
 async def verify_prompts_auth(
     request: Request,

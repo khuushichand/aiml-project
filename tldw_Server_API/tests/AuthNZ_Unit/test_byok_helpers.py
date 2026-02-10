@@ -29,3 +29,41 @@ def test_validate_credential_fields_required_policy(monkeypatch):
 
     with pytest.raises(ValueError):
         validate_credential_fields("test-provider", {})
+
+
+def test_trusted_base_url_request_rejects_legacy_boolean_only_user_shape():
+    from tldw_Server_API.app.core.AuthNZ.byok_helpers import is_trusted_base_url_request
+
+    assert (
+        is_trusted_base_url_request(
+            None,
+            principal=None,
+            user={
+                "role": "user",
+                "roles": ["user"],
+                "permissions": [],
+                "is_admin": True,
+                "is_superuser": True,
+            },
+        )
+        is False
+    )
+
+
+def test_trusted_base_url_request_accepts_permission_claims_from_legacy_user_shape():
+    from tldw_Server_API.app.core.AuthNZ.byok_helpers import is_trusted_base_url_request
+
+    assert (
+        is_trusted_base_url_request(
+            None,
+            principal=None,
+            user={
+                "role": "user",
+                "roles": ["user"],
+                "permissions": ["system.configure"],
+                "is_admin": False,
+                "is_superuser": False,
+            },
+        )
+        is True
+    )

@@ -108,7 +108,7 @@ export const TemplatesTab: React.FC = () => {
       key: "description",
       ellipsis: true,
       render: (desc: string | null) => (
-        <span className="text-sm text-zinc-500">
+        <span className="text-sm text-text-muted">
           {desc || "-"}
         </span>
       )
@@ -129,11 +129,11 @@ export const TemplatesTab: React.FC = () => {
       width: 150,
       render: (date: string | null) =>
         date ? (
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm text-text-muted">
             {formatRelativeTime(date, t)}
           </span>
         ) : (
-          <span className="text-sm text-zinc-400">-</span>
+          <span className="text-sm text-text-subtle">-</span>
         )
     },
     {
@@ -192,7 +192,7 @@ export const TemplatesTab: React.FC = () => {
       </div>
 
       {/* Description */}
-      <div className="text-sm text-zinc-500">
+      <div className="text-sm text-text-muted">
         {t("watchlists:templates.description", "Jinja2 templates for generating briefing outputs.")}
       </div>
 

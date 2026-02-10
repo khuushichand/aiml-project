@@ -147,4 +147,5 @@ def test_get_settings_does_not_use_pytest_module_presence_for_test_context(
 
     settings = get_settings()
 
-    assert settings.RATE_LIMIT_ENABLED is True
+    assert settings.AUTH_MODE == "single_user"
+    assert not hasattr(settings, "RATE_LIMIT_ENABLED")

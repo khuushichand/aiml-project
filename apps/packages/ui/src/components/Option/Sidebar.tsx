@@ -737,7 +737,7 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
         key={chat.id}
         className={`flex py-2 px-2 items-center gap-3 relative rounded-md truncate group transition-opacity duration-300 ease-in-out border ${
           serverChatId === chat.id
-            ? "bg-surface2 border-borderStrong text-text"
+            ? "bg-surface2 border-border-strong text-text"
             : "bg-surface text-text border-border hover:bg-surface2"
         }`}
       >
@@ -890,7 +890,7 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
 
       {showLocalChats && status === "error" && (
         <div className="flex justify-center items-center">
-          <span className="text-red-500">Error loading history</span>
+          <span className="text-danger">Error loading history</span>
         </div>
       )}
 
@@ -925,7 +925,7 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
                     key={chat.id}
                     className={`flex py-2 px-2 items-start gap-2 relative rounded-md hover:pr-4 group transition-opacity duration-300 ease-in-out border ${
                       historyId === chat.id
-                        ? "bg-surface2 border-borderStrong text-text"
+                        ? "bg-surface2 border-border-strong text-text"
                         : "bg-surface text-text border-border hover:bg-surface2"
                     }`}>
                     {chat?.message_source === "copilot" && (

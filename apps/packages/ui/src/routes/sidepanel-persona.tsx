@@ -425,9 +425,9 @@ const SidepanelPersona = () => {
     return (
       <div
         data-testid="persona-route-root"
-        className="flex bg-neutral-50 dark:bg-surface flex-col min-h-screen mx-auto max-w-7xl"
+        className="flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
       >
-        <div className="sticky bg-white dark:bg-surface top-0 z-10">
+        <div className="sticky bg-surface top-0 z-10">
           <SidepanelHeaderSimple activeTitle="Persona" />
         </div>
         <div className="p-4">
@@ -449,9 +449,9 @@ const SidepanelPersona = () => {
     return (
       <div
         data-testid="persona-route-root"
-        className="flex bg-neutral-50 dark:bg-surface flex-col min-h-screen mx-auto max-w-7xl"
+        className="flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
       >
-        <div className="sticky bg-white dark:bg-surface top-0 z-10">
+        <div className="sticky bg-surface top-0 z-10">
           <SidepanelHeaderSimple activeTitle="Persona" />
         </div>
         <div className="p-4">
@@ -472,9 +472,9 @@ const SidepanelPersona = () => {
   return (
     <div
       data-testid="persona-route-root"
-      className="flex bg-neutral-50 dark:bg-surface flex-col min-h-screen mx-auto max-w-7xl"
+      className="flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
     >
-      <div className="sticky bg-white dark:bg-surface top-0 z-10">
+      <div className="sticky bg-surface top-0 z-10">
         <SidepanelHeaderSimple activeTitle={t("sidepanel:persona.title", "Persona")} />
       </div>
 
@@ -551,7 +551,7 @@ const SidepanelPersona = () => {
         </div>
 
         {error ? (
-          <div className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-600/50 dark:bg-red-950/30 dark:text-red-200">
+          <div className="rounded-md border border-danger/30 bg-danger/10 p-2 text-xs text-danger">
             {error}
           </div>
         ) : null}
@@ -603,7 +603,7 @@ const SidepanelPersona = () => {
                       ) : null}
                     </span>
                     {step.policy?.allow === false && step.policy.reason ? (
-                      <div className="mt-1 text-[11px] text-red-700 dark:text-red-300">
+                      <div className="mt-1 text-[11px] text-danger">
                         {step.policy.reason}
                       </div>
                     ) : null}

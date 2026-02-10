@@ -19,7 +19,6 @@ async def test_revoke_all_user_tokens_counts_tokens(tmp_path):
         JWT_SECRET_KEY="token-blacklist-secret-1234567890abcd",
         ENABLE_REGISTRATION=True,
         REQUIRE_REGISTRATION_CODE=False,
-        RATE_LIMIT_ENABLED=False,
     )
 
     pool = DatabasePool(settings)

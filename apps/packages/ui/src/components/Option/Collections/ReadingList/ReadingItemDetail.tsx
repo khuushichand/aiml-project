@@ -576,13 +576,13 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       children: (
         <div className="space-y-3">
           {selectedQuote && (
-            <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 dark:border-blue-900/50 dark:bg-blue-900/20">
-              <p className="text-xs font-medium text-blue-700 dark:text-blue-300">
+            <div className="rounded-lg border border-primary/30 bg-primary/10 p-3">
+              <p className="text-xs font-medium text-primary">
                 {selectedMatchId
                   ? t("collections:highlights.selectionMatched", "Selected text matches an existing highlight")
                   : t("collections:highlights.selectionCaptured", "Selected text captured")}
               </p>
-              <blockquote className="mt-1 text-sm italic text-zinc-700 dark:text-zinc-200">
+              <blockquote className="mt-1 text-sm italic text-text">
                 "{selectedQuote}"
               </blockquote>
               <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -644,11 +644,11 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
             {currentItem?.clean_html ? (
               <div dangerouslySetInnerHTML={{ __html: currentItem.clean_html }} />
             ) : currentItem?.text ? (
-              <pre className="whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-200">
+              <pre className="whitespace-pre-wrap text-sm text-text">
                 {currentItem.text}
               </pre>
             ) : (
-              <p className="text-zinc-500">
+              <p className="text-text-muted">
                 {t("collections:reading.noContent", "Content not available")}
               </p>
             )}
@@ -672,8 +672,8 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
             </div>
           ) : (
             <div className="text-center py-8">
-              <Sparkles className="h-8 w-8 mx-auto text-zinc-400 mb-2" />
-              <p className="text-zinc-500 mb-4">
+              <Sparkles className="h-8 w-8 mx-auto text-text-subtle mb-2" />
+              <p className="text-text-muted mb-4">
                 {t("collections:reading.noSummary", "No summary yet")}
               </p>
               <Button
@@ -699,10 +699,10 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       ),
       children: (
         <div className="space-y-4">
-          <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
+          <div className="rounded-lg border border-border p-4">
             <div className="space-y-3">
               <div>
-                <label className="mb-1 block text-sm font-medium text-zinc-600 dark:text-zinc-300">
+                <label className="mb-1 block text-sm font-medium text-text-muted">
                   {t("collections:highlights.quoteLabel", "Quote")}
                 </label>
                 <TextArea
@@ -717,7 +717,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
                 />
               </div>
               <div>
-                <label className="mb-1 block text-sm font-medium text-zinc-600 dark:text-zinc-300">
+                <label className="mb-1 block text-sm font-medium text-text-muted">
                   {t("collections:highlights.noteLabel", "Note (optional)")}
                 </label>
                 <TextArea
@@ -809,7 +809,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
                 rows={6}
                 placeholder={t("collections:reading.notesPlaceholder", "Add your notes...")}
               />
-              <div className="flex items-center justify-between text-xs text-zinc-500">
+              <div className="flex items-center justify-between text-xs text-text-muted">
                 <span>{notesSaveStateLabel}</span>
                 {notesSaveState === "saving" && <Spin size="small" />}
               </div>
@@ -837,7 +837,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
                   {currentItem.notes}
                 </div>
               ) : (
-                <p className="text-zinc-500">
+                <p className="text-text-muted">
                   {t("collections:reading.noNotes", "No notes yet")}
                 </p>
               )}
@@ -870,19 +870,19 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
         ) : currentItem ? (
           <div className="flex flex-col h-full">
             {/* Header */}
-            <div className="border-b border-zinc-200 p-4 dark:border-zinc-700">
+            <div className="border-b border-border p-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
-                  <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                  <h2 className="text-xl font-semibold text-text">
                     {currentItem.title}
                   </h2>
-                  <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-zinc-500 dark:text-zinc-400">
+                  <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-text-muted">
                     {currentItem.domain && (
                       <a
                         href={currentItem.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-center gap-1 hover:text-blue-500"
+                        className="flex items-center gap-1 hover:text-primary"
                       >
                         <Globe className="h-3 w-3" />
                         {currentItem.domain}
@@ -964,7 +964,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
             </div>
 
             {/* Footer Actions */}
-            <div className="border-t border-zinc-200 p-4 dark:border-zinc-700">
+            <div className="border-t border-border p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Button

@@ -174,7 +174,6 @@ _AUTH_ENV_BASELINE_KEYS = (
     # Common guardrail toggles that can leak between tests when set via os.environ directly.
     "VIRTUAL_KEYS_ENABLED",
     "LLM_BUDGET_ENFORCE",
-    "RATE_LIMIT_ENABLED",
     "CSRF_ENABLED",
     # Route gating and backend knobs used by a handful of integration tests.
     "ROUTES_ENABLE",

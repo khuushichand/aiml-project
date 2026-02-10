@@ -76,7 +76,7 @@ export const SkillPreview: React.FC<SkillPreviewProps> = ({
         </Button>
 
         {executeMutation.isError && (
-          <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <div className="rounded border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
             {(executeMutation.error as any)?.message || "Execution failed"}
           </div>
         )}

@@ -25,10 +25,10 @@ import { cn } from "@/libs/utils"
 import { ChatStateBadge } from "./ChatStateBadge"
 
 const STATE_ICON_BY_VALUE: Record<ConversationState, React.ReactElement> = {
-  "in-progress": <Circle className="size-3 text-blue-500" />,
-  resolved: <CheckCircle2 className="size-3 text-green-500" />,
-  backlog: <Clock className="size-3 text-gray-400" />,
-  "non-viable": <XCircle className="size-3 text-red-400" />
+  "in-progress": <Circle className="size-3 text-primary" />,
+  resolved: <CheckCircle2 className="size-3 text-success" />,
+  backlog: <Clock className="size-3 text-text-subtle" />,
+  "non-viable": <XCircle className="size-3 text-danger" />
 }
 
 type ServerChatRowCommonProps = {
@@ -197,7 +197,7 @@ export const ServerChatRow = React.memo((props: ServerChatRowAllProps) => {
       className={cn(
         "flex py-2 px-2 items-center gap-3 relative rounded-md truncate group transition-opacity duration-300 ease-in-out border",
         isActive
-          ? "bg-surface2 border-borderStrong text-text"
+          ? "bg-surface2 border-border-strong text-text"
           : "bg-surface text-text border-border hover:bg-surface2",
         selectionMode && isSelected && "border-primary/40"
       )}

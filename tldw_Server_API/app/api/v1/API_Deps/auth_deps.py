@@ -686,7 +686,8 @@ async def get_current_user(
                         user_id=getattr(principal, "user_id", None),
                         org_ids=org_ids if org_ids is not None else getattr(request.state, "org_ids", None),
                         team_ids=team_ids if team_ids is not None else getattr(request.state, "team_ids", None),
-                        is_admin=bool(getattr(principal, "is_admin", False)),
+                        # Stage 4 claim-first: admin scope context derives from claims, not boolean flags.
+                        is_admin=_principal_has_admin_bypass_claims(principal),
                     )
                 except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
@@ -852,7 +853,7 @@ async def get_auth_principal(
 
         state = _get_maintenance_state()
         if state.get("enabled"):
-            if principal.is_admin:
+            if _principal_has_admin_bypass_claims(principal):
                 return principal
             allowlist_ids = set()
             for val in state.get("allowlist_user_ids") or []:
@@ -886,8 +887,9 @@ def require_permissions(*permissions: str) -> Callable[[AuthPrincipal], Awaitabl
     """
     Dependency factory that enforces required permission claims on the principal.
 
-    Admin principals (principal.is_admin) are allowed regardless of specific
-    permissions. On failure, raises HTTP 403 with a descriptive message.
+    Admin-style principals (explicit role/permission claims) are allowed
+    regardless of specific permissions. On failure, raises HTTP 403 with a
+    descriptive message.
 
     Note: Uses AND semantics - the principal must have all specified
     permissions (unlike require_roles, which uses OR semantics for roles).
@@ -896,7 +898,7 @@ def require_permissions(*permissions: str) -> Callable[[AuthPrincipal], Awaitabl
     perms = [str(p) for p in permissions if str(p).strip()]
 
     async def _checker(principal: AuthPrincipal = Depends(get_auth_principal)) -> AuthPrincipal:  # noqa: B008
-        if principal.is_admin:
+        if _principal_has_admin_bypass_claims(principal):
             return principal
         missing = [p for p in perms if p not in principal.permissions]
         if missing:
@@ -928,7 +930,8 @@ def require_api_key_scope(
         *scopes: One or more scope strings that satisfy the requirement (OR logic).
                  Valid values: "read", "write", "admin", "service"
         allow_jwt_bypass: If True, JWT-authenticated users bypass this check (default: True)
-        allow_admin_bypass: If True, principals with is_admin=True bypass this check (default: True)
+        allow_admin_bypass: If True, principals with explicit admin role/permission
+            claims bypass this check (default: True)
 
     Returns:
         Dependency function that raises HTTP 403 if scope requirement not met
@@ -960,7 +963,7 @@ def require_api_key_scope(
             return principal
 
         # Admin bypass
-        if allow_admin_bypass and principal.is_admin:
+        if allow_admin_bypass and _principal_has_admin_bypass_claims(principal):
             # AUDIT: Log when admin bypasses API key scope check for security visibility
             logger.info(
                 "Admin user {} bypassing API key scope check for scopes {} on endpoint {}",
@@ -1010,8 +1013,9 @@ def require_roles(*roles: str) -> Callable[[AuthPrincipal], Awaitable[AuthPrinci
     """
     Dependency factory that enforces required role claims on the principal.
 
-    Admin principals (principal.is_admin) are allowed regardless of specific
-    roles. On failure, raises HTTP 403 with a descriptive message.
+    Admin-style principals (explicit role/permission claims) are allowed
+    regardless of specific roles. On failure, raises HTTP 403 with a
+    descriptive message.
 
     Note: Uses OR semantics - the principal must have at least one of the
     specified roles (unlike require_permissions, which requires all listed
@@ -1021,7 +1025,7 @@ def require_roles(*roles: str) -> Callable[[AuthPrincipal], Awaitable[AuthPrinci
     role_list = [str(r) for r in roles if str(r).strip()]
 
     async def _checker(principal: AuthPrincipal = Depends(get_auth_principal)) -> AuthPrincipal:  # noqa: B008
-        if principal.is_admin:
+        if _principal_has_admin_bypass_claims(principal):
             return principal
         if not role_list:
             return principal
@@ -1090,7 +1094,6 @@ async def get_current_active_user(
 async def get_user_org_policy(
     db: Any = Depends(get_db_transaction),  # noqa: B008
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
 ) -> dict[str, Any]:
     """
     Deprecated compatibility shim for user-dict org policy lookups.
@@ -1180,79 +1183,36 @@ async def get_org_policy_from_principal(
     return await _load_org_policy(db, org_id)
 
 
-async def require_admin(
-    current_user: dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
-) -> dict[str, Any]:
-    """
-    Require admin role for access (legacy shim).
-
-    This dependency is retained for backwards compatibility with older
-    routes and tests that still rely on a user-dict based admin check.
-    New endpoints MUST NOT use this helper and should instead depend on
-    `get_auth_principal` together with `require_roles("admin")` and/or
-    `require_permissions(...)` for claim-first authorization.
-
-    Args:
-        current_user: Current active user
-
-    Returns:
-        User dictionary if admin
-
-    Raises:
-        HTTPException: If user is not admin
-    """
-    # Prefer explicit admin-style claims over global mode checks so that both
-    # single-user and multi-user profiles rely on the same RBAC surface:
-    # - is_admin flag
-    # - primary role == 'admin'
-    # - roles list contains 'admin'
-    is_admin_flag = bool(
-        current_user.get("is_admin")
-        or current_user.get("role") == "admin"
-        or ("admin" in (current_user.get("roles") or []))
-    )
-    if not is_admin_flag:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
-
-    return current_user
+_ADMIN_BYPASS_PERMISSIONS = frozenset({"*"})
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
-def require_role(role: str):
-    # Legacy shim - do not use in new code.
-    # Prefer claim-first helpers (get_auth_principal, require_roles, require_permissions)
-    # for new endpoints. This dependency is retained only for existing routes that
-    # still rely on get_current_active_user user dicts.
-    """
-    Create a dependency that requires a specific role
+def _normalized_claim_values(values: list[Any] | tuple[Any, ...] | None) -> set[str]:
+    return {
+        str(value).strip().lower()
+        for value in (values or [])
+        if str(value).strip()
+    }
 
-    Args:
-        role: Required role name
 
-    Returns:
-        Dependency function that checks for the role
-    """
-    async def role_checker(
-        current_user: dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
-    ) -> dict[str, Any]:
-        user_role = current_user.get("role", "user")
+def _principal_has_admin_bypass_claims(principal: AuthPrincipal | None) -> bool:
+    if principal is None:
+        return False
+    roles = _normalized_claim_values(principal.roles)
+    permissions = _normalized_claim_values(principal.permissions)
+    if "admin" in roles:
+        return True
+    return bool(permissions & _ADMIN_BYPASS_PERMISSIONS)
 
-        # Admin can access everything
-        if user_role == "admin":
-            return current_user
 
-        # Check specific role
-        if user_role != role:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Requires {role} role"
-            )
-
-        return current_user
-
-    return role_checker
+def _principal_has_admin_claims(principal: AuthPrincipal | None) -> bool:
+    if principal is None:
+        return False
+    roles = _normalized_claim_values(principal.roles)
+    permissions = _normalized_claim_values(principal.permissions)
+    if "admin" in roles:
+        return True
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 async def get_optional_current_user(
@@ -1337,9 +1297,6 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
         return
 
     endpoint = request.url.path if getattr(request, "url", None) else "unknown"
-    settings = get_settings()
-    if not getattr(settings, "RATE_LIMIT_ENABLED", True):
-        return
 
     principal = None
     try:
@@ -1378,9 +1335,6 @@ async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
         return
 
     endpoint = request.url.path if getattr(request, "url", None) else "auth"
-    settings = get_settings()
-    if not getattr(settings, "RATE_LIMIT_ENABLED", True):
-        return
 
     principal = None
     try:
@@ -1620,7 +1574,7 @@ def require_token_scope(
                 exc,
             )
 
-        # Optional admin bypass based on the resolved principal (not token claims).
+        # Optional admin bypass based on explicit principal claims (not token claims).
         if allow_admin_bypass:
             principal = None
             try:
@@ -1660,7 +1614,7 @@ def require_token_scope(
                     principal = None
                 except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                     principal = None
-            if principal is not None and principal.is_admin:
+            if _principal_has_admin_bypass_claims(principal):
                 return None
 
         # If we have Authorization bearer and it looks like a JWT, apply JWT-based checks.

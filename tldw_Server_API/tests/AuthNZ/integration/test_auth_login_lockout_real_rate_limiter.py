@@ -84,7 +84,6 @@ class TestAuthLoginLockoutRealRateLimiter:
         rl_settings = Settings(
             AUTH_MODE="multi_user",
             JWT_SECRET_KEY="test-" * 16,
-            RATE_LIMIT_ENABLED=True,
             MAX_LOGIN_ATTEMPTS=3,
             LOCKOUT_DURATION_MINUTES=5,
         )

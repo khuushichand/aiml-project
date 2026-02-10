@@ -136,7 +136,6 @@ DEFAULT_USER_ROLE=user
 DEFAULT_STORAGE_QUOTA_MB=5120
 
 # Rate Limiting
-RATE_LIMIT_ENABLED=false  # Disable for testing
 EOF
 ```
 

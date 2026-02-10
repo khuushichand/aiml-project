@@ -209,7 +209,7 @@ export const HighlightsList: React.FC = () => {
         <div className="flex flex-1 items-center gap-2 sm:max-w-md">
           <Input
             placeholder={t("collections:highlights.searchPlaceholder", "Search highlights...")}
-            prefix={<Search className="h-4 w-4 text-gray-400" />}
+            prefix={<Search className="h-4 w-4 text-text-subtle" />}
             value={highlightsSearch}
             onChange={handleSearchChange}
             allowClear
@@ -241,8 +241,8 @@ export const HighlightsList: React.FC = () => {
         />
 
         <div className="ml-auto flex items-center gap-2">
-          <Layers className="h-4 w-4 text-gray-500" />
-          <span className="text-sm text-gray-500">
+          <Layers className="h-4 w-4 text-text-muted" />
+          <span className="text-sm text-text-muted">
             {t("collections:highlights.groupByItem", "Group by article")}
           </span>
           <Switch
@@ -271,7 +271,7 @@ export const HighlightsList: React.FC = () => {
           }
           image={Empty.PRESENTED_IMAGE_SIMPLE}
         >
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-text-muted">
             {t(
               "collections:highlights.emptyHint",
               "Highlights you create while reading will appear here."

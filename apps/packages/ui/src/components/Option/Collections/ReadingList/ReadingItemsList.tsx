@@ -302,7 +302,7 @@ export const ReadingItemsList: React.FC = () => {
                   )}
                 </p>
                 {failureLines.length > 0 && (
-                  <div className="max-h-52 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-xs dark:border-zinc-700 dark:bg-zinc-900">
+                  <div className="max-h-52 overflow-auto rounded border border-border bg-bg p-2 text-xs">
                     {failureLines.map((line) => (
                       <div key={line}>{line}</div>
                     ))}
@@ -508,7 +508,7 @@ export const ReadingItemsList: React.FC = () => {
                   )}
                 </p>
                 {failureLines.length > 0 && (
-                  <div className="max-h-52 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-xs dark:border-zinc-700 dark:bg-zinc-900">
+                  <div className="max-h-52 overflow-auto rounded border border-border bg-bg p-2 text-xs">
                     {failureLines.map((line) => (
                       <div key={line}>{line}</div>
                     ))}
@@ -739,7 +739,7 @@ export const ReadingItemsList: React.FC = () => {
         <div className="flex flex-1 items-center gap-2 sm:max-w-md">
           <Input
             placeholder={t("collections:reading.searchPlaceholder", "Search articles...")}
-            prefix={<Search className="h-4 w-4 text-gray-400" />}
+            prefix={<Search className="h-4 w-4 text-text-subtle" />}
             value={itemsSearch}
             onChange={handleSearchChange}
             allowClear
@@ -750,8 +750,8 @@ export const ReadingItemsList: React.FC = () => {
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
-          <Filter className="h-4 w-4 text-gray-500" />
-          <span className="text-sm text-gray-500">
+          <Filter className="h-4 w-4 text-text-muted" />
+          <span className="text-sm text-text-muted">
             {t("collections:reading.filters", "Filters")}:
           </span>
         </div>
@@ -803,7 +803,7 @@ export const ReadingItemsList: React.FC = () => {
         />
 
         <div className="ml-auto flex items-center gap-2">
-          <span className="text-sm text-gray-500">
+          <span className="text-sm text-text-muted">
             {t("collections:reading.sortBy", "Sort")}:
           </span>
           <Select
@@ -840,7 +840,7 @@ export const ReadingItemsList: React.FC = () => {
 
       {/* Bulk action controls */}
       {selectionMode && (
-        <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
+        <div className="rounded-lg border border-border bg-bg p-3">
           <div className="flex flex-wrap items-center gap-3">
             <Checkbox
               checked={allPageSelected}
@@ -849,7 +849,7 @@ export const ReadingItemsList: React.FC = () => {
             >
               {t("collections:reading.bulk.selectAllPage", "Select all on this page")}
             </Checkbox>
-            <span className="text-sm text-zinc-600 dark:text-zinc-300">
+            <span className="text-sm text-text-muted">
               {t("collections:reading.bulk.selectedCount", "{{count}} selected", {
                 count: selectedCount
               })}
@@ -1064,7 +1064,7 @@ export const ReadingItemsList: React.FC = () => {
             onChange={(e) => setOutputTitle(e.target.value)}
             placeholder={t("collections:reading.bulk.outputNamePlaceholder", "Optional output title")}
           />
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          <p className="text-xs text-text-muted">
             {t("collections:reading.bulk.outputHint", "Selected items: {{count}}", {
               count: selectedItemIds.length
             })}

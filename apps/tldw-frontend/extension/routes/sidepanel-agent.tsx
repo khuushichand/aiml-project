@@ -469,7 +469,7 @@ const SidepanelAgent: FC = () => {
                   aria-label={`${msg.role === "user" ? t("userMessage", "Your message") : t("assistantMessage", "Assistant message")}: ${msg.content.substring(0, 50)}${msg.content.length > 50 ? "..." : ""}`}
                   className={`max-w-[80%] rounded-lg px-4 py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 ${
                     msg.role === "user"
-                      ? "bg-blue-500 text-white"
+                      ? "bg-primary text-white"
                       : "bg-gray-100 dark:bg-gray-800"
                   }`}
                 >
@@ -516,7 +516,7 @@ const SidepanelAgent: FC = () => {
           <FileCode className="size-4" />
           {t("diff", "Diff")}
           {diffs.length > 0 && (
-            <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+            <span className="px-1.5 py-0.5 text-xs rounded-full bg-primary/10 text-primary">
               {diffs.length}
             </span>
           )}
@@ -544,7 +544,7 @@ const SidepanelAgent: FC = () => {
           <TerminalIcon className="size-4" />
           {t("terminal", "Terminal")}
           {executions.length > 0 && (
-            <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+            <span className="px-1.5 py-0.5 text-xs rounded-full bg-primary/10 text-primary">
               {executions.length}
             </span>
           )}
@@ -582,7 +582,7 @@ const SidepanelAgent: FC = () => {
 
         <div className="flex items-center gap-2">
           {isRunning && (
-            <span className="flex items-center gap-1.5 text-sm text-blue-500">
+            <span className="flex items-center gap-1.5 text-sm text-primary">
               <Loader2 className="size-4 animate-spin" />
               {t("step", "Step")} {currentStep}
             </span>

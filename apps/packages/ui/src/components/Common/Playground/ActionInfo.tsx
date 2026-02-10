@@ -39,12 +39,12 @@ export const ActionInfo = ({ action }: Props) => {
 
   return (
     <div
-      className="inline-flex items-center gap-2 px-3 py-2 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800"
+      className="inline-flex items-center gap-2 px-3 py-2 rounded-full bg-primary/10 border border-primary/30"
       role="status"
       aria-live="polite"
     >
-      <IconComponent className="size-4 text-blue-600 dark:text-blue-400 animate-pulse" />
-      <span className="text-sm font-medium text-blue-700 dark:text-blue-300 shimmer-text">
+      <IconComponent className="size-4 text-primary animate-pulse" />
+      <span className="text-sm font-medium text-primary shimmer-text">
         {label}
       </span>
     </div>

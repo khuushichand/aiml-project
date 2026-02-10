@@ -744,10 +744,6 @@ class TestSecurity:
         assert "required role" in detail.lower()
         assert "admin" in detail.lower()
 
-    @pytest.mark.skipif(
-        get_settings().RATE_LIMIT_ENABLED == False,
-        reason="Rate limiting disabled"
-    )
     def test_rate_limiting(self, isolated_test_environment):
         """Test rate limiting"""
         client, db_name = isolated_test_environment

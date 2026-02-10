@@ -11,7 +11,7 @@ type DraftListSidebarProps = {
 export function DraftListSidebar({ drafts, selectedId, onSelect }: DraftListSidebarProps) {
   return (
     <aside className="w-full lg:w-80">
-      <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="rounded-lg border border-border bg-surface p-4 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Batch</h2>
           <Badge>{drafts.length} items</Badge>
@@ -24,8 +24,8 @@ export function DraftListSidebar({ drafts, selectedId, onSelect }: DraftListSide
               onClick={() => onSelect(draft.id)}
               className={`w-full rounded-md border px-3 py-2 text-left transition ${
                 draft.id === selectedId
-                  ? 'border-blue-500 bg-blue-50'
-                  : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                  ? 'border-primary bg-primary/10'
+                  : 'border-border hover:border-border-strong hover:bg-elevated'
               }`}
             >
               <div className="flex items-center justify-between">
@@ -36,7 +36,7 @@ export function DraftListSidebar({ drafts, selectedId, onSelect }: DraftListSide
                   </Badge>
                 )}
               </div>
-              <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
+              <div className="mt-1 flex items-center gap-2 text-xs text-text-muted">
                 <span>{draft.mediaType}</span>
                 <span>•</span>
                 <span>{formatStatus(draft.status)}</span>

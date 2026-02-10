@@ -151,7 +151,7 @@ export const JobsTab: React.FC = () => {
         <div>
           <span className="font-medium">{name}</span>
           {record.description && (
-            <div className="text-xs text-zinc-500 truncate">
+            <div className="text-xs text-text-muted truncate">
               {record.description}
             </div>
           )}
@@ -170,7 +170,7 @@ export const JobsTab: React.FC = () => {
       key: "scope",
       width: 150,
       render: (_, record) => (
-        <span className="text-sm text-zinc-600 dark:text-zinc-400">
+        <span className="text-sm text-text-muted">
           {renderScope(record)}
         </span>
       )
@@ -185,7 +185,7 @@ export const JobsTab: React.FC = () => {
         return count > 0 ? (
           <Tag>{count}</Tag>
         ) : (
-          <span className="text-zinc-400">-</span>
+          <span className="text-text-subtle">-</span>
         )
       }
     },
@@ -196,11 +196,11 @@ export const JobsTab: React.FC = () => {
       width: 140,
       render: (date: string | null) =>
         date ? (
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm text-text-muted">
             {formatRelativeTime(date, t)}
           </span>
         ) : (
-          <span className="text-sm text-zinc-400">
+          <span className="text-sm text-text-subtle">
             {t("watchlists:jobs.never", "Never")}
           </span>
         )
@@ -279,7 +279,7 @@ export const JobsTab: React.FC = () => {
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex items-center justify-between">
-        <div className="text-sm text-zinc-500">
+        <div className="text-sm text-text-muted">
           {t("watchlists:jobs.description", "Create scheduled jobs to automatically fetch and process content from your sources.")}
         </div>
         <div className="flex items-center gap-2">

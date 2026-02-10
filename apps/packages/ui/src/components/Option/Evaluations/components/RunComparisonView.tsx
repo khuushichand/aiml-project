@@ -106,9 +106,9 @@ export const RunComparisonView: React.FC<RunComparisonViewProps> = ({
               const deltaClass =
                 typeof row.delta === "number" && Number.isFinite(row.delta)
                   ? row.delta > 0
-                    ? "text-green-600"
+                    ? "text-success"
                     : row.delta < 0
-                      ? "text-red-600"
+                      ? "text-danger"
                       : "text-text-subtle"
                   : "text-text-subtle"
               return (

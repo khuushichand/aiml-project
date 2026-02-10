@@ -82,9 +82,9 @@ const QuestionCard: React.FC<{
                 let className = "w-full rounded-lg border p-2.5 transition-colors"
                 if (showAnswer) {
                   if (isThisCorrect) {
-                    className += " border-green-500 bg-green-50 dark:bg-green-900/20"
+                    className += " border-success bg-success/10"
                   } else if (isSelected && !isThisCorrect) {
-                    className += " border-red-500 bg-red-50 dark:bg-red-900/20"
+                    className += " border-danger bg-danger/10"
                   } else {
                     className += " border-border"
                   }
@@ -102,10 +102,10 @@ const QuestionCard: React.FC<{
                   >
                     <span className="text-sm">{option}</span>
                     {showAnswer && isThisCorrect && (
-                      <Check className="ml-2 inline h-4 w-4 text-green-500" />
+                      <Check className="ml-2 inline h-4 w-4 text-success" />
                     )}
                     {showAnswer && isSelected && !isThisCorrect && (
-                      <X className="ml-2 inline h-4 w-4 text-red-500" />
+                      <X className="ml-2 inline h-4 w-4 text-danger" />
                     )}
                   </Radio>
                 )
@@ -117,7 +117,7 @@ const QuestionCard: React.FC<{
 
       {/* For non-multiple choice, show answer directly */}
       {(!question.options || question.options.length === 0) && showAnswer && (
-        <div className="mb-3 rounded-lg border border-green-500 bg-green-50 dark:bg-green-900/20 p-3 pl-8">
+        <div className="mb-3 rounded-lg border border-success bg-success/10 p-3 pl-8">
           <p className="text-sm">
             <span className="font-medium">{t("option:documentWorkspace.answer", "Answer:")}</span>{" "}
             {question.correctAnswer}
@@ -250,8 +250,8 @@ export const QuizPanel: React.FC = () => {
   if (error) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
-        <X className="h-10 w-10 text-red-500" />
-        <p className="text-sm text-red-500">
+        <X className="h-10 w-10 text-danger" />
+        <p className="text-sm text-danger">
           {error instanceof Error ? error.message : t("option:documentWorkspace.quizError", "Failed to generate quiz")}
         </p>
         <Button onClick={handleNewQuiz}>

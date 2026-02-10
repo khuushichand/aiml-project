@@ -7,7 +7,7 @@ This document summarizes the background services in `tldw_server`, their respons
 - Core workers: Chatbooks Jobs worker, Jobs metrics gauges worker, Claims rebuild worker
 - Aggregators: API request usage aggregator, LLM usage aggregator
 - Quotas: User storage quota service (filesystem + DB)
-- Web scraping: Enhanced scraping service (Playwright-based) with legacy fallback
+- Web scraping: Enhanced scraping service (Playwright-based) with compatibility fallback behavior
 - Placeholders (non-production): document/ebook/podcast/XML processors, in-memory ephemeral store
 
 ## Startup/Shutdown
@@ -65,7 +65,7 @@ Each loop supports graceful stop via an `asyncio.Event` and is gated by env flag
 - File: `tldw_Server_API/app/services/enhanced_web_scraping_service.py`
 - Purpose: Production scraping pipeline with queueing, rate limiting, cookie/session support, and rich progress.
 - Notes:
-  - Uses Playwright if available; otherwise raises to trigger legacy fallback (`services/web_scraping_service.py`).
+  - Uses Playwright if available; otherwise raises to trigger compatibility fallback behavior (`services/web_scraping_service.py`).
   - Persists scraped content into Media DB with chunk-level FTS.
   - Ephemeral mode stores results in an in-memory store (dev-only; see “Known Gaps”).
 

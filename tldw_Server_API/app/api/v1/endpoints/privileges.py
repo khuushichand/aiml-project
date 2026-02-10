@@ -35,12 +35,23 @@ from tldw_Server_API.app.core.PrivilegeMaps import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 router = APIRouter(prefix="/privileges", tags=["privileges"])
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
 def _has_privilege_admin_claim(principal: AuthPrincipal) -> bool:
-    if principal.is_admin:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if roles & {"admin", "owner", "platform_admin"}:
         return True
-    return bool({"admin", "owner", "platform_admin"} & set(principal.roles or []))
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 async def require_privilege_admin(

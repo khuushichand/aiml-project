@@ -49,6 +49,7 @@ _FLASHCARDS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     ValueError,
     json.JSONDecodeError,
 )
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
 def _fetch_flashcard_or_404(card_uuid: str, db: CharactersRAGDB) -> dict:
@@ -93,9 +94,17 @@ def _normalize_flashcard_model_fields(
 
 def _require_flashcards_admin(principal: AuthPrincipal) -> None:
     """Raise 403 if the principal lacks flashcards admin permission."""
-    perms = set(principal.permissions or [])
-    roles = set(principal.roles or [])
-    if FLASHCARDS_ADMIN not in perms and "admin" not in roles and not principal.is_admin:
+    perms = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if FLASHCARDS_ADMIN.lower() not in perms and "admin" not in roles and not (perms & _ADMIN_CLAIM_PERMISSIONS):
         raise HTTPException(
             status_code=403,
             detail="Admin flashcards permission required for override",

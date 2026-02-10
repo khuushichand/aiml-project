@@ -7731,9 +7731,9 @@ python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;
 <span class="nv">BYOK_ENABLED</span><span class="o">=</span><span class="nb">false</span>
 
 <span class="c1"># --- Rate Limits (sensible household defaults) ---</span>
-<span class="nv">RATE_LIMIT_ENABLED</span><span class="o">=</span><span class="nb">true</span>
-<span class="nv">RATE_LIMIT_PER_MINUTE</span><span class="o">=</span><span class="m">60</span>
-<span class="nv">RATE_LIMIT_BURST</span><span class="o">=</span><span class="m">10</span>
+<span class="nv">RG_ENABLED</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">requests.rpm</span><span class="o">=</span><span class="m">60</span>
+<span class="nv">requests.burst</span><span class="o">=</span><span class="m">10</span>
 
 <span class="c1"># --- Provider Keys (add the ones you use) ---</span>
 <span class="nv">OPENAI_API_KEY</span><span class="o">=</span>
@@ -7891,9 +7891,9 @@ curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:8000/api/
 <h3 id="rate-limits">Rate Limits<a class="headerlink" href="#rate-limits" title="Permanent link">&para;</a></h3>
 <p>These defaults prevent any single user from overwhelming the server:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># In .env</span>
-<span class="nv">RATE_LIMIT_ENABLED</span><span class="o">=</span><span class="nb">true</span>
-<span class="nv">RATE_LIMIT_PER_MINUTE</span><span class="o">=</span><span class="m">60</span>
-<span class="nv">RATE_LIMIT_BURST</span><span class="o">=</span><span class="m">10</span>
+<span class="nv">RG_ENABLED</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">requests.rpm</span><span class="o">=</span><span class="m">60</span>
+<span class="nv">requests.burst</span><span class="o">=</span><span class="m">10</span>
 </code></pre></div>
 <h3 id="disable-byok">Disable BYOK<a class="headerlink" href="#disable-byok" title="Permanent link">&para;</a></h3>
 <p>Unless family members need to add their own API keys:</p>
@@ -8276,12 +8276,12 @@ cp<span class="w"> </span>-r<span class="w"> </span>Databases/user_databases/<sp
 <td><code>false</code></td>
 </tr>
 <tr>
-<td><code>RATE_LIMIT_ENABLED</code></td>
+<td><code>RG_ENABLED</code></td>
 <td>Enable rate limiting</td>
 <td><code>true</code></td>
 </tr>
 <tr>
-<td><code>RATE_LIMIT_PER_MINUTE</code></td>
+<td><code>requests.rpm</code></td>
 <td>Requests per minute per user</td>
 <td><code>60</code></td>
 </tr>

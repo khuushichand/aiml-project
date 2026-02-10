@@ -1799,7 +1799,7 @@ const SidepanelChat = () => {
                 aria-live="polite"
                 className={`max-w-lg rounded-full px-4 py-2 text-sm shadow-lg backdrop-blur-sm ${
                   dropFeedback.type === "error"
-                    ? "bg-red-600 text-white"
+                    ? "bg-danger text-white"
                     : "bg-slate-900/80 text-white dark:bg-slate-100/90 dark:text-slate-900"
                 }`}
               >
@@ -1875,7 +1875,7 @@ const SidepanelChat = () => {
                 aria-label={t("playground:composer.scrollToLatest", "Scroll to latest messages")}
                 title={t("playground:composer.scrollToLatest", "Scroll to latest messages") as string}
                 data-testid="chat-scroll-latest"
-                className="bg-gray-50 shadow border border-gray-200 dark:border-none dark:bg-white/20 p-1.5 rounded-full pointer-events-auto hover:bg-gray-100 dark:hover:bg-white/30 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500">
+                className="bg-gray-50 shadow border border-gray-200 dark:border-none dark:bg-white/20 p-1.5 rounded-full pointer-events-auto hover:bg-gray-100 dark:hover:bg-white/30 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-warn">
                 <ChevronDown className="size-4 text-gray-600 dark:text-gray-300" aria-hidden="true" />
               </button>
             </div>

@@ -186,14 +186,14 @@ export const ScopeSelector: React.FC<ScopeSelectorProps> = ({
   ]
 
   return (
-    <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg p-3">
+    <div className="border border-border rounded-lg p-3">
       <Tabs
         activeKey={activeMode}
         onChange={handleModeChange}
         items={tabItems}
         size="small"
       />
-      <div className="mt-2 text-xs text-zinc-500">
+      <div className="mt-2 text-xs text-text-muted">
         {activeMode === "sources" &&
           t("watchlists:jobs.scope.sourcesHelp", "Job will fetch from selected sources directly")}
         {activeMode === "groups" &&

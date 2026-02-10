@@ -55,12 +55,12 @@ export function VirtualizedTable<T>({
   });
 
   if (!data.length && emptyState) {
-    return <div className={cn('border border-dashed border-gray-300 rounded-md p-6 text-sm text-gray-500', className)}>{emptyState}</div>;
+    return <div className={cn('border border-dashed border-border rounded-md p-6 text-sm text-text-muted', className)}>{emptyState}</div>;
   }
 
   return (
-    <div className={cn('border border-gray-200 rounded-md bg-white', className)}>
-      <div className="border-b border-gray-200 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600">
+    <div className={cn('border border-border rounded-md bg-surface', className)}>
+      <div className="border-b border-border bg-bg px-3 py-2 text-xs font-semibold text-text-muted">
         <div className="flex gap-3">
           {columns.map((column, idx) => (
             <div
@@ -86,7 +86,7 @@ export function VirtualizedTable<T>({
               return (
                 <div
                   key={`${rowIndex}-${columns[0]?.key ?? 'col'}`}
-                  className={cn('flex gap-3 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors')}
+                  className={cn('flex gap-3 px-3 py-2 text-sm text-text hover:bg-elevated transition-colors')}
                   style={{ height: rowHeight }}
                 >
                   {columns.map((column, colIdx) => (

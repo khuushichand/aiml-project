@@ -907,7 +907,7 @@ def load_settings():
         _max_messages_per_chat_soft = _cc_int('MAX_MESSAGES_PER_CHAT_SOFT', _max_messages_per_chat)
         _max_chat_completions_per_minute = _cc_int('MAX_CHAT_COMPLETIONS_PER_MINUTE', 20)
         _max_message_sends_per_minute = _cc_int('MAX_MESSAGE_SENDS_PER_MINUTE', 60)
-        _has_char_rl_enabled, _char_rl_enabled_bool = _cc_bool_present('RATE_LIMIT_ENABLED')
+        _has_char_rl_enabled, _char_rl_enabled_bool = _cc_bool_present('CHARACTER_RATE_LIMIT_ENABLED')
     except _CONFIG_NONCRITICAL_EXCEPTIONS:
         _character_rate_limit_ops = 100
         _character_rate_limit_window = 3600
@@ -1642,7 +1642,7 @@ def load_settings():
             _cp.getboolean('persona.rbac', 'allow_delete', fallback=False) if _cp and _cp.has_section('persona.rbac') else False
         ))(load_comprehensive_config()),
     }
-    # Only include explicit Character-Chat RATE_LIMIT_ENABLED if present in config.txt
+    # Only include explicit Character-Chat CHARACTER_RATE_LIMIT_ENABLED if present in config.txt
     try:
         if _has_char_rl_enabled:
             config_dict["CHARACTER_RATE_LIMIT_ENABLED"] = _char_rl_enabled_bool

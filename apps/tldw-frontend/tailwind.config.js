@@ -17,12 +17,9 @@ module.exports = {
         danger: "rgb(var(--color-danger) / <alpha-value>)",
         muted: "rgb(var(--color-muted) / <alpha-value>)",
         border: "rgb(var(--color-border) / <alpha-value>)",
-        borderStrong: "rgb(var(--color-border-strong) / <alpha-value>)",
         "border-strong": "rgb(var(--color-border-strong) / <alpha-value>)",
         text: "rgb(var(--color-text) / <alpha-value>)",
-        textMuted: "rgb(var(--color-text-muted) / <alpha-value>)",
         "text-muted": "rgb(var(--color-text-muted) / <alpha-value>)",
-        textSubtle: "rgb(var(--color-text-subtle) / <alpha-value>)",
         "text-subtle": "rgb(var(--color-text-subtle) / <alpha-value>)",
         focus: "rgb(var(--color-focus) / <alpha-value>)"
       },
@@ -46,10 +43,8 @@ module.exports = {
         modal: "0 10px 30px rgba(0,0,0,0.28)"
       },
       backgroundImage: {
-        "bottom-mask-light":
-          "linear-gradient(0deg, transparent 0, #ffffff 160px)",
-        "bottom-mask-dark":
-          "linear-gradient(0deg, transparent 0, #171717 160px)"
+        "bottom-mask":
+          "linear-gradient(0deg, transparent 0, rgb(var(--color-bg)) 160px)"
       },
       maskImage: {
         "bottom-fade": "linear-gradient(0deg, transparent 0, #000 160px)"

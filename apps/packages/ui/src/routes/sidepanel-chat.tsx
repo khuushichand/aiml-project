@@ -2010,11 +2010,11 @@ const SidepanelChat = () => {
   }, [ingestCard?.status, t])
   const ingestStatusToneClass = React.useMemo(() => {
     const status = ingestCard?.status
-    if (status === "completed") return "border-emerald-300 bg-emerald-50 text-emerald-800"
+    if (status === "completed") return "border-success/30 bg-success/10 text-success"
     if (status === "failed" || status === "cancelled" || status === "auth_required") {
-      return "border-rose-300 bg-rose-50 text-rose-800"
+      return "border-danger/30 bg-danger/10 text-danger"
     }
-    return "border-blue-300 bg-blue-50 text-blue-800"
+    return "border-primary/30 bg-primary/10 text-primary"
   }, [ingestCard?.status])
 
   const isDockedSidebar = uiMode === "pro" && !isNarrow
@@ -2086,7 +2086,7 @@ const SidepanelChat = () => {
 
           {dropState === "dragging" && (
             <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center">
-              <div className="rounded-2xl border border-dashed border-white/70 bg-black/70 px-5 py-3 text-center text-sm font-medium text-white shadow-lg backdrop-blur-sm dark:border-white/40">
+              <div className="rounded-2xl border border-dashed border-white/50 bg-black/70 px-5 py-3 text-center text-sm font-medium text-white shadow-lg backdrop-blur-sm">
                 {t(
                   "playground:drop.overlayInstruction",
                   "Drop the image to attach it to your next reply"
@@ -2102,8 +2102,8 @@ const SidepanelChat = () => {
                 aria-live="polite"
                 className={`max-w-lg rounded-full px-4 py-2 text-sm shadow-lg backdrop-blur-sm ${
                   dropFeedback.type === "error"
-                    ? "bg-red-600 text-white"
-                    : "bg-slate-900/80 text-white dark:bg-slate-100/90 dark:text-slate-900"
+                    ? "bg-danger text-white"
+                    : "bg-elevated text-text"
                 }`}
               >
                 {dropFeedback.message}
@@ -2250,11 +2250,11 @@ const SidepanelChat = () => {
                 <div className="w-full max-w-3xl space-y-4">
                   {[1, 2, 3].map((i) => (
                     <div key={i} className="flex gap-4 animate-pulse">
-                      <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex-shrink-0"></div>
+                      <div className="w-8 h-8 rounded-full bg-surface2 flex-shrink-0"></div>
                       <div className="flex-1 space-y-2">
-                        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-1/4"></div>
-                        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-full"></div>
-                        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-3/4"></div>
+                        <div className="h-4 bg-surface2 rounded w-1/4"></div>
+                        <div className="h-4 bg-surface2 rounded w-full"></div>
+                        <div className="h-4 bg-surface2 rounded w-3/4"></div>
                       </div>
                     </div>
                   ))}
@@ -2292,8 +2292,8 @@ const SidepanelChat = () => {
                 aria-label={t("playground:composer.scrollToLatest", "Scroll to latest messages")}
                 title={t("playground:composer.scrollToLatest", "Scroll to latest messages") as string}
                 data-testid="chat-scroll-latest"
-                className="bg-gray-50 shadow border border-gray-200 dark:border-none dark:bg-white/20 p-1.5 rounded-full pointer-events-auto hover:bg-gray-100 dark:hover:bg-white/30 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500">
-                <ChevronDown className="size-4 text-gray-600 dark:text-gray-300" aria-hidden="true" />
+                className="bg-surface shadow border border-border p-1.5 rounded-full pointer-events-auto hover:bg-surface2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-warn">
+                <ChevronDown className="size-4 text-text-muted" aria-hidden="true" />
               </button>
             </div>
           )}

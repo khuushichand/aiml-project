@@ -153,6 +153,18 @@ async def test_vector_stores_batches_non_admin_cannot_override_user_id(monkeypat
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_vector_stores_batches_rejects_boolean_admin_without_claims(monkeypatch):
+    """Boolean admin flag alone must not permit cross-user batch inspection."""
+    principal = _make_principal(roles=["user"], permissions=[], is_admin=True)
+    app = _build_app_with_overrides(principal, monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.get("/vector_stores/batches", params={"user_id": "42"})
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_vector_stores_batches_admin_can_override_user_id(monkeypatch):
     """Admin principals may override user_id and inspect other users' batches."""
     principal = _make_principal(roles=["admin"], permissions=["*"], is_admin=True)

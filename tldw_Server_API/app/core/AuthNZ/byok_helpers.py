@@ -32,6 +32,37 @@ DEFAULT_BYOK_ALLOWED_PROVIDERS: set[str] = {
     "voyage",
     "zai",
 }
+_PLATFORM_ADMIN_ROLES = frozenset({"admin", "owner", "super_admin"})
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _normalized_claim_values(values: list[Any] | tuple[Any, ...] | set[Any] | None) -> set[str]:
+    return {
+        str(value).strip().lower()
+        for value in (values or [])
+        if str(value).strip()
+    }
+
+
+def _principal_has_platform_admin_claims(principal: AuthPrincipal | None) -> bool:
+    if not isinstance(principal, AuthPrincipal):
+        return False
+    roles = _normalized_claim_values(principal.roles)
+    permissions = _normalized_claim_values(principal.permissions)
+    if roles & _PLATFORM_ADMIN_ROLES:
+        return True
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
+
+
+def _legacy_user_has_platform_admin_claims(user: dict[str, Any] | None) -> bool:
+    if not isinstance(user, dict):
+        return False
+    role = str(user.get("role") or "").strip().lower()
+    roles = _normalized_claim_values(user.get("roles") or [])
+    permissions = _normalized_claim_values(user.get("permissions") or [])
+    if role in _PLATFORM_ADMIN_ROLES or roles & _PLATFORM_ADMIN_ROLES:
+        return True
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 def resolve_byok_base_url_allowlist() -> set[str]:
@@ -89,7 +120,7 @@ def validate_credential_fields(
 def is_trusted_base_url_principal(principal: AuthPrincipal | None) -> bool:
     if not isinstance(principal, AuthPrincipal):
         return False
-    if principal.is_admin:
+    if _principal_has_platform_admin_claims(principal):
         return True
     if principal.kind == "service":
         return True
@@ -113,12 +144,8 @@ def is_trusted_base_url_request(
     if is_trusted_base_url_principal(principal):
         return True
 
-    if isinstance(user, dict):
-        if user.get("is_admin") or user.get("is_superuser"):
-            return True
-        role = str(user.get("role") or "").lower()
-        if role == "admin":
-            return True
+    if _legacy_user_has_platform_admin_claims(user):
+        return True
 
     return False
 

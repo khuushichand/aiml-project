@@ -166,10 +166,10 @@ export const EvaluationsPage: React.FC = () => {
   return (
     <PageShell className="py-6" maxWidthClassName="max-w-6xl">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
+        <h1 className="text-2xl font-semibold text-text">
           {t("evaluations:title", "Evaluations")}
         </h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-sm text-text-muted">
           {t(
             "evaluations:subtitle",
             "Define evaluations against your tldw server and inspect recent runs."

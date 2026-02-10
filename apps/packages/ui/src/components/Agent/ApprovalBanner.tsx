@@ -138,7 +138,7 @@ export const ApprovalBanner: FC<ApprovalBannerProps> = ({
         key: "writes",
         label: t("fileChanges", "File changes"),
         icon: FileEdit,
-        color: "text-blue-500",
+        color: "text-primary",
         approvals: groups.writes
       })
     }

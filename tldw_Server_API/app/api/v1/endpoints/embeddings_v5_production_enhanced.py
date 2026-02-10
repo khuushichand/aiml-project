@@ -145,6 +145,7 @@ _EMBEDDINGS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     json.JSONDecodeError,
     *_REDIS_ERRORS,
 )
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 # ============================================================================
 # Embeddings Implementation Import (Safe/Lazy)
@@ -1462,16 +1463,23 @@ def _is_policy_bypass_admin(principal: AuthPrincipal | None, user: User | None) 
     Determine whether policy checks should allow admin bypass.
 
     Claim-first behavior:
-    - Prefer principal claims (`is_admin` or role `admin`) when principal exists.
-    - Fall back to legacy user.is_admin for compatibility when principal is absent.
+    - Trust only principal role/permission claims (`admin`, `*`, `system.configure`).
+    - Absence of a principal means no bypass.
     """
-    if principal is not None:
-        try:
-            roles = {str(role).strip().lower() for role in (principal.roles or [])}
-        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-            roles = set()
-        return bool(principal.is_admin or ("admin" in roles))
-    return bool(user and getattr(user, "is_admin", False))
+    _ = user
+    if principal is None:
+        return False
+    try:
+        roles = {str(role).strip().lower() for role in (principal.roles or [])}
+        permissions = {
+            str(permission).strip().lower()
+            for permission in (principal.permissions or [])
+            if str(permission).strip()
+        }
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+        roles = set()
+        permissions = set()
+    return bool(("admin" in roles) or (permissions & _ADMIN_CLAIM_PERMISSIONS))
 
 
 def _should_enforce_policy(user: User | None = None, principal: AuthPrincipal | None = None) -> bool:

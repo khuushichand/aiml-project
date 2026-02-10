@@ -724,7 +724,7 @@ export const MediaReviewPage: React.FC = () => {
         }}
         data-index={virtualRow?.index ?? idx}
         style={style}
-        className={`${cardCls} shadow-sm ${isFocused ? 'ring-2 ring-primary ring-offset-2 dark:ring-offset-surface' : ''}`}
+        className={`${cardCls} shadow-sm ${isFocused ? 'ring-2 ring-primary ring-offset-2 ring-offset-surface' : ''}`}
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -768,7 +768,7 @@ export const MediaReviewPage: React.FC = () => {
                   }
                 }}
                 icon={copiedIds.has(`content-${key}`)
-                  ? (<Check className="w-4 h-4 text-green-500" />) as any
+                  ? (<Check className="w-4 h-4 text-success" />) as any
                   : (<CopyIcon className="w-4 h-4" />) as any}
               >
                 {t("mediaPage.copyContentLabel", "Copy Content")}
@@ -793,7 +793,7 @@ export const MediaReviewPage: React.FC = () => {
                   }
                 }}
                 icon={copiedIds.has(`analysis-${key}`)
-                  ? (<Check className="w-4 h-4 text-green-500" />) as any
+                  ? (<Check className="w-4 h-4 text-success" />) as any
                   : (<CopyIcon className="w-4 h-4" />) as any}
               >
                 {t("mediaPage.copyAnalysisLabel", "Copy Analysis")}
@@ -931,13 +931,13 @@ export const MediaReviewPage: React.FC = () => {
             </button>
             {/* Selection count with progress bar */}
             <div className="flex items-center gap-2">
-              <div className="w-20 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+              <div className="w-20 h-2 bg-surface2 rounded-full overflow-hidden">
                 <div
                   className={`h-full transition-all duration-200 ${
                     selectedIds.length >= openAllLimit
-                      ? 'bg-red-500'
+                      ? 'bg-danger'
                       : selectedIds.length >= SELECTION_WARNING_THRESHOLD
-                        ? 'bg-amber-500'
+                        ? 'bg-warn'
                         : 'bg-primary'
                   }`}
                   style={{ width: `${Math.min((selectedIds.length / openAllLimit) * 100, 100)}%` }}
@@ -945,9 +945,9 @@ export const MediaReviewPage: React.FC = () => {
               </div>
               <span className={`text-xs whitespace-nowrap ${
                 selectedIds.length >= openAllLimit
-                  ? 'text-red-500 font-medium'
+                  ? 'text-danger font-medium'
                   : selectedIds.length >= SELECTION_WARNING_THRESHOLD
-                    ? 'text-amber-500 font-medium'
+                    ? 'text-warn font-medium'
                     : 'text-text-muted'
               }`}>
                 {selectedIds.length} / {openAllLimit}

@@ -133,9 +133,8 @@ class BillingEnforcer:
         Return True when the provided DatabasePool is backed by PostgreSQL.
 
         Backend selection should derive from pool state, not connection
-        capabilities (for example ``hasattr(conn, "fetchval")``), because
-        wrapper/shim connections can expose methods that do not indicate the
-        active backend.
+        method-presence probes, because wrapper/shim connections can expose
+        methods that do not indicate the active backend.
         """
         if pool is None:
             return False

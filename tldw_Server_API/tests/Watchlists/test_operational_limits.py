@@ -106,9 +106,16 @@ def user_client(monkeypatch):
 @pytest.fixture()
 def admin_client(monkeypatch):
     async def override_user():
-        u = User(id=9401, username="op-limits-admin", email=None, is_active=True)
-        setattr(u, "is_admin", True)
-        return u
+        return User(
+            id=9401,
+            username="op-limits-admin",
+            email=None,
+            role="user",
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=False,
+            is_active=True,
+        )
 
     base_dir = Path.cwd() / "Databases" / USER_DB_BASE_DIR_NAME
     base_dir.mkdir(parents=True, exist_ok=True)

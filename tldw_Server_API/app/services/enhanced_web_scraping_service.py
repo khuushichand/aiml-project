@@ -50,6 +50,18 @@ _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS = (
     ValueError,
     json.JSONDecodeError,
 )
+_PLATFORM_ADMIN_ROLES = frozenset({"admin"})
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _normalized_claim_values(values: Any) -> set[str]:
+    if not isinstance(values, (list, tuple, set)):
+        return set()
+    return {
+        str(value).strip().lower()
+        for value in values
+        if str(value).strip()
+    }
 
 
 class WebScrapingService:
@@ -791,11 +803,22 @@ class WebScrapingService:
         }
 
     def _is_admin_user(self, user: Any) -> bool:
-        return bool(
-            getattr(user, "is_admin", False)
-            or getattr(user, "is_superuser", False)
-            or str(getattr(user, "role", "") or "").lower() == "admin"
+        if user is None:
+            return False
+        role = str(
+            user.get("role", "") if isinstance(user, dict) else getattr(user, "role", "")
+        ).strip().lower()
+        if role in _PLATFORM_ADMIN_ROLES:
+            return True
+        roles = _normalized_claim_values(
+            user.get("roles", []) if isinstance(user, dict) else getattr(user, "roles", [])
         )
+        if roles & _PLATFORM_ADMIN_ROLES:
+            return True
+        permissions = _normalized_claim_values(
+            user.get("permissions", []) if isinstance(user, dict) else getattr(user, "permissions", [])
+        )
+        return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
     def _can_access_job(self, job: ScrapingJob, user: Any) -> bool:
         if self._is_admin_user(user):

@@ -64,7 +64,7 @@ Setup CSP (Content Security Policy)
 - `BYOK_LAST_USED_THROTTLE_SECONDS`: Throttle runtime updates to BYOK `last_used_at` (seconds, default `300`).
 - `BYOK_SECONDARY_ENCRYPTION_KEY`: Secondary BYOK encryption key for dual-read during rotations.
 - `SHOW_API_KEY_ON_STARTUP`: Avoid in production.
-- `RG_ENABLED=0` should be treated as emergency/debug-only for AuthNZ ingress paths; dependency shims (`check_rate_limit`, `check_auth_rate_limit`) are diagnostics-only and do not restore legacy fallback 429 enforcement.
+- `RG_ENABLED=0` should be treated as emergency/debug-only for AuthNZ ingress paths; dependency shims (`check_rate_limit`, `check_auth_rate_limit`) are diagnostics-only and do not restore fallback 429 enforcement.
 
 Egress & Outbound Policy (global + Workflows)
 - `EGRESS_ALLOWLIST`, `EGRESS_DENYLIST`: Global DNS allow/deny lists for outbound requests.
@@ -174,7 +174,7 @@ Queues
 
 ## Resource Governor (Unified Rate Limiting)
 
-The Resource Governor (RG) is the **primary enforcement path** for all rate limiting. Some legacy per-module limiters remain during cutover and will be removed once shadow-mode exit criteria are met. AuthNZ dependency shims (`check_rate_limit`, `check_auth_rate_limit`) are diagnostics-only and do not enforce legacy fallback limits.
+The Resource Governor (RG) is the **primary enforcement path** for all rate limiting. Some deprecated module-local compatibility knobs remain during cutover and will be removed once shadow-mode exit criteria are met. AuthNZ dependency shims (`check_rate_limit`, `check_auth_rate_limit`) are diagnostics-only and do not enforce fallback 429 behavior.
 
 - `RG_ENABLED`: Master toggle (`true|1|false|0`). Resolution: env var > `config.txt` `[ResourceGovernor] enabled` > default `false`.
 - `RG_BACKEND`: Backend type (`memory` | `redis`). Default `memory`. Redis requires `REDIS_URL`.

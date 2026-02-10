@@ -2074,7 +2074,17 @@ async def get_evaluation_history(
         if requested_user_id:
             allowed = _user_id_variants(stable_user_id)
             if requested_user_id not in allowed:
-                is_admin = bool(principal and (principal.is_admin or ("admin" in (principal.roles or []))))
+                roles = {
+                    str(role).strip().lower()
+                    for role in ((principal.roles if principal else []) or [])
+                    if str(role).strip()
+                }
+                permissions = {
+                    str(permission).strip().lower()
+                    for permission in ((principal.permissions if principal else []) or [])
+                    if str(permission).strip()
+                }
+                is_admin = bool("admin" in roles or ("*" in permissions) or ("system.configure" in permissions))
                 if not is_admin:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,

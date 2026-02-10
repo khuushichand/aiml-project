@@ -329,7 +329,7 @@ export const FilterBuilder: React.FC<FilterBuilderProps> = ({
               }
               className="w-36"
             />
-            <span className="text-zinc-400">to</span>
+            <span className="text-text-subtle">to</span>
             <Input
               type="date"
               placeholder={t("watchlists:filters.endDate", "End date")}
@@ -351,13 +351,13 @@ export const FilterBuilder: React.FC<FilterBuilderProps> = ({
 
   return (
     <div className="space-y-3">
-      <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900/30">
+      <div className="rounded-lg border border-border bg-surface p-3">
         <div className="mb-2 flex items-center justify-between gap-2">
-          <div className="text-xs font-medium text-zinc-500">
+          <div className="text-xs font-medium text-text-muted">
             {t("watchlists:filters.presets", "Presets")}
           </div>
           <div className="flex items-center gap-2">
-            <div className="text-xs text-zinc-500">
+            <div className="text-xs text-text-muted">
               {t("watchlists:filters.advancedMode", "Advanced JSON")}
             </div>
             <Switch
@@ -396,8 +396,8 @@ export const FilterBuilder: React.FC<FilterBuilderProps> = ({
       </div>
 
       {advancedMode && (
-        <div className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900/30">
-          <div className="text-xs font-medium text-zinc-500">
+        <div className="space-y-2 rounded-lg border border-border bg-surface p-3">
+          <div className="text-xs font-medium text-text-muted">
             {t("watchlists:filters.advancedHelp", "Edit filters as raw JSON")}
           </div>
           <Input.TextArea
@@ -410,7 +410,7 @@ export const FilterBuilder: React.FC<FilterBuilderProps> = ({
             className="font-mono text-xs"
           />
           {advancedError && (
-            <div className="text-xs text-red-600 dark:text-red-400">{advancedError}</div>
+            <div className="text-xs text-danger">{advancedError}</div>
           )}
           <div className="flex items-center justify-end gap-2">
             <Button
@@ -437,14 +437,14 @@ export const FilterBuilder: React.FC<FilterBuilderProps> = ({
       )}
 
       {value.length === 0 ? (
-        <div className="text-center py-4 text-zinc-500 border border-dashed border-zinc-300 dark:border-zinc-600 rounded-lg">
+        <div className="text-center py-4 text-text-muted border border-dashed border-border rounded-lg">
           {t("watchlists:filters.noFilters", "No filters configured. All items will be included.")}
         </div>
       ) : (
         value.map((filter, index) => (
           <div
             key={index}
-            className="flex items-start gap-3 p-3 border border-zinc-200 dark:border-zinc-700 rounded-lg bg-zinc-50 dark:bg-zinc-800/50"
+            className="flex items-start gap-3 p-3 border border-border rounded-lg bg-surface"
           >
             {/* Filter type */}
             <Select
@@ -533,7 +533,7 @@ export const FilterBuilder: React.FC<FilterBuilderProps> = ({
         {t("watchlists:filters.addFilter", "Add Filter")}
       </Button>
 
-      <div className="text-xs text-zinc-500">
+      <div className="text-xs text-text-muted">
         {t(
           "watchlists:filters.help",
           "Filters determine which items are included, excluded, or flagged during job runs. Include filters require at least one match."

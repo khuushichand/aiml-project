@@ -100,13 +100,11 @@ def _normalize_policy_role(role_name: str | None) -> str:
 
 def _principal_has_role(principal: AuthPrincipal, role_name: str) -> bool:
     target = _normalize_policy_role(role_name)
-    if target == "admin" and principal.is_admin:
-        return True
     return any(_normalize_policy_role(str(role)) == target for role in principal.roles or [])
 
 
 def _principal_role_for_policy(principal: AuthPrincipal) -> str:
-    if principal.is_admin or _principal_has_role(principal, "admin"):
+    if _principal_has_role(principal, "admin"):
         return "admin"
     for role in principal.roles or []:
         role_text = _normalize_policy_role(str(role))

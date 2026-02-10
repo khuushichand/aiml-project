@@ -71,7 +71,7 @@ export const AttachedFiles: React.FC<AttachedFilesProps> = ({
           {files.length > 0 && (
             <button
               onClick={onClear}
-              className="p-1 text-text-muted hover:text-red-500 transition-colors rounded hover:bg-surface3"
+              className="p-1 text-text-muted hover:text-danger transition-colors rounded hover:bg-surface3"
               aria-label={t("sidepanel:rag.clearFiles", "Clear all files")}
               title={t("sidepanel:rag.clearFiles", "Clear all files")}
             >
@@ -103,7 +103,7 @@ export const AttachedFiles: React.FC<AttachedFilesProps> = ({
                   </div>
                   <button
                     onClick={() => onRemove(file.id)}
-                    className="p-0.5 text-text-muted hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                    className="p-0.5 text-text-muted hover:text-danger transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
                     aria-label={t("sidepanel:rag.removeFile", "Remove file")}
                   >
                     <X className="h-3.5 w-3.5" />

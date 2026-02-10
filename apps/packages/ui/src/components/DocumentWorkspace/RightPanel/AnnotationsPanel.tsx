@@ -127,7 +127,7 @@ const AnnotationCard: React.FC<AnnotationCardProps> = ({
             okButtonProps={{ danger: true }}
           >
             <button className="rounded p-1 hover:bg-hover">
-              <Trash2 className="h-3.5 w-3.5 text-text-secondary hover:text-red-500" />
+              <Trash2 className="h-3.5 w-3.5 text-text-secondary hover:text-danger" />
             </button>
           </Popconfirm>
         </div>
@@ -429,7 +429,7 @@ export const AnnotationsPanel: React.FC = () => {
   if (error) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
-        <p className="text-sm text-red-500">
+        <p className="text-sm text-danger">
           {t("option:documentWorkspace.loadAnnotationsError", "Failed to load annotations")}
         </p>
       </div>

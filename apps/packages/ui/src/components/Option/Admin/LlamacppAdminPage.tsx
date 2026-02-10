@@ -275,7 +275,7 @@ export const LlamacppAdminPage: React.FC = () => {
                 </div>
 
                 {/* Basic Settings - Always Visible */}
-                <div className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+                <div className="rounded-lg border border-border p-4">
                   <Text strong className="mb-3 block">
                     {t("settings:admin.llamacppBasicSettings", "Basic Settings")}
                   </Text>

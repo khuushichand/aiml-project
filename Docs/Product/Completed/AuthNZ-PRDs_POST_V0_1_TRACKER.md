@@ -67,6 +67,7 @@ Quick commands:
   - `python Helper_Scripts/rg_stage9a_parity_window.py snapshot --out stage9a_before.prom`
   - `python Helper_Scripts/rg_stage9a_parity_window.py snapshot --out stage9a_after.prom`
   - `python Helper_Scripts/rg_stage9a_parity_window.py report --before stage9a_before.prom --after stage9a_after.prom`
+  - Release-window gate (multi-snapshot): `python Helper_Scripts/rg_stage9a_parity_window.py release-window-report --snapshots-glob "stage9a_window/*.prom" --out-md stage9a_release_window.md`
 
 ---
 

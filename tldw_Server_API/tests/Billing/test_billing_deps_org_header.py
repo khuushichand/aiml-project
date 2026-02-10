@@ -72,10 +72,25 @@ async def test_resolve_org_id_allows_header_for_admin(monkeypatch) -> None:
     monkeypatch.setattr(billing_deps, "get_db_pool", _fake_get_db_pool, raising=False)
     monkeypatch.setattr(billing_deps, "AuthnzOrgsTeamsRepo", _FakeRepoAdminHeader, raising=False)
 
-    principal = AuthPrincipal(kind="user", user_id=8, is_admin=True)
+    principal = AuthPrincipal(kind="user", user_id=8, is_admin=False, roles=["admin"], permissions=[])
     org_id = await billing_deps._resolve_org_id(principal, x_tldw_org_id=999)
 
     assert org_id == 999
+
+
+@pytest.mark.asyncio
+async def test_resolve_org_id_rejects_header_for_boolean_admin_without_claims(monkeypatch) -> None:
+    async def _fake_get_db_pool():
+        return object()
+
+    monkeypatch.setattr(billing_deps, "get_db_pool", _fake_get_db_pool, raising=False)
+    monkeypatch.setattr(billing_deps, "AuthnzOrgsTeamsRepo", _FakeRepoIgnoreHeader, raising=False)
+
+    principal = AuthPrincipal(kind="user", user_id=8, is_admin=True, roles=["user"], permissions=[])
+    with pytest.raises(HTTPException) as exc_info:
+        await billing_deps._resolve_org_id(principal, x_tldw_org_id=999)
+
+    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio

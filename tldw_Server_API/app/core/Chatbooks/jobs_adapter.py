@@ -22,7 +22,10 @@ def _env_bool(key: str, default: bool = False) -> bool:
 
 def _warn_legacy_flag(key: str) -> None:
     if _env_bool(key, False):
-        logger.warning("Chatbooks jobs legacy fallback flag {} is ignored; core Jobs is the only backend.", key)
+        logger.warning(
+            "Chatbooks jobs deprecated compatibility flag {} is ignored; core Jobs is the only backend.",
+            key,
+        )
 
 
 def _jobs_manager() -> JobManager:

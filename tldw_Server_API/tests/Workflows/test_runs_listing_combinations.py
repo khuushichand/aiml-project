@@ -20,7 +20,14 @@ def client_with_db(tmp_path, auth_headers):
     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_admin():
-        return User(id=1, username="admin", email="a@x", is_active=True, is_admin=True)
+        return User(
+            id=1,
+            username="admin",
+            email="a@x",
+            is_active=True,
+            is_admin=True,
+            roles=["admin"],
+        )
 
     def override_db():
 

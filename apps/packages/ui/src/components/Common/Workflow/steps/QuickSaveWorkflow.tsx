@@ -180,7 +180,7 @@ const CaptureStep: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <Spin size="large" />
-        <p className="mt-4 text-textMuted">
+        <p className="mt-4 text-text-muted">
           {t("workflows:quickSave.capturing", "Capturing content...")}
         </p>
       </div>
@@ -202,7 +202,7 @@ const CaptureStep: React.FC = () => {
           description={
             <div className="mt-2">
               <p className="font-medium">{capturedContent.title}</p>
-              <p className="text-xs text-textMuted flex items-center gap-1 mt-1">
+              <p className="text-xs text-text-muted flex items-center gap-1 mt-1">
                 <Globe className="h-3 w-3" />
                 {capturedContent.url}
               </p>
@@ -210,7 +210,7 @@ const CaptureStep: React.FC = () => {
           }
         />
         <div className="bg-surface rounded-lg p-3">
-          <p className="text-sm text-textMuted line-clamp-4">
+          <p className="text-sm text-text-muted line-clamp-4">
             {capturedContent.content.slice(0, 300)}
             {capturedContent.content.length > 300 && "..."}
           </p>
@@ -387,7 +387,7 @@ const ConfirmStep: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <Spin size="large" />
-        <p className="mt-4 text-textMuted">
+        <p className="mt-4 text-text-muted">
           {t("workflows:quickSave.saving", "Saving note...")}
         </p>
       </div>
@@ -404,7 +404,7 @@ const ConfirmStep: React.FC = () => {
           <h3 className="text-lg font-medium text-text">
             {t("workflows:quickSave.savedTitle", "Note Saved!")}
           </h3>
-          <p className="text-sm text-textMuted mt-2">
+          <p className="text-sm text-text-muted mt-2">
             {t(
               "workflows:quickSave.savedDescription",
               "Your content has been saved to your notes."
@@ -417,7 +417,7 @@ const ConfirmStep: React.FC = () => {
             <p className="font-medium text-text">
               {activeWorkflow?.data?.noteTitle as string}
             </p>
-            <p className="text-textMuted mt-1">
+            <p className="text-text-muted mt-1">
               {t("workflows:quickSave.folder", "Folder")}:{" "}
               {activeWorkflow?.data?.noteFolder as string}
             </p>

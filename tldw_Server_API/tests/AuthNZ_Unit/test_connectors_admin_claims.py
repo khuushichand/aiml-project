@@ -119,6 +119,11 @@ async def test_connectors_admin_policy_200_for_admin_with_perm(monkeypatch: pyte
     assert resp.json().get("org_id") == 1
 
 
+def test_connectors_policy_role_ignores_boolean_admin_without_claims():
+    principal = _make_principal(is_admin=True, roles=["user"], permissions=[])
+    assert connectors_mod._principal_role_for_policy(principal) == "member"
+
+
 @pytest.mark.asyncio
 async def test_connectors_single_user_org_policy_principal_only_paths(monkeypatch: pytest.MonkeyPatch):
     """

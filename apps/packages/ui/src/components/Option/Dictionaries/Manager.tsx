@@ -145,7 +145,7 @@ export const DictionariesManager: React.FC = () => {
           return (
             <Tooltip title={status.message || 'Valid'}>
               <button
-                className="min-w-[36px] min-h-[36px] flex items-center justify-center text-green-600 hover:bg-green-50 rounded-md transition-colors"
+                className="min-w-[36px] min-h-[36px] flex items-center justify-center text-success hover:bg-success/10 rounded-md transition-colors"
                 onClick={() => validateDictionary(record.id)}
                 aria-label={`Dictionary ${record.name} is valid. Click to re-validate.`}
               >
@@ -158,7 +158,7 @@ export const DictionariesManager: React.FC = () => {
           return (
             <Tooltip title={status.message || 'Has warnings'}>
               <button
-                className="min-w-[36px] min-h-[36px] flex items-center justify-center text-yellow-600 hover:bg-yellow-50 rounded-md transition-colors"
+                className="min-w-[36px] min-h-[36px] flex items-center justify-center text-warn hover:bg-warn/10 rounded-md transition-colors"
                 onClick={() => validateDictionary(record.id)}
                 aria-label={`Dictionary ${record.name} has warnings. Click to re-validate.`}
               >

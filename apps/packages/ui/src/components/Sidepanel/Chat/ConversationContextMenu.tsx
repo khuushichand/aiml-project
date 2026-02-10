@@ -72,25 +72,25 @@ export const ConversationContextMenu: React.FC<
   const statusItems: MenuProps["items"] = [
     {
       key: "status-in_progress",
-      icon: <Circle className="size-3 text-blue-500" />,
+      icon: <Circle className="size-3 text-primary" />,
       label: t("sidepanel:contextMenu.statusInProgress", "In Progress"),
       onClick: () => onSetStatus(tab.id, "in_progress")
     },
     {
       key: "status-resolved",
-      icon: <CheckCircle2 className="size-3 text-green-500" />,
+      icon: <CheckCircle2 className="size-3 text-success" />,
       label: t("sidepanel:contextMenu.statusResolved", "Resolved"),
       onClick: () => onSetStatus(tab.id, "resolved")
     },
     {
       key: "status-backlog",
-      icon: <Clock className="size-3 text-gray-500" />,
+      icon: <Clock className="size-3 text-text-muted" />,
       label: t("sidepanel:contextMenu.statusBacklog", "Backlog"),
       onClick: () => onSetStatus(tab.id, "backlog")
     },
     {
       key: "status-non_viable",
-      icon: <XCircle className="size-3 text-red-500" />,
+      icon: <XCircle className="size-3 text-danger" />,
       label: t("sidepanel:contextMenu.statusNonViable", "Non-viable"),
       onClick: () => onSetStatus(tab.id, "non_viable")
     },

@@ -974,7 +974,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                   }
                   showZero={false}
                   className="mr-1"
-                  style={{ backgroundColor: selectAllAcross ? "#1890ff" : "#52c41a" }}
+                  style={{ backgroundColor: selectAllAcross ? "rgb(var(--color-primary))" : "rgb(var(--color-success))" }}
                   title={selectAllAcross ? t("option:flashcards.allResults", { defaultValue: "All results" }) : t("option:flashcards.thisPage", { defaultValue: "This page" })}
                 />
                 <span className="text-text-muted flex items-center gap-1">
@@ -1111,7 +1111,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                       {/* Due status indicator */}
                       {item.due_at && dayjs(item.due_at).isBefore(dayjs()) && (
                         <Tooltip title={t("option:flashcards.dueNow", { defaultValue: "Due now" })}>
-                          <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+                          <span className="inline-block w-2 h-2 rounded-full bg-success" />
                         </Tooltip>
                       )}
                       <Text className="flex-1 truncate">{item.front}</Text>
@@ -1284,7 +1284,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               </span>
             }
             showZero={false}
-            style={{ backgroundColor: selectAllAcross ? "#1890ff" : "#52c41a" }}
+            style={{ backgroundColor: selectAllAcross ? "rgb(var(--color-primary))" : "rgb(var(--color-success))" }}
           />
           <span className="text-sm text-text-muted">
             {selectAllAcross

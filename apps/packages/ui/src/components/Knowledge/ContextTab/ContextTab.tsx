@@ -129,7 +129,7 @@ export const ContextTab: React.FC<ContextTabProps> = ({
                 <button
                   type="button"
                   onClick={onRemoveImage}
-                  className="p-1 text-text-muted hover:text-red-500 transition-colors rounded hover:bg-surface3"
+                  className="p-1 text-text-muted hover:text-danger transition-colors rounded hover:bg-surface3"
                   aria-label={t("common:remove", "Remove") as string}
                   title={t("common:remove", "Remove") as string}
                 >

@@ -201,9 +201,9 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
   const warningCount = issues.filter((i) => i.severity === "warning").length
 
   return (
-    <div className={`flex flex-col h-full bg-gray-100 dark:bg-gray-900 ${className}`}>
+    <div className={`flex flex-col h-full bg-bg ${className}`}>
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+      <div className="flex items-center gap-2 px-3 py-2 bg-surface border-b border-border">
         {/* Workflow name */}
         <div className="flex items-center gap-2 min-w-[200px]">
           {isEditing ? (
@@ -222,17 +222,17 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
                 setEditName(workflowName)
                 setIsEditing(true)
               }}
-              className="text-sm font-medium text-gray-800 dark:text-gray-200 hover:text-blue-500 truncate max-w-[180px]"
+              className="text-sm font-medium text-text hover:text-primary truncate max-w-[180px]"
             >
               {workflowName}
             </button>
           )}
           {isDirty && (
-            <span className="text-xs text-gray-400">*</span>
+            <span className="text-xs text-text-subtle">*</span>
           )}
         </div>
 
-        <div className="h-4 w-px bg-gray-200 dark:bg-gray-700" />
+        <div className="h-4 w-px bg-border" />
 
         {/* Undo/Redo */}
         <div className="flex items-center gap-1">
@@ -256,7 +256,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
           </Tooltip>
         </div>
 
-        <div className="h-4 w-px bg-gray-200 dark:bg-gray-700" />
+        <div className="h-4 w-px bg-border" />
 
         {/* View controls */}
         <div className="flex items-center gap-1">
@@ -306,7 +306,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
                 icon={
                   <AlertCircle
                     className={`w-4 h-4 ${
-                      errorCount > 0 ? "text-red-500" : "text-orange-500"
+                      errorCount > 0 ? "text-danger" : "text-warn"
                     }`}
                   />
                 }
@@ -345,9 +345,9 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <div className="w-72 flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
+        <div className="w-72 flex flex-col bg-surface border-r border-border">
           {/* Panel tabs */}
-          <div className="flex items-center p-2 border-b border-gray-200 dark:border-gray-700">
+          <div className="flex items-center p-2 border-b border-border">
             <Segmented
               size="small"
               value={sidebarPanel || "palette"}
@@ -376,7 +376,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
       </div>
 
       {/* Status bar */}
-      <div className="flex items-center justify-between px-3 py-1 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 text-xs text-gray-500">
+      <div className="flex items-center justify-between px-3 py-1 bg-surface border-t border-border text-xs text-text-subtle">
         <div className="flex items-center gap-3">
           <span>
             {useWorkflowEditorStore.getState().nodes.length} nodes
@@ -391,12 +391,12 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
               <span
                 className={`w-2 h-2 rounded-full ${
                   status === "running"
-                    ? "bg-blue-500 animate-pulse"
+                    ? "bg-primary animate-pulse"
                     : status === "completed"
-                    ? "bg-green-500"
+                    ? "bg-success"
                     : status === "failed"
-                    ? "bg-red-500"
-                    : "bg-yellow-500"
+                    ? "bg-danger"
+                    : "bg-warn"
                 }`}
               />
               {status}

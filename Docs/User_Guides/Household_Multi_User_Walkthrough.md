@@ -149,10 +149,9 @@ REQUIRE_REGISTRATION_CODE=true
 # --- BYOK (disable unless family members bring their own API keys) ---
 BYOK_ENABLED=false
 
-# --- Rate Limits (sensible household defaults) ---
-RATE_LIMIT_ENABLED=true
-RATE_LIMIT_PER_MINUTE=60
-RATE_LIMIT_BURST=10
+# --- Resource Governor Rate Limits ---
+RG_ENABLED=true
+# Tune requests.rpm / requests.burst in Config_Files/resource_governor_policies.yaml
 
 # --- Provider Keys (add the ones you use) ---
 OPENAI_API_KEY=
@@ -383,9 +382,8 @@ These defaults prevent any single user from overwhelming the server:
 
 ```bash
 # In .env
-RATE_LIMIT_ENABLED=true
-RATE_LIMIT_PER_MINUTE=60
-RATE_LIMIT_BURST=10
+RG_ENABLED=true
+# Tune requests.rpm / requests.burst in Config_Files/resource_governor_policies.yaml
 ```
 
 ### Disable BYOK
@@ -703,8 +701,8 @@ curl -s -X PATCH http://127.0.0.1:8000/api/v1/admin/users/<USER_ID> \
 | `ENABLE_REGISTRATION` | Allow new signups | `false` |
 | `REQUIRE_REGISTRATION_CODE` | Require code to register | `true` |
 | `BYOK_ENABLED` | Allow user-provided API keys | `false` |
-| `RATE_LIMIT_ENABLED` | Enable rate limiting | `true` |
-| `RATE_LIMIT_PER_MINUTE` | Requests per minute per user | `60` |
+| `RG_ENABLED` | Enable Resource Governor rate limiting | `true` |
+| `RG_POLICY_PATH` | Policy file containing requests.rpm / requests.burst limits | `tldw_Server_API/Config_Files/resource_governor_policies.yaml` |
 | `ALLOWED_ORIGINS` | CORS allowed origins | `https://tldw.yourdomain.com` |
 
 ---

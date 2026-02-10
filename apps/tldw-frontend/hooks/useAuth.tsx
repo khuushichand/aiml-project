@@ -1,6 +1,7 @@
 import { useState, useEffect, createContext, useContext, ReactNode } from 'react';
 import { useRouter } from 'next/router';
 import { authService, getAuthMode, User } from '@web/lib/auth';
+import { emitSplashAfterLoginSuccess } from '@/services/splash-events';
 
 interface AuthContextType {
   user: User | null;
@@ -59,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await authService.login({ username, password });
     const loggedInUser = authService.getUser();
     setUser(loggedInUser);
+    emitSplashAfterLoginSuccess();
     router.push('/');
   };
 

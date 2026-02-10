@@ -111,7 +111,7 @@ export const GenerationPanel: React.FC = () => {
     <div className="space-y-6">
       {/* Sources summary */}
       <div>
-        <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+        <h4 className="text-sm font-medium text-text mb-2">
           {t("dataTables:sourcesSelected", "Sources Selected")}
         </h4>
         <div className="flex flex-wrap gap-1">
@@ -125,7 +125,7 @@ export const GenerationPanel: React.FC = () => {
 
       {/* Table name */}
       <div>
-        <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+        <h4 className="text-sm font-medium text-text mb-2">
           {t("dataTables:tableName", "Table Name")}
         </h4>
         <Input
@@ -138,7 +138,7 @@ export const GenerationPanel: React.FC = () => {
 
       {/* Prompt input */}
       <div>
-        <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+        <h4 className="text-sm font-medium text-text mb-2">
           <span className="flex items-center gap-2">
             <Sparkles className="h-4 w-4" />
             {t("dataTables:promptLabel", "Describe the table you want to create")}
@@ -159,7 +159,7 @@ export const GenerationPanel: React.FC = () => {
 
       {/* Example prompts */}
       <div>
-        <h5 className="text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-2">
+        <h5 className="text-xs font-medium text-text-muted mb-2">
           {t("dataTables:examplePrompts", "Example prompts:")}
         </h5>
         <div className="flex flex-wrap gap-2">
@@ -168,7 +168,7 @@ export const GenerationPanel: React.FC = () => {
               type="button"
               key={index}
               onClick={() => useExamplePrompt(example)}
-              className="text-xs px-2 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors"
+              className="text-xs px-2 py-1 rounded-full bg-surface hover:bg-surface2 text-text-muted transition-colors"
             >
               {example.slice(0, 40)}...
             </button>
@@ -190,10 +190,10 @@ export const GenerationPanel: React.FC = () => {
           <div className="space-y-4">
             {/* Column hints */}
             <div>
-              <h5 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+              <h5 className="text-sm font-medium text-text mb-2">
                 {t("dataTables:columnHints", "Column Hints (Optional)")}
               </h5>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-2">
+              <p className="text-xs text-text-muted mb-2">
                 {t(
                   "dataTables:columnHintsDesc",
                   "Suggest column names and types to guide the LLM. If not specified, columns will be inferred from your prompt."
@@ -206,7 +206,7 @@ export const GenerationPanel: React.FC = () => {
                   {columnHints.map((hint, index) => (
                     <div
                       key={index}
-                      className="flex items-center gap-2 p-2 bg-zinc-50 dark:bg-zinc-800 rounded"
+                      className="flex items-center gap-2 p-2 bg-bg rounded"
                     >
                       <Input
                         value={hint.name || ""}
@@ -269,7 +269,7 @@ export const GenerationPanel: React.FC = () => {
 
             {/* Model selection */}
             <div>
-              <h5 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+              <h5 className="text-sm font-medium text-text mb-2">
                 {t("dataTables:modelSelection", "Model")}
               </h5>
               <Select
@@ -289,7 +289,7 @@ export const GenerationPanel: React.FC = () => {
 
             {/* Max rows */}
             <div>
-              <h5 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+              <h5 className="text-sm font-medium text-text mb-2">
                 {t("dataTables:maxRows", "Maximum Rows")}
               </h5>
               <InputNumber
@@ -299,7 +299,7 @@ export const GenerationPanel: React.FC = () => {
                 max={1000}
                 className="w-32"
               />
-              <span className="ml-2 text-xs text-zinc-500">
+              <span className="ml-2 text-xs text-text-muted">
                 {t("dataTables:maxRowsHint", "(1-1000)")}
               </span>
             </div>

@@ -9,7 +9,6 @@ def _base_env(tmp_path: Path):
     os.environ["AUTH_MODE"] = "multi_user"
     os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-rag-media-claims-12345678901234567890"
     os.environ["DATABASE_URL"] = f"sqlite:///{tmp_path / 'users.db'}"
-    os.environ["RATE_LIMIT_ENABLED"] = "false"
     os.environ["VIRTUAL_KEYS_ENABLED"] = "false"
     os.environ["LLM_BUDGET_ENFORCE"] = "false"
 

@@ -346,7 +346,7 @@ export const AudiobookStudioPage: React.FC = () => {
           })}
         </span>
         {completedCount > 0 && (
-          <span className="text-green-600">
+          <span className="text-success">
             {t("audiobook:stats.completed", "{{count}} completed", {
               count: completedCount
             })}

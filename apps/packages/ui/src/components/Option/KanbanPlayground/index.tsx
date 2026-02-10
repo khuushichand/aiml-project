@@ -124,7 +124,7 @@ export const KanbanPlayground = () => {
         <h1 className="text-xl font-semibold">Kanban Playground</h1>
       </div>
       <div className="flex items-center gap-2">
-        <div className="flex items-center gap-2 text-sm text-gray-500">
+        <div className="flex items-center gap-2 text-sm text-text-muted">
           <span>Boards</span>
           <Badge
             count={boards.length}

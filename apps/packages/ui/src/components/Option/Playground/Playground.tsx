@@ -500,7 +500,7 @@ export const Playground = () => {
               dropFeedback.type === "error"
                 ? "border border-danger bg-danger text-white"
                 : dropFeedback.type === "warning"
-                  ? "border border-yellow-500 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400"
+                  ? "border border-warn bg-warn/10 text-warn"
                   : "border border-border bg-elevated text-text"
             }`}
           >

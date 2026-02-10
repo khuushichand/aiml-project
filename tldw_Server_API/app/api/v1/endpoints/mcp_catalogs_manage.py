@@ -37,6 +37,7 @@ _CATALOG_NONCRITICAL_EXCEPTIONS = (
 )
 _CATALOG_MEMBER_PARSE_EXCEPTIONS = (AttributeError, TypeError, ValueError)
 _CATALOG_PAGE_SIZE = 1000
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
 def _is_manager(role: str | None) -> bool:
@@ -47,9 +48,19 @@ def _is_manager(role: str | None) -> bool:
 
 
 def _is_admin_principal(principal: AuthPrincipal) -> bool:
-    if principal.is_admin:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
         return True
-    return any(str(role).lower() == "admin" for role in principal.roles)
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 async def _require_org_manager(principal: AuthPrincipal, org_id: int) -> None:

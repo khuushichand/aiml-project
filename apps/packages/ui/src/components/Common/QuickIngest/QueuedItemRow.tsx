@@ -106,7 +106,7 @@ export const QueuedItemRow: React.FC<QueuedItemRowProps> = ({
             <div className="flex items-center gap-2 text-[11px] text-text-subtle">
               <Tag color="geekblue">{detectedType.toUpperCase()}</Tag>
               {status.reason ? (
-                <span className="text-orange-600">{status.reason}</span>
+                <span className="text-warn">{status.reason}</span>
               ) : (
                 <span>{qi("defaultsApplied", "Defaults will be applied.")}</span>
               )}

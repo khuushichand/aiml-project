@@ -123,7 +123,7 @@ function Markdown({
           },
           a({ ...props }) {
             return (
-              <a target="_blank" rel="noopener noreferrer" className="text-blue-500 text-sm hover:underline" {...props}>
+              <a target="_blank" rel="noopener noreferrer" className="text-primary text-sm hover:underline" {...props}>
                 {props.children}
               </a>
             )

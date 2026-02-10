@@ -99,6 +99,9 @@ from tldw_Server_API.app.api.v1.endpoints.media import (
     process_pdfs as process_pdfs_endpoint,  # noqa: E402
 )
 from tldw_Server_API.app.api.v1.endpoints.media import (
+    navigation as navigation_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import (
     process_videos as process_videos_endpoint,  # noqa: E402
 )
 from tldw_Server_API.app.api.v1.endpoints.media import (
@@ -136,6 +139,7 @@ for _router in (
     process_mediawiki_endpoint.router,
     reprocess_endpoint.router,
     transcription_models_endpoint.router,
+    navigation_endpoint.router,
     document_outline_endpoint.router,
     document_insights_endpoint.router,
     document_references_endpoint.router,

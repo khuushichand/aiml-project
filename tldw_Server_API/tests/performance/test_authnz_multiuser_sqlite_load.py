@@ -41,7 +41,6 @@ async def _build_app(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key-12345")
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("TESTING", "true")
-    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
 
     try:
         from tldw_Server_API.app.core.config import settings as core_settings

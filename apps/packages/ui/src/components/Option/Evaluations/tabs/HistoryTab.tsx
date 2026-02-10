@@ -136,7 +136,7 @@ export const HistoryTab: React.FC = () => {
                 <Card
                   key={item.id}
                   size="small"
-                  className="hover:border-blue-500/70"
+                  className="hover:border-primary/70"
                   bodyStyle={{ padding: "8px 12px" }}
                 >
                   <div className="flex items-center justify-between">

@@ -323,14 +323,14 @@ export const GenerationPanel: React.FC = () => {
               <Text>
                 {t("audiobook:generation.completed", "Completed:")}
               </Text>
-              <Text strong className="text-green-600">
+              <Text strong className="text-success">
                 {completedCount}/{chapters.length}
               </Text>
             </div>
             {errorCount > 0 && (
               <div className="flex items-center gap-2">
                 <Text>{t("audiobook:generation.errors", "Errors:")}</Text>
-                <Text strong className="text-red-500">
+                <Text strong className="text-danger">
                   {errorCount}
                 </Text>
               </div>

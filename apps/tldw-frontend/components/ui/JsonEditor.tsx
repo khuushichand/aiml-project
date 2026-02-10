@@ -2,7 +2,7 @@ import React, { useCallback, useState } from 'react';
 import dynamic from 'next/dynamic';
 import type { JsonSchema } from '@web/lib/schema';
 
-const Monaco = dynamic(() => import('@monaco-editor/react'), { ssr: false, loading: () => <div className="rounded border bg-gray-50 p-2 text-xs text-gray-500">Loading editor…</div> });
+const Monaco = dynamic(() => import('@monaco-editor/react'), { ssr: false, loading: () => <div className="rounded border bg-bg p-2 text-xs text-text-muted">Loading editor…</div> });
 
 export function JsonEditor({
   value,
@@ -48,7 +48,7 @@ export function JsonEditor({
   if (fallback) {
     return (
       <textarea
-        className="w-full rounded-md border-gray-300 bg-gray-50 font-mono text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+        className="w-full rounded-md border-border bg-bg font-mono text-sm shadow-sm focus:border-primary focus:ring-primary"
         style={{ height }}
         value={value}
         readOnly={readOnly}

@@ -1049,7 +1049,6 @@ async def isolated_test_environment(monkeypatch):
     monkeypatch.setenv("ENABLE_REGISTRATION", "true")
     monkeypatch.setenv("REQUIRE_REGISTRATION_CODE", "false")
     monkeypatch.setenv("EMAIL_VERIFICATION_REQUIRED", "false")
-    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     # Defer heavy startup (embeddings, TTS, request queue, etc.) to prevent local hangs
     monkeypatch.setenv("DEFER_HEAVY_STARTUP", "true")
     monkeypatch.setenv("TEST_MODE", "true")
@@ -1381,7 +1380,6 @@ async def setup_test_database(monkeypatch):
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("DATABASE_URL", f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}")
     monkeypatch.setenv("JWT_SECRET_KEY", os.environ.get("JWT_SECRET_KEY", "test-secret-key-for-testing-only"))
-    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     monkeypatch.setenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "1")
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import setup_database as _authnz_setup_db
@@ -1468,7 +1466,6 @@ async def test_db_pool(setup_test_database, clean_database):
         JWT_SECRET_KEY="test-secret-key-for-testing-only",
         ENABLE_REGISTRATION=True,
         REQUIRE_REGISTRATION_CODE=False,
-        RATE_LIMIT_ENABLED=False
     )
 
     pool = DatabasePool(test_settings)
@@ -1521,7 +1518,6 @@ def jwt_settings():
         REFRESH_TOKEN_EXPIRE_DAYS=7,
         SESSION_CLEANUP_INTERVAL_HOURS=24,
         SESSION_MAX_AGE_DAYS=30,
-        RATE_LIMIT_ENABLED=True,
         RATE_LIMIT_MAX_REQUESTS=100,
         RATE_LIMIT_WINDOW_SECONDS=60,
         PASSWORD_MIN_LENGTH=8,

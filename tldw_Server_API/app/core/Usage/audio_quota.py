@@ -215,7 +215,7 @@ async def _log_rg_audio_init_failure(exc: Exception) -> None:
             return
         _rg_audio_init_error_logged = True
         logger.opt(exception=exc).error(
-            "Audio ResourceGovernor init failed; using diagnostics-only legacy shim (no enforcement/counters). "
+            "Audio ResourceGovernor init failed; using diagnostics-only compatibility shim (no enforcement/counters). "
             "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
             "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
             "reload_interval={policy_reload_interval} cwd={cwd}",
@@ -232,7 +232,7 @@ async def _log_rg_audio_fallback(reason: str) -> None:
         _rg_audio_fallback_logged = True
         init_error = _rg_audio_init_error
         logger.error(
-            "Audio ResourceGovernor unavailable; using diagnostics-only legacy shim (no enforcement/counters). "
+            "Audio ResourceGovernor unavailable; using diagnostics-only compatibility shim (no enforcement/counters). "
             "reason={} init_error={} backend={backend} policy_path={policy_path} "
             "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
             "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",

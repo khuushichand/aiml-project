@@ -915,7 +915,7 @@ def _log_rg_evals_init_failure(exc: Exception) -> None:
     _rg_evals_init_error_logged = True
     ctx = _rg_evals_context()
     logger.exception(
-        "Evaluations ResourceGovernor init failed; using diagnostics-only legacy shim (no enforcement). "
+        "Evaluations ResourceGovernor init failed; using diagnostics-only compatibility shim (no enforcement). "
         "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
         "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
         "reload_interval={policy_reload_interval} cwd={cwd}",
@@ -930,7 +930,7 @@ def _log_rg_evals_fallback(reason: str) -> None:
     _rg_evals_fallback_logged = True
     ctx = _rg_evals_context()
     logger.error(
-        "Evaluations ResourceGovernor unavailable; using diagnostics-only legacy shim (no enforcement). "
+        "Evaluations ResourceGovernor unavailable; using diagnostics-only compatibility shim (no enforcement). "
         "reason={} init_error={} backend={backend} policy_path={policy_path} "
         "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
         "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",

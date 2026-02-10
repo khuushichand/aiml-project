@@ -434,7 +434,7 @@ export const RunsTab: React.FC = () => {
                       key={run.id}
                       className={`flex cursor-pointer items-center justify-between rounded border px-2 py-1 ${
                         selectedRunId === run.id
-                          ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
+                          ? "border-primary bg-primary/10"
                           : "border-border"
                       }`}
                       onClick={() => {

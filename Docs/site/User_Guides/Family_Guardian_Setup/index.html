@@ -7278,9 +7278,9 @@ curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:8000/api/
 - Virtual keys enforce <strong>provider/model allowlists</strong> and <strong>budgets</strong> for API-key traffic.
 - If you rely on the Web UI (JWT), use account permissions and global rate limits as your primary guardrails.</p>
 <h3 id="3-global-rate-limits-all-users">3) Global rate limits (all users)<a class="headerlink" href="#3-global-rate-limits-all-users" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="nv">RATE_LIMIT_ENABLED</span><span class="o">=</span><span class="nb">true</span>
-<span class="nv">RATE_LIMIT_PER_MINUTE</span><span class="o">=</span><span class="m">60</span>
-<span class="nv">RATE_LIMIT_BURST</span><span class="o">=</span><span class="m">10</span>
+<div class="highlight"><pre><span></span><code><span class="nv">RG_ENABLED</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">requests.rpm</span><span class="o">=</span><span class="m">60</span>
+<span class="nv">requests.burst</span><span class="o">=</span><span class="m">10</span>
 </code></pre></div>
 <h3 id="4-disable-byok-for-kids">4) Disable BYOK for kids<a class="headerlink" href="#4-disable-byok-for-kids" title="Permanent link">&para;</a></h3>
 <p>If you don’t want users to add their own provider keys:</p>

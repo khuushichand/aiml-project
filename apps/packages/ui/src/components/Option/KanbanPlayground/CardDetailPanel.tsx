@@ -243,7 +243,7 @@ export const CardDetailPanel = ({
           </div>
 
           {/* Metadata (read-only info) */}
-          <div className="pt-4 border-t text-xs text-gray-500 space-y-1">
+          <div className="pt-4 border-t text-xs text-text-muted space-y-1">
             <div>Created: {new Date(card.created_at).toLocaleString()}</div>
             <div>Updated: {new Date(card.updated_at).toLocaleString()}</div>
             <div>ID: {card.id}</div>

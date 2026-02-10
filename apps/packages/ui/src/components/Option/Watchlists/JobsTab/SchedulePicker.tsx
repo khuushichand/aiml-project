@@ -77,9 +77,9 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
     <div className="space-y-4">
       {/* Current schedule display */}
       {value && (
-        <div className="flex items-center justify-between p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+        <div className="flex items-center justify-between p-3 bg-primary/10 border border-primary/30 rounded-lg">
           <div className="flex items-center gap-2">
-            <Clock className="h-4 w-4 text-blue-500" />
+            <Clock className="h-4 w-4 text-primary" />
             <CronDisplay expression={value} showIcon={false} />
           </div>
           <Button size="small" onClick={handleClear}>
@@ -129,7 +129,7 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
           </Button>
         </div>
         {customCron && customCron !== value && (
-          <div className="mt-2 text-sm text-zinc-500">
+          <div className="mt-2 text-sm text-text-muted">
             <span className="font-medium">{t("watchlists:schedule.preview", "Preview")}:</span>{" "}
             <CronDisplay expression={customCron} showIcon={false} />
           </div>
@@ -154,7 +154,7 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
       )}
 
       {/* Help text */}
-      <div className="text-xs text-zinc-500">
+      <div className="text-xs text-text-muted">
         {t(
           "watchlists:schedule.help",
           "Cron format: minute hour day-of-month month day-of-week. Use * for any, */N for every N intervals."

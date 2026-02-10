@@ -21,7 +21,7 @@ def _principal(*, user_id: int | None, roles: list[str] | None = None, is_admin:
 
 
 @pytest.mark.asyncio
-async def test_require_org_manager_allows_admin_without_membership_lookup(
+async def test_require_org_manager_allows_admin_role_claim_without_membership_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def _fail_if_called(*args, **kwargs):  # pragma: no cover - should not run
@@ -30,9 +30,20 @@ async def test_require_org_manager_allows_admin_without_membership_lookup(
     monkeypatch.setattr(mcp_catalogs_manage, "list_org_members", _fail_if_called)
 
     await mcp_catalogs_manage._require_org_manager(
-        _principal(user_id=None, roles=["user"], is_admin=True),
+        _principal(user_id=None, roles=["admin"], is_admin=False),
         org_id=12,
     )
+
+
+@pytest.mark.asyncio
+async def test_require_org_manager_rejects_boolean_admin_without_claims() -> None:
+    with pytest.raises(HTTPException) as exc:
+        await mcp_catalogs_manage._require_org_manager(
+            _principal(user_id=None, roles=["user"], is_admin=True),
+            org_id=12,
+        )
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Org manager role required"
 
 
 @pytest.mark.asyncio

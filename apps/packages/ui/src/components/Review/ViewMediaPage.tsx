@@ -7,8 +7,10 @@ import { Storage } from '@plasmohq/storage'
 import { useStorage } from '@plasmohq/storage/hook'
 import { safeStorageSerde } from '@/utils/safe-storage'
 import { bgRequest } from '@/services/background-proxy'
+import { tldwClient } from '@/services/tldw/TldwApiClient'
 import { useServerOnline } from '@/hooks/useServerOnline'
 import { useServerCapabilities } from '@/hooks/useServerCapabilities'
+import { useConnectionState } from '@/hooks/useConnectionState'
 import { useDemoMode } from '@/context/demo-mode'
 import { useMessageOption } from '@/hooks/useMessageOption'
 import { useAntdMessage } from '@/hooks/useAntdMessage'
@@ -18,16 +20,47 @@ import { SearchBar } from '@/components/Media/SearchBar'
 import { FilterPanel } from '@/components/Media/FilterPanel'
 import { ResultsList } from '@/components/Media/ResultsList'
 import { ContentViewer } from '@/components/Media/ContentViewer'
+import { MediaSectionNavigator } from '@/components/Media/MediaSectionNavigator'
 import { Pagination } from '@/components/Media/Pagination'
 import { JumpToNavigator } from '@/components/Media/JumpToNavigator'
 import { KeyboardShortcutsOverlay } from '@/components/Media/KeyboardShortcutsOverlay'
 import { FilterChips } from '@/components/Media/FilterChips'
 import type { MediaResultItem } from '@/components/Media/types'
+import {
+  useMediaNavigation
+} from '@/hooks/useMediaNavigation'
+import {
+  useMediaAnalysisDisplayModeSelector,
+  useMediaNavigationGeneratedFallbackDefault,
+  useMediaNavigationPanel,
+  useMediaRichRendering
+} from '@/hooks/useFeatureFlags'
+import {
+  buildMediaNavigationScopeKey,
+  coerceMediaNavigationFormat,
+  type MediaNavigationFormat
+} from '@/utils/media-navigation-scope'
+import {
+  getMediaNavigationResumeEntry,
+  resolveMediaNavigationResumeSelection,
+  saveMediaNavigationResumeSelection
+} from '@/utils/media-navigation-resume'
+import {
+  hashMediaNavigationScopeKey,
+  type MediaNavigationFallbackKind,
+  trackMediaNavigationTelemetry
+} from '@/utils/media-navigation-telemetry'
+import { normalizeRequestedMediaRenderMode } from '@/utils/media-render-mode'
 import { setSetting } from '@/services/settings/registry'
 import {
   DISCUSS_MEDIA_PROMPT_SETTING,
   LAST_MEDIA_ID_SETTING
 } from '@/services/settings/ui-settings'
+
+const MEDIA_NAVIGATION_PANEL_VISIBLE_STORAGE_KEY =
+  'media:navigation:panelVisible'
+const MEDIA_NAVIGATION_GENERATED_FALLBACK_STORAGE_KEY =
+  'media:navigation:includeGeneratedFallback'
 
 const ViewMediaPage: React.FC = () => {
   const { t } = useTranslation(['review', 'common', 'settings'])
@@ -77,7 +110,7 @@ const ViewMediaPage: React.FC = () => {
       <FeatureEmptyState
         title={
           <span className="inline-flex items-center gap-2">
-            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-200">
+            <span className="rounded-full bg-warn/10 px-2 py-0.5 text-[11px] font-medium text-warn">
               {t('review:mediaEmpty.featureUnavailableBadge', {
                 defaultValue: 'Feature unavailable'
               })}
@@ -220,6 +253,13 @@ const MediaPageContent: React.FC = () => {
     setSelectedKnowledge,
     setRagMediaIds
   } = useMessageOption()
+  const { serverUrl } = useConnectionState()
+  const [mediaNavigationPanelEnabled] = useMediaNavigationPanel()
+  const [includeGeneratedFallbackDefault] =
+    useMediaNavigationGeneratedFallbackDefault()
+  const [mediaRichRenderingEnabled] = useMediaRichRendering()
+  const [mediaDisplayModeSelectorEnabled] =
+    useMediaAnalysisDisplayModeSelector()
 
   const [shortcutsOverlayOpen, setShortcutsOverlayOpen] = useState(false)
   const [query, setQuery] = useState<string>('')
@@ -243,17 +283,424 @@ const MediaPageContent: React.FC = () => {
   const [keywordOptions, setKeywordOptions] = useState<string[]>([])
   const [selectedContent, setSelectedContent] = useState<string>('')
   const [selectedDetail, setSelectedDetail] = useState<any>(null)
+  const [selectedNavigationNodeId, setSelectedNavigationNodeId] =
+    useState<string | null>(null)
+  const [navigationSelectionNonce, setNavigationSelectionNonce] = useState(0)
+  const [navigationScopeAuth, setNavigationScopeAuth] = useState<{
+    authMode: string | null
+    accessToken: string | null
+  }>({
+    authMode: null,
+    accessToken: null
+  })
+  const [navigationDisplayMode, setNavigationDisplayMode] =
+    useState<MediaNavigationFormat>('auto')
+  const [navigationDisplayModeLoaded, setNavigationDisplayModeLoaded] =
+    useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [contentHeight, setContentHeight] = useState<number>(0)
 
   // Favorites state - persisted to extension storage
   const [favorites, setFavorites] = useStorage<string[]>('media:favorites', [])
+  const [navigationPanelVisible, setNavigationPanelVisible] = useStorage<boolean>(
+    MEDIA_NAVIGATION_PANEL_VISIBLE_STORAGE_KEY,
+    true
+  )
+  const [includeGeneratedFallback, setIncludeGeneratedFallback] =
+    useStorage<boolean>(
+      MEDIA_NAVIGATION_GENERATED_FALLBACK_STORAGE_KEY,
+      includeGeneratedFallbackDefault
+    )
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
   const contentDivRef = React.useRef<HTMLDivElement | null>(null)
   const hasRunInitialSearch = React.useRef(false)
+  const pendingSectionSelectionTelemetryRef = React.useRef<{
+    nodeId: string
+    startedAt: number
+    source: 'user' | 'restore'
+  } | null>(null)
+  const lastTruncatedTelemetryKeyRef = React.useRef<string>('')
+  const lastFallbackTelemetryKeyRef = React.useRef<string>('')
+  const navigationScopeKey = useMemo(
+    () =>
+      buildMediaNavigationScopeKey({
+        serverUrl: serverUrl ?? undefined,
+        authMode: navigationScopeAuth.authMode,
+        accessToken: navigationScopeAuth.accessToken
+      }),
+    [navigationScopeAuth.accessToken, navigationScopeAuth.authMode, serverUrl]
+  )
+  const navigationScopeKeyHash = useMemo(
+    () => hashMediaNavigationScopeKey(navigationScopeKey),
+    [navigationScopeKey]
+  )
+  const navigationDisplayModeStorageKey = useMemo(
+    () => `tldw:media:navigation:displayMode:${navigationScopeKey}`,
+    [navigationScopeKey]
+  )
 
   // Favorites helpers
   const favoritesSet = useMemo(() => new Set(favorites || []), [favorites])
+  const selectedMediaIdForNavigation =
+    selected?.kind === 'media' && selected?.id != null ? selected.id : null
+  const navigationControlsEnabled =
+    mediaNavigationPanelEnabled && selectedMediaIdForNavigation != null
+  const navigationEnabled = navigationControlsEnabled
+  const navigationPanelVisibleValue = navigationPanelVisible !== false
+  const includeGeneratedFallbackValue = includeGeneratedFallback !== false
+
+  const {
+    data: navigationData,
+    isLoading: isNavigationLoading,
+    error: navigationError,
+    refetch: refetchNavigation
+  } = useMediaNavigation(selectedMediaIdForNavigation, {
+    enabled: navigationEnabled,
+    includeGeneratedFallback: includeGeneratedFallbackValue
+  })
+  const navigationNodes = navigationData?.nodes || []
+  const selectedNavigationNode = useMemo(
+    () =>
+      selectedNavigationNodeId
+        ? navigationNodes.find((node) => node.id === selectedNavigationNodeId) || null
+        : null,
+    [navigationNodes, selectedNavigationNodeId]
+  )
+  const showNavigationPanel =
+    navigationEnabled &&
+    navigationPanelVisibleValue &&
+    (isNavigationLoading || Boolean(navigationError) || navigationNodes.length > 0)
+
+  const effectiveContentFormat: MediaNavigationFormat | null = null
+  const selectedNavigationTarget = useMemo(() => {
+    if (!showNavigationPanel || !selectedNavigationNodeId) return null
+    if (!selectedNavigationNode) return null
+    return {
+      target_type: selectedNavigationNode.target_type,
+      target_start: selectedNavigationNode.target_start,
+      target_end: selectedNavigationNode.target_end,
+      target_href: selectedNavigationNode.target_href
+    }
+  }, [selectedNavigationNode, selectedNavigationNodeId, showNavigationPanel])
+  const navigationPageCountHint = useMemo(() => {
+    const toPositiveInt = (value: unknown): number | null => {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        const parsed = Math.trunc(value)
+        return parsed > 0 ? parsed : null
+      }
+      if (typeof value === 'string' && value.trim().length > 0) {
+        const parsed = Number.parseInt(value, 10)
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+      }
+      return null
+    }
+
+    const explicitCandidates = [
+      selectedDetail?.page_count,
+      selectedDetail?.pageCount,
+      selectedDetail?.num_pages,
+      selectedDetail?.numPages,
+      selectedDetail?.total_pages,
+      selectedDetail?.totalPages,
+      selectedDetail?.metadata?.page_count,
+      selectedDetail?.metadata?.num_pages,
+      selectedDetail?.metadata?.total_pages,
+      selected?.raw?.page_count,
+      selected?.raw?.num_pages,
+      selected?.raw?.total_pages
+    ]
+    for (const candidate of explicitCandidates) {
+      const parsed = toPositiveInt(candidate)
+      if (parsed != null) return parsed
+    }
+
+    let maxPage = 0
+    for (const node of navigationNodes) {
+      if (node.target_type !== 'page') continue
+      if (typeof node.target_start !== 'number' || !Number.isFinite(node.target_start)) {
+        continue
+      }
+      const parsed = Math.trunc(node.target_start)
+      if (parsed > maxPage) maxPage = parsed
+    }
+    return maxPage > 0 ? maxPage : null
+  }, [navigationNodes, selected?.raw, selectedDetail])
+
+  const effectiveContent = selectedContent
+  const effectiveDetailLoading = detailLoading
+  const navigationStatusLabel = useMemo(() => {
+    if (!navigationEnabled) return ''
+    if (isNavigationLoading) {
+      return t('review:mediaNavigation.loading', {
+        defaultValue: 'Loading sections...'
+      })
+    }
+    if (navigationError) {
+      return t('review:mediaNavigation.error', {
+        defaultValue: 'Section navigation unavailable'
+      })
+    }
+    if (navigationNodes.length === 0) {
+      return t('review:mediaNavigation.noStructure', {
+        defaultValue: 'No section structure'
+      })
+    }
+    const generatedNodeCount = navigationNodes.filter(
+      (node) => node.source === 'generated'
+    ).length
+    if (generatedNodeCount === navigationNodes.length) {
+      return t('review:mediaNavigation.generatedCount', {
+        defaultValue: 'Generated sections: {{count}}',
+        count: navigationNodes.length
+      })
+    }
+    return t('review:mediaNavigation.sectionCount', {
+      defaultValue: 'Sections: {{count}}',
+      count: navigationNodes.length
+    })
+  }, [isNavigationLoading, navigationEnabled, navigationError, navigationNodes, t])
+
+  const handleNavigationPanelVisibilityChange = useCallback(
+    (nextVisible: boolean) => {
+      void setNavigationPanelVisible(nextVisible)
+      if (!nextVisible) {
+        pendingSectionSelectionTelemetryRef.current = null
+      }
+      void trackMediaNavigationTelemetry({
+        type: 'media_navigation_rollout_control_changed',
+        scope_key_hash: navigationScopeKeyHash,
+        media_id: selectedMediaIdForNavigation,
+        control: 'panel_visible',
+        enabled: nextVisible
+      })
+    },
+    [navigationScopeKeyHash, selectedMediaIdForNavigation, setNavigationPanelVisible]
+  )
+
+  const handleGeneratedFallbackToggle = useCallback(
+    (nextEnabled: boolean) => {
+      void setIncludeGeneratedFallback(nextEnabled)
+      lastFallbackTelemetryKeyRef.current = ''
+      setSelectedNavigationNodeId(null)
+      pendingSectionSelectionTelemetryRef.current = null
+      void trackMediaNavigationTelemetry({
+        type: 'media_navigation_rollout_control_changed',
+        scope_key_hash: navigationScopeKeyHash,
+        media_id: selectedMediaIdForNavigation,
+        control: 'include_generated_fallback',
+        enabled: nextEnabled
+      })
+    },
+    [
+      navigationScopeKeyHash,
+      selectedMediaIdForNavigation,
+      setIncludeGeneratedFallback
+    ]
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const cfg = await tldwClient.getConfig().catch(() => null)
+      if (cancelled) return
+      setNavigationScopeAuth({
+        authMode: cfg?.authMode || null,
+        accessToken: cfg?.accessToken || null
+      })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [serverUrl])
+
+  useEffect(() => {
+    let cancelled = false
+    setNavigationDisplayModeLoaded(false)
+    ;(async () => {
+      try {
+        const storage = new Storage({ area: 'local', serde: safeStorageSerde } as any)
+        const persisted = await storage.get(navigationDisplayModeStorageKey)
+        if (cancelled) return
+        const parsed = coerceMediaNavigationFormat(persisted, 'auto')
+        setNavigationDisplayMode(
+          normalizeRequestedMediaRenderMode(parsed, mediaRichRenderingEnabled)
+        )
+      } catch {
+        if (!cancelled) {
+          setNavigationDisplayMode('auto')
+        }
+      } finally {
+        if (!cancelled) {
+          setNavigationDisplayModeLoaded(true)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [mediaRichRenderingEnabled, navigationDisplayModeStorageKey])
+
+  useEffect(() => {
+    if (!mediaRichRenderingEnabled && navigationDisplayMode === 'html') {
+      setNavigationDisplayMode('auto')
+    }
+  }, [mediaRichRenderingEnabled, navigationDisplayMode])
+
+  useEffect(() => {
+    if (!navigationDisplayModeLoaded) return
+    const persistedMode = normalizeRequestedMediaRenderMode(
+      navigationDisplayMode,
+      mediaRichRenderingEnabled
+    )
+    const storage = new Storage({ area: 'local', serde: safeStorageSerde } as any)
+    void storage.set(navigationDisplayModeStorageKey, persistedMode).catch(() => {})
+  }, [
+    mediaRichRenderingEnabled,
+    navigationDisplayMode,
+    navigationDisplayModeLoaded,
+    navigationDisplayModeStorageKey
+  ])
+
+  const persistNavigationSelection = useCallback(
+    async (node: {
+      id: string
+      path_label: string | null
+      title: string
+      level: number
+    }) => {
+      if (selectedMediaIdForNavigation == null) return
+      const evictionStats = await saveMediaNavigationResumeSelection({
+        scopeKey: navigationScopeKey,
+        mediaId: selectedMediaIdForNavigation,
+        node,
+        navigationVersion: navigationData?.navigation_version
+      }).catch(() => null)
+      if (!evictionStats) return
+
+      if (evictionStats.evicted_lru_count > 0) {
+        void trackMediaNavigationTelemetry({
+          type: 'media_navigation_resume_state_evicted',
+          scope_key_hash: navigationScopeKeyHash,
+          evicted_entry_count: evictionStats.evicted_lru_count,
+          reason: 'lru'
+        })
+      }
+      if (evictionStats.evicted_stale_count > 0) {
+        void trackMediaNavigationTelemetry({
+          type: 'media_navigation_resume_state_evicted',
+          scope_key_hash: navigationScopeKeyHash,
+          evicted_entry_count: evictionStats.evicted_stale_count,
+          reason: 'stale'
+        })
+      }
+    },
+    [
+      navigationData?.navigation_version,
+      navigationScopeKey,
+      navigationScopeKeyHash,
+      selectedMediaIdForNavigation
+    ]
+  )
+
+  useEffect(() => {
+    if (!navigationData?.stats?.truncated) return
+    if (selectedMediaIdForNavigation == null) return
+    const telemetryKey = [
+      selectedMediaIdForNavigation,
+      navigationData.navigation_version || 'unknown',
+      navigationData.stats.returned_node_count,
+      navigationData.stats.node_count
+    ].join(':')
+    if (lastTruncatedTelemetryKeyRef.current === telemetryKey) return
+    lastTruncatedTelemetryKeyRef.current = telemetryKey
+
+    void trackMediaNavigationTelemetry({
+      type: 'media_navigation_payload_truncated',
+      scope_key_hash: navigationScopeKeyHash,
+      media_id: selectedMediaIdForNavigation,
+      requested_max_nodes: null,
+      returned_node_count: navigationData.stats.returned_node_count,
+      node_count: navigationData.stats.node_count
+    })
+  }, [navigationData, navigationScopeKeyHash, selectedMediaIdForNavigation])
+
+  useEffect(() => {
+    if (!navigationEnabled || selectedMediaIdForNavigation == null) return
+    if (isNavigationLoading || navigationError || !navigationData) return
+
+    let fallbackKind: MediaNavigationFallbackKind | null = null
+    let source: string | null = null
+
+    if (!navigationData.available || navigationNodes.length === 0) {
+      fallbackKind = 'no_structure'
+    } else {
+      const hasGeneratedNodes = navigationNodes.some(
+        (node) => node.source === 'generated'
+      )
+      if (hasGeneratedNodes) {
+        fallbackKind = 'generated'
+        source = 'generated'
+      }
+    }
+
+    if (!fallbackKind) return
+
+    const telemetryKey = [
+      selectedMediaIdForNavigation,
+      navigationData.navigation_version || 'unknown',
+      fallbackKind,
+      source || 'none',
+      navigationNodes.length
+    ].join(':')
+    if (lastFallbackTelemetryKeyRef.current === telemetryKey) return
+    lastFallbackTelemetryKeyRef.current = telemetryKey
+
+    void trackMediaNavigationTelemetry({
+      type: 'media_navigation_fallback_used',
+      scope_key_hash: navigationScopeKeyHash,
+      media_id: selectedMediaIdForNavigation,
+      fallback_kind: fallbackKind,
+      source
+    })
+  }, [
+    isNavigationLoading,
+    navigationData,
+    navigationEnabled,
+    navigationError,
+    navigationNodes,
+    navigationScopeKeyHash,
+    selectedMediaIdForNavigation
+  ])
+
+  useEffect(() => {
+    const pendingSelection = pendingSectionSelectionTelemetryRef.current
+    if (!pendingSelection) return
+    if (!showNavigationPanel || !selectedNavigationNodeId) return
+    if (selectedMediaIdForNavigation == null) return
+    if (pendingSelection.nodeId !== selectedNavigationNodeId) return
+
+    const selectedNode = navigationNodes.find(
+      (node) => node.id === selectedNavigationNodeId
+    )
+    if (!selectedNode) return
+
+    pendingSectionSelectionTelemetryRef.current = null
+    const latencyMs = Math.max(0, Date.now() - pendingSelection.startedAt)
+
+    void trackMediaNavigationTelemetry({
+      type: 'media_navigation_section_selected',
+      media_id: selectedMediaIdForNavigation,
+      node_id: selectedNode.id,
+      depth: selectedNode.level || 0,
+      latency_ms: latencyMs,
+      source: pendingSelection.source
+    })
+  }, [
+    navigationNodes,
+    selectedMediaIdForNavigation,
+    selectedNavigationNodeId,
+    showNavigationPanel
+  ])
 
   const toggleFavorite = useCallback((id: string) => {
     const idStr = String(id)
@@ -328,7 +775,7 @@ const MediaPageContent: React.FC = () => {
       if (observer) observer.disconnect()
     }
     // Note: contentDivRef excluded as refs are stable
-  }, [selectedContent, selected])
+  }, [effectiveContent, selected])
 
   const contentRef = useCallback((node: HTMLDivElement | null) => {
     contentDivRef.current = node
@@ -356,6 +803,81 @@ const MediaPageContent: React.FC = () => {
       rafId = requestAnimationFrame(measure)
     }
   }, [])
+
+  useEffect(() => {
+    setSelectedNavigationNodeId(null)
+    setNavigationSelectionNonce(0)
+    pendingSectionSelectionTelemetryRef.current = null
+  }, [selected?.id, selected?.kind])
+
+  useEffect(() => {
+    if (!showNavigationPanel) return
+    if (navigationNodes.length === 0) {
+      setSelectedNavigationNodeId(null)
+      pendingSectionSelectionTelemetryRef.current = null
+      return
+    }
+    const hasCurrentSelection =
+      !!selectedNavigationNodeId &&
+      navigationNodes.some((node) => node.id === selectedNavigationNodeId)
+    if (hasCurrentSelection || selectedMediaIdForNavigation == null) return
+
+    let cancelled = false
+    ;(async () => {
+      const resumeEntry = await getMediaNavigationResumeEntry({
+        scopeKey: navigationScopeKey,
+        mediaId: selectedMediaIdForNavigation
+      }).catch(() => null)
+      if (cancelled) return
+
+      const resolvedSelection = resolveMediaNavigationResumeSelection({
+        nodes: navigationNodes,
+        navigationVersion: navigationData?.navigation_version,
+        resumeEntry
+      })
+
+      const nextNodeId = resolvedSelection?.nodeId || navigationNodes[0]?.id || null
+      if (!nextNodeId) {
+        setSelectedNavigationNodeId(null)
+        return
+      }
+
+      const nextNode =
+        navigationNodes.find((node) => node.id === nextNodeId) || navigationNodes[0]
+      if (!nextNode) return
+
+      setSelectedNavigationNodeId(nextNode.id)
+      setNavigationSelectionNonce((prev) => prev + 1)
+      void persistNavigationSelection(nextNode)
+
+      if (resumeEntry && resolvedSelection) {
+        pendingSectionSelectionTelemetryRef.current = {
+          nodeId: nextNode.id,
+          startedAt: Date.now(),
+          source: 'restore'
+        }
+        void trackMediaNavigationTelemetry({
+          type: 'media_navigation_resume_state_restored',
+          scope_key_hash: navigationScopeKeyHash,
+          media_id: selectedMediaIdForNavigation,
+          outcome: resolvedSelection.outcome
+        })
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    navigationData?.navigation_version,
+    navigationNodes,
+    navigationScopeKey,
+    navigationScopeKeyHash,
+    persistNavigationSelection,
+    selectedMediaIdForNavigation,
+    selectedNavigationNodeId,
+    showNavigationPanel
+  ])
 
   const runSearch = useCallback(async (): Promise<MediaResultItem[]> => {
     const results: MediaResultItem[] = []
@@ -893,11 +1415,20 @@ const MediaPageContent: React.FC = () => {
       const content = contentFromDetail(detail)
       setSelectedContent(String(content || ''))
       setSelectedDetail(detail)
+      if (showNavigationPanel) {
+        void refetchNavigation()
+      }
     } catch {
       setSelectedContent('')
       setSelectedDetail(null)
     }
-  }, [selected, fetchSelectedDetails, contentFromDetail])
+  }, [
+    contentFromDetail,
+    fetchSelectedDetails,
+    refetchNavigation,
+    selected,
+    showNavigationPanel
+  ])
 
   const handleSearch = () => {
     setPage(1)
@@ -1177,7 +1708,7 @@ const MediaPageContent: React.FC = () => {
     if (!selected) return
 
     const title = selected.title || String(selected.id)
-    const content = selectedContent || ''
+    const content = effectiveContent || ''
 
     try {
       const payload = {
@@ -1209,7 +1740,16 @@ const MediaPageContent: React.FC = () => {
         'Prepared chat with this media in the composer.'
       )
     )
-  }, [selected, selectedContent, setChatMode, setSelectedKnowledge, setRagMediaIds, navigate, message, t])
+  }, [
+    effectiveContent,
+    message,
+    navigate,
+    selected,
+    setChatMode,
+    setRagMediaIds,
+    setSelectedKnowledge,
+    t
+  ])
 
   const handleChatAboutMedia = useCallback(() => {
     if (!selected) return
@@ -1540,35 +2080,119 @@ const MediaPageContent: React.FC = () => {
       </button>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col">
-        <ContentViewer
-          selectedMedia={selected}
-          content={selectedContent}
-          mediaDetail={selectedDetail}
-          isDetailLoading={detailLoading}
-          onPrevious={handlePrevious}
-          onNext={handleNext}
-          hasPrevious={hasPrevious}
-          hasNext={hasNext}
-          currentIndex={selectedIndex >= 0 ? selectedIndex : 0}
-          totalResults={displayResults.length}
-          onChatWithMedia={handleChatWithMedia}
-          onChatAboutMedia={handleChatAboutMedia}
-          onRefreshMedia={handleRefreshMedia}
-          onKeywordsUpdated={(mediaId, keywords) => {
-            // Update the selected item with new keywords
-            if (selected && selected.id === mediaId) {
-              setSelected({ ...selected, keywords })
-            }
-            // Refresh the list to show updated keywords
-            refetch()
-          }}
-          onDeleteItem={handleDeleteItem}
-          onCreateNoteWithContent={handleCreateNoteWithContent}
-          onOpenInMultiReview={handleOpenInMultiReview}
-          onSendAnalysisToChat={handleSendAnalysisToChat}
-          contentRef={contentRef}
-        />
+      <div className="flex-1 flex min-h-0 flex-col">
+        {navigationEnabled ? (
+          <div className="border-b border-border bg-surface px-3 py-2">
+            <div className="flex flex-wrap items-center gap-3 text-xs text-text-muted">
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={navigationPanelVisibleValue}
+                  onChange={(event) =>
+                    handleNavigationPanelVisibilityChange(event.target.checked)
+                  }
+                  className="h-3.5 w-3.5 rounded border-border bg-surface"
+                />
+                <span>
+                  {t('review:mediaNavigation.showPanel', {
+                    defaultValue: 'Show chapters/sections panel'
+                  })}
+                </span>
+              </label>
+
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeGeneratedFallbackValue}
+                  onChange={(event) =>
+                    handleGeneratedFallbackToggle(event.target.checked)
+                  }
+                  className="h-3.5 w-3.5 rounded border-border bg-surface"
+                />
+                <span>
+                  {t('review:mediaNavigation.generatedFallback', {
+                    defaultValue: 'Allow generated fallback structure'
+                  })}
+                </span>
+              </label>
+
+              <span className="ml-auto rounded bg-surface2 px-2 py-0.5 text-[11px] text-text-subtle">
+                {navigationStatusLabel}
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex-1 flex min-h-0 flex-col md:flex-row">
+          {showNavigationPanel ? (
+            <MediaSectionNavigator
+              nodes={navigationNodes}
+              selectedNodeId={selectedNavigationNodeId}
+              loading={isNavigationLoading}
+              error={navigationError}
+              onRetry={() => {
+                void refetchNavigation()
+              }}
+              onSelectNode={(node) => {
+                setSelectedNavigationNodeId(node.id)
+                setNavigationSelectionNonce((prev) => prev + 1)
+                pendingSectionSelectionTelemetryRef.current = {
+                  nodeId: node.id,
+                  startedAt: Date.now(),
+                  source: 'user'
+                }
+                void persistNavigationSelection(node)
+              }}
+            />
+          ) : null}
+
+          <div className="flex-1 flex flex-col min-h-0">
+            <ContentViewer
+              selectedMedia={selected}
+              content={effectiveContent}
+              mediaDetail={selectedDetail}
+              contentDisplayMode={normalizeRequestedMediaRenderMode(
+                navigationDisplayMode,
+                mediaRichRenderingEnabled
+              )}
+              resolvedContentFormat={effectiveContentFormat}
+              showContentDisplayModeSelector={mediaDisplayModeSelectorEnabled}
+              allowRichRendering={mediaRichRenderingEnabled}
+              onContentDisplayModeChange={(mode) => {
+                setNavigationDisplayMode(
+                  normalizeRequestedMediaRenderMode(mode, mediaRichRenderingEnabled)
+                )
+              }}
+              isDetailLoading={effectiveDetailLoading}
+              onPrevious={handlePrevious}
+              onNext={handleNext}
+              hasPrevious={hasPrevious}
+              hasNext={hasNext}
+              currentIndex={selectedIndex >= 0 ? selectedIndex : 0}
+              totalResults={displayResults.length}
+              onChatWithMedia={handleChatWithMedia}
+              onChatAboutMedia={handleChatAboutMedia}
+              onRefreshMedia={handleRefreshMedia}
+              onKeywordsUpdated={(mediaId, keywords) => {
+                // Update the selected item with new keywords
+                if (selected && selected.id === mediaId) {
+                  setSelected({ ...selected, keywords })
+                }
+                // Refresh the list to show updated keywords
+                refetch()
+              }}
+              onDeleteItem={handleDeleteItem}
+              onCreateNoteWithContent={handleCreateNoteWithContent}
+              onOpenInMultiReview={handleOpenInMultiReview}
+              onSendAnalysisToChat={handleSendAnalysisToChat}
+              contentRef={contentRef}
+              navigationTarget={selectedNavigationTarget}
+              navigationNodeTitle={selectedNavigationNode?.title || null}
+              navigationPageCountHint={navigationPageCountHint}
+              navigationSelectionNonce={navigationSelectionNonce}
+            />
+          </div>
+        </div>
       </div>
 
       {/* Keyboard Shortcuts Overlay */}

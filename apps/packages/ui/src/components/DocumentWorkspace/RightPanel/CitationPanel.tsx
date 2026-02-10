@@ -72,7 +72,7 @@ export const CitationPanel: React.FC = () => {
   if (error) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
-        <p className="text-sm text-red-500">
+        <p className="text-sm text-danger">
           {t("option:documentWorkspace.loadMetadataError", "Failed to load document metadata")}
         </p>
       </div>
@@ -128,7 +128,7 @@ export const CitationPanel: React.FC = () => {
                   type="text"
                   icon={
                     copied ? (
-                      <Check className="h-3.5 w-3.5 text-green-500" />
+                      <Check className="h-3.5 w-3.5 text-success" />
                     ) : (
                       <Copy className="h-3.5 w-3.5" />
                     )

@@ -194,7 +194,7 @@ const QuickChatPopout: React.FC = () => {
         />
         {showModelsError && (
           <div
-            className="mt-2 flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400"
+            className="mt-2 flex items-center gap-2 text-xs text-warn"
             id={modelsErrorHintId}>
             <AlertCircle className="h-4 w-4" />
             <span>
@@ -217,7 +217,7 @@ const QuickChatPopout: React.FC = () => {
           <div className="flex flex-col items-center justify-center h-full text-gray-500 dark:text-gray-400 text-center px-4">
             <p className="text-sm">{emptyState}</p>
             {!hasModel && (
-              <div className="mt-3 flex items-center gap-2 text-amber-600 dark:text-amber-400 text-xs">
+              <div className="mt-3 flex items-center gap-2 text-warn text-xs">
                 <AlertCircle className="h-4 w-4" />
                 <span>
                   {t(

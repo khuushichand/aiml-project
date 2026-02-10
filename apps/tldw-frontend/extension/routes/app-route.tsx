@@ -1,7 +1,7 @@
 import React from "react"
 import type { ErrorInfo, ReactNode } from "react"
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom"
-import { useDarkMode } from "~/hooks/useDarkmode"
+import { useTheme } from "~/hooks/useTheme"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { useAutoButtonTitles } from "@/hooks/useAutoButtonTitles"
 import { ensureI18nNamespaces } from "@/i18n"
@@ -197,7 +197,7 @@ class SidepanelErrorBoundary extends React.Component<
 }
 
 export const RouteShell = ({ kind }: { kind: RouteKind }) => {
-  const { mode } = useDarkMode()
+  const { mode } = useTheme()
   const navigate = useNavigate()
   const { capabilities, loading: capabilitiesLoading } = useServerCapabilities()
   useAutoButtonTitles()

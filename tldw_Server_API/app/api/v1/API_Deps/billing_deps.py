@@ -28,6 +28,23 @@ from tldw_Server_API.app.core.Resource_Governance import cost_units
 BILLING_WARNING_HEADER = "X-Billing-Warning"
 BILLING_LIMIT_HEADER = "X-Billing-Limit"
 BILLING_USAGE_HEADER = "X-Billing-Usage"
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _principal_has_admin_claims(principal: AuthPrincipal) -> bool:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 async def _resolve_org_id(
@@ -48,7 +65,7 @@ async def _resolve_org_id(
         pool = await get_db_pool()
         repo = AuthnzOrgsTeamsRepo(db_pool=pool)
         if org_id is not None:
-            if principal.is_admin:
+            if _principal_has_admin_claims(principal):
                 return org_id
             membership = await repo.get_org_member(org_id, principal.user_id)
             if not membership:
@@ -59,7 +76,7 @@ async def _resolve_org_id(
             return org_id
 
         if x_tldw_org_id is not None:
-            if principal.is_admin:
+            if _principal_has_admin_claims(principal):
                 return x_tldw_org_id
             membership = await repo.get_org_member(x_tldw_org_id, principal.user_id)
             if membership:

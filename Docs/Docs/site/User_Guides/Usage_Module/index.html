@@ -7193,7 +7193,7 @@ LLM_USAGE_LOG_RETENTION_DAYS=180
 <li>Leave <code>USAGE_LOG_ENABLED=true</code> in dev/staging to get insights; tune exclusions as needed.</li>
 <li>In production, set sensible retention to keep DB size in check.</li>
 <li>Keep pricing overrides current for accurate cost tracking.</li>
-<li>Ensure admin endpoints are restricted (they are under <code>require_admin</code>).</li>
+<li>Ensure admin endpoints are restricted (they use claim-first admin dependencies such as <code>require_roles("admin")</code> / <code>require_permissions(...)</code>).</li>
 </ul>
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
 <ul>

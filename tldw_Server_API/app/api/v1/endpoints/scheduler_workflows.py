@@ -101,10 +101,13 @@ def _normalize_claim_values(raw: Any) -> list[str]:
 
 
 def _is_scheduler_admin_user(current_user: User) -> bool:
-    """Resolve scheduler admin authorization from explicit claims."""
+    """
+    Resolve scheduler admin authorization from explicit role/permission claims.
+
+    Legacy profile booleans/columns like ``is_admin`` are intentionally not
+    trusted for cross-user scheduler authorization paths.
+    """
     try:
-        if bool(getattr(current_user, "is_admin", False)):
-            return True
         if "admin" in _normalize_claim_values(getattr(current_user, "roles", [])):
             return True
         permission_values = _normalize_claim_values(getattr(current_user, "permissions", []))

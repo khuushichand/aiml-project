@@ -9,6 +9,8 @@ import {
   normalizeMediaChatHandoffPayload,
   type MediaChatHandoffPayload
 } from "@/services/tldw/media-chat-handoff"
+import type { ThemeDefinition } from "@/themes/types"
+import { validateThemeDefinition } from "@/themes/validation"
 
 const THEME_VALUES = ["system", "dark", "light"] as const
 export type ThemeValue = (typeof THEME_VALUES)[number]
@@ -38,6 +40,33 @@ export const THEME_SETTING = defineSetting(
     mirrorToLocalStorage: true,
     localStorageSerialize: (value) =>
       value === "system" ? resolveSystemTheme() : value
+  }
+)
+
+export const THEME_PRESET_SETTING = defineSetting(
+  "tldw:themePreset",
+  "default",
+  (value) => coerceString(value, "default"),
+  {
+    area: "local",
+    localStorageKey: "tldw:themePreset",
+    mirrorToLocalStorage: true
+  }
+)
+
+const coerceThemeArray = (value: unknown): ThemeDefinition[] => {
+  if (!Array.isArray(value)) return []
+  return value.filter(validateThemeDefinition)
+}
+
+export const CUSTOM_THEMES_SETTING = defineSetting<ThemeDefinition[]>(
+  "tldw:customThemes",
+  [],
+  coerceThemeArray,
+  {
+    area: "local",
+    localStorageKey: "tldw:customThemes",
+    mirrorToLocalStorage: true
   }
 )
 

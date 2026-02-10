@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from "react"
-import { App as AntdApp, ConfigProvider, Empty, theme } from "antd"
+import { App as AntdApp, ConfigProvider, Empty } from "antd"
 import { StyleProvider } from "@ant-design/cssinjs"
 import { QueryClientProvider } from "@tanstack/react-query"
-import { useDarkMode } from "~/hooks/useDarkmode"
+import { useTheme } from "@/hooks/useTheme"
 import { PageAssistProvider } from "@/components/Common/PageAssistProvider"
 import { LocaleJsonDiagnostics } from "@/components/Common/LocaleJsonDiagnostics"
 import { FontSizeProvider } from "@/context/FontSizeProvider"
@@ -31,7 +31,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   suspendWhenHidden = false,
   includeAntdApp = true
 }) => {
-  const { mode } = useDarkMode()
+  const { antdTheme } = useTheme()
   const portalRootRef = useRef<HTMLDivElement | null>(null)
   const getPopupContainer = React.useCallback(() => {
     if (typeof document === "undefined") return undefined
@@ -72,13 +72,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   return (
     <Router>
       <ConfigProvider
-        theme={{
-          algorithm:
-            mode === "dark" ? theme.darkAlgorithm : theme.defaultAlgorithm,
-          token: {
-            fontFamily: "Arimo"
-          }
-        }}
+        theme={antdTheme}
         getPopupContainer={getPopupContainer}
         renderEmpty={() => (
           <Empty

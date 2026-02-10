@@ -384,7 +384,7 @@ def _log_rg_embeddings_init_failure(exc: Exception) -> None:
     _rg_embeddings_init_error_logged = True
     ctx = _rg_embeddings_context()
     logger.exception(
-        "Embeddings ResourceGovernor init failed; legacy limiter remains diagnostics-only. "
+        "Embeddings ResourceGovernor init failed; compatibility shim remains diagnostics-only. "
         "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
         "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
         "reload_interval={policy_reload_interval} cwd={cwd}",
@@ -399,7 +399,7 @@ def _log_rg_embeddings_fallback(reason: str) -> None:
     _rg_embeddings_fallback_logged = True
     ctx = _rg_embeddings_context()
     logger.error(
-        "Embeddings ResourceGovernor unavailable; using diagnostics-only legacy shim (no enforcement). "
+        "Embeddings ResourceGovernor unavailable; using diagnostics-only compatibility shim (no enforcement). "
         "reason={} init_error={} backend={backend} policy_path={policy_path} "
         "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
         "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
@@ -459,8 +459,9 @@ async def _maybe_enforce_with_rg(
     Attempt to enforce embeddings limits via Resource Governor.
 
     Requests are enforced at ingress via `RGSimpleMiddleware`. This helper is
-    used for token accounting (and legacy fallback) and MUST NOT reserve
-    `requests` to avoid double-enforcement on RG-governed routes.
+    used for token accounting and diagnostics-only behavior when RG is
+    unavailable, and MUST NOT reserve `requests` to avoid double-enforcement
+    on RG-governed routes.
 
     Returns a decision dict when RG is used, or None when RG is unavailable/disabled.
     """
@@ -481,7 +482,7 @@ async def _maybe_enforce_with_rg(
         if tu > 0:
             categories["tokens"] = {"units": tu}
         else:
-            # No token units to enforce; allow and bypass legacy limiter.
+            # No token units to enforce; allow and bypass compatibility shim.
             return {"allowed": True, "retry_after": None, "policy_id": policy_id}
 
         decision, handle = await gov.reserve(

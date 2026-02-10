@@ -7781,8 +7781,8 @@ chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>/
 <h2 id="performance-configuration">Performance Configuration<a class="headerlink" href="#performance-configuration" title="Permanent link">&para;</a></h2>
 <h3 id="1-rate-limiting">1. Rate Limiting<a class="headerlink" href="#1-rate-limiting" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># Configure rate limits</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">RATE_LIMIT_PER_MINUTE</span><span class="o">=</span><span class="m">30</span><span class="w">  </span><span class="c1"># For evaluations</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">RATE_LIMIT_BURST</span><span class="o">=</span><span class="m">5</span><span class="w">        </span><span class="c1"># Burst allowance</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">requests.rpm</span><span class="o">=</span><span class="m">30</span><span class="w">  </span><span class="c1"># For evaluations</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">requests.burst</span><span class="o">=</span><span class="m">5</span><span class="w">        </span><span class="c1"># Burst allowance</span>
 </code></pre></div>
 <h3 id="2-connection-pooling">2. Connection Pooling<a class="headerlink" href="#2-connection-pooling" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># Database connections</span>
@@ -7987,7 +7987,7 @@ sudo<span class="w"> </span>systemctl<span class="w"> </span>start<span class="w
 </tr>
 <tr>
 <td>"Rate limit exceeded"</td>
-<td>Increase RATE_LIMIT_PER_MINUTE</td>
+<td>Increase requests.rpm</td>
 </tr>
 <tr>
 <td>"Evaluation timeout"</td>
@@ -8076,7 +8076,7 @@ sudo<span class="w"> </span>systemctl<span class="w"> </span>restart<span class=
 <td>Database path</td>
 </tr>
 <tr>
-<td>RATE_LIMIT_PER_MINUTE</td>
+<td>requests.rpm</td>
 <td>No</td>
 <td>60</td>
 <td>Rate limit per minute</td>

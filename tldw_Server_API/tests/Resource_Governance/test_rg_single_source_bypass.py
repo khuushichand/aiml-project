@@ -109,8 +109,6 @@ async def test_evaluations_check_rate_limit_is_diagnostics_only_shim(monkeypatch
 
 @pytest.mark.asyncio
 async def test_auth_endpoint_reserve_uses_diagnostics_only_shim_when_governor_unavailable(monkeypatch):
-    monkeypatch.setattr(auth_endpoints, "_auth_rg_rate_limits_enabled", lambda: True)
-
     async def _no_governor(_request):
         return None
 

@@ -3,11 +3,13 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.endpoints.data_tables import (
     _wait_for_job_completion,
     get_job_manager,
 )
 from tldw_Server_API.app.api.v1.schemas.data_tables_schemas import DATA_TABLES_MAX_ROWS_LIMIT
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 
@@ -114,6 +116,46 @@ def test_job_status_and_cancel(tmp_path, data_tables_app_factory):
         cancel_resp = client.delete(f"/api/v1/data-tables/jobs/{job_id}")
         assert cancel_resp.status_code == 200, cancel_resp.text
         assert cancel_resp.json()["success"] is True
+
+
+def test_data_table_job_status_rejects_boolean_admin_without_claims(tmp_path, data_tables_app_factory):
+    db_path = tmp_path / "media.db"
+    app, _ = data_tables_app_factory(db_path)
+
+    class _StubJobManager:
+        def get_job(self, _job_id: int):
+            return {
+                "id": 9,
+                "domain": "data_tables",
+                "owner_user_id": "2",
+                "status": "queued",
+                "job_type": "data_table_generate",
+            }
+
+    async def _principal_override():
+        return AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject=None,
+            token_type="access",
+            jti=None,
+            roles=["user"],
+            permissions=["media.read"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+
+    app.dependency_overrides[get_job_manager] = lambda: _StubJobManager()
+    app.dependency_overrides[get_auth_principal] = _principal_override
+    try:
+        with TestClient(app) as client:
+            resp = client.get("/api/v1/data-tables/jobs/9")
+            assert resp.status_code == 403
+    finally:
+        app.dependency_overrides.pop(get_job_manager, None)
+        app.dependency_overrides.pop(get_auth_principal, None)
 
 
 def test_generate_uses_configured_data_tables_queue(tmp_path, data_tables_app_factory, monkeypatch):

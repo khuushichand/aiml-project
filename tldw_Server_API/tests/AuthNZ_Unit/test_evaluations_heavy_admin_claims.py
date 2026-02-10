@@ -120,6 +120,18 @@ def test_enforce_heavy_evaluations_admin_respects_env_guard(monkeypatch):
 
 
 @pytest.mark.unit
+def test_enforce_heavy_evaluations_admin_rejects_boolean_admin_without_claims(monkeypatch):
+    from fastapi import HTTPException
+    from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import enforce_heavy_evaluations_admin
+
+    principal = _make_principal(roles=["user"], permissions=[], is_admin=True)
+    monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
+    with pytest.raises(HTTPException) as excinfo:
+        enforce_heavy_evaluations_admin(principal)
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.unit
 def test_admin_cleanup_idempotency_forbidden_without_admin_role(monkeypatch):
     principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
     app = _build_app_with_admin_cleanup(principal)

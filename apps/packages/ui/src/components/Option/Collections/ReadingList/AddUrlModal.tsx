@@ -144,7 +144,7 @@ export const AddUrlModal: React.FC<AddUrlModalProps> = ({ onSuccess }) => {
           ]}
         >
           <Input
-            prefix={<Link className="h-4 w-4 text-gray-400" />}
+            prefix={<Link className="h-4 w-4 text-text-subtle" />}
             placeholder="https://example.com/article"
             autoFocus
           />

@@ -469,8 +469,6 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
         limits = get_character_limits()
         single_user_mode = bool(settings.get("SINGLE_USER_MODE", False))
         configured_enabled = settings.get("CHARACTER_RATE_LIMIT_ENABLED", None)
-        if configured_enabled is None:
-            configured_enabled = settings.get("RATE_LIMIT_ENABLED", None)
         default_enabled = not single_user_mode
         enabled_flag = _env_bool("CHARACTER_RATE_LIMIT_ENABLED", configured_enabled, default_enabled)
 

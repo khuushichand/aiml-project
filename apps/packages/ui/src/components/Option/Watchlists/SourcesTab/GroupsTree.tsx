@@ -91,7 +91,7 @@ export const GroupsTree: React.FC<GroupsTreeProps> = ({
   }
 
   return (
-    <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 space-y-3">
+    <div className="rounded-lg border border-border p-3 space-y-3">
       <div className="flex items-center justify-between">
         <div className="text-sm font-medium">
           {t("watchlists:groups.title", "Groups")}

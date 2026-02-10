@@ -367,23 +367,23 @@ const ImportSection: React.FC = () => {
 
       {importWizardStep === "source" && (
         <div className="space-y-3">
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-text-muted">
             {t("collections:import.selectSource", "Select import source:")}
           </p>
           {IMPORT_SOURCES.map((source) => (
             <button
               key={source.value}
               onClick={() => handleSourceSelect(source.value)}
-              className="flex w-full items-center gap-4 rounded-lg border border-zinc-200 p-4 text-left transition-colors hover:border-blue-500 hover:bg-blue-50 dark:border-zinc-700 dark:hover:border-blue-500 dark:hover:bg-blue-900/20"
+              className="flex w-full items-center gap-4 rounded-lg border border-border p-4 text-left transition-colors hover:border-primary hover:bg-primary/10"
             >
-              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-zinc-100 dark:bg-zinc-800">
+              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-surface">
                 {source.icon}
               </div>
               <div>
                 <div className="font-medium">{t(source.labelKey)}</div>
-                <div className="text-sm text-zinc-500">{t(source.descriptionKey)}</div>
+                <div className="text-sm text-text-muted">{t(source.descriptionKey)}</div>
               </div>
-              <ArrowRight className="ml-auto h-5 w-5 text-zinc-400" />
+              <ArrowRight className="ml-auto h-5 w-5 text-text-subtle" />
             </button>
           ))}
         </div>
@@ -425,20 +425,20 @@ const ImportSection: React.FC = () => {
             {importInProgress ? (
               <div className="py-8">
                 <Spin size="large" />
-                <p className="mt-4 text-zinc-500">
+                <p className="mt-4 text-text-muted">
                   {t("collections:import.processing", "Processing file...")}
                 </p>
               </div>
             ) : (
               <div className="py-8">
-                <UploadIcon className="mx-auto h-10 w-10 text-zinc-400" />
-                <p className="mt-4 text-zinc-600 dark:text-zinc-300">
+                <UploadIcon className="mx-auto h-10 w-10 text-text-subtle" />
+                <p className="mt-4 text-text-muted">
                   {t("collections:import.dropzone", "Click or drag file to upload")}
                 </p>
-                <p className="mt-2 text-sm text-zinc-400">
+                <p className="mt-2 text-sm text-text-subtle">
                   {describeExpectedFormats(importSource)}
                 </p>
-                <p className="mt-1 text-xs text-zinc-400">
+                <p className="mt-1 text-xs text-text-subtle">
                   {t("collections:import.maxSize", "Max file size: {{size}} MB", {
                     size: Math.floor(MAX_IMPORT_FILE_BYTES / (1024 * 1024))
                   })}
@@ -462,7 +462,7 @@ const ImportSection: React.FC = () => {
           )}
 
           {importError && (
-            <div className="flex items-center gap-2 text-red-500">
+            <div className="flex items-center gap-2 text-danger">
               <AlertCircle className="h-4 w-4" />
               <span className="text-sm">{importError}</span>
             </div>
@@ -1022,7 +1022,7 @@ const ExportSection: React.FC = () => {
           </Radio.Group>
         </div>
 
-        <div className="space-y-2 rounded-md border border-zinc-200 p-3 dark:border-zinc-700">
+        <div className="space-y-2 rounded-md border border-border p-3">
           <Checkbox
             checked={applyReadingFilters}
             onChange={(e) => setApplyReadingFilters(e.target.checked)}
@@ -1030,7 +1030,7 @@ const ExportSection: React.FC = () => {
             {t("collections:export.useReadingFilters", "Use current Reading filters")}
           </Checkbox>
           {applyReadingFilters && (
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-text-muted">
               {activeFilterLabels.length > 0
                 ? t(
                     "collections:export.activeFilters",
@@ -1058,7 +1058,7 @@ const ExportSection: React.FC = () => {
             </Checkbox>
           </div>
           <p
-            className="text-xs text-zinc-500"
+            className="text-xs text-text-muted"
             data-testid="export-filename-hint"
           >
             {t("collections:export.filenameHint", "Filename hint: {{filename}}", {
@@ -1082,7 +1082,7 @@ const ExportSection: React.FC = () => {
             size="small"
             allowClear
           />
-          <div className="mt-2 flex items-center justify-between text-xs text-zinc-600 dark:text-zinc-400">
+          <div className="mt-2 flex items-center justify-between text-xs text-text-muted">
             <Checkbox
               indeterminate={someFilteredSelected && !allFilteredSelected}
               checked={allFilteredSelected}
@@ -1107,7 +1107,7 @@ const ExportSection: React.FC = () => {
             ref={listRef as React.RefObject<HTMLDivElement>}
             tabIndex={0}
             onKeyDownCapture={handleKeyDown}
-            className="mt-2 max-h-48 overflow-auto rounded-md border border-zinc-200 dark:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset"
+            className="mt-2 max-h-48 overflow-auto rounded-md border border-border focus:outline-none focus:ring-2 focus:ring-primary focus:ring-inset"
             role="listbox"
             aria-label={t("collections:export.itemList", "Export items list")}
           >
@@ -1115,7 +1115,7 @@ const ExportSection: React.FC = () => {
               <div className="flex flex-col items-center justify-center gap-2 py-6">
                 <Spin size="small" />
                 {loadProgress.total !== null && (
-                  <span className="text-xs text-zinc-500">
+                  <span className="text-xs text-text-muted">
                     {t("collections:export.loadingProgress", "Loading {{loaded}} / {{total}} items...", {
                       loaded: loadProgress.loaded,
                       total: loadProgress.total
@@ -1140,8 +1140,8 @@ const ExportSection: React.FC = () => {
                   return (
                     <List.Item
                       data-selection-item
-                      className={`cursor-pointer py-2 hover:bg-zinc-50 dark:hover:bg-zinc-800 ${
-                        isFocused ? "ring-2 ring-inset ring-blue-400" : ""
+                      className={`cursor-pointer py-2 hover:bg-surface ${
+                        isFocused ? "ring-2 ring-inset ring-primary" : ""
                       }`}
                       onClick={(e) => handleItemClick(index, e)}
                       role="option"
@@ -1170,7 +1170,7 @@ const ExportSection: React.FC = () => {
               />
             )}
           </div>
-          <p className="mt-2 text-xs text-zinc-500">
+          <p className="mt-2 text-xs text-text-muted">
             {t(
               "collections:export.selectionHint",
               "Select items to export, or leave empty to export everything."

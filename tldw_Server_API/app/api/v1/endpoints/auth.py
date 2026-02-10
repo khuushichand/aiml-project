@@ -28,7 +28,6 @@ from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_auth_rate_limit,
     get_auth_principal,
-    get_current_active_user,
     get_db_transaction,
     get_jwt_service_dep,
     get_password_service_dep,
@@ -270,6 +269,47 @@ def _current_user_id(user: Any) -> Optional[int]:
         return None
 
 
+_PLATFORM_ADMIN_ROLES = frozenset({"admin"})
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _normalized_claim_values(values: Any) -> set[str]:
+    if not isinstance(values, (list, tuple, set)):
+        return set()
+    return {
+        str(value).strip().lower()
+        for value in values
+        if str(value).strip()
+    }
+
+
+def _current_user_has_admin_claims(user: Any) -> bool:
+    role = str(_current_user_value(user, "role", "") or "").strip().lower()
+    if role in _PLATFORM_ADMIN_ROLES:
+        return True
+
+    roles = _normalized_claim_values(_current_user_value(user, "roles", []))
+    if roles & _PLATFORM_ADMIN_ROLES:
+        return True
+
+    permissions = _normalized_claim_values(_current_user_value(user, "permissions", []))
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
+
+
+def _principal_primary_role(principal: AuthPrincipal) -> str:
+    roles = [
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    ]
+    if any(role in _PLATFORM_ADMIN_ROLES for role in roles):
+        return "admin"
+    permissions = _normalized_claim_values(principal.permissions)
+    if permissions & _ADMIN_CLAIM_PERMISSIONS:
+        return "admin"
+    return roles[0] if roles else "user"
+
+
 async def _fetch_user_by_email_for_password_reset(db: Any, email: str) -> dict[str, Any] | None:
     return await _svc_fetch_user_by_email_for_password_reset(db, email)
 
@@ -353,6 +393,23 @@ def _current_user_username(user: Any) -> str:
         return str(email).split("@", 1)[0]
     uid = _current_user_id(user)
     return f"user-{uid}" if uid is not None else "user"
+
+
+def _current_user_primary_role(user: Any) -> str:
+    role = _current_user_value(user, "role", None)
+    if role:
+        role_text = str(role).strip().lower()
+        if role_text:
+            return role_text
+    raw_roles = _current_user_value(user, "roles", [])
+    if isinstance(raw_roles, (list, tuple, set)):
+        for raw_role in raw_roles:
+            role_text = str(raw_role).strip().lower()
+            if role_text:
+                return role_text
+    if _current_user_has_admin_claims(user):
+        return "admin"
+    return "user"
 
 
 def _derive_username_from_email(email: str) -> str:
@@ -452,13 +509,6 @@ def _auth_hashed_entity(raw_value: str) -> str:
         return raw_value
 
 
-def _auth_rg_rate_limits_enabled() -> bool:
-    try:
-        return bool(get_settings().RATE_LIMIT_ENABLED)
-    except _AUTH_NONCRITICAL_EXCEPTIONS:
-        return True
-
-
 def _log_auth_rg_diagnostics_only_shim(
     *,
     reason: str,
@@ -554,8 +604,6 @@ async def _reserve_auth_rg_requests(
     fail_open: bool = True,
 ) -> tuple[bool, Optional[int]]:
     _ = fail_open  # Compatibility parameter; legacy fallback limiter is retired.
-    if not _auth_rg_rate_limits_enabled():
-        return True, None
 
     rg_entity = entity or f"ip:{_auth_request_client_ip(request)}"
 
@@ -812,7 +860,7 @@ async def mint_self_virtual_key(
         raise HTTPException(status_code=400, detail="Invalid user context")
 
     username = str(current_user.username or current_user.email or "user")
-    role = "admin" if current_user.is_admin else str(current_user.roles[0] if current_user.roles else "user")
+    role = _principal_primary_role(current_user)
 
     try:
         svc = JWTService(settings)
@@ -1474,14 +1522,20 @@ async def logout(
 
 @router.get("/sessions", response_model=list[SessionResponse])
 async def list_user_sessions(
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> list[SessionResponse]:
     """
     List all active sessions for the current user.
     """
     try:
-        sessions = await session_manager.get_user_sessions(current_user['id'])
+        user_id = _current_user_id(current_user)
+        if user_id is None or user_id <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+        sessions = await session_manager.get_user_sessions(user_id)
 
         return [
             SessionResponse(
@@ -1512,21 +1566,29 @@ async def list_user_sessions(
 @router.delete("/sessions/{session_id}", response_model=MessageResponse)
 async def revoke_session(
     session_id: int,
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> MessageResponse:
     """
     Revoke a specific session for the current user.
     """
     try:
+        user_id = _current_user_id(current_user)
+        if user_id is None or user_id <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+        username = _current_user_username(current_user)
+
         # Get session to verify ownership
-        sessions = await session_manager.get_user_sessions(current_user['id'])
+        sessions = await session_manager.get_user_sessions(user_id)
         session_ids = [s['id'] for s in sessions]
 
         if session_id not in session_ids:
             # Return success for idempotency - session is already not active
             logger.info(
-                f"Session {session_id} not found for user {current_user['id']} - treating as already revoked"
+                f"Session {session_id} not found for user {user_id} - treating as already revoked"
             )
             return MessageResponse(
                 message="Session revoked successfully",
@@ -1536,11 +1598,11 @@ async def revoke_session(
         # Revoke the session
         await session_manager.revoke_session(
             session_id,
-            revoked_by=current_user['id'],
+            revoked_by=user_id,
             reason="User requested revocation"
         )
 
-        logger.info(f"User {current_user['username']} revoked session {session_id}")
+        logger.info(f"User {username} revoked session {session_id}")
 
         return MessageResponse(
             message="Session revoked successfully",
@@ -1565,20 +1627,28 @@ async def revoke_session(
 
 @router.post("/sessions/revoke-all", response_model=MessageResponse)
 async def revoke_all_sessions(
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> MessageResponse:
     """
     Revoke all sessions for the current user.
     """
     try:
+        user_id = _current_user_id(current_user)
+        if user_id is None or user_id <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+        username = _current_user_username(current_user)
+
         count = await session_manager.revoke_all_user_sessions(
-            user_id=current_user['id'],
+            user_id=user_id,
             reason="User requested logout from all devices"
         )
         revoked_count = int(count)
 
-        logger.info(f"User {current_user['username']} revoked all {revoked_count} sessions")
+        logger.info(f"User {username} revoked all {revoked_count} sessions")
 
         return MessageResponse(
             message=f"Successfully revoked {revoked_count} sessions",
@@ -2443,7 +2513,7 @@ async def verify_magic_link(
 
 @router.post("/mfa/setup", response_model=MFASetupResponse)
 async def setup_mfa(
-    current_user=Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
     session_manager: SessionManager = Depends(get_session_manager_dep),
 ) -> MFASetupResponse:
@@ -2525,7 +2595,7 @@ async def setup_mfa(
 async def verify_mfa_setup(
     data: MFAVerifyRequest,
     request: Request,
-    current_user=Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     session_manager: SessionManager = Depends(get_session_manager_dep),
 ) -> dict[str, Any]:
     """
@@ -2634,7 +2704,7 @@ async def verify_mfa_setup(
 
 @router.post("/mfa/disable", status_code=status.HTTP_200_OK)
 async def disable_mfa(
-    current_user=Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     password: str = Form(..., description="Current password for verification"),
     db=Depends(get_db_transaction),
     password_service: PasswordService = Depends(get_password_service_dep),
@@ -3108,7 +3178,7 @@ async def register(
 
 @router.get("/me", response_model=DeprecatedUserResponse, deprecated=True)
 async def get_current_user_info(
-    current_user: dict[str, Any] = Depends(get_current_active_user),
+    current_user: AuthPrincipal = Depends(get_auth_principal),
     response: Response = None,
 ) -> DeprecatedUserResponse:
     """
@@ -3130,20 +3200,28 @@ async def get_current_user_info(
             response.headers.update(_build_deprecation_headers(successor))
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         pass
+
+    user_id = _current_user_id(current_user)
+    if user_id is None or user_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
+
     return DeprecatedUserResponse(
         warning="deprecated_endpoint",
         successor=successor,
-        id=current_user['id'],
-        uuid=current_user.get('uuid') or None,
-        username=current_user['username'],
-        email=current_user.get('email') or "",
-        role=current_user['role'],
-        is_active=current_user.get('is_active', True),
-        is_verified=current_user.get('is_verified', True),
-        created_at=current_user.get('created_at', datetime.utcnow()),
-        last_login=current_user.get('last_login'),
-        storage_quota_mb=current_user.get('storage_quota_mb', 1000),
-        storage_used_mb=current_user.get('storage_used_mb', 0.0)
+        id=user_id,
+        uuid=_current_user_value(current_user, "uuid", None) or None,
+        username=_current_user_username(current_user),
+        email=str(_current_user_value(current_user, "email", "") or ""),
+        role=_current_user_primary_role(current_user),
+        is_active=bool(_current_user_value(current_user, "is_active", True)),
+        is_verified=bool(_current_user_value(current_user, "is_verified", True)),
+        created_at=_current_user_value(current_user, "created_at", datetime.utcnow()),
+        last_login=_current_user_value(current_user, "last_login"),
+        storage_quota_mb=_current_user_value(current_user, "storage_quota_mb", 1000),
+        storage_used_mb=_current_user_value(current_user, "storage_used_mb", 0.0),
     )
 
 

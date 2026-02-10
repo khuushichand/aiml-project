@@ -55,7 +55,7 @@
 - Error Handling & Safety
   - Rule compilation is guarded; invalid rules are skipped with warnings.
   - Alert metadata is JSON‑encoded/decoded with fallback on parse failures.
-  - Admin endpoints require `require_admin` and validate inputs.
+  - Admin endpoints use claim-first authorization (`get_auth_principal` + `require_roles("admin")` / `require_permissions(...)`) and validate inputs.
 
 ## 3. Developer-Related/Relevant Information for Contributors
 

@@ -227,7 +227,7 @@ export const CreateEvaluationWizard: React.FC<CreateEvaluationWizardProps> = ({
               onValidationError={onSpecError}
             />
             {evalSpecError && (
-              <div className="text-xs text-red-600">{evalSpecError}</div>
+              <div className="text-xs text-danger">{evalSpecError}</div>
             )}
             <Collapse
               ghost

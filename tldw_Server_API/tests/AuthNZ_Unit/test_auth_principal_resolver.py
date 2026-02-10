@@ -119,6 +119,43 @@ async def test_get_auth_principal_jwt_path(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_auth_principal_jwt_path_ignores_boolean_is_admin_without_claims(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    reset_settings()
+
+    async def _fake_verify_jwt_and_fetch_user(request, _token: str = "") -> User:
+        request.state.user_id = 43
+        request.state.org_ids = [11]
+        request.state.team_ids = [21]
+        return User(
+            id=43,
+            username="jwt-user",
+            is_active=True,
+            roles=["user"],
+            permissions=[],
+            is_admin=True,
+        )
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.User_DB_Handling.verify_jwt_and_fetch_user",
+        _fake_verify_jwt_and_fetch_user,
+    )
+
+    req = _make_request(headers={"Authorization": "Bearer token-abc"})
+
+    try:
+        principal = await get_auth_principal(req)
+        assert principal.kind == "user"
+        assert principal.user_id == 43
+        assert principal.is_admin is False
+    finally:
+        for env_key in ("AUTH_MODE", "DATABASE_URL"):
+            monkeypatch.delenv(env_key, raising=False)
+        reset_settings()
+
+
+@pytest.mark.asyncio
 async def test_get_auth_principal_api_key_path(monkeypatch):
     async def _fake_authenticate_api_key_user(request, _api_key: str) -> User:
         request.state.user_id = 7

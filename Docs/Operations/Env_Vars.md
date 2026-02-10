@@ -246,7 +246,7 @@ Pytest markers
 
 ## Resource Governor (Unified Rate Limiting)
 
-The Resource Governor (RG) is the **primary enforcement path** for all rate limiting. Some legacy per-module limiters remain during cutover and will be removed once shadow-mode exit criteria are met (see `Docs/Product/Completed/AuthNZ-Refactor/Resource_Governor_PRD.md`). AuthNZ dependency shims (`check_rate_limit`, `check_auth_rate_limit`) are diagnostics-only and do not enforce legacy fallback limits.
+The Resource Governor (RG) is the **primary enforcement path** for all rate limiting. Some deprecated module-local compatibility knobs remain during cutover and will be removed once shadow-mode exit criteria are met (see `Docs/Product/Completed/AuthNZ-Refactor/Resource_Governor_PRD.md`). AuthNZ dependency shims (`check_rate_limit`, `check_auth_rate_limit`) are diagnostics-only and do not enforce fallback 429 behavior.
 
 ### Core Settings
 - `RG_ENABLED`: Master toggle for Resource Governor enforcement (`true|1|false|0`). Resolution: env var > `config.txt` `[ResourceGovernor] enabled` > default `false`.
@@ -283,22 +283,22 @@ The Resource Governor (RG) is the **primary enforcement path** for all rate limi
 - `RG_TEST_PURGE_LEASES_BEFORE_RESERVE`: Test-only: purge concurrency leases before each reserve call.
 - `RG_REAL_REDIS_URL`: Test-only: real Redis URL for integration tests.
 
-### Legacy Rate Limit Knobs (Deprecated)
+### Legacy Rate Limit Knobs (Deprecated Compatibility)
 
-The following env vars configure **legacy per-module rate limiters** that remain in compatibility paths during cutover. They will be removed in a future release once shadow-mode exit criteria are met.
+The following env vars are retained as **deprecated compatibility knobs** during cutover. RG policy configuration is the authoritative enforcement path.
 
-#### Chat (legacy fallback)
+#### Chat (deprecated compatibility)
 - `TEST_CHAT_PER_USER_RPM`: Per-user requests per minute (test override).
 - `TEST_CHAT_PER_CONVERSATION_RPM`: Per-conversation requests per minute (test override).
 - `TEST_CHAT_GLOBAL_RPM`: Global requests per minute (test override).
 - `TEST_CHAT_TOKENS_PER_MINUTE`: Token limit per user per minute (test override).
 - `TEST_CHAT_BURST_MULTIPLIER`: Burst multiplier (test override).
 
-#### Embeddings (legacy fallback)
+#### Embeddings (deprecated compatibility)
 - `EMBEDDINGS_RATE_LIMIT_PER_MINUTE`: Per-user embeddings requests per minute.
 - `EMBEDDINGS_RATE_LIMIT_MODE`: Rate limit mode (`tokens` or other). Controls whether token-based limiting is applied.
 
-#### Character Chat (legacy fallback)
+#### Character Chat (deprecated compatibility)
 - `CHARACTER_RATE_LIMIT_OPS`: Per-window operation limit. Superseded by RG policy.
 - `CHARACTER_RATE_LIMIT_WINDOW`: Window size in seconds. Superseded by RG policy.
 - `CHARACTER_RATE_LIMIT_ENABLED`: Enable/disable character chat rate limiting. Superseded by `RG_CHARACTER_CHAT_ENFORCE_REQUESTS`.
@@ -313,9 +313,6 @@ The following env vars configure **legacy per-module rate limiters** that remain
 - `REDIS_URL`: Optional Redis URL for sessions (`redis://` or `rediss://`).
 - `ENABLE_REGISTRATION`: Enable user registration (`true|false`).
 - `REQUIRE_REGISTRATION_CODE`: Require code to register (`true|false`).
-- `RATE_LIMIT_ENABLED`: Enables/disables legacy AuthNZ limiter compatibility surfaces (`true|false`). **Note**: `check_rate_limit` and `check_auth_rate_limit` dependencies are diagnostics-only and do not enforce fallback 429 behavior; keep `RG_ENABLED=true` for ingress abuse protection.
-- `RATE_LIMIT_PER_MINUTE`: Legacy AuthNZ limiter default requests per minute (default `60`) for compatibility paths that still call the AuthNZ `RateLimiter` directly. Not used by diagnostics-only AuthNZ dependency shims.
-- `RATE_LIMIT_BURST`: Legacy AuthNZ limiter burst default (default `10`) for compatibility paths that still call the AuthNZ `RateLimiter` directly. Not used by diagnostics-only AuthNZ dependency shims.
 - `SECURITY_ALERTS_ENABLED`: Enable AuthNZ security alert dispatching (`true|false`, default `false`).
 - `SECURITY_ALERT_MIN_SEVERITY`: Minimum severity to deliver (`low|medium|high|critical`, default `high`).
 - `SECURITY_ALERT_FILE_PATH`: JSONL file sink for security alerts (default `Databases/security_alerts.log`).

@@ -22,21 +22,21 @@ const PRESETS: PresetConfig[] = [
     label: "Fast",
     description: "Quick results, FTS only",
     icon: Zap,
-    color: "text-yellow-500",
+    color: "text-warn",
   },
   {
     name: "balanced",
     label: "Balanced",
     description: "Hybrid search + reranking",
     icon: Scale,
-    color: "text-blue-500",
+    color: "text-primary",
   },
   {
     name: "thorough",
     label: "Thorough",
     description: "Deep search + verification",
     icon: Brain,
-    color: "text-purple-500",
+    color: "text-accent",
   },
   {
     name: "custom",
@@ -53,7 +53,7 @@ const RESEARCH_PRESET: PresetConfig = {
   label: "Research",
   description: "Max verification + citations",
   icon: Beaker,
-  color: "text-green-500",
+  color: "text-success",
 }
 
 export function PresetSelector() {

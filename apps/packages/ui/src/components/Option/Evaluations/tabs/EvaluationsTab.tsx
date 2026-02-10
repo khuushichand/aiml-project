@@ -304,8 +304,8 @@ export const EvaluationsTab: React.FC = () => {
               <Card
                 key={ev.id}
                 size="small"
-                className={`cursor-pointer hover:border-blue-500/70 ${
-                  selectedEvalId === ev.id ? "border-blue-500" : ""
+                className={`cursor-pointer hover:border-primary/70 ${
+                  selectedEvalId === ev.id ? "border-primary" : ""
                 }`}
                 bodyStyle={{ padding: "8px 12px" }}
                 onClick={() => {

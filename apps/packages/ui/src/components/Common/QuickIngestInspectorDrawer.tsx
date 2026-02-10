@@ -147,7 +147,7 @@ export const QuickIngestInspectorDrawer: React.FC<
                     ).toUpperCase()}
                   </Tag>
                   {statusForUrlRow(selectedRow).reason ? (
-                    <span className="text-orange-600">
+                    <span className="text-warn">
                       {statusForUrlRow(selectedRow).reason}
                     </span>
                   ) : (
@@ -173,7 +173,7 @@ export const QuickIngestInspectorDrawer: React.FC<
                     {selectedFile.type ? ` · ${selectedFile.type}` : ""}
                   </span>
                   {fileStatus?.reason ? (
-                    <span className="text-orange-600">
+                    <span className="text-warn">
                       {fileStatus.reason}
                     </span>
                   ) : null}

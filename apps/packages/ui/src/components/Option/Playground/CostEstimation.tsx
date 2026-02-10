@@ -23,7 +23,7 @@ const TIER_COLORS: Record<string, string> = {
   free: "text-success",
   low: "text-success",
   medium: "text-warning",
-  high: "text-orange-500",
+  high: "text-warn",
   premium: "text-error"
 }
 
@@ -31,7 +31,7 @@ const TIER_BG_COLORS: Record<string, string> = {
   free: "bg-success/10",
   low: "bg-success/10",
   medium: "bg-warning/10",
-  high: "bg-orange-500/10",
+  high: "bg-warn/10",
   premium: "bg-error/10"
 }
 

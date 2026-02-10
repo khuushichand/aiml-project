@@ -54,6 +54,7 @@ router = APIRouter()
 MAX_CACHED_JOB_MANAGER_INSTANCES = 4
 _job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
 _job_manager_lock = threading.Lock()
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 _ADMIN_DEPS = [
     Depends(require_roles("admin")),
@@ -81,6 +82,22 @@ _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     ValueError,
 )
+
+
+def _principal_has_admin_claims(principal: AuthPrincipal) -> bool:
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 def _path_is_within(path: Path, base_dir: Path) -> bool:
@@ -298,7 +315,7 @@ async def get_audio_job(
             raise HTTPException(status_code=404, detail="Job not found")
         # Owner/admin check
         owner = str(d.get("owner_user_id") or "")
-        is_admin = principal.is_admin
+        is_admin = _principal_has_admin_claims(principal)
         if not (is_admin or owner == str(current_user.id)):
             raise HTTPException(status_code=403, detail="Not authorized for this job")
         return AudioJob(**{k: d.get(k) for k in _AUDIO_JOB_FIELD_MAP})

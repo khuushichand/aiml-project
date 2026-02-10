@@ -11,22 +11,22 @@ export function VlmBackendsCard() {
       <summary className="cursor-pointer text-sm font-semibold">VLM Backends</summary>
       <div className="mt-2 text-sm">
         {endpoint && (
-          <div className="mb-2 text-xs text-gray-500">Endpoint: <code>{endpoint}</code></div>
+          <div className="mb-2 text-xs text-text-muted">Endpoint: <code>{endpoint}</code></div>
         )}
-        {loading && <div className="text-gray-600">Loading backends…</div>}
+        {loading && <div className="text-text-muted">Loading backends…</div>}
         {error && (
-          <div className="mb-2 rounded bg-red-50 p-2 text-red-800">
+          <div className="mb-2 rounded bg-danger/10 p-2 text-danger">
             {error}
           </div>
         )}
         {!loading && !error && (!entries.length ? (
-          <div className="text-gray-600">No VLM backends reported.</div>
+          <div className="text-text-muted">No VLM backends reported.</div>
         ) : (
           <ul className="space-y-1">
             {entries.map(([name, available]) => (
-              <li key={name} className="flex items-center justify-between rounded bg-gray-50 px-2 py-1">
-                <span className="font-mono text-xs text-gray-800">{name}</span>
-                <span className={available ? 'text-green-700' : 'text-gray-500'}>
+              <li key={name} className="flex items-center justify-between rounded bg-bg px-2 py-1">
+                <span className="font-mono text-xs text-text">{name}</span>
+                <span className={available ? 'text-success' : 'text-text-muted'}>
                   {available ? 'Available' : 'Unavailable'}
                 </span>
               </li>

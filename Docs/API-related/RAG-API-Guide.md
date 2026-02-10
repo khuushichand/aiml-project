@@ -990,13 +990,13 @@ Handle validation errors gracefully:
 
 ### Rate Limits
 
-Defaults are configured via AuthNZ settings and enforced per client/IP (token bucket):
-- RATE_LIMIT_ENABLED: true
-- RATE_LIMIT_PER_MINUTE: 60
-- RATE_LIMIT_BURST: 10
+Defaults are configured via Resource Governor policies:
+- RG_ENABLED: true
+- requests.rpm / requests.burst on route policy IDs in `Config_Files/resource_governor_policies.yaml`
 
 Notes:
-- Endpoints apply a general `check_rate_limit` dependency; administrators can tune settings via environment or config.
+- Endpoints enforce limits through Resource Governor route-map policy bindings.
+- `check_rate_limit` dependencies are diagnostics-only compatibility shims.
 - Health endpoints may be left open or gated by global policies per deployment.
 
 ### Rate Limit Headers

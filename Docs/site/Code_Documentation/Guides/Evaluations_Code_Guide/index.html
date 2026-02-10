@@ -7044,7 +7044,7 @@
 - Text‑to‑text scoring: <code>POST /ocr</code> with items of <code>extracted_text</code> + <code>ground_truth_text</code>; metrics include CER/WER/coverage (page coverage optional).
 - PDF path: <code>POST /ocr-pdf</code> (multipart) runs OCR (backend selectable) then computes metrics against provided ground truths; tune via form fields (dpi, lang, mode, min chars).</p>
 <p><strong>Auth, Limits, and Error Handling</strong>
-- Auth modes handled in <code>evaluations_auth.verify_api_key</code>; admin gating via <code>require_admin</code>.
+- Auth modes handled in <code>evaluations_auth.verify_api_key</code>; admin gating uses claim-first dependencies (<code>get_auth_principal</code> + <code>require_roles</code>/<code>require_permissions</code>).
 - Path limiter (<code>check_evaluation_rate_limit</code>) + per‑user <code>UserRateLimiter</code> estimate tokens and enforce daily/cost quotas; usage headers are applied by helpers.
 - Errors are normalized via <code>create_error_response</code> and <code>sanitize_error_message</code> for consistent API error shapes.</p>
 <p><strong>API Usage Examples (curl)</strong>

@@ -52,7 +52,6 @@ def test_env_vars():
 
     # Set test mode
     os.environ["TEST_MODE"] = "true"
-    os.environ["RATE_LIMIT_PER_MINUTE"] = "30"
 
     yield
 

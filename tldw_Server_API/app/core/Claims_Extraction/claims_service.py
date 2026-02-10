@@ -91,6 +91,39 @@ _REVIEW_TRANSITIONS = {
     "rejected": {"pending"},
     "approved": {"pending"},
 }
+_PLATFORM_ADMIN_ROLES = frozenset({"admin", "owner", "super_admin"})
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _normalized_claim_values(values: list[Any] | tuple[Any, ...] | set[Any] | None) -> set[str]:
+    return {
+        str(value).strip().lower()
+        for value in (values or [])
+        if str(value).strip()
+    }
+
+
+def _principal_has_platform_admin_claims(principal: AuthPrincipal | None) -> bool:
+    if principal is None:
+        return False
+    roles = _normalized_claim_values(principal.roles)
+    permissions = _normalized_claim_values(principal.permissions)
+    if roles & _PLATFORM_ADMIN_ROLES:
+        return True
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
+
+
+def _legacy_user_has_platform_admin_claims(current_user: User | Any | None) -> bool:
+    if current_user is None:
+        return False
+    role = str(getattr(current_user, "role", "")).strip().lower()
+    roles = _normalized_claim_values(getattr(current_user, "roles", None))
+    permissions = _normalized_claim_values(getattr(current_user, "permissions", None))
+    if role in _PLATFORM_ADMIN_ROLES or roles & _PLATFORM_ADMIN_ROLES:
+        return True
+    if permissions & _ADMIN_CLAIM_PERMISSIONS:
+        return True
+    return False
 
 
 def _is_db_pool_object(db: Any) -> bool:
@@ -1024,7 +1057,7 @@ async def _ensure_claim_edit_access(
     principal: AuthPrincipal,
     claim_row: dict[str, Any],
 ) -> None:
-    if principal.is_admin:
+    if _principal_has_platform_admin_claims(principal):
         return
 
     visibility = str(claim_row.get("media_visibility") or "personal").lower()
@@ -1077,7 +1110,7 @@ async def _ensure_claim_edit_access(
 
 
 def _can_review_claim(principal: AuthPrincipal, claim_row: dict[str, Any]) -> bool:
-    if principal.is_admin:
+    if _principal_has_platform_admin_claims(principal):
         return True
     reviewer_id = claim_row.get("reviewer_id")
     review_group = claim_row.get("review_group")
@@ -1096,13 +1129,13 @@ def _can_review_claim(principal: AuthPrincipal, claim_row: dict[str, Any]) -> bo
 
 
 def _ensure_claims_admin(principal: AuthPrincipal) -> None:
-    if principal.is_admin or CLAIMS_ADMIN in (principal.permissions or []):
+    if _principal_has_platform_admin_claims(principal) or CLAIMS_ADMIN in (principal.permissions or []):
         return
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
 
 
 def _ensure_claims_review(principal: AuthPrincipal) -> None:
-    if principal.is_admin:
+    if _principal_has_platform_admin_claims(principal):
         return
     perms = set(principal.permissions or [])
     if CLAIMS_ADMIN in perms or CLAIMS_REVIEW in perms:
@@ -1114,7 +1147,7 @@ def _filter_notifications_for_principal(
     principal: AuthPrincipal,
     rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    if principal.is_admin:
+    if _principal_has_platform_admin_claims(principal):
         return rows
     allowed_roles = {str(r) for r in (principal.roles or [])}
     allowed_user = str(principal.user_id) if principal.user_id is not None else ""
@@ -1599,7 +1632,7 @@ def _resolve_media_db(
     owner_user_id: int | None = None
     try:
         if user_id is not None:
-            if not getattr(current_user, "is_admin", False) and admin_required:
+            if not _legacy_user_has_platform_admin_claims(current_user) and admin_required:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
             if db.backend_type == BackendType.POSTGRESQL:
                 owner_user_id = int(user_id) if owner_filter else None
@@ -1762,7 +1795,7 @@ def list_claim_notifications(
         owner_filter=False,
     ) as (target_db, _owner_filter):
         target_user = str(user_id) if user_id is not None else str(current_user.id)
-        if not principal.is_admin and target_user_id is not None and str(target_user_id) != str(principal.user_id):
+        if not _principal_has_platform_admin_claims(principal) and target_user_id is not None and str(target_user_id) != str(principal.user_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         rows = target_db.list_claim_notifications(
             user_id=target_user,
@@ -2021,7 +2054,7 @@ def list_claims_alerts(
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
-        if not principal.is_admin:
+        if not _principal_has_platform_admin_claims(principal):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
     with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
@@ -2041,7 +2074,7 @@ def create_claims_alert(
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
-        if not principal.is_admin:
+        if not _principal_has_platform_admin_claims(principal):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
     with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
@@ -2094,7 +2127,7 @@ def update_claims_alert(
     existing = db.get_claims_monitoring_alert(int(config_id))
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert config not found")
-    if not principal.is_admin and str(existing.get("user_id")) != str(current_user.id):
+    if not _principal_has_platform_admin_claims(principal) and str(existing.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     threshold_val = payload.get("threshold_ratio", existing.get("threshold_ratio"))
     baseline_val = payload.get("baseline_ratio", existing.get("baseline_ratio"))
@@ -2150,7 +2183,7 @@ def delete_claims_alert(
     existing = db.get_claims_monitoring_alert(int(config_id))
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert config not found")
-    if not principal.is_admin and str(existing.get("user_id")) != str(current_user.id):
+    if not _principal_has_platform_admin_claims(principal) and str(existing.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     db.delete_claims_monitoring_alert(int(config_id))
     return {"status": "deleted", "id": int(config_id)}
@@ -2168,7 +2201,7 @@ def evaluate_claims_alerts(
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
-        if not principal.is_admin:
+        if not _principal_has_platform_admin_claims(principal):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
     return _evaluate_claims_alerts_for_user(
@@ -2361,12 +2394,12 @@ def get_review_queue(
         db=db,
         current_user=current_user,
         user_id=user_id,
-        admin_required=not principal.is_admin,
+        admin_required=not _principal_has_platform_admin_claims(principal),
         owner_filter=True,
     ) as (target_db, owner_filter):
         if status_filter is None:
             status_filter = "pending"
-        if not principal.is_admin:
+        if not _principal_has_platform_admin_claims(principal):
             if reviewer_id is not None and int(reviewer_id) != int(principal.user_id or 0):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
             if review_group is not None:
@@ -2405,7 +2438,7 @@ async def review_claim(
         db=db,
         current_user=current_user,
         user_id=user_id,
-        admin_required=not principal.is_admin,
+        admin_required=not _principal_has_platform_admin_claims(principal),
         owner_filter=False,
     ) as (target_db, _owner_filter):
         claim_row = target_db.get_claim_with_media(int(claim_id), include_deleted=True)
@@ -2420,7 +2453,7 @@ async def review_claim(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Reassigned requires reviewer or group")
 
         reviewer_id = payload.get("reviewer_id")
-        if not principal.is_admin:
+        if not _principal_has_platform_admin_claims(principal):
             if reviewer_id is not None and int(reviewer_id) != int(principal.user_id or 0):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
             reviewer_id = int(principal.user_id or 0)
@@ -2428,7 +2461,7 @@ async def review_claim(
                 if str(payload.get("review_group")) not in [str(r) for r in (principal.roles or [])]:
                     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
 
-        if not principal.is_admin and not _can_review_claim(principal, claim_row):
+        if not _principal_has_platform_admin_claims(principal) and not _can_review_claim(principal, claim_row):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
 
         action_ip, action_user_agent = _extract_request_metadata(request)
@@ -2550,13 +2583,13 @@ def get_claim_review_history(
         db=db,
         current_user=current_user,
         user_id=user_id,
-        admin_required=not principal.is_admin,
+        admin_required=not _principal_has_platform_admin_claims(principal),
         owner_filter=False,
     ) as (target_db, _owner_filter):
         claim_row = target_db.get_claim_with_media(int(claim_id), include_deleted=True)
         if not claim_row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found")
-        if not principal.is_admin and not _can_review_claim(principal, claim_row):
+        if not _principal_has_platform_admin_claims(principal) and not _can_review_claim(principal, claim_row):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         return target_db.list_claim_review_history(int(claim_id))
 
@@ -2579,7 +2612,7 @@ def bulk_review_claims(
         db=db,
         current_user=current_user,
         user_id=user_id,
-        admin_required=not principal.is_admin,
+        admin_required=not _principal_has_platform_admin_claims(principal),
         owner_filter=False,
     ) as (target_db, _owner_filter):
         updated_ids: list[int] = []
@@ -2676,7 +2709,7 @@ def list_review_rules(
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
-        if not principal.is_admin:
+        if not _principal_has_platform_admin_claims(principal):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
     rows = db.list_claim_review_rules(target_user_id, active_only=active_only)
@@ -2694,7 +2727,7 @@ def create_review_rule(
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
-        if not principal.is_admin:
+        if not _principal_has_platform_admin_claims(principal):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
     rule = db.create_claim_review_rule(
@@ -2722,7 +2755,7 @@ def update_review_rule(
     existing = db.get_claim_review_rule(int(rule_id))
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rule not found")
-    if not principal.is_admin and str(existing.get("user_id")) != str(current_user.id):
+    if not _principal_has_platform_admin_claims(principal) and str(existing.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     updated = db.update_claim_review_rule(
         int(rule_id),
@@ -2746,7 +2779,7 @@ def delete_review_rule(
     existing = db.get_claim_review_rule(int(rule_id))
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rule not found")
-    if not principal.is_admin and str(existing.get("user_id")) != str(current_user.id):
+    if not _principal_has_platform_admin_claims(principal) and str(existing.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     db.delete_claim_review_rule(int(rule_id))
     return {"status": "deleted", "id": int(rule_id)}
@@ -2981,7 +3014,7 @@ def list_claims_review_metrics(
     _ensure_claims_admin(principal)
     target_user_id = str(getattr(current_user, "id", None) or settings.get("SINGLE_USER_FIXED_ID", "1"))
     if user_id is not None:
-        if not principal.is_admin:
+        if not _principal_has_platform_admin_claims(principal):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
 
@@ -3023,7 +3056,7 @@ def export_claims_analytics(
     target_user_id = str(current_user.id)
     workspace_id = filters.get("workspace_id")
     if workspace_id:
-        if not principal.is_admin:
+        if not _principal_has_platform_admin_claims(principal):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(workspace_id)
 
@@ -3132,7 +3165,7 @@ def list_claims_analytics_exports(
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if workspace_id:
-        if not principal.is_admin:
+        if not _principal_has_platform_admin_claims(principal):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(workspace_id)
 
@@ -3203,7 +3236,7 @@ def get_claims_analytics_export(
     row = db.get_claims_analytics_export(str(export_id))
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export not found")
-    if not principal.is_admin and str(row.get("user_id")) != str(current_user.id):
+    if not _principal_has_platform_admin_claims(principal) and str(row.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     fmt = row.get("format")
     if fmt == "csv":
@@ -3238,7 +3271,7 @@ def list_claim_clusters(
     _ensure_claims_review(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
-        if not principal.is_admin:
+        if not _principal_has_platform_admin_claims(principal):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
     clusters = db.list_claim_clusters(
@@ -3278,7 +3311,7 @@ def rebuild_claim_clusters(
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
-        if not principal.is_admin:
+        if not _principal_has_platform_admin_claims(principal):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
     cluster_method = (method or settings.get("CLAIMS_CLUSTER_METHOD", "embeddings") or "embeddings").strip().lower()
@@ -3370,7 +3403,7 @@ def get_claim_cluster(
     cluster = db.get_claim_cluster(int(cluster_id))
     if not cluster:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
-    if not principal.is_admin and str(cluster.get("user_id")) != str(current_user.id):
+    if not _principal_has_platform_admin_claims(principal) and str(cluster.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     count_row = db.execute_query(
         "SELECT COUNT(*) AS total FROM claim_cluster_membership WHERE cluster_id = ?",
@@ -3397,7 +3430,7 @@ def list_claim_cluster_links(
     cluster = db.get_claim_cluster(int(cluster_id))
     if not cluster:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
-    if not principal.is_admin and str(cluster.get("user_id")) != str(current_user.id):
+    if not _principal_has_platform_admin_claims(principal) and str(cluster.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     rows = db.list_claim_cluster_links(cluster_id=int(cluster_id), direction=direction)
     links: list[dict[str, Any]] = []
@@ -3439,7 +3472,7 @@ def create_claim_cluster_link(
     child = db.get_claim_cluster(child_id)
     if not parent or not child:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
-    if not principal.is_admin:
+    if not _principal_has_platform_admin_claims(principal):
         if str(parent.get("user_id")) != str(current_user.id) or str(child.get("user_id")) != str(current_user.id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     created = db.create_claim_cluster_link(
@@ -3470,7 +3503,7 @@ def delete_claim_cluster_link(
     child = db.get_claim_cluster(int(child_cluster_id))
     if not parent or not child:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
-    if not principal.is_admin:
+    if not _principal_has_platform_admin_claims(principal):
         if str(parent.get("user_id")) != str(current_user.id) or str(child.get("user_id")) != str(current_user.id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     deleted = db.delete_claim_cluster_link(
@@ -3497,7 +3530,7 @@ def list_claim_cluster_members(
     cluster = db.get_claim_cluster(int(cluster_id))
     if not cluster:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
-    if not principal.is_admin and str(cluster.get("user_id")) != str(current_user.id):
+    if not _principal_has_platform_admin_claims(principal) and str(cluster.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     rows = db.list_claim_cluster_members(int(cluster_id), limit=limit, offset=offset)
     return [_normalize_claim_row(dict(r)) for r in rows]
@@ -3535,7 +3568,7 @@ def claim_cluster_timeline(
     cluster = db.get_claim_cluster(int(cluster_id))
     if not cluster:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
-    if not principal.is_admin and str(cluster.get("user_id")) != str(current_user.id):
+    if not _principal_has_platform_admin_claims(principal) and str(cluster.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     rows = db.execute_query(
         "SELECT DATE(cluster_joined_at) AS day, COUNT(*) AS count "
@@ -3560,7 +3593,7 @@ def claim_cluster_evidence(
     cluster = db.get_claim_cluster(int(cluster_id))
     if not cluster:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
-    if not principal.is_admin and str(cluster.get("user_id")) != str(current_user.id):
+    if not _principal_has_platform_admin_claims(principal) and str(cluster.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
 
     members = db.list_claim_cluster_members(int(cluster_id), limit=limit, offset=offset)
@@ -3623,7 +3656,7 @@ def list_claims_by_media(
             else:
                 base = request.url.path if request else f"/api/v1/claims/{media_id}"
             params = f"limit={limit}&offset={next_off}&envelope=true"
-            if user_id is not None and getattr(current_user, "is_admin", False):
+            if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
                 params += f"&user_id={int(user_id)}"
             if absolute_links:
                 params += "&absolute_links=true"
@@ -3717,7 +3750,7 @@ def rebuild_claims(
     db: MediaDatabase,
     rebuild_service: Any = None,
 ) -> dict[str, Any]:
-    if user_id is not None and getattr(current_user, "is_admin", False):
+    if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
         db_path = get_user_media_db_path(int(user_id))
     else:
         db_path = db.db_path_str
@@ -3737,7 +3770,7 @@ def rebuild_all_media(
     override_db: MediaDatabase | None = None
     svc = rebuild_service or get_claims_rebuild_service()
     try:
-        if user_id is not None and getattr(current_user, "is_admin", False):
+        if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
             db_path = get_user_media_db_path(int(user_id))
             override_db = MediaDatabase(
                 db_path=db_path,
@@ -3798,7 +3831,7 @@ def rebuild_claims_fts(
 ) -> dict[str, Any]:
     override_db: MediaDatabase | None = None
     try:
-        if user_id is not None and getattr(current_user, "is_admin", False):
+        if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
             db_path = get_user_media_db_path(int(user_id))
             override_db = MediaDatabase(
                 db_path=db_path,

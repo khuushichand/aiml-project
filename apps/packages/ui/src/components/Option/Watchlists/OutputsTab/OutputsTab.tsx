@@ -211,7 +211,7 @@ export const OutputsTab: React.FC = () => {
       width: 180,
       ellipsis: true,
       render: (_, record) => (
-        <span className="text-sm text-zinc-600 dark:text-zinc-400">
+        <span className="text-sm text-text-muted">
           {getJobName(record.job_id)}
         </span>
       )
@@ -222,7 +222,7 @@ export const OutputsTab: React.FC = () => {
       key: "run_id",
       width: 100,
       render: (runId: number) => (
-        <span className="text-sm text-zinc-500">#{runId}</span>
+        <span className="text-sm text-text-muted">#{runId}</span>
       )
     },
     {
@@ -242,7 +242,7 @@ export const OutputsTab: React.FC = () => {
       key: "created_at",
       width: 150,
       render: (date: string) => (
-        <span className="text-sm text-zinc-500">
+        <span className="text-sm text-text-muted">
           {formatRelativeTime(date, t)}
         </span>
       )
@@ -254,7 +254,7 @@ export const OutputsTab: React.FC = () => {
       render: (_, record) => {
         const deliveries = getOutputDeliveryStatuses(record.metadata)
         if (deliveries.length === 0) {
-          return <span className="text-zinc-400">-</span>
+          return <span className="text-text-subtle">-</span>
         }
         return (
           <Space size={[4, 4]} wrap>
@@ -279,10 +279,10 @@ export const OutputsTab: React.FC = () => {
           return <Tag color="red">Expired</Tag>
         }
         if (!date) {
-          return <span className="text-zinc-400">Never</span>
+          return <span className="text-text-subtle">Never</span>
         }
         return (
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm text-text-muted">
             {formatRelativeTime(date, t)}
           </span>
         )
@@ -351,7 +351,7 @@ export const OutputsTab: React.FC = () => {
       </div>
 
       {/* Description */}
-      <div className="text-sm text-zinc-500">
+      <div className="text-sm text-text-muted">
         {t("watchlists:outputs.description", "Generated briefings and reports from your watchlist jobs.")}
       </div>
 
@@ -397,7 +397,7 @@ export const OutputsTab: React.FC = () => {
       >
         <div className="space-y-3">
           <div>
-            <div className="text-xs font-medium text-zinc-500 mb-1">
+            <div className="text-xs font-medium text-text-muted mb-1">
               {t("watchlists:outputs.templateLabel", "Template")}
             </div>
             <Select
@@ -420,7 +420,7 @@ export const OutputsTab: React.FC = () => {
             />
           </div>
           <div>
-            <div className="text-xs font-medium text-zinc-500 mb-1">
+            <div className="text-xs font-medium text-text-muted mb-1">
               {t("watchlists:outputs.templateVersionLabel", "Template version")}
             </div>
             {selectedTemplateVersionOptions.length > 0 ? (
@@ -452,7 +452,7 @@ export const OutputsTab: React.FC = () => {
             )}
           </div>
           <div>
-            <div className="text-xs font-medium text-zinc-500 mb-1">
+            <div className="text-xs font-medium text-text-muted mb-1">
               {t("watchlists:outputs.titleLabel", "Title")}
             </div>
             <Input

@@ -289,7 +289,7 @@ export const DigestSchedulesPanel: React.FC = () => {
       .map((status) => STATUS_LABELS[status] || status)
       .join(", ")
     return (
-      <div className="mt-1 text-xs text-zinc-500">
+      <div className="mt-1 text-xs text-text-muted">
         {t(
           "collections:digests.suggestionsSummary",
           "Suggestions enabled: {{limit}} items, statuses: {{statuses}}",
@@ -306,10 +306,10 @@ export const DigestSchedulesPanel: React.FC = () => {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-base font-medium text-zinc-900 dark:text-zinc-100">
+          <h3 className="text-base font-medium text-text">
             {t("collections:digests.title", "Digest Schedules")}
           </h3>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="text-sm text-text-muted">
             {t(
               "collections:digests.description",
               "Configure recurring reading digests and optional suggestion candidates."
@@ -376,7 +376,7 @@ export const DigestSchedulesPanel: React.FC = () => {
               ]}
             >
               <List.Item.Meta
-                avatar={<CalendarClock className="h-4 w-4 mt-1 text-zinc-500" />}
+                avatar={<CalendarClock className="h-4 w-4 mt-1 text-text-muted" />}
                 title={
                   <Space size="small" wrap>
                     <span>{schedule.name || t("collections:digests.untitled", "Untitled Digest")}</span>
@@ -390,7 +390,7 @@ export const DigestSchedulesPanel: React.FC = () => {
                 }
                 description={
                   <div>
-                    <div className="text-sm text-zinc-600 dark:text-zinc-300">
+                    <div className="text-sm text-text-muted">
                       {t("collections:digests.scheduleLine", "Cron: {{cron}} ({{timezone}})", {
                         cron: schedule.cron,
                         timezone: schedule.timezone || "UTC"
@@ -507,7 +507,7 @@ export const DigestSchedulesPanel: React.FC = () => {
             <Input placeholder="newsletter_markdown" />
           </Form.Item>
 
-          <div className="rounded border border-zinc-200 dark:border-zinc-700 p-3 space-y-3">
+          <div className="rounded border border-border p-3 space-y-3">
             <Form.Item
               label={t("collections:digests.form.suggestionsEnabled", "Enable suggestions")}
               name="suggestions_enabled"

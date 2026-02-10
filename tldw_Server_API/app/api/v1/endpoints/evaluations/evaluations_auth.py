@@ -35,6 +35,7 @@ from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime
 
 security = HTTPBearer(auto_error=False)
 _EVALS_LEGACY_RATE_LIMIT_SHIM_LOGGED = False
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
 def _env_truthy(name: str, default: str = "") -> bool:
@@ -281,10 +282,21 @@ def require_eval_permissions(*permissions: str):
     perms = [str(p) for p in permissions if str(p).strip()]
 
     async def _checker(current_user: User = Depends(get_eval_request_user)) -> User:  # noqa: B008
-        if getattr(current_user, "is_admin", False):
+        role_values = {
+            str(role).strip().lower()
+            for role in (getattr(current_user, "roles", []) or [])
+            if str(role).strip()
+        }
+        if "admin" in role_values:
             return current_user
-        user_perms = set(getattr(current_user, "permissions", []) or [])
-        missing = [p for p in perms if p not in user_perms]
+        user_perm_values = {
+            str(perm).strip().lower()
+            for perm in (getattr(current_user, "permissions", []) or [])
+            if str(perm).strip()
+        }
+        if "*" in user_perm_values or "system.configure" in user_perm_values:
+            return current_user
+        missing = [p for p in perms if p.lower() not in user_perm_values]
         if missing:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -363,7 +375,7 @@ def enforce_heavy_evaluations_admin(principal: Optional[AuthPrincipal]) -> None:
     Claim-first enforcement for heavy evaluations admin operations.
 
     When EVALS_HEAVY_ADMIN_ONLY is disabled, this is a no-op. Otherwise,
-    require an admin-style principal (is_admin or role 'admin') for heavy
+    require an admin-style principal (role/permission claims) for heavy
     evaluations flows.
 
     Args:
@@ -380,10 +392,17 @@ def enforce_heavy_evaluations_admin(principal: Optional[AuthPrincipal]) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required for heavy evaluations",
         )
-    is_admin_flag = bool(
-        principal.is_admin
-        or ("admin" in (principal.roles or []))
-    )
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    is_admin_flag = bool(("admin" in roles) or (permissions & _ADMIN_CLAIM_PERMISSIONS))
     if not is_admin_flag:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

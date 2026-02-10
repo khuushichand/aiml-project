@@ -71,7 +71,7 @@ export const EditableCell: React.FC<EditableCellProps> = ({
   // Render display value (non-editing mode)
   const renderDisplayValue = () => {
     if (value === null || value === undefined) {
-      return <span className="text-zinc-400 italic">-</span>
+      return <span className="text-text-subtle italic">-</span>
     }
 
     switch (columnType) {
@@ -82,7 +82,7 @@ export const EditableCell: React.FC<EditableCellProps> = ({
               href={value}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-600 hover:text-blue-800 dark:text-blue-400"
+              className="text-primary hover:text-primaryStrong"
               onClick={(e) => e.stopPropagation()}
             >
               {value.length > 40 ? `${value.slice(0, 40)}...` : value}
@@ -224,8 +224,8 @@ export const EditableCell: React.FC<EditableCellProps> = ({
   // Display mode
   return (
     <div
-      className={`editable-cell cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-700 px-1 py-0.5 rounded min-h-[24px] ${
-        isModified ? "bg-yellow-50 dark:bg-yellow-900/20 border-l-2 border-yellow-400" : ""
+      className={`editable-cell cursor-pointer hover:bg-surface px-1 py-0.5 rounded min-h-[24px] ${
+        isModified ? "bg-warn/10 border-l-2 border-warn" : ""
       }`}
       onClick={onStartEdit}
       title="Click to edit"

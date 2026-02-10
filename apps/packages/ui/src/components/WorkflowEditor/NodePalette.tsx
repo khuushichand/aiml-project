@@ -101,9 +101,9 @@ const CATEGORY_COLORS: Record<string, { bg: string; text: string; border: string
     border: "border-purple-300 dark:border-purple-700"
   },
   blue: {
-    bg: "bg-blue-100 dark:bg-blue-900/30",
-    text: "text-blue-600 dark:text-blue-400",
-    border: "border-blue-300 dark:border-blue-700"
+    bg: "bg-primary/10",
+    text: "text-primary",
+    border: "border-primary/30"
   },
   indigo: {
     bg: "bg-indigo-100 dark:bg-indigo-900/30",
@@ -136,14 +136,14 @@ const CATEGORY_COLORS: Record<string, { bg: string; text: string; border: string
     border: "border-orange-300 dark:border-orange-700"
   },
   green: {
-    bg: "bg-green-100 dark:bg-green-900/30",
-    text: "text-green-600 dark:text-green-400",
-    border: "border-green-300 dark:border-green-700"
+    bg: "bg-success/10",
+    text: "text-success",
+    border: "border-success/30"
   },
   gray: {
-    bg: "bg-gray-100 dark:bg-gray-800",
-    text: "text-gray-600 dark:text-gray-400",
-    border: "border-gray-300 dark:border-gray-600"
+    bg: "bg-surface",
+    text: "text-text-muted",
+    border: "border-border"
   }
 }
 
@@ -191,12 +191,12 @@ const PaletteItem = ({
           transition-all duration-150
         `}
       >
-        <GripVertical className="w-3 h-3 text-gray-400 shrink-0" />
+        <GripVertical className="w-3 h-3 text-text-subtle shrink-0" />
         <div className={`p-1.5 rounded ${colors.bg}`}>
           <Icon className={`w-4 h-4 ${colors.text}`} />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+          <div className="text-sm font-medium text-text truncate">
             {step.label}
           </div>
         </div>
@@ -315,7 +315,7 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
           style={{ backgroundColor: `var(--${cat.color}-500, #888)` }}
         />
         <span className="font-medium">{cat.label}</span>
-        <span className="text-xs text-gray-400">({cat.steps.length})</span>
+        <span className="text-xs text-text-subtle">({cat.steps.length})</span>
       </div>
     ),
     children: (
@@ -340,12 +340,12 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
   return (
     <div className={`flex flex-col h-full ${className}`}>
       {/* Header */}
-      <div className="p-3 border-b border-gray-200 dark:border-gray-700">
-        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+      <div className="p-3 border-b border-border">
+        <h3 className="text-sm font-semibold text-text-muted mb-2">
           Node Library
         </h3>
         <Input
-          prefix={<Search className="w-4 h-4 text-gray-400" />}
+          prefix={<Search className="w-4 h-4 text-text-subtle" />}
           placeholder="Search nodes..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -377,12 +377,12 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
       {/* Node Categories */}
       <div className="flex-1 overflow-y-auto p-2">
         {stepTypesStatus === "loading" ? (
-          <div className="flex items-center justify-center py-10 text-gray-400">
+          <div className="flex items-center justify-center py-10 text-text-subtle">
             <Spin size="small" />
             <span className="ml-2 text-sm">Loading steps…</span>
           </div>
         ) : filteredCategories.length === 0 ? (
-          <div className="text-center text-gray-400 py-8">
+          <div className="text-center text-text-subtle py-8">
             <Search className="w-8 h-8 mx-auto mb-2 opacity-50" />
             <p className="text-sm">
               {stepTypesError ? "Unable to load step types" : "No nodes found"}
@@ -418,8 +418,8 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
       </div>
 
       {/* Help text */}
-      <div className="p-3 border-t border-gray-200 dark:border-gray-700">
-        <p className="text-xs text-gray-400 text-center">
+      <div className="p-3 border-t border-border">
+        <p className="text-xs text-text-subtle text-center">
           Drag, click, or press Enter to add nodes
         </p>
       </div>

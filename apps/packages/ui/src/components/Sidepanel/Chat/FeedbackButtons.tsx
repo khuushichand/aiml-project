@@ -23,8 +23,8 @@ const baseButton =
 const getThumbClass = (active: boolean, kind: "up" | "down") => {
   if (active) {
     return kind === "up"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-      : "border-rose-200 bg-rose-50 text-rose-600 dark:border-rose-700 dark:bg-rose-900/30 dark:text-rose-300"
+      ? "border-success/30 bg-success/10 text-success"
+      : "border-danger/30 bg-danger/10 text-danger"
   }
   return "border-border text-text-muted hover:bg-surface2"
 }
@@ -128,7 +128,7 @@ export const FeedbackButtons = ({
         </Tooltip>
       </div>
       {showThanks && (
-        <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-300">
+        <span className="text-[11px] font-medium text-success">
           {t("feedback.thanks", "Thanks for the feedback")}
         </span>
       )}

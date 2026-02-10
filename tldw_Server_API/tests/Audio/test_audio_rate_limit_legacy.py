@@ -28,7 +28,6 @@ class _StubRateLimiter:
 
 class _StubSettings:
     RATE_LIMIT_ENABLED = True
-    RATE_LIMIT_PER_MINUTE = 1
 
 
 class _StubUsageLogger:
@@ -71,7 +70,7 @@ async def _fake_get_jwt_service():
     return _StubJWT()
 
 
-def test_audio_speech_uses_legacy_rate_limit_when_rg_disabled(monkeypatch):
+def test_audio_speech_does_not_use_legacy_rate_limit_when_rg_disabled(monkeypatch):
 
 
     monkeypatch.setenv("RG_ENABLED", "0")
@@ -106,6 +105,6 @@ def test_audio_speech_uses_legacy_rate_limit_when_rg_disabled(monkeypatch):
     with TestClient(app) as client:
         response = client.post("/api/v1/audio/speech", json=payload, headers={"X-API-KEY": "test-key"})
 
-    assert response.status_code == 429
-    assert limiter.calls
-    assert limiter.calls[0][0] in {"user", "ip"}
+    # Stage 5: Auth dependency shim is diagnostics-only; no legacy limiter 429 path.
+    assert response.status_code == 401
+    assert limiter.calls == []

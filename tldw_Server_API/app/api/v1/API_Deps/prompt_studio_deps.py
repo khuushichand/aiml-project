@@ -326,7 +326,16 @@ async def get_prompt_studio_user(
     roles_raw = getattr(current_user, "roles", []) or []
     normalized_roles = {r.lower() for r in roles_raw if isinstance(r, str)}
     perms = getattr(current_user, "permissions", []) or []
-    is_admin = bool(getattr(current_user, "is_admin", False) or ("admin" in normalized_roles))
+    normalized_permissions = {
+        p.lower()
+        for p in perms
+        if isinstance(p, str) and p.strip()
+    }
+    is_admin = bool(
+        ("admin" in normalized_roles)
+        or ("*" in normalized_permissions)
+        or ("system.configure" in normalized_permissions)
+    )
 
     user_context: dict[str, Any] = {
         "user_id": str(getattr(current_user, "id", "anonymous")),

@@ -61,7 +61,6 @@ def test_env_vars():
     os.environ["TEST_MODE"] = "true"
     os.environ["CHARACTER_DB_PATH"] = ":memory:"
     os.environ["MAX_CHAT_HISTORY"] = "100"
-    os.environ["RATE_LIMIT_PER_MINUTE"] = "30"
 
     yield
 

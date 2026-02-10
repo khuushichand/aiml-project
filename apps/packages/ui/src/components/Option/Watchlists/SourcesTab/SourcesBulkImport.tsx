@@ -84,7 +84,7 @@ export const SourcesBulkImport: React.FC<SourcesBulkImportProps> = ({
     >
       <div className="space-y-4">
         <Upload.Dragger {...uploadProps} disabled={importing}>
-          <div className="flex flex-col items-center justify-center gap-2 py-6 text-zinc-500">
+          <div className="flex flex-col items-center justify-center gap-2 py-6 text-text-muted">
             <UploadCloud className="h-6 w-6" />
             <div className="text-sm font-medium">
               {t("watchlists:sources.importDrop", "Drop OPML file here or click to upload")}
@@ -97,7 +97,7 @@ export const SourcesBulkImport: React.FC<SourcesBulkImportProps> = ({
 
         <div className="grid gap-3 md:grid-cols-3">
           <div>
-            <div className="text-xs font-medium text-zinc-500 mb-1">
+            <div className="text-xs font-medium text-text-muted mb-1">
               {t("watchlists:sources.importGroup", "Assign Group")}
             </div>
             <Select
@@ -113,7 +113,7 @@ export const SourcesBulkImport: React.FC<SourcesBulkImportProps> = ({
             />
           </div>
           <div>
-            <div className="text-xs font-medium text-zinc-500 mb-1">
+            <div className="text-xs font-medium text-text-muted mb-1">
               {t("watchlists:sources.importTags", "Apply Tags")}
             </div>
             <Select
@@ -126,7 +126,7 @@ export const SourcesBulkImport: React.FC<SourcesBulkImportProps> = ({
             />
           </div>
           <div>
-            <div className="text-xs font-medium text-zinc-500 mb-1">
+            <div className="text-xs font-medium text-text-muted mb-1">
               {t("watchlists:sources.importActive", "Set Active")}
             </div>
             <Switch checked={active} onChange={setActive} />

@@ -26,6 +26,7 @@ import {
 import "@xyflow/react/dist/style.css"
 import { message } from "antd"
 
+import { getComputedTokens } from "@/themes/runtime-tokens"
 import type { WorkflowStepType, WorkflowNode, WorkflowNodeData } from "@/types/workflow-editor"
 import { useWorkflowEditorStore } from "@/store/workflow-editor"
 import { buildWorkflowNodeTypes } from "./nodes/WorkflowNode"
@@ -57,6 +58,8 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
   const setSelectedEdges = useWorkflowEditorStore((s) => s.setSelectedEdges)
   const setZoom = useWorkflowEditorStore((s) => s.setZoom)
   const setPanPosition = useWorkflowEditorStore((s) => s.setPanPosition)
+
+  const tokens = useMemo(() => getComputedTokens(), [])
 
   const nodeTypes = useMemo(() => {
     const registryTypes = Object.keys(stepRegistry || {})
@@ -191,6 +194,7 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
   const nodeColor = useCallback((node: Node) => {
     const data = node.data as WorkflowNodeData
     const meta = getStepMetadata(data.stepType, stepRegistry)
+    // theme-exempt: workflow category colors
     const categoryColors: Record<string, string> = {
       ai: "#a855f7",
       search: "#3b82f6",
@@ -238,24 +242,24 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
           animated: false,
           style: {
             strokeWidth: 2,
-            stroke: "#94a3b8"
+            stroke: tokens.border
           }
         }}
         connectionLineStyle={{
           strokeWidth: 2,
-          stroke: "#3b82f6"
+          stroke: tokens.primary
         }}
         proOptions={{
           hideAttribution: true
         }}
-        className="bg-gray-50 dark:bg-gray-900"
+        className="bg-bg"
       >
         {isGridVisible && (
           <Background
             variant={BackgroundVariant.Dots}
             gap={16}
             size={1}
-            color="#94a3b8"
+            color={tokens.muted}
             className="opacity-30"
           />
         )}
@@ -264,14 +268,14 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
           showZoom
           showFitView
           showInteractive={false}
-          className="!bg-white dark:!bg-gray-800 !border-gray-200 dark:!border-gray-700 !shadow-lg"
+          className="!bg-surface !border-border !shadow-lg"
         />
 
         {isMiniMapVisible && (
           <MiniMap
             nodeColor={nodeColor}
             maskColor="rgba(0, 0, 0, 0.1)"
-            className="!bg-white dark:!bg-gray-800 !border-gray-200 dark:!border-gray-700"
+            className="!bg-surface !border-border"
           />
         )}
       </ReactFlow>

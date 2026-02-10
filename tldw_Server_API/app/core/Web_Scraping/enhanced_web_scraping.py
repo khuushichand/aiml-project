@@ -282,7 +282,7 @@ def _log_rg_web_fallback(reason: str) -> None:
         return
     _rg_web_fallback_logged = True
     logger.warning(
-        "Web scraping ResourceGovernor unavailable; using diagnostics-only legacy shim (no sleeps/counters). "
+        "Web scraping ResourceGovernor unavailable; using diagnostics-only compatibility shim (no sleeps/counters). "
         "reason={}",
         reason,
     )
@@ -338,7 +338,8 @@ async def _get_web_scraping_rg_governor():
             return gov
         except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - optional path
             logger.debug(
-                "Web scraping RG governor init failed; using diagnostics-only legacy shim: {}", exc
+                "Web scraping RG governor init failed; using diagnostics-only compatibility shim: {}",
+                exc,
             )
             return None
 

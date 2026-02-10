@@ -302,7 +302,7 @@ export const DiscoSkillsSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={resetStats}
-                    className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                    className="text-xs text-primary hover:text-primaryStrong"
                   >
                     {t("discoSkills.resetStats", "Reset to default")}
                   </button>

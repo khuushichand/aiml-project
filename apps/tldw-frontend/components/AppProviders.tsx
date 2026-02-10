@@ -1,13 +1,16 @@
 import React, { useEffect, useRef, useState } from "react"
-import { App as AntdApp, ConfigProvider, Empty, theme } from "antd"
+import { App as AntdApp, ConfigProvider, Empty } from "antd"
 import { StyleProvider } from "@ant-design/cssinjs"
 import { QueryClientProvider } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
-import { useDarkMode } from "@/hooks/useDarkmode"
+import { useTheme } from "@/hooks/useTheme"
 import { PageAssistProvider } from "@/components/Common/PageAssistProvider"
 import { FontSizeProvider } from "@/context/FontSizeProvider"
 import { DemoModeProvider } from "@/context/demo-mode"
 import { getQueryClient } from "@/services/query-client"
+import { SplashOverlay } from "@/components/Common/SplashScreen"
+import { useSplashScreen } from "@/hooks/useSplashScreen"
+import { SPLASH_TRIGGER_EVENT } from "@/services/splash-events"
 
 type AppProvidersProps = {
   children: React.ReactNode
@@ -17,8 +20,9 @@ const queryClient = getQueryClient()
 const EMPTY_STYLES = { image: { height: 60 } }
 
 export const AppProviders: React.FC<AppProvidersProps> = ({ children }) => {
-  const { mode } = useDarkMode()
+  const { antdTheme } = useTheme()
   const { i18n, t } = useTranslation("common")
+  const splash = useSplashScreen()
   // SSR-safe: default to "ltr", update on client
   const [direction, setDirection] = useState<"ltr" | "rtl">("ltr")
   const portalRootRef = useRef<HTMLDivElement | null>(null)
@@ -50,6 +54,13 @@ export const AppProviders: React.FC<AppProvidersProps> = ({ children }) => {
     setDirection(i18n.dir(language))
   }, [i18n, i18n.resolvedLanguage, i18n.language])
 
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const onSplashTrigger = () => splash.show()
+    window.addEventListener(SPLASH_TRIGGER_EVENT, onSplashTrigger)
+    return () => window.removeEventListener(SPLASH_TRIGGER_EVENT, onSplashTrigger)
+  }, [splash.show])
+
   return (
     <StyleProvider hashPriority="high">
       <QueryClientProvider client={queryClient}>
@@ -57,20 +68,19 @@ export const AppProviders: React.FC<AppProvidersProps> = ({ children }) => {
           <PageAssistProvider>
             <FontSizeProvider>
               <ConfigProvider
-                theme={{
-                  algorithm:
-                    mode === "dark"
-                      ? theme.darkAlgorithm
-                      : theme.defaultAlgorithm,
-                  token: {
-                    fontFamily: "Arimo"
-                  }
-                }}
+                theme={antdTheme}
                 getPopupContainer={getPopupContainer}
                 renderEmpty={renderEmpty}
                 direction={direction}
               >
                 <AntdApp>{children}</AntdApp>
+                {splash.visible && splash.card && (
+                  <SplashOverlay
+                    card={splash.card}
+                    message={splash.message}
+                    onDismiss={splash.dismiss}
+                  />
+                )}
                 <div id="tldw-portal-root" ref={portalRootRef} />
               </ConfigProvider>
             </FontSizeProvider>

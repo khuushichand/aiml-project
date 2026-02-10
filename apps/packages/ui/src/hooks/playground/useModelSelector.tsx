@@ -295,7 +295,7 @@ export function useModelSelector({
               <ProviderIcons provider={providerRaw} className="h-3 w-3 text-text-subtle" />
               <span className="truncate flex-1">{modelLabel}</span>
               {isRecommended && (
-                <span className="rounded-full bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 text-[10px] text-blue-600 dark:text-blue-400">
+                <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
                   {t("playground:composer.recommended", "Recommended")}
                 </span>
               )}

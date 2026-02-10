@@ -589,7 +589,7 @@ export const ControlRow: React.FC<ControlRowProps> = ({
             onClick={() => setWebSearch(!webSearch)}
             className={`flex items-center gap-2 px-3 py-2 sm:px-2 sm:py-1 rounded text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-focus transition-colors min-h-[44px] sm:min-h-0 ${
               webSearch
-                ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/40"
+                ? "bg-primary/10 text-primary hover:bg-primary/20"
                 : "text-text-muted hover:bg-surface2 hover:text-text"
             }`}
             aria-label={t("sidepanel:controlRow.webSearch", "Web Search")}

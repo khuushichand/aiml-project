@@ -31,38 +31,46 @@ _FALSEY_ENV_VALUES = {"0", "false", "no", "off", "n"}
 _CONFIG_REMOTE_CACHE_TTL = 30.0  # seconds
 _config_remote_cached: bool | None = None
 _config_remote_cached_at = 0.0
+_ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _principal_has_admin_claims(principal) -> bool:
+    roles = {
+        str(role).strip().lower()
+        for role in (getattr(principal, "roles", None) or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (getattr(principal, "permissions", None) or [])
+        if str(permission).strip()
+    }
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 async def _require_admin_for_remote(request: Request) -> None:
     """Enforce admin-level authorization for remote setup access.
 
     Principals satisfying any of these conditions are permitted:
-    - ``principal.is_admin`` is truthy (full admin privileges)
+    - explicit admin claims (role ``admin`` or permissions ``*`` / ``system.configure``)
     - Single-user mode principal (bootstrapped local user)
-    - Has "admin" role AND ``SYSTEM_CONFIGURE`` permission
 
     Raises:
         HTTPException: 403 Forbidden if the principal lacks required privileges.
     """
     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
-    from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
     from tldw_Server_API.app.core.AuthNZ.principal_model import is_single_user_principal
 
     principal = await get_auth_principal(request)
-    if principal.is_admin or is_single_user_principal(principal):
+    if _principal_has_admin_claims(principal) or is_single_user_principal(principal):
         return
 
-    roles = {str(role).lower() for role in (principal.roles or [])}
-    if "admin" not in roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required for remote setup.",
-        )
-    if SYSTEM_CONFIGURE not in (principal.permissions or []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: missing system.configure",
-        )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Admin access required for remote setup.",
+    )
 
 
 def reset_remote_access_cache(value: bool | None = None) -> None:

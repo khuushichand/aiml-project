@@ -67,7 +67,7 @@ export const TTSPanel: React.FC<TTSPanelProps> = ({ defaultText }) => {
           <button
             onClick={handlePlayPause}
             disabled={state.isLoading || !canPlay}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-white hover:bg-primary/90 disabled:bg-gray-300 disabled:cursor-not-allowed"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-white hover:bg-primary/90 disabled:bg-muted disabled:cursor-not-allowed"
           >
             {state.isLoading ? (
               <Spin size="small" />
@@ -107,7 +107,7 @@ export const TTSPanel: React.FC<TTSPanelProps> = ({ defaultText }) => {
 
       {/* Error message */}
       {state.error && (
-        <div className="rounded border border-red-200 bg-red-50 dark:bg-red-900/20 p-2 text-xs text-red-600 dark:text-red-400">
+        <div className="rounded border border-danger/30 bg-danger/10 p-2 text-xs text-danger">
           {state.error}
         </div>
       )}

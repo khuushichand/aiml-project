@@ -16,15 +16,15 @@ interface TokenProgressBarProps {
 }
 
 const getProgressColor = (percentage: number): string => {
-  if (percentage >= 80) return "bg-red-500"
-  if (percentage >= 50) return "bg-yellow-500"
-  return "bg-green-500"
+  if (percentage >= 80) return "bg-danger"
+  if (percentage >= 50) return "bg-warn"
+  return "bg-success"
 }
 
 const getProgressColorText = (percentage: number): string => {
-  if (percentage >= 80) return "text-red-600 dark:text-red-400"
-  if (percentage >= 50) return "text-yellow-600 dark:text-yellow-400"
-  return "text-green-600 dark:text-green-400"
+  if (percentage >= 80) return "text-danger"
+  if (percentage >= 50) return "text-warn"
+  return "text-success"
 }
 
 export const TokenProgressBar: React.FC<TokenProgressBarProps> = ({

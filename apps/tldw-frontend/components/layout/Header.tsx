@@ -59,12 +59,12 @@ export function Header() {
   ];
 
   return (
-    <header className="border-b border-gray-200 bg-white">
+    <header className="border-b border-border bg-surface">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between">
           {/* Logo */}
           <div className="flex items-center">
-            <Link href="/" className="text-xl font-bold text-gray-900">
+            <Link href="/" className="text-xl font-bold text-text">
               TLDW
             </Link>
           </div>
@@ -78,8 +78,8 @@ export function Header() {
                 className={cn(
                   'inline-flex items-center px-1 pt-1 text-sm font-medium',
                   router.pathname === link.href
-                    ? 'border-b-2 border-blue-500 text-gray-900'
-                    : 'text-gray-500 hover:text-gray-900'
+                    ? 'border-b-2 border-primary text-text'
+                    : 'text-text-muted hover:text-text'
                 )}
               >
                 {link.label}
@@ -91,14 +91,14 @@ export function Header() {
           <div className="flex items-center space-x-4">
             {isAuthenticated ? (
               <>
-                <span className="text-sm text-gray-700">
+                <span className="text-sm text-text">
                   {user?.username || 'User'}
                 </span>
                 {/* Only show logout when using session-based auth */}
                 {!process.env.NEXT_PUBLIC_X_API_KEY && !process.env.NEXT_PUBLIC_API_BEARER && (
                   <button
                     onClick={handleLogout}
-                    className="rounded-md bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200"
+                    className="rounded-md bg-surface px-3 py-2 text-sm font-medium text-text hover:bg-surface2"
                   >
                     Logout
                   </button>
@@ -107,7 +107,7 @@ export function Header() {
             ) : (
               <Link
                 href="/login"
-                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primaryStrong"
               >
                 Login
               </Link>

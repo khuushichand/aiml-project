@@ -59,10 +59,10 @@ const ErrorBubble: React.FC<{
     <div
       role="alert"
       aria-live="assertive"
-      className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-700 dark:bg-red-900/30 dark:text-red-100">
+      className="rounded-md border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
       <p className="font-semibold">{payload.summary}</p>
       {payload.hint && (
-        <p className="mt-1 text-xs text-red-900 dark:text-red-100">
+        <p className="mt-1 text-xs text-danger">
           {payload.hint}
         </p>
       )}
@@ -71,12 +71,12 @@ const ErrorBubble: React.FC<{
           type="button"
           onClick={() => setShowDetails((prev) => !prev)}
           title={showDetails ? toggleLabels.hide : toggleLabels.show}
-          className="mt-2 text-xs font-medium text-red-800 underline hover:text-red-700 dark:text-red-200 dark:hover:text-red-100">
+          className="mt-2 text-xs font-medium text-danger underline hover:text-danger">
           {showDetails ? toggleLabels.hide : toggleLabels.show}
         </button>
       )}
       {showDetails && payload.detail && (
-        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-red-100/70 p-2 text-xs text-red-900 dark:bg-red-900/40 dark:text-red-100">
+        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-danger/10 p-2 text-xs text-danger">
           {payload.detail}
         </pre>
       )}
@@ -1007,7 +1007,7 @@ export const PlaygroundMessage = (props: Props) => {
             </div>
           ) : !props.userAvatar ? (
             <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
-              <div className="absolute h-8 w-8 rounded-full from-blue-400 to-blue-600 bg-gradient-to-r"></div>
+              <div className="absolute h-8 w-8 rounded-full from-primary/60 to-primary bg-gradient-to-r"></div>
             </div>
           ) : (
             props.userAvatar
@@ -1056,24 +1056,24 @@ export const PlaygroundMessage = (props: Props) => {
                         title={compareLabel}
                         className={`rounded-full px-2 py-1 text-xs font-medium border transition ${
                           props.compareSelected
-                            ? "bg-blue-600 text-white border-blue-600"
-                            : "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700"
+                            ? "bg-primary text-white border-primary"
+                            : "bg-primary/10 text-primary border-primary/30"
                         }`}
                       >
                         {compareLabel}
                       </button>
                     ) : (
-                      <span className="rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                      <span className="rounded-full bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
                         {compareLabel}
                       </span>
                     )}
                     {props.compareError && (
-                      <span className="rounded-full bg-red-50 px-2 py-1 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-200">
+                      <span className="rounded-full bg-danger/10 px-2 py-1 text-xs font-medium text-danger">
                         {t("error.label", "Error")}
                       </span>
                     )}
                     {props.compareChosen && (
-                      <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200">
+                      <span className="rounded-full bg-success/10 px-2 py-1 text-xs font-medium text-success">
                         {t(
                           "playground:composer.compareChosenLabel",
                           "Chosen"
@@ -1278,7 +1278,7 @@ export const PlaygroundMessage = (props: Props) => {
                 {props.documents.map((doc, index) => (
                   <div
                     key={index}
-                    className="inline-flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded-lg text-sm border border-blue-200 dark:border-blue-800">
+                    className="inline-flex items-center gap-2 px-3 py-2 bg-primary/10 text-primary rounded-lg text-sm border border-primary/30">
                     <FileIcon className="h-4 w-4" />
                     <div className="flex flex-col">
                       <span className="font-medium">{doc.filename || "Unknown file"}</span>

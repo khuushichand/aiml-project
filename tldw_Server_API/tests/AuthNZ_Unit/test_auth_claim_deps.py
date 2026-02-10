@@ -41,9 +41,9 @@ async def test_require_permissions_allows_when_permission_present():
 
 
 @pytest.mark.asyncio
-async def test_require_permissions_allows_admin_even_without_specific_perm():
-    principal = _make_principal(is_admin=True, permissions=[])
-    dep = require_permissions("system.configure")
+async def test_require_permissions_allows_admin_claim_even_without_specific_perm():
+    principal = _make_principal(roles=["admin"], permissions=[])
+    dep = require_permissions("media.create")
 
     result = await dep(principal)  # type: ignore[arg-type]
     assert result is principal
@@ -53,6 +53,18 @@ async def test_require_permissions_allows_admin_even_without_specific_perm():
 async def test_require_permissions_denies_when_missing_perm_and_not_admin():
     principal = _make_principal(permissions=["media.read"])
     dep = require_permissions("media.create")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dep(principal)  # type: ignore[arg-type]
+
+    assert exc_info.value.status_code == 403
+    assert "Permission denied" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_require_permissions_denies_boolean_admin_without_admin_claims():
+    principal = _make_principal(is_admin=True, permissions=[], roles=["user"])
+    dep = require_permissions("system.configure")
 
     with pytest.raises(HTTPException) as exc_info:
         await dep(principal)  # type: ignore[arg-type]
@@ -83,9 +95,21 @@ async def test_require_roles_denies_when_missing_role_and_not_admin():
 
 
 @pytest.mark.asyncio
-async def test_require_roles_allows_admin_even_without_role():
-    principal = _make_principal(is_admin=True, roles=["user"])
+async def test_require_roles_allows_admin_claim_even_without_role():
+    principal = _make_principal(is_admin=False, roles=["user"], permissions=["*"])
     dep = require_roles("admin")
 
     result: Any = await dep(principal)  # type: ignore[arg-type]
     assert result is principal
+
+
+@pytest.mark.asyncio
+async def test_require_roles_denies_boolean_admin_without_admin_claims():
+    principal = _make_principal(is_admin=True, roles=["user"], permissions=[])
+    dep = require_roles("admin")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dep(principal)  # type: ignore[arg-type]
+
+    assert exc_info.value.status_code == 403
+    assert "Access denied" in str(exc_info.value.detail)

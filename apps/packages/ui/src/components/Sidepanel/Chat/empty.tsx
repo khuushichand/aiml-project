@@ -204,8 +204,8 @@ export const EmptySidePanel = ({ inputRef }: EmptySidePanelProps) => {
         : Settings
 
     const iconColorClass = uxState === "error_auth" || uxState === "error_unreachable"
-      ? "text-amber-600 dark:text-amber-400"
-      : "text-blue-500 dark:text-blue-400"
+      ? "text-warn"
+      : "text-primary"
 
     return (
       <div
@@ -218,8 +218,8 @@ export const EmptySidePanel = ({ inputRef }: EmptySidePanelProps) => {
           <div className="flex items-center gap-3 border-b border-border/70 px-4 py-4">
             <div className={`flex-shrink-0 rounded-2xl p-2 ${
               uxState === "error_auth" || uxState === "error_unreachable"
-                ? "bg-amber-100 dark:bg-amber-900/30"
-                : "bg-blue-100 dark:bg-blue-900/30"
+                ? "bg-warn/10"
+                : "bg-primary/10"
             }`}>
               <StatusIcon className={`size-5 ${iconColorClass}`} />
             </div>
@@ -244,8 +244,8 @@ export const EmptySidePanel = ({ inputRef }: EmptySidePanelProps) => {
               data-testid="chat-connection-cta"
               className={`flex w-full items-center justify-center gap-2 rounded-full px-4 py-2.5 text-xs font-medium transition-colors ${
                 uxState === "error_auth" || uxState === "error_unreachable"
-                  ? "bg-amber-500 hover:bg-amber-600 text-white"
-                  : "bg-blue-500 hover:bg-blue-600 text-white"
+                  ? "bg-warn hover:bg-warn/90 text-white"
+                  : "bg-primary hover:bg-primaryStrong text-white"
               }`}
               title={
                 !hasCompletedFirstRun
@@ -295,10 +295,10 @@ export const EmptySidePanel = ({ inputRef }: EmptySidePanelProps) => {
     >
       {/* Animated icon */}
       <div className="relative mb-3">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-green-100 to-emerald-100 dark:from-green-900/30 dark:to-emerald-900/30">
-          <MessageSquare className="size-6 text-green-600 dark:text-green-400" />
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-success/10">
+          <MessageSquare className="size-6 text-success" />
         </div>
-        <div className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-white bg-green-500 dark:border-[#1a1a1a]" />
+        <div className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-white bg-success dark:border-[#1a1a1a]" />
       </div>
 
       {/* Status and heading */}

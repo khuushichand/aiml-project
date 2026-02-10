@@ -207,7 +207,7 @@ export const useServerDictation = (
               )}
             </p>
             {isChromeOrEdge && (
-              <span className="text-xs text-blue-600 dark:text-blue-400">
+              <span className="text-xs text-primary">
                 {t(
                   "playground:actions.micPermissionsHint",
                   "Check Site Settings > Microphone in your browser"

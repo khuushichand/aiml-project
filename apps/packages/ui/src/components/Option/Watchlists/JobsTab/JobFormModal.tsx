@@ -489,7 +489,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
       label: (
         <span className="font-medium">
           {t("watchlists:jobs.form.scope", "Scope")}
-          <span className="text-red-500 ml-1">*</span>
+          <span className="text-danger ml-1">*</span>
         </span>
       ),
       children: <ScopeSelector value={scope} onChange={setScope} />,
@@ -517,7 +517,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         <span className="font-medium">
           {t("watchlists:jobs.form.filters", "Filters")}
           {filters.length > 0 && (
-            <span className="ml-2 text-zinc-500">({filters.length})</span>
+            <span className="ml-2 text-text-muted">({filters.length})</span>
           )}
         </span>
       ),
@@ -532,7 +532,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
       ),
       children: (
         <div className="space-y-4">
-          <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+          <div className="rounded-lg border border-border p-3">
             <div className="mb-3 text-sm font-medium">
               {t("watchlists:jobs.form.guidedPresets", "Guided presets")}
             </div>
@@ -563,7 +563,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                 {t("watchlists:jobs.form.applyPreset", "Apply preset")}
               </Button>
             </div>
-            <div className="mt-2 text-xs text-zinc-500">
+            <div className="mt-2 text-xs text-text-muted">
               {t(
                 "watchlists:jobs.form.presetHint",
                 "Presets prefill template/delivery defaults. You can still customize fields below."
@@ -571,13 +571,13 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
             </div>
           </div>
 
-          <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+          <div className="rounded-lg border border-border p-3">
             <div className="mb-3 text-sm font-medium">
               {t("watchlists:jobs.form.defaultTemplate", "Default template")}
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div>
-                <div className="mb-1 text-xs text-zinc-500">
+                <div className="mb-1 text-xs text-text-muted">
                   {t("watchlists:jobs.form.defaultTemplateName", "Template name")}
                 </div>
                 <Select
@@ -596,7 +596,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                 />
               </div>
               <div>
-                <div className="mb-1 text-xs text-zinc-500">
+                <div className="mb-1 text-xs text-text-muted">
                   {t("watchlists:jobs.form.defaultTemplateVersion", "Template version")}
                 </div>
                 <InputNumber
@@ -614,7 +614,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                 />
               </div>
               <div>
-                <div className="mb-1 text-xs text-zinc-500">
+                <div className="mb-1 text-xs text-text-muted">
                   {t("watchlists:jobs.form.defaultTemplateFormat", "Default output format")}
                 </div>
                 <Select
@@ -631,13 +631,13 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
             </div>
           </div>
 
-          <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+          <div className="rounded-lg border border-border p-3">
             <div className="mb-3 text-sm font-medium">
               {t("watchlists:jobs.form.retentionDefaults", "Retention defaults")}
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
-                <div className="mb-1 text-xs text-zinc-500">
+                <div className="mb-1 text-xs text-text-muted">
                   {t("watchlists:jobs.form.retentionDefaultSeconds", "Default TTL (seconds)")}
                 </div>
                 <InputNumber
@@ -654,7 +654,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                 />
               </div>
               <div>
-                <div className="mb-1 text-xs text-zinc-500">
+                <div className="mb-1 text-xs text-text-muted">
                   {t("watchlists:jobs.form.retentionTemporarySeconds", "Temporary TTL (seconds)")}
                 </div>
                 <InputNumber
@@ -671,7 +671,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                 />
               </div>
             </div>
-            <div className="mt-2 text-xs text-zinc-500">
+            <div className="mt-2 text-xs text-text-muted">
               {t(
                 "watchlists:jobs.form.retentionHint",
                 "Set 0 for no expiry. Leave blank to use server defaults."
@@ -679,7 +679,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
             </div>
           </div>
 
-          <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+          <div className="rounded-lg border border-border p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="text-sm font-medium">
                 {t("watchlists:jobs.form.emailDelivery", "Email delivery")}
@@ -688,7 +688,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div>
-                <div className="mb-1 text-xs text-zinc-500">
+                <div className="mb-1 text-xs text-text-muted">
                   {t("watchlists:jobs.form.emailRecipients", "Recipients")}
                 </div>
                 <Select
@@ -701,7 +701,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                 />
               </div>
               <div>
-                <div className="mb-1 text-xs text-zinc-500">
+                <div className="mb-1 text-xs text-text-muted">
                   {t("watchlists:jobs.form.emailSubject", "Default subject")}
                 </div>
                 <Input
@@ -714,7 +714,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                 />
               </div>
               <div>
-                <div className="mb-1 text-xs text-zinc-500">
+                <div className="mb-1 text-xs text-text-muted">
                   {t("watchlists:jobs.form.emailBodyFormat", "Body format")}
                 </div>
                 <Select
@@ -728,7 +728,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                 />
               </div>
             </div>
-            <div className="mt-3 flex items-center justify-between rounded-md bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-900/40">
+            <div className="mt-3 flex items-center justify-between rounded-md bg-surface px-3 py-2 text-sm">
               <span>{t("watchlists:jobs.form.emailAttachFile", "Attach output file")}</span>
               <Switch
                 checked={deliveryEmailAttachFile}
@@ -737,7 +737,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
             </div>
           </div>
 
-          <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+          <div className="rounded-lg border border-border p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="text-sm font-medium">
                 {t("watchlists:jobs.form.chatbookDelivery", "Chatbook delivery")}

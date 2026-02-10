@@ -1205,7 +1205,7 @@ export const PromptBody = () => {
                       <Tooltip title={systemPromptLabel}>
                         <span>
                           <Computer
-                            className={`size-4 ${hasSystem ? "text-orange-500" : "text-text-muted/30"}`}
+                            className={`size-4 ${hasSystem ? "text-warn" : "text-text-muted/30"}`}
                             aria-hidden="true"
                           />
                         </span>
@@ -1213,7 +1213,7 @@ export const PromptBody = () => {
                       <Tooltip title={quickPromptLabel}>
                         <span>
                           <Zap
-                            className={`size-4 ${hasQuick ? "text-blue-500" : "text-text-muted/30"}`}
+                            className={`size-4 ${hasQuick ? "text-primary" : "text-text-muted/30"}`}
                             aria-hidden="true"
                           />
                         </span>
@@ -1798,7 +1798,7 @@ export const PromptBody = () => {
               data-testid="prompt-insert-system"
               className="w-full text-left p-4 rounded-lg border border-border hover:border-primary hover:bg-primary/5 transition-colors">
               <div className="flex items-center gap-2 mb-2">
-                <Computer className="size-5 text-orange-500" />
+                <Computer className="size-5 text-warn" />
                 <span className="font-medium">
                   {t("option:promptInsert.useAsSystem", {
                     defaultValue: "Use as System Instruction"
@@ -1824,7 +1824,7 @@ export const PromptBody = () => {
               data-testid="prompt-insert-quick"
               className="w-full text-left p-4 rounded-lg border border-border hover:border-primary hover:bg-primary/5 transition-colors">
               <div className="flex items-center gap-2 mb-2">
-                <Zap className="size-5 text-blue-500" />
+                <Zap className="size-5 text-primary" />
                 <span className="font-medium">
                   {t("option:promptInsert.useAsTemplate", {
                     defaultValue: "Insert as Message Template"

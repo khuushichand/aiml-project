@@ -14,13 +14,22 @@ export const FEATURE_FLAGS = {
   COMMAND_PALETTE: "ff_commandPalette",
   COMPACT_MESSAGES: "ff_compactMessages",
   CHAT_SIDEBAR: "ff_chatSidebar",
-  COMPARE_MODE: "ff_compareMode"
+  COMPARE_MODE: "ff_compareMode",
+  MEDIA_NAVIGATION_PANEL: "ff_mediaNavigationPanel",
+  MEDIA_RICH_RENDERING: "ff_mediaRichRendering",
+  MEDIA_ANALYSIS_DISPLAY_MODE_SELECTOR: "ff_mediaAnalysisDisplayModeSelector",
+  MEDIA_NAVIGATION_GENERATED_FALLBACK_DEFAULT:
+    "ff_mediaNavigationGeneratedFallbackDefault"
 } as const
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[keyof typeof FEATURE_FLAGS]
 
 const FEATURE_FLAG_DEFAULTS: Partial<Record<FeatureFlagKey, boolean>> = {
-  [FEATURE_FLAGS.COMPARE_MODE]: false
+  [FEATURE_FLAGS.COMPARE_MODE]: false,
+  [FEATURE_FLAGS.MEDIA_NAVIGATION_PANEL]: true,
+  [FEATURE_FLAGS.MEDIA_RICH_RENDERING]: true,
+  [FEATURE_FLAGS.MEDIA_ANALYSIS_DISPLAY_MODE_SELECTOR]: true,
+  [FEATURE_FLAGS.MEDIA_NAVIGATION_GENERATED_FALLBACK_DEFAULT]: true
 }
 
 /**
@@ -63,6 +72,30 @@ export function useAllFeatureFlags() {
     FEATURE_FLAGS.COMPARE_MODE,
     FEATURE_FLAG_DEFAULTS[FEATURE_FLAGS.COMPARE_MODE] ?? true
   )
+  const [mediaNavigationPanel, setMediaNavigationPanel] = useStorage(
+    FEATURE_FLAGS.MEDIA_NAVIGATION_PANEL,
+    FEATURE_FLAG_DEFAULTS[FEATURE_FLAGS.MEDIA_NAVIGATION_PANEL] ?? true
+  )
+  const [mediaRichRendering, setMediaRichRendering] = useStorage(
+    FEATURE_FLAGS.MEDIA_RICH_RENDERING,
+    FEATURE_FLAG_DEFAULTS[FEATURE_FLAGS.MEDIA_RICH_RENDERING] ?? true
+  )
+  const [mediaAnalysisDisplayModeSelector, setMediaAnalysisDisplayModeSelector] =
+    useStorage(
+      FEATURE_FLAGS.MEDIA_ANALYSIS_DISPLAY_MODE_SELECTOR,
+      FEATURE_FLAG_DEFAULTS[
+        FEATURE_FLAGS.MEDIA_ANALYSIS_DISPLAY_MODE_SELECTOR
+      ] ?? true
+    )
+  const [
+    mediaNavigationGeneratedFallbackDefault,
+    setMediaNavigationGeneratedFallbackDefault
+  ] = useStorage(
+    FEATURE_FLAGS.MEDIA_NAVIGATION_GENERATED_FALLBACK_DEFAULT,
+    FEATURE_FLAG_DEFAULTS[
+      FEATURE_FLAGS.MEDIA_NAVIGATION_GENERATED_FALLBACK_DEFAULT
+    ] ?? true
+  )
 
   return {
     flags: {
@@ -72,7 +105,11 @@ export function useAllFeatureFlags() {
       commandPalette,
       compactMessages,
       chatSidebar,
-      compareMode
+      compareMode,
+      mediaNavigationPanel,
+      mediaRichRendering,
+      mediaAnalysisDisplayModeSelector,
+      mediaNavigationGeneratedFallbackDefault
     },
     setters: {
       setNewOnboarding,
@@ -81,7 +118,11 @@ export function useAllFeatureFlags() {
       setCommandPalette,
       setCompactMessages,
       setChatSidebar,
-      setCompareMode
+      setCompareMode,
+      setMediaNavigationPanel,
+      setMediaRichRendering,
+      setMediaAnalysisDisplayModeSelector,
+      setMediaNavigationGeneratedFallbackDefault
     },
     // Enable all new UX features
     enableAll: useCallback(() => {
@@ -92,6 +133,10 @@ export function useAllFeatureFlags() {
       setCompactMessages(true)
       setChatSidebar(true)
       setCompareMode(true)
+      setMediaNavigationPanel(true)
+      setMediaRichRendering(true)
+      setMediaAnalysisDisplayModeSelector(true)
+      setMediaNavigationGeneratedFallbackDefault(true)
     }, [
       setNewOnboarding,
       setNewChat,
@@ -99,7 +144,11 @@ export function useAllFeatureFlags() {
       setCommandPalette,
       setCompactMessages,
       setChatSidebar,
-      setCompareMode
+      setCompareMode,
+      setMediaNavigationPanel,
+      setMediaRichRendering,
+      setMediaAnalysisDisplayModeSelector,
+      setMediaNavigationGeneratedFallbackDefault
     ]),
     // Disable all new UX features (revert to old)
     disableAll: useCallback(() => {
@@ -110,6 +159,10 @@ export function useAllFeatureFlags() {
       setCompactMessages(false)
       setChatSidebar(false)
       setCompareMode(false)
+      setMediaNavigationPanel(false)
+      setMediaRichRendering(false)
+      setMediaAnalysisDisplayModeSelector(false)
+      setMediaNavigationGeneratedFallbackDefault(false)
     }, [
       setNewOnboarding,
       setNewChat,
@@ -117,7 +170,11 @@ export function useAllFeatureFlags() {
       setCommandPalette,
       setCompactMessages,
       setChatSidebar,
-      setCompareMode
+      setCompareMode,
+      setMediaNavigationPanel,
+      setMediaRichRendering,
+      setMediaAnalysisDisplayModeSelector,
+      setMediaNavigationGeneratedFallbackDefault
     ])
   }
 }
@@ -147,4 +204,20 @@ export function useCompactMessages() {
 
 export function useChatSidebar() {
   return useFeatureFlag(FEATURE_FLAGS.CHAT_SIDEBAR)
+}
+
+export function useMediaNavigationPanel() {
+  return useFeatureFlag(FEATURE_FLAGS.MEDIA_NAVIGATION_PANEL)
+}
+
+export function useMediaRichRendering() {
+  return useFeatureFlag(FEATURE_FLAGS.MEDIA_RICH_RENDERING)
+}
+
+export function useMediaAnalysisDisplayModeSelector() {
+  return useFeatureFlag(FEATURE_FLAGS.MEDIA_ANALYSIS_DISPLAY_MODE_SELECTOR)
+}
+
+export function useMediaNavigationGeneratedFallbackDefault() {
+  return useFeatureFlag(FEATURE_FLAGS.MEDIA_NAVIGATION_GENERATED_FALLBACK_DEFAULT)
 }

@@ -242,24 +242,6 @@ class Settings(BaseSettings):
         description="Account lockout duration in minutes"
     )
 
-    # ===== Rate Limiting =====
-    RATE_LIMIT_ENABLED: bool = Field(
-        default=True,
-        description="Enable rate limiting"
-    )
-
-    RATE_LIMIT_PER_MINUTE: int = Field(
-        default=60,
-        ge=10,
-        description="Requests allowed per minute"
-    )
-
-    RATE_LIMIT_BURST: int = Field(
-        default=10,
-        ge=5,
-        description="Burst requests allowed"
-    )
-
     # ===== Storage Settings =====
     DEFAULT_STORAGE_QUOTA_MB: int = Field(
         default=5120,  # 5GB
@@ -1047,9 +1029,6 @@ def _load_overrides_from_config() -> dict:
             "org_invite_allow_missing_email",
             _bool_from_str,
         )
-        maybe_set("RATE_LIMIT_ENABLED", "rate_limit_enabled", _bool_from_str)
-        maybe_set("RATE_LIMIT_PER_MINUTE", "rate_limit_per_minute", lambda v: int(v))
-        maybe_set("RATE_LIMIT_BURST", "rate_limit_burst", lambda v: int(v))
         maybe_set("ACCESS_TOKEN_EXPIRE_MINUTES", "access_token_expire_minutes", lambda v: int(v))
         maybe_set("REFRESH_TOKEN_EXPIRE_DAYS", "refresh_token_expire_days", lambda v: int(v))
         maybe_set("MAGIC_LINK_EXPIRE_MINUTES", "magic_link_expire_minutes", lambda v: int(v))
@@ -1162,37 +1141,6 @@ def get_settings() -> Settings:
                 _settings.USER_DATA_BASE_PATH = str(Path(base_dir).resolve())
         except _SETTINGS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"AuthNZ settings: failed to align USER_DATA_BASE_PATH with core settings: {exc}")
-        # In explicit pytest/runtime test contexts, default-disable rate
-        # limiting to keep tests deterministic. Explicit falsey flags (e.g.,
-        # TEST_MODE=0) should take precedence so tests can exercise real rate
-        # limiting.
-        try:
-            import os as _os
-            falsy = {"0", "false", "no", "off"}
-
-            def _env_bool(name: str) -> Optional[bool]:
-                raw = _os.getenv(name)
-                if raw is None:
-                    return None
-                norm = str(raw).strip().lower()
-                if _is_truthy(norm):
-                    return True
-                if norm in falsy:
-                    return False
-                return None
-
-            explicit_flags = [
-                _env_bool("TEST_MODE"),
-                _env_bool("TLDW_TEST_MODE"),
-                _env_bool("TESTING"),
-            ]
-            explicit_false = any(flag is False for flag in explicit_flags)
-            explicit_true = any(flag is True for flag in explicit_flags)
-
-            if not explicit_false and (explicit_true or _os.getenv("PYTEST_CURRENT_TEST")):
-                _settings.RATE_LIMIT_ENABLED = False
-        except _SETTINGS_NONCRITICAL_EXCEPTIONS:
-            pass
         # Log a lightweight profile hint for coordination/UX and optional
         # hardening. AUTH_MODE remains the canonical behavioral switch; PROFILE
         # (explicit or inferred) must not be used to bypass or relax auth

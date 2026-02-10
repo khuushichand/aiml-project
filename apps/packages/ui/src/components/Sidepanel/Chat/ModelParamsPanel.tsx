@@ -167,7 +167,7 @@ export const ModelParamsPanel: React.FC<ModelParamsPanelProps> = ({
               </Tooltip>
               {headersError && (
                 <Tooltip title={headersError}>
-                  <AlertCircle className="size-3 text-red-500" />
+                  <AlertCircle className="size-3 text-danger" />
                 </Tooltip>
               )}
             </div>
@@ -179,7 +179,7 @@ export const ModelParamsPanel: React.FC<ModelParamsPanelProps> = ({
               rows={2}
               className={classNames(
                 "font-mono text-xs",
-                headersError && "border-red-500"
+                headersError && "border-danger"
               )}
             />
           </div>
@@ -199,7 +199,7 @@ export const ModelParamsPanel: React.FC<ModelParamsPanelProps> = ({
               </Tooltip>
               {bodyError && (
                 <Tooltip title={bodyError}>
-                  <AlertCircle className="size-3 text-red-500" />
+                  <AlertCircle className="size-3 text-danger" />
                 </Tooltip>
               )}
             </div>
@@ -211,7 +211,7 @@ export const ModelParamsPanel: React.FC<ModelParamsPanelProps> = ({
               rows={2}
               className={classNames(
                 "font-mono text-xs",
-                bodyError && "border-red-500"
+                bodyError && "border-danger"
               )}
             />
           </div>

@@ -95,7 +95,7 @@ export const JobPreviewModal: React.FC<JobPreviewModalProps> = ({
         </div>
       ) : preview ? (
         <div className="space-y-4">
-          <div className="text-sm text-zinc-500">
+          <div className="text-sm text-text-muted">
             {t(
               "watchlists:jobs.preview.summary",
               "{{total}} candidates: {{ingestable}} ingestable, {{filtered}} filtered",
@@ -115,7 +115,7 @@ export const JobPreviewModal: React.FC<JobPreviewModalProps> = ({
           />
         </div>
       ) : (
-        <div className="text-center text-sm text-zinc-500 py-8">
+        <div className="text-center text-sm text-text-muted py-8">
           {t("watchlists:jobs.preview.empty", "No preview data available")}
         </div>
       )}

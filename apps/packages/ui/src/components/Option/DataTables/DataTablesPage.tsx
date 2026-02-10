@@ -104,10 +104,10 @@ export const DataTablesPage: React.FC = () => {
   return (
     <PageShell className="py-6" maxWidthClassName="max-w-6xl">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
+        <h1 className="text-2xl font-semibold text-text">
           {t("dataTables:title", "Data Tables Studio")}
         </h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-sm text-text-muted">
           {t(
             "dataTables:dataTablesDescription",
             "Generate structured tables from your chats, documents, and knowledge base using natural language prompts."

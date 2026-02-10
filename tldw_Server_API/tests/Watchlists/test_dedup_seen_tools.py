@@ -59,9 +59,16 @@ def user_client(monkeypatch):
 @pytest.fixture()
 def admin_client(monkeypatch):
     async def override_user():
-        u = User(id=9199, username="watch-admin", email=None, is_active=True)
-        setattr(u, "is_admin", True)
-        return u
+        return User(
+            id=9199,
+            username="watch-admin",
+            email=None,
+            role="user",
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=False,
+            is_active=True,
+        )
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_seen_tools"
     base_dir.mkdir(parents=True, exist_ok=True)

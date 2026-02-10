@@ -178,8 +178,8 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
   if (!selectedNode || !metadata) {
     return (
       <div className={`flex flex-col h-full ${className}`}>
-        <div className="p-3 border-b border-gray-200 dark:border-gray-700">
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-2">
+        <div className="p-3 border-b border-border">
+          <h3 className="text-sm font-semibold text-text-muted flex items-center gap-2">
             <Settings className="w-4 h-4" />
             Node Configuration
           </h3>
@@ -213,10 +213,10 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
     const label = (
       <span className="flex items-center gap-1">
         {field.label}
-        {field.required && <span className="text-red-500">*</span>}
+        {field.required && <span className="text-danger">*</span>}
         {field.description && (
           <Tooltip title={field.description}>
-            <Info className="w-3 h-3 text-gray-400 cursor-help" />
+            <Info className="w-3 h-3 text-text-subtle cursor-help" />
           </Tooltip>
         )}
       </span>
@@ -248,7 +248,7 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
               className="font-mono text-sm"
             />
             {field.type === "template-editor" && (
-              <div className="text-xs text-gray-400 mt-1">
+              <div className="text-xs text-text-subtle mt-1">
                 Use {"{{variable}}"} for template placeholders
               </div>
             )}
@@ -396,9 +396,9 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
   return (
     <div className={`flex flex-col h-full ${className}`}>
       {/* Header */}
-      <div className="p-3 border-b border-gray-200 dark:border-gray-700">
+      <div className="p-3 border-b border-border">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-text-muted flex items-center gap-2">
             <Settings className="w-4 h-4" />
             {metadata.label}
           </h3>
@@ -422,7 +422,7 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
             </Tooltip>
           </div>
         </div>
-        <p className="text-xs text-gray-500 dark:text-gray-400">
+        <p className="text-xs text-text-muted">
           {metadata.description}
         </p>
       </div>
@@ -467,23 +467,23 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
       </div>
 
       {/* Port Info */}
-      <div className="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+      <div className="p-3 border-t border-border bg-surface">
         <div className="text-xs">
           <div className="flex items-center gap-2 mb-1">
-            <span className="font-medium text-gray-600 dark:text-gray-400">
+            <span className="font-medium text-text-muted">
               Inputs:
             </span>
-            <span className="text-gray-500">
+            <span className="text-text-subtle">
               {metadata.inputs.length > 0
                 ? metadata.inputs.map((i) => i.label).join(", ")
                 : "None"}
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="font-medium text-gray-600 dark:text-gray-400">
+            <span className="font-medium text-text-muted">
               Outputs:
             </span>
-            <span className="text-gray-500">
+            <span className="text-text-subtle">
               {metadata.outputs.length > 0
                 ? metadata.outputs.map((o) => o.label).join(", ")
                 : "None"}

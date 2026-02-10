@@ -19,7 +19,6 @@ async def test_authnz_monitoring_repo_sqlite_basic(tmp_path):
         JWT_SECRET_KEY="monitoring-secret-key-32-characters-minimum!",
         ENABLE_REGISTRATION=True,
         REQUIRE_REGISTRATION_CODE=False,
-        RATE_LIMIT_ENABLED=False,
     )
 
     pool = DatabasePool(settings)
