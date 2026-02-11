@@ -9,6 +9,9 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
 from tldw_Server_API.app.services import workflows_scheduler as workflows_scheduler_mod
 from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
 
@@ -127,6 +130,45 @@ def test_next_run_persisted_after_create(client_admin):
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert isinstance(data.get("next_run_at"), str) and len(data["next_run_at"]) > 0
+
+
+def test_get_tolerates_default_and_user_db_lookup_errors(monkeypatch, tmp_path):
+    svc = workflows_scheduler_mod._WFRecurringScheduler()
+    target = object()
+
+    class _BrokenDefaultDB:
+        def get_schedule(self, _schedule_id: str):
+            raise BackendDatabaseError("SQLite error: no such table: workflow_schedules")
+
+    class _BrokenUserDB:
+        def get_schedule(self, _schedule_id: str):
+            raise BackendDatabaseError("SQLite error: no such table: workflow_schedules")
+
+    class _GoodUserDB:
+        def get_schedule(self, schedule_id: str):
+            return target if schedule_id == "wf-1" else None
+
+    (tmp_path / "101").mkdir()
+    (tmp_path / "202").mkdir()
+    (tmp_path / "not-a-user").mkdir()
+
+    monkeypatch.setattr(svc, "_db", _BrokenDefaultDB())
+    monkeypatch.setattr(
+        workflows_scheduler_mod.DatabasePaths,
+        "get_user_db_base_dir",
+        lambda: tmp_path,
+    )
+
+    def _get_db(uid: int):
+        if uid == 101:
+            return _BrokenUserDB()
+        if uid == 202:
+            return _GoodUserDB()
+        raise AssertionError(f"Unexpected user id: {uid}")
+
+    monkeypatch.setattr(svc, "_get_db", _get_db)
+
+    assert svc.get("wf-1") is target
 
 
 @pytest.mark.asyncio

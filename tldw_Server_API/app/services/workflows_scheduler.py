@@ -27,6 +27,9 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.config import settings as core_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
 from tldw_Server_API.app.core.DB_Management.Workflows_Scheduler_DB import (
     WorkflowSchedule,
     WorkflowsSchedulerDB,
@@ -59,6 +62,7 @@ _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     ValueError,
     UnicodeDecodeError,
+    BackendDatabaseError,
 )
 
 
@@ -458,7 +462,13 @@ class _WFRecurringScheduler:
 
     def get(self, schedule_id: str) -> WorkflowSchedule | None:
         # Check default DB first
-        found = self._db.get_schedule(schedule_id)
+        try:
+            found = self._db.get_schedule(schedule_id)
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(
+                f"Workflows scheduler: default DB lookup failed for schedule {schedule_id}: {e}"
+            )
+            found = None
         if found:
             return found
         # Scan per-user DBs
@@ -471,12 +481,18 @@ class _WFRecurringScheduler:
                     uid = int(p.name)
                 except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS:
                     continue
-                db = self._get_db(uid)
-                s = db.get_schedule(schedule_id)
+                try:
+                    db = self._get_db(uid)
+                    s = db.get_schedule(schedule_id)
+                except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
+                    logger.debug(
+                        f"Workflows scheduler: user DB lookup failed for schedule {schedule_id} in user {uid}: {e}"
+                    )
+                    continue
                 if s:
                     return s
-        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS:
-            logger.debug(f"Workflows scheduler: failed to locate schedule {schedule_id}")
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"Workflows scheduler: failed to locate schedule {schedule_id}: {e}")
         return None
 
     def list(self, *, tenant_id: str, user_id: str | None = None, limit: int = 50, offset: int = 0) -> builtins.list[WorkflowSchedule]:
