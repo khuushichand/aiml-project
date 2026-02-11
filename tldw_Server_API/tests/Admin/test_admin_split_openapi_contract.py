@@ -60,9 +60,12 @@ EXPECTED_SPLIT_ADMIN_OPERATIONS: set[tuple[str, str]] = {
 }
 
 
-def _load_openapi_spec(monkeypatch):
+def _load_openapi_spec(monkeypatch, *, tmp_path: Path):
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("ENABLE_OPENAPI", "true")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "unit-test-api-key-openapi")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'users_test_admin_openapi.db'}")
     monkeypatch.delenv("tldw_production", raising=False)
     with TestClient(app) as client:
         res = client.get("/openapi.json")
@@ -72,8 +75,8 @@ def _load_openapi_spec(monkeypatch):
     return spec
 
 
-def test_admin_split_openapi_contains_expected_operations(monkeypatch) -> None:
-    spec = _load_openapi_spec(monkeypatch)
+def test_admin_split_openapi_contains_expected_operations(monkeypatch, tmp_path) -> None:
+    spec = _load_openapi_spec(monkeypatch, tmp_path=tmp_path)
     paths = spec["paths"]
     actual_operations: set[tuple[str, str]] = set()
     for path, operations in paths.items():
@@ -88,8 +91,8 @@ def test_admin_split_openapi_contains_expected_operations(monkeypatch) -> None:
     assert not missing, f"Missing admin split OpenAPI operations: {missing}"
 
 
-def test_admin_split_openapi_schema_contracts(monkeypatch) -> None:
-    spec = _load_openapi_spec(monkeypatch)
+def test_admin_split_openapi_schema_contracts(monkeypatch, tmp_path) -> None:
+    spec = _load_openapi_spec(monkeypatch, tmp_path=tmp_path)
     paths = spec["paths"]
 
     roles_get = paths["/api/v1/admin/roles"]["get"]

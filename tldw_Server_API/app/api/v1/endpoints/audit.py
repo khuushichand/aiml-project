@@ -17,7 +17,7 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core import config as app_config
 from tldw_Server_API.app.core.testing import is_truthy
 
 router = APIRouter()
@@ -25,7 +25,7 @@ router = APIRouter()
 _DEFAULT_STREAM_AUTO_THRESHOLD = 5000
 raw_stream_auto = None
 try:
-    raw_stream_auto = settings.get("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS", None)
+    raw_stream_auto = app_config.settings.get("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS", None)
     if raw_stream_auto is None:
         STREAM_AUTO_MAX_ROWS_THRESHOLD = _DEFAULT_STREAM_AUTO_THRESHOLD
     else:
@@ -75,6 +75,7 @@ def _coerce_bool(value: object | None, default: bool = False) -> bool:
 
 
 def _shared_storage_enabled() -> bool:
+    settings = app_config.settings
     if _coerce_bool(settings.get("AUDIT_STORAGE_ROLLBACK"), False):
         return False
     mode = str(settings.get("AUDIT_STORAGE_MODE", "per_user")).strip().lower()
@@ -247,13 +248,14 @@ async def export_audit_events(
 
     user_id_filter = user_id
     allow_cross_tenant = False
-    if _shared_storage_enabled():
-        if _principal_is_admin(principal):
-            allow_cross_tenant = True
-        else:
-            user_id_filter = _resolve_request_user_id(principal, current_user)
-            if user_id and str(user_id) != user_id_filter:
-                logger.warning("Ignoring cross-tenant audit export request from non-admin user.")
+    principal_is_admin = _principal_is_admin(principal)
+    if principal_is_admin and _shared_storage_enabled():
+        allow_cross_tenant = True
+    elif not principal_is_admin:
+        request_user_id = _resolve_request_user_id(principal, current_user)
+        user_id_filter = request_user_id
+        if user_id and str(user_id) != request_user_id:
+            logger.warning("Ignoring audit export user_id override from non-admin user.")
     content = await audit_service.export_events(
         start_time=st,
         end_time=et,
@@ -350,13 +352,14 @@ async def count_audit_events(
 
     user_id_filter = user_id
     allow_cross_tenant = False
-    if _shared_storage_enabled():
-        if _principal_is_admin(principal):
-            allow_cross_tenant = True
-        else:
-            user_id_filter = _resolve_request_user_id(principal, current_user)
-            if user_id and str(user_id) != user_id_filter:
-                logger.warning("Ignoring cross-tenant audit count request from non-admin user.")
+    principal_is_admin = _principal_is_admin(principal)
+    if principal_is_admin and _shared_storage_enabled():
+        allow_cross_tenant = True
+    elif not principal_is_admin:
+        request_user_id = _resolve_request_user_id(principal, current_user)
+        user_id_filter = request_user_id
+        if user_id and str(user_id) != request_user_id:
+            logger.warning("Ignoring audit count user_id override from non-admin user.")
     count = await audit_service.count_events(
         start_time=st,
         end_time=et,

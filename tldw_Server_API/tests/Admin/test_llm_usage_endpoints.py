@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,11 +8,10 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 
 
-def _setup_env():
-
-
+def _setup_env(tmp_path):
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key-llm"
+    os.environ["DATABASE_URL"] = f"sqlite:///{tmp_path / 'users_test_llm_usage_endpoints.db'}"
 
 
 async def _ensure_llm_tables_and_seed():
@@ -118,11 +116,11 @@ async def _ensure_llm_tables_and_seed():
 
 
 @pytest.mark.asyncio
-async def test_llm_usage_endpoints_sqlite(monkeypatch):
-    _setup_env()
+async def test_llm_usage_endpoints_sqlite(monkeypatch, tmp_path):
+    _setup_env(tmp_path)
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
-    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
     await reset_db_pool()
     reset_settings()

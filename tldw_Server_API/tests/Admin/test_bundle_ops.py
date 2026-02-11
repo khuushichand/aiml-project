@@ -22,6 +22,8 @@ from tldw_Server_API.app.main import app
 def _setup_env(tmp_path):
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key"
+    os.environ["DATABASE_URL"] = f"sqlite:///{tmp_path / 'users_test_bundle_ops.db'}"
+    os.environ["TLDW_DB_ALLOWED_BASE_DIRS"] = str(tmp_path)
     os.environ["TLDW_DB_BACKUP_PATH"] = str(tmp_path / "backups")
     os.environ["USER_DB_BASE_DIR"] = str(tmp_path / "user_dbs")
 

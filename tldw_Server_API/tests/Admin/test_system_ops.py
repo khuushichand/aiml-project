@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +14,8 @@ def _setup_env(monkeypatch, *, user_db_base: str) -> None:
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", "unit-test-api-key")
     monkeypatch.setenv("USER_DB_BASE_DIR", user_db_base)
+    auth_db_path = Path(user_db_base).parent / "users_test_system_ops.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{auth_db_path}")
     monkeypatch.setenv("TEST_MODE", "true")
 
 
