@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from tldw_Server_API.app.core.UserProfiles import user_profile_catalog as catalog_module
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.UserProfiles.user_profile_catalog import (
     clear_user_profile_catalog_cache,
     load_user_profile_catalog,
@@ -52,8 +53,21 @@ async def test_user_profile_catalog_endpoint_etag(tmp_path: Path, monkeypatch) -
     clear_user_profile_catalog_cache()
     from tldw_Server_API.app.api.v1.endpoints.users import get_user_profile_catalog
 
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=1,
+        username="test-user",
+        roles=[],
+        permissions=[],
+        is_admin=False,
+        org_ids=[],
+        team_ids=[],
+        active_org_id=None,
+        active_team_id=None,
+    )
+
     resp = await get_user_profile_catalog(
-        current_user={"id": 1, "username": "test-user"},
+        principal=principal,
         if_none_match=None,
     )
     assert resp.status_code == 200
@@ -64,7 +78,7 @@ async def test_user_profile_catalog_endpoint_etag(tmp_path: Path, monkeypatch) -
     assert payload["version"] == "1.0.0"
 
     resp_304 = await get_user_profile_catalog(
-        current_user={"id": 1, "username": "test-user"},
+        principal=principal,
         if_none_match=etag,
     )
     assert resp_304.status_code == 304
