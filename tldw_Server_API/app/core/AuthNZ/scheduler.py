@@ -565,7 +565,7 @@ class AuthNZScheduler:
             set_gauge("privilege_snapshots_table_rows", float(row_count))
 
             logger.info(
-                "Privilege snapshot retention pruned %s legacy rows (> %s days) and %s weekly duplicates (> %s days); remaining=%s rows",
+                'Privilege snapshot retention pruned {} legacy rows (> {} days) and {} weekly duplicates (> {} days); remaining={} rows',
                 purged_legacy,
                 weekly_retention_days,
                 purged_duplicates,

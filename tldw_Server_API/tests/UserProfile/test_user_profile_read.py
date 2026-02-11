@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
@@ -150,3 +152,110 @@ def test_admin_profile_mask_secrets_false(auth_headers) -> None:
             headers=auth_headers,
         )
         assert resp.status_code == 200
+
+
+def test_user_profile_me_rejects_unverified_user(auth_headers, monkeypatch) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import users as users_endpoints
+
+    async def _fake_resolve_user_context(_principal, *, allow_missing: bool = False):
+        del allow_missing
+        return {
+            "id": 1,
+            "username": "unverified-user",
+            "email": "unverified@example.invalid",
+            "role": "user",
+            "is_active": True,
+            "is_verified": False,
+            "storage_quota_mb": 5120,
+            "storage_used_mb": 0.0,
+            "created_at": datetime.utcnow(),
+            "last_login": None,
+        }
+
+    monkeypatch.setattr(users_endpoints, "_resolve_user_context", _fake_resolve_user_context)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/users/me/profile", headers=auth_headers)
+
+    assert resp.status_code == 403
+
+
+def test_users_api_keys_reject_inactive_user(auth_headers, monkeypatch) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import users as users_endpoints
+
+    async def _fake_resolve_user_context(_principal, *, allow_missing: bool = False):
+        del allow_missing
+        return {
+            "id": 1,
+            "username": "inactive-user",
+            "email": "inactive@example.invalid",
+            "role": "user",
+            "is_active": False,
+            "is_verified": True,
+            "storage_quota_mb": 5120,
+            "storage_used_mb": 0.0,
+            "created_at": datetime.utcnow(),
+            "last_login": None,
+        }
+
+    monkeypatch.setattr(users_endpoints, "_resolve_user_context", _fake_resolve_user_context)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/users/api-keys", headers=auth_headers)
+
+    assert resp.status_code == 403
+    assert resp.json().get("detail") == "User account is inactive"
+
+
+def test_users_sessions_reject_unverified_user(auth_headers, monkeypatch) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import users as users_endpoints
+
+    async def _fake_resolve_user_context(_principal, *, allow_missing: bool = False):
+        del allow_missing
+        return {
+            "id": 1,
+            "username": "unverified-user",
+            "email": "unverified@example.invalid",
+            "role": "user",
+            "is_active": True,
+            "is_verified": False,
+            "storage_quota_mb": 5120,
+            "storage_used_mb": 0.0,
+            "created_at": datetime.utcnow(),
+            "last_login": None,
+        }
+
+    monkeypatch.setattr(users_endpoints, "_resolve_user_context", _fake_resolve_user_context)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/users/sessions", headers=auth_headers)
+
+    assert resp.status_code == 403
+    assert resp.json().get("detail") == "Email verification required"
+
+
+def test_users_storage_reject_inactive_user(auth_headers, monkeypatch) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import users as users_endpoints
+
+    async def _fake_resolve_user_context(_principal, *, allow_missing: bool = False):
+        del allow_missing
+        return {
+            "id": 1,
+            "username": "inactive-user",
+            "email": "inactive@example.invalid",
+            "role": "user",
+            "is_active": False,
+            "is_verified": True,
+            "storage_quota_mb": 5120,
+            "storage_used_mb": 0.0,
+            "created_at": datetime.utcnow(),
+            "last_login": None,
+        }
+
+    monkeypatch.setattr(users_endpoints, "_resolve_user_context", _fake_resolve_user_context)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/users/storage", headers=auth_headers)
+
+    assert resp.status_code == 403
+    assert resp.json().get("detail") == "User account is inactive"

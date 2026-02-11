@@ -593,7 +593,7 @@ async def delete_evaluation(
                 columns = {row[1] for row in cursor.fetchall()}
             supports_soft_delete = "deleted" in columns and "deleted_at" in columns
         except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Failed to check prompt_studio_evaluations columns: %s", exc)
+            logger.debug("Failed to check prompt_studio_evaluations columns: {}", exc)
 
         if supports_soft_delete:
             cursor.execute(

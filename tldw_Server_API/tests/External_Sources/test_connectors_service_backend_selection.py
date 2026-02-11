@@ -19,6 +19,12 @@ class _CursorStub:
         return list(self._rows)
 
 
+@pytest.mark.unit
+def test_get_connector_by_name_supports_gmail_provider() -> None:
+    connector = svc.get_connector_by_name("gmail")
+    assert connector.name == "gmail"
+
+
 class _SqliteDbWithPgTraps:
     def __init__(self) -> None:
         self._is_sqlite = True

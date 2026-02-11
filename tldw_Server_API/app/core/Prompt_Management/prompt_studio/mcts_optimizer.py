@@ -150,7 +150,7 @@ class MCTSOptimizer:
         self.scorer.set_token_callback(_add_tokens)
 
         logger.info(
-            "MCTS starting: prompt=%s sims=%s depth=%s c=%.2f",
+            'MCTS starting: prompt={} sims={} depth={} c={}',
             initial_prompt_id,
             n_sims,
             max_depth,
@@ -202,7 +202,7 @@ class MCTSOptimizer:
 
         for sim in range(1, n_sims + 1):
             if token_budget and self._tokens_spent >= token_budget:
-                logger.info("MCTS token budget exhausted: %s >= %s", self._tokens_spent, token_budget)
+                logger.info("MCTS token budget exhausted: {} >= {}", self._tokens_spent, token_budget)
                 break
             # Selection & Expansion
             path: list[MCTSOptimizer._Node] = [root]
@@ -237,7 +237,7 @@ class MCTSOptimizer:
                             ]
                             chosen, chosen_uct = max(scored_children, key=lambda p: p[1])
                             logger.debug(
-                                "mcts.select depth=%s chose_child_bin=%s uct=%.4f",
+                                'mcts.select depth={} chose_child_bin={} uct={}',
                                 node.segment_index,
                                 getattr(chosen, "score_bin", None),
                                 float(chosen_uct),
@@ -293,7 +293,7 @@ class MCTSOptimizer:
             else:
                 no_improve_streak += 1
                 if no_improve_streak >= early_no_improve:
-                    logger.info("MCTS early stop: no improvement for %s sims", early_no_improve)
+                    logger.info("MCTS early stop: no improvement for {} sims", early_no_improve)
                     break
 
             # Throttled WS + per-iteration persistence

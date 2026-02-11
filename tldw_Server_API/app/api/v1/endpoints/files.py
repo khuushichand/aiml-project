@@ -50,7 +50,7 @@ def _resolve_export_path_for_user(user_id: int, path_value: str) -> PathlibPath:
     try:
         base_resolved = base_dir.resolve(strict=False)
     except Exception as exc:
-        logger.error("files: failed to resolve temp outputs base dir for user %s: %s", user_id, exc)
+        logger.error("files: failed to resolve temp outputs base dir for user {}: {}", user_id, exc)
         raise HTTPException(status_code=500, detail="storage_unavailable") from exc
 
     candidate = PathlibPath(path_value)
@@ -105,7 +105,7 @@ def _clear_export_state(
                 export_consumed_at=consumed_at,
             )
     except Exception as exc:
-        logger.warning("files.export: failed to clear export state for %s: %s", file_id, exc)
+        logger.warning("files.export: failed to clear export state for {}: {}", file_id, exc)
 
 
 @router.post(
@@ -184,7 +184,7 @@ async def export_file_artifact(
                 if path.exists():
                     path.unlink()
             except Exception as exc:
-                logger.warning("files.export: failed to delete expired export file for %s: %s", file_id, exc)
+                logger.warning("files.export: failed to delete expired export file for {}: {}", file_id, exc)
         _clear_export_state(
             user_id=user_id,
             file_id=file_id,
@@ -213,7 +213,7 @@ async def export_file_artifact(
             if path.exists():
                 path.unlink()
         except Exception as exc:
-            logger.warning("files.export: failed to delete export file for %s: %s", file_id, exc)
+            logger.warning("files.export: failed to delete export file for {}: {}", file_id, exc)
         _clear_export_state(
             user_id=user_id,
             file_id=file_id,
@@ -255,9 +255,9 @@ async def delete_file_artifact(
                     path.unlink()
                     fs_deleted = True
             except HTTPException as exc:
-                logger.warning("files.delete: invalid export path for %s: %s", file_id, exc.detail)
+                logger.warning("files.delete: invalid export path for {}: {}", file_id, exc.detail)
             except Exception as exc:
-                logger.warning("files.delete: failed to delete export file for %s: %s", file_id, exc)
+                logger.warning("files.delete: failed to delete export file for {}: {}", file_id, exc)
     ok = cdb.delete_file_artifact(file_id, hard=hard)
     if not ok:
         raise HTTPException(status_code=404, detail="file_artifact_not_found")
@@ -292,9 +292,9 @@ async def purge_file_artifacts(
                     path.unlink()
                     files_deleted += 1
             except HTTPException as exc:
-                logger.warning("files.purge: invalid export path for %s: %s", file_id, exc.detail)
+                logger.warning("files.purge: invalid export path for {}: {}", file_id, exc.detail)
             except Exception as exc:
-                logger.warning("files.purge: failed to delete export file for %s: %s", file_id, exc)
+                logger.warning("files.purge: failed to delete export file for {}: {}", file_id, exc)
 
     removed = 0
     if candidates:

@@ -211,7 +211,7 @@ class LuxTTSAdapter(TTSAdapter):
         self._status = ProviderStatus.AVAILABLE
         self._initialized = True
         logger.info(
-            "LuxTTS adapter initialized (device=%s, model=%s)",
+            'LuxTTS adapter initialized (device={}, model={})',
             self.device,
             self.model_path,
         )
@@ -354,7 +354,7 @@ class LuxTTSAdapter(TTSAdapter):
                 },
             )
         except Exception as exc:
-            logger.error("LuxTTS generation failed: %s", exc, exc_info=True)
+            logger.error("LuxTTS generation failed: {}", exc, exc_info=True)
             raise TTSGenerationError(
                 "LuxTTS generation failed",
                 provider=self.PROVIDER_KEY,
@@ -542,7 +542,7 @@ class LuxTTSAdapter(TTSAdapter):
                 if final_bytes:
                     yield final_bytes
             except Exception as exc:
-                logger.error("LuxTTS streaming failed: %s", exc, exc_info=True)
+                logger.error("LuxTTS streaming failed: {}", exc, exc_info=True)
                 raise TTSGenerationError(
                     "LuxTTS streaming failed",
                     provider=self.PROVIDER_KEY,

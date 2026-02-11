@@ -213,7 +213,7 @@ def _workflows_idempotency_ttl_hours() -> int:
     try:
         ttl = int(raw)
     except (TypeError, ValueError):
-        logger.warning("Invalid WORKFLOWS_IDEMPOTENCY_TTL_HOURS=%r; defaulting to 24", raw)
+        logger.warning("Invalid WORKFLOWS_IDEMPOTENCY_TTL_HOURS={}; defaulting to 24", raw)
         ttl = 24
     return max(1, ttl)
 
@@ -479,7 +479,7 @@ class WorkflowsDatabase:
             self.db_path = str(db_path or DEFAULT_DB_PATH)
             self._conn = WorkflowsBackendConnection(self)
             self._initialize_schema_backend()
-            logger.debug("Workflows DB initialized using %s backend", self.backend_type.value)
+            logger.debug("Workflows DB initialized using {} backend", self.backend_type.value)
             return
 
         # Fallback to SQLite path (default behaviour)
@@ -491,7 +491,7 @@ class WorkflowsDatabase:
                 db_path = resolved or str(DEFAULT_DB_PATH)
             else:
                 logger.warning(
-                    "DATABASE_URL_WORKFLOWS=%s is not a supported SQLite URI; falling back to default path",
+                    'DATABASE_URL_WORKFLOWS={} is not a supported SQLite URI; falling back to default path',
                     url,
                 )
 
@@ -942,10 +942,10 @@ class WorkflowsDatabase:
         except WorkflowsSchemaError:
             raise
         except BackendDatabaseError as exc:
-            logger.error("Failed to initialise workflows schema on backend: %s", exc)
+            logger.error("Failed to initialise workflows schema on backend: {}", exc)
             raise
         except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS as exc:
-            logger.error("Unexpected error while initialising workflows schema: %s", exc)
+            logger.error("Unexpected error while initialising workflows schema: {}", exc)
             raise
 
     def _create_schema(self) -> None:
@@ -2004,13 +2004,13 @@ class WorkflowsDatabase:
                 try:
                     outputs = json.loads(raw.decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError):
-                    logger.debug("Skipping malformed outputs_json for run_id=%s", run_id)
+                    logger.debug("Skipping malformed outputs_json for run_id={}", run_id)
                     continue
             elif isinstance(raw, str):
                 try:
                     outputs = json.loads(raw)
                 except json.JSONDecodeError:
-                    logger.debug("Skipping malformed outputs_json for run_id=%s", run_id)
+                    logger.debug("Skipping malformed outputs_json for run_id={}", run_id)
                     continue
             if not isinstance(outputs, dict):
                 continue

@@ -127,7 +127,7 @@ class PrivilegeSnapshotStore:
                 try:
                     summary_obj = json.loads(record["summary_json"])
                 except _SNAPSHOT_JSON_EXCEPTIONS as exc:
-                    logger.warning("Failed to parse snapshot summary JSON: %s", exc)
+                    logger.warning("Failed to parse snapshot summary JSON: {}", exc)
                     summary_obj = None
 
             generated_at_dt = self._parse_datetime(record.get("generated_at"))
@@ -192,7 +192,7 @@ class PrivilegeSnapshotStore:
             detail_payload = list(detail_items)[:MAX_SNAPSHOT_DETAIL_ROWS]
             if len(detail_items) > MAX_SNAPSHOT_DETAIL_ROWS:
                 logger.warning(
-                    "Truncated snapshot detail rows for %s to %s entries",
+                    'Truncated snapshot detail rows for {} to {} entries',
                     snapshot_id,
                     MAX_SNAPSHOT_DETAIL_ROWS,
                 )
@@ -326,7 +326,7 @@ class PrivilegeSnapshotStore:
             try:
                 summary_obj = json.loads(record["summary_json"])
             except _SNAPSHOT_JSON_EXCEPTIONS as exc:
-                logger.warning("Failed to parse snapshot summary JSON: %s", exc)
+                logger.warning("Failed to parse snapshot summary JSON: {}", exc)
                 summary_obj = None
         page = max(page, 1)
         page_size = max(min(page_size, 500), 1)
@@ -407,7 +407,7 @@ class PrivilegeSnapshotStore:
             try:
                 summary_obj = json.loads(record["summary_json"])
             except _SNAPSHOT_JSON_EXCEPTIONS as exc:
-                logger.warning("Failed to parse snapshot summary JSON during export: %s", exc)
+                logger.warning("Failed to parse snapshot summary JSON during export: {}", exc)
                 summary_obj = None
 
         rows = await pool.fetchall(
@@ -520,7 +520,7 @@ class PrivilegeSnapshotStore:
                     "CREATE INDEX IF NOT EXISTS idx_priv_snapshots_team ON privilege_snapshots(team_id)"
                 )
         except _SNAPSHOT_DB_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Privilege snapshot index creation skipped: %s", exc)
+            logger.debug("Privilege snapshot index creation skipped: {}", exc)
 
         self._initialized = True
 
@@ -547,7 +547,7 @@ class PrivilegeSnapshotStore:
             payload = json.loads(value)
             return payload if isinstance(payload, dict) else None
         except _SNAPSHOT_JSON_EXCEPTIONS as exc:
-            logger.warning("Failed to decode snapshot detail payload: %s", exc)
+            logger.warning("Failed to decode snapshot detail payload: {}", exc)
             return None
 
     @staticmethod

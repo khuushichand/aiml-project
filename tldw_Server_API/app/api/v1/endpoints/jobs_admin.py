@@ -1835,6 +1835,7 @@ class BatchRequeueQuarantinedResponse(BaseModel):
 
 @router.post(
     "/jobs/batch/requeue_quarantined",
+    operation_id="batch_requeue_quarantined",
     response_model=BatchRequeueQuarantinedResponse,
     openapi_extra={
         "requestBody": {
@@ -1861,6 +1862,7 @@ class BatchRequeueQuarantinedResponse(BaseModel):
 )
 @router.post(
     "/jobs/batch/requeue-quarantined",
+    operation_id="batch_requeue_quarantined_alias",
     response_model=BatchRequeueQuarantinedResponse,
     openapi_extra={
         "requestBody": {

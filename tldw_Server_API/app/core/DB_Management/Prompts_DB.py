@@ -113,7 +113,7 @@ _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # --- Database Class ---
 class PromptsDatabase:
-    _CURRENT_SCHEMA_VERSION = 1
+    _CURRENT_SCHEMA_VERSION = 2
 
     _TABLES_SQL_V1 = """
     PRAGMA foreign_keys = ON;
@@ -232,6 +232,32 @@ class PromptsDatabase:
         content='PromptKeywordsTable',
         content_rowid='id'
     );
+    """
+
+    _COLLECTIONS_SQL_V2 = """
+    CREATE TABLE IF NOT EXISTS PromptCollections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT,
+        uuid TEXT UNIQUE NOT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS PromptCollectionItems (
+        collection_id INTEGER NOT NULL,
+        prompt_id INTEGER NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (collection_id, prompt_id),
+        FOREIGN KEY (collection_id) REFERENCES PromptCollections(id) ON DELETE CASCADE,
+        FOREIGN KEY (prompt_id) REFERENCES Prompts(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_promptcollections_name ON PromptCollections(name);
+    CREATE INDEX IF NOT EXISTS idx_promptcollectionitems_collection_order
+        ON PromptCollectionItems(collection_id, sort_order, prompt_id);
+    CREATE INDEX IF NOT EXISTS idx_promptcollectionitems_prompt_id
+        ON PromptCollectionItems(prompt_id);
     """
 
     def __init__(self, db_path: Union[str, Path], client_id: str):
@@ -529,6 +555,7 @@ class PromptsDatabase:
                 raise DatabaseError(f"Could not determine schema version: {e}") from e  # noqa: TRY003
 
     _SCHEMA_UPDATE_VERSION_SQL_V1 = "UPDATE schema_version SET version = 1 WHERE version = 0;"
+    _SCHEMA_UPDATE_VERSION_SQL_V2 = "UPDATE schema_version SET version = 2 WHERE version = 1;"
 
     def _apply_schema_v1(self, conn: sqlite3.Connection):
         logging.info(f"Applying initial schema (Version 1) to DB: {self.db_path_str}...")
@@ -569,6 +596,28 @@ class PromptsDatabase:
             logging.error(f"[Schema V1] Application failed: {e}", exc_info=True)
             raise DatabaseError(f"DB schema V1 setup failed: {e}") from e  # noqa: TRY003
 
+    def _apply_schema_v2(self, conn: sqlite3.Connection):
+        logging.info(f"Applying schema migration (Version 2) to DB: {self.db_path_str}...")
+        try:
+            migration_script = f"""
+                {self._COLLECTIONS_SQL_V2}
+                {self._SCHEMA_UPDATE_VERSION_SQL_V2}
+            """
+            with self.transaction():
+                conn.executescript(migration_script)
+                cursor_check = conn.execute("SELECT version FROM schema_version LIMIT 1")
+                version_in_tx = cursor_check.fetchone()
+                if not version_in_tx or version_in_tx["version"] != 2:
+                    raise SchemaError("Schema V2 version update did not take effect within transaction.")  # noqa: TRY003
+                collection_table = conn.execute("PRAGMA table_info(PromptCollections)").fetchall()
+                item_table = conn.execute("PRAGMA table_info(PromptCollectionItems)").fetchall()
+                if not collection_table or not item_table:
+                    raise SchemaError("Schema V2 validation failed: collection tables missing.")  # noqa: TRY003
+            logging.info(f"[Schema V2] Collection tables applied and committed for DB: {self.db_path_str}.")
+        except sqlite3.Error as e:
+            logging.error(f"[Schema V2] Application failed: {e}", exc_info=True)
+            raise DatabaseError(f"DB schema V2 setup failed: {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         conn = self.get_connection()
         try:
@@ -576,31 +625,35 @@ class PromptsDatabase:
             target_version = self._CURRENT_SCHEMA_VERSION
             logging.info(f"Checking DB schema. Current: {current_db_version}, Code supports: {target_version}")
 
-            if current_db_version == target_version:
-                logging.debug("Database schema is up to date.")
-                try:  # Ensure FTS tables exist
-                    conn.executescript(self._FTS_TABLES_SQL)
-                    conn.commit()
-                    logging.debug("Verified FTS tables exist.")
-                except sqlite3.Error as fts_err:
-                    logging.warning(f"Could not verify/create FTS tables on correct schema: {fts_err}")
-                return
-
             if current_db_version > target_version:
                 raise SchemaError(  # noqa: TRY003, TRY301
                     f"DB schema version ({current_db_version}) is newer than supported ({target_version}).")
 
-            if current_db_version == 0:
-                self._apply_schema_v1(conn)
-                final_db_version = self._get_db_version(conn)
-                if final_db_version != target_version:
-                    raise SchemaError(  # noqa: TRY003, TRY301
-                        f"Schema migration applied, but final DB version is {final_db_version}, expected {target_version}.")
-                logging.info(f"Database schema initialized/migrated to version {target_version}.")
-            else:
-                # Placeholder for future migrations from v1 to v2, etc.
-                raise SchemaError(  # noqa: TRY003, TRY301
-                    f"Migration needed from {current_db_version} to {target_version}, but no path defined.")
+            while current_db_version < target_version:
+                if current_db_version == 0:
+                    self._apply_schema_v1(conn)
+                    current_db_version = self._get_db_version(conn)
+                    continue
+                if current_db_version == 1:
+                    self._apply_schema_v2(conn)
+                    current_db_version = self._get_db_version(conn)
+                    continue
+                raise SchemaError(  # noqa: TRY003
+                    f"Migration needed from {current_db_version} to {target_version}, but no path defined."
+                )
+
+            if current_db_version != target_version:
+                raise SchemaError(  # noqa: TRY003
+                    f"Schema migration applied, but final DB version is {current_db_version}, expected {target_version}."
+                )
+
+            logging.info(f"Database schema initialized/migrated to version {target_version}.")
+            try:
+                conn.executescript(self._FTS_TABLES_SQL)
+                conn.commit()
+                logging.debug("Verified FTS tables exist.")
+            except sqlite3.Error as fts_err:
+                logging.warning(f"Could not verify/create FTS tables on correct schema: {fts_err}")
         except (DatabaseError, SchemaError, sqlite3.Error) as e:
             logging.error(f"Schema initialization/migration failed: {e}", exc_info=True)
             raise DatabaseError(f"Schema initialization failed: {e}") from e  # noqa: TRY003
@@ -1365,6 +1418,112 @@ class PromptsDatabase:
             logger.error(f"Error soft deleting prompt keyword '{keyword_text}': {e}", exc_info=True)
             if isinstance(e, (InputError, ConflictError, DatabaseError)): raise  # noqa: E701
             else: raise DatabaseError(f"Failed to soft delete prompt keyword: {e}") from e  # noqa: E701, TRY003
+
+    # --- Prompt Collection Methods ---
+    def create_prompt_collection(
+        self,
+        name: str,
+        description: Optional[str] = None,
+        prompt_ids: Optional[list[int]] = None,
+    ) -> dict[str, Any]:
+        if not isinstance(name, str) or not name.strip():
+            raise InputError("Collection name cannot be empty.")  # noqa: TRY003
+
+        cleaned_name = name.strip()
+        cleaned_description = description.strip() if isinstance(description, str) else description
+        normalized_prompt_ids: list[int] = []
+        for item in prompt_ids or []:
+            if not isinstance(item, int) or item <= 0:
+                raise InputError(f"Invalid prompt ID in collection payload: {item!r}")  # noqa: TRY003
+            if item not in normalized_prompt_ids:
+                normalized_prompt_ids.append(item)
+
+        timestamp = self._get_current_utc_timestamp_str()
+        collection_uuid = self._generate_uuid()
+
+        try:
+            with self.transaction() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO PromptCollections (name, description, uuid, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (cleaned_name, cleaned_description, collection_uuid, timestamp, timestamp),
+                )
+                collection_id = cursor.lastrowid
+                if not collection_id:
+                    raise DatabaseError("Failed to create prompt collection.")  # noqa: TRY003
+
+                if normalized_prompt_ids:
+                    placeholders = ",".join("?" for _ in normalized_prompt_ids)
+                    existing_rows = cursor.execute(
+                        f"SELECT id FROM Prompts WHERE deleted = 0 AND id IN ({placeholders})",
+                        tuple(normalized_prompt_ids),
+                    ).fetchall()
+                    existing_prompt_ids = {int(row["id"]) for row in existing_rows}
+                    missing = [pid for pid in normalized_prompt_ids if pid not in existing_prompt_ids]
+                    if missing:
+                        raise InputError(f"Prompt(s) not found or deleted: {missing}")  # noqa: TRY003
+
+                    cursor.executemany(
+                        """
+                        INSERT INTO PromptCollectionItems (collection_id, prompt_id, sort_order)
+                        VALUES (?, ?, ?)
+                        """,
+                        [(collection_id, prompt_id, idx) for idx, prompt_id in enumerate(normalized_prompt_ids)],
+                    )
+
+                return {
+                    "collection_id": int(collection_id),
+                    "name": cleaned_name,
+                    "description": cleaned_description,
+                    "prompt_ids": normalized_prompt_ids,
+                }
+        except (InputError, DatabaseError, sqlite3.Error) as e:
+            logger.error(f"Error creating prompt collection '{cleaned_name}': {e}", exc_info=True)
+            if isinstance(e, (InputError, DatabaseError)):
+                raise
+            raise DatabaseError(f"Failed to create prompt collection: {e}") from e  # noqa: TRY003
+
+    def get_prompt_collection_by_id(self, collection_id: int) -> Optional[dict[str, Any]]:
+        if not isinstance(collection_id, int) or collection_id <= 0:
+            raise InputError("Collection ID must be a positive integer.")  # noqa: TRY003
+
+        try:
+            collection_row = self.execute_query(
+                """
+                SELECT id, name, description
+                FROM PromptCollections
+                WHERE id = ?
+                """,
+                (collection_id,),
+            ).fetchone()
+            if not collection_row:
+                return None
+
+            prompt_rows = self.execute_query(
+                """
+                SELECT pci.prompt_id
+                FROM PromptCollectionItems pci
+                JOIN Prompts p ON p.id = pci.prompt_id
+                WHERE pci.collection_id = ? AND p.deleted = 0
+                ORDER BY pci.sort_order ASC, pci.prompt_id ASC
+                """,
+                (collection_id,),
+            ).fetchall()
+
+            return {
+                "collection_id": int(collection_row["id"]),
+                "name": collection_row["name"],
+                "description": collection_row["description"],
+                "prompt_ids": [int(row["prompt_id"]) for row in prompt_rows],
+            }
+        except (InputError, DatabaseError, sqlite3.Error) as e:
+            logger.error(f"Error fetching prompt collection {collection_id}: {e}", exc_info=True)
+            if isinstance(e, (InputError, DatabaseError)):
+                raise
+            raise DatabaseError(f"Failed to fetch prompt collection: {e}") from e  # noqa: TRY003
 
     # --- Read Methods ---
     def get_prompt_by_id(self, prompt_id: int, include_deleted: bool = False) -> Optional[dict]:

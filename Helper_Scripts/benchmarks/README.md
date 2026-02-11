@@ -3,6 +3,52 @@ LLM Gateway Benchmark Scripts
 Overview
 - `llm_gateway_bench.py` is a minimal async load generator for the Chat API (`/api/v1/chat/completions`).
 - It sweeps concurrency levels and reports latency percentiles, error rates, and streaming TTFT.
+- `email_search_bench.py` benchmarks Stage-1 email operator search (`search_email_messages`) with optional synthetic fixture generation.
+
+Email Search Benchmark (M1-009)
+- Script: `Helper_Scripts/benchmarks/email_search_bench.py`
+- Optional query mix fixture: `Helper_Scripts/benchmarks/email_search_query_mix.sample.jsonc`
+- Optional workload trace fixture: `Helper_Scripts/benchmarks/email_search_workload_trace.sample.json`
+- Output: JSON report containing:
+  - dataset profile (message count, label cardinality, date span)
+  - cold pass summary (reopen DB for each query)
+  - warm pass summary (warmups + measured runs)
+  - optional SQLite query-plan captures (when `--capture-query-plans` is enabled)
+  - p50/p95 checks against PRD NFR targets
+
+Examples
+- Build deterministic fixture + run benchmark:
+
+  python Helper_Scripts/benchmarks/email_search_bench.py \
+    --db-path .benchmarks/email_search_bench.sqlite \
+    --ensure-fixture \
+    --fixture-messages 20000 \
+    --runs 30 \
+    --warmup-runs 5 \
+    --out .benchmarks/email_search_report.json
+
+- Benchmark existing tenant without fixture writes:
+
+  python Helper_Scripts/benchmarks/email_search_bench.py \
+    --db-path /path/to/media.db \
+    --tenant-id user:1 \
+    --runs 20 \
+    --warmup-runs 3
+
+- Use custom query mix JSON:
+
+  python Helper_Scripts/benchmarks/email_search_bench.py \
+    --db-path .benchmarks/email_search_bench.sqlite \
+    --query-mix-file Helper_Scripts/benchmarks/email_search_query_mix.sample.jsonc
+
+- Use workload trace-derived query mix and capture SQLite query plans:
+
+  python Helper_Scripts/benchmarks/email_search_bench.py \
+    --db-path .benchmarks/email_search_bench.sqlite \
+    --workload-trace-file Helper_Scripts/benchmarks/email_search_workload_trace.sample.json \
+    --workload-top-n 15 \
+    --capture-query-plans \
+    --out .benchmarks/email_search_report.json
 
 Recommended Server Settings (for safe local benchmarking)
 - Quick start (recommended):

@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import pytest
 
@@ -90,3 +91,9 @@ async def test_rate_limiter_no_longer_exposes_fallback_api():
     )
     limiter = RateLimiter(db_pool=object(), settings=settings)
     assert not hasattr(limiter, "check_rate_limit_fallback")
+
+
+def test_rate_limiter_check_lockout_type_hints_resolve():
+    """Regression: keep datetime imports aligned with check_lockout annotation."""
+    hints = get_type_hints(RateLimiter.check_lockout)
+    assert "return" in hints

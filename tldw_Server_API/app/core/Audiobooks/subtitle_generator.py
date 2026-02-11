@@ -155,7 +155,7 @@ def _chunk_sentences_spacy(
     try:
         doc = nlp(source_text)
     except Exception as exc:
-        logger.warning("spaCy sentence parsing failed: %s", exc)
+        logger.warning("spaCy sentence parsing failed: {}", exc)
         return None
     sentences = list(getattr(doc, "sents", []) or [])
     if not sentences:
@@ -195,7 +195,7 @@ def _load_spacy_model():
     try:
         import spacy  # type: ignore
     except Exception as exc:
-        logger.warning("spaCy unavailable: %s", exc)
+        logger.warning("spaCy unavailable: {}", exc)
         return None
 
     model_name = os.getenv("AUDIOBOOK_SPACY_MODEL") or get_config_value(
@@ -204,7 +204,7 @@ def _load_spacy_model():
     try:
         return spacy.load(model_name)
     except Exception as exc:
-        logger.warning("Failed to load spaCy model '%s': %s", model_name, exc)
+        logger.warning("Failed to load spaCy model '{}': {}", model_name, exc)
         return None
 
 

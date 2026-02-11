@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, t
 
 _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS = (
     OSError,
+    ImportError,
     ValueError,
     TypeError,
     KeyError,
@@ -491,10 +492,10 @@ async def run_process_media_adapter(config: dict[str, Any], context: dict[str, A
     Supports kinds:
       - web_scraping (existing)
       - pdf (file_uri)
-      - ebook (file_uri)
-      - xml (file_uri)
+      - ebook (not yet implemented in workflows)
+      - xml (not yet implemented in workflows)
       - mediawiki_dump (file_uri)
-      - podcast (url)
+      - podcast (not yet implemented in workflows)
 
     For smoother chains, the adapter emits a best-effort `text` field in
     outputs (e.g., first article summary/content, or extracted text), so
@@ -528,6 +529,12 @@ async def run_process_media_adapter(config: dict[str, Any], context: dict[str, A
     except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
         pass
     kind = str(config.get("kind") or "web_scraping").strip().lower()
+    if kind in {"ebook", "xml", "podcast"}:
+        return {
+            "error": "not_implemented",
+            "kind": kind,
+            "message": f"process_media kind '{kind}' is not implemented in workflows",
+        }
     # Web scraping
     if kind == "web_scraping":
         try:
@@ -628,53 +635,6 @@ async def run_process_media_adapter(config: dict[str, Any], context: dict[str, A
         }
         return _emit(out)
 
-    # Ebook (file_uri; placeholder service)
-    if kind == "ebook":
-        file_uri = str(config.get("file_uri") or "").strip()
-        if not file_uri.startswith("file://"):
-            return {"error": "missing_or_invalid_file_uri"}
-        try:
-            resolved_path = resolve_workflow_file_uri(file_uri, context, config)
-        except AdapterError as e:
-            return {"error": str(e)}
-        try:
-            from tldw_Server_API.app.services.ebook_processing_service import process_ebook_task
-            res = await process_ebook_task(file_path=str(resolved_path), title=config.get("title"), author=config.get("author"), custom_prompt=config.get("custom_prompt"), api_name=config.get("api_name"))
-            out = {"kind": "ebook", "content": res.get("text") or "", "summary": res.get("summary") or "", "metadata": res.get("metadata") or {}}
-            return _emit(out)
-        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS as e:
-            return {"error": f"ebook_process_error:{e}"}
-
-    # XML (file_uri; placeholder service)
-    if kind == "xml":
-        file_uri = str(config.get("file_uri") or "").strip()
-        if not file_uri.startswith("file://"):
-            return {"error": "missing_or_invalid_file_uri"}
-        try:
-            resolved_path = resolve_workflow_file_uri(file_uri, context, config)
-        except AdapterError as e:
-            return {"error": str(e)}
-        try:
-            from tldw_Server_API.app.services.xml_processing_service import process_xml_task
-            fb = resolved_path.read_bytes()
-            res = await process_xml_task(
-                file_bytes=fb,
-                filename=resolved_path.name,
-                title=config.get("title"),
-                author=config.get("author"),
-                keywords=config.get("keywords") or [],
-                system_prompt=config.get("system_prompt"),
-                custom_prompt=config.get("custom_prompt"),
-                auto_summarize=bool(config.get("summarize")),
-                api_name=config.get("api_name"),
-                api_key=None,
-            )
-            text = "\n".join([seg.get("Text") or "" for seg in (res.get("segments") or [])])
-            out = {"kind": "xml", "content": text, "summary": res.get("summary"), "metadata": res.get("info_dict") or {}}
-            return _emit(out)
-        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS as e:
-            return {"error": f"xml_process_error:{e}"}
-
     # MediaWiki dump (file_uri) - ephemeral process
     if kind == "mediawiki_dump":
         file_uri = str(config.get("file_uri") or "").strip()
@@ -690,31 +650,5 @@ async def run_process_media_adapter(config: dict[str, Any], context: dict[str, A
         except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
             content = ""
         return _emit({"kind": "mediawiki_dump", "content": content[:5000], "metadata": {"file": resolved_path.name}})
-
-    # Podcast (url)
-    if kind == "podcast":
-        url = str(config.get("url") or "").strip()
-        if not url:
-            return {"error": "missing_url"}
-        try:
-            from tldw_Server_API.app.services.podcast_processing_service import process_podcast_task
-            res = await process_podcast_task(
-                url=url,
-                custom_prompt=config.get("custom_prompt"),
-                api_name=config.get("api_name"),
-                api_key=None,
-                keywords=config.get("keywords") or [],
-                diarize=bool(config.get("diarize")),
-                whisper_model=str(config.get("whisper_model") or "small"),
-                keep_original_audio=False,
-                start_time=config.get("start_time"),
-                end_time=config.get("end_time"),
-                include_timestamps=True,
-                cookies=None,
-            )
-            out = {"kind": "podcast", "content": res.get("transcript") or "", "summary": res.get("summary"), "metadata": res.get("metadata")}
-            return _emit(out)
-        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS as e:
-            return {"error": f"podcast_process_error:{e}"}
 
     return {"error": f"unsupported_process_media_kind:{kind}"}

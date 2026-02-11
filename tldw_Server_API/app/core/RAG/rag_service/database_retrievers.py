@@ -2040,7 +2040,7 @@ class CharacterCardsRetriever(BaseRetriever):
             except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as e:
                 if getattr(self.chacha_db, "backend_type", None) == BackendType.POSTGRESQL:
                     logger.warning(
-                        "ChaCha backend search failed under PostgreSQL backend; skipping legacy fallback: %s",
+                        'ChaCha backend search failed under PostgreSQL backend; skipping legacy fallback: {}',
                         e,
                     )
                     raise

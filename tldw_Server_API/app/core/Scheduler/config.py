@@ -148,6 +148,9 @@ class SchedulerConfig:
     payload_compression: bool = field(
         default_factory=lambda: os.getenv('SCHEDULER_PAYLOAD_COMPRESSION', 'true').lower() == 'true'
     )
+    allow_legacy_pickle_payloads: bool = field(
+        default_factory=lambda: os.getenv('SCHEDULER_ALLOW_LEGACY_PICKLE_PAYLOADS', 'false').lower() == 'true'
+    )
 
     # Cleanup and retention
     payload_retention_days: int = field(
@@ -265,15 +268,30 @@ class SchedulerConfig:
         # Check for directory traversal BEFORE resolving
         original_base = str(self.base_path)
 
-        # Reject symlink base paths explicitly before resolving
+        # Reject symlink paths, including symlink ancestors (e.g. symlink/child).
+        # Allow top-level OS alias symlinks such as '/var' on macOS.
         import os as _os
         try:
-            abspath = _os.path.abspath(original_base)
-            realpath = _os.path.realpath(original_base)
-            if abspath != realpath or _os.path.islink(original_base):
+            absolute_base = Path(_os.path.abspath(original_base))
+        except OSError as exc:
+            raise ValueError(f"Invalid base path: {self.base_path}") from exc
+
+        for candidate in (absolute_base, *absolute_base.parents):
+            try:
+                if not candidate.exists():
+                    continue
+                if not candidate.is_symlink():
+                    continue
+                anchor = Path(candidate.anchor) if candidate.anchor else Path("/")
+                if candidate.parent == anchor:
+                    # OS-level alias symlink at the root boundary.
+                    continue
                 raise ValueError(f"Base path cannot be a symlink: {self.base_path}")
-        except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
-            pass
+            except OSError as exc:
+                raise ValueError(f"Invalid base path: {self.base_path}") from exc
+
+        if _os.path.islink(original_base):
+            raise ValueError(f"Base path cannot be a symlink: {self.base_path}")
 
         # Detect and prevent directory traversal attempts
         if '..' in original_base or '~' in original_base:
@@ -384,6 +402,7 @@ class SchedulerConfig:
             'leader_ttl_seconds': self.leader_ttl_seconds,
             'payload_threshold_bytes': self.payload_threshold_bytes,
             'payload_compression': self.payload_compression,
+            'allow_legacy_pickle_payloads': self.allow_legacy_pickle_payloads,
             'payload_retention_days': self.payload_retention_days,
             'completed_task_retention_days': self.completed_task_retention_days,
             'cleanup_interval_seconds': self.cleanup_interval_seconds,

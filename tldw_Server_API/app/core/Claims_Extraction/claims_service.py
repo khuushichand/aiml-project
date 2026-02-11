@@ -556,7 +556,7 @@ def _deliver_claims_alert_webhook(
             duration = time.time() - start_ts
             if 200 <= status_code < 300:
                 logger.info(
-                    "Claims webhook delivered channel=%s attempt=%s status=%s",
+                    'Claims webhook delivered channel={} attempt={} status={}',
                     channel,
                     attempt,
                     status_code,
@@ -579,7 +579,7 @@ def _deliver_claims_alert_webhook(
             else:
                 reason = "other"
             logger.warning(
-                "Claims webhook failed channel=%s attempt=%s status=%s reason=%s",
+                'Claims webhook failed channel={} attempt={} status={} reason={}',
                 channel,
                 attempt,
                 status_code,
@@ -600,7 +600,7 @@ def _deliver_claims_alert_webhook(
             reason = _classify_webhook_exception(exc)
             duration = time.time() - start_ts
             logger.warning(
-                "Claims webhook failed channel=%s attempt=%s reason=%s",
+                'Claims webhook failed channel={} attempt={} reason={}',
                 channel,
                 attempt,
                 reason,
@@ -2566,7 +2566,7 @@ async def review_claim(
                         notification_ids=[int(notif_id)],
                     )
             except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("Failed to emit claims review notification: %s", exc)
+                logger.debug("Failed to emit claims review notification: {}", exc)
         return _normalize_claim_row(dict(updated))
 
 
@@ -2689,7 +2689,7 @@ def bulk_review_claims(
                         notification_ids=[int(notif_id)],
                     )
             except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("Failed to emit claims bulk review notification: %s", exc)
+                logger.debug("Failed to emit claims bulk review notification: {}", exc)
         return {
             "updated": updated_ids,
             "conflicts": conflicts,
@@ -3069,7 +3069,7 @@ def export_claims_analytics(
         try:
             db.cleanup_claims_analytics_exports(user_id=target_user_id, retention_hours=retention_val)
         except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Claims analytics export cleanup failed: %s", exc)
+            logger.debug("Claims analytics export cleanup failed: {}", exc)
 
     events = db.list_claims_monitoring_events(
         user_id=target_user_id,

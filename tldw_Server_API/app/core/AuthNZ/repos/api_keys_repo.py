@@ -1042,14 +1042,14 @@ class AuthnzApiKeysRepo:
                         parts = str(result).split()
                         if not parts:
                             logger.error(
-                                "AuthnzApiKeysRepo.expire_keys_before: empty status string from driver: %r",
+                                'AuthnzApiKeysRepo.expire_keys_before: empty status string from driver: {}',
                                 result,
                             )
                             raise ValueError("Empty status string from driver")
                         affected = int(parts[-1])
                     except (ValueError, IndexError) as parse_exc:
                         logger.error(
-                            "AuthnzApiKeysRepo.expire_keys_before: failed to parse driver status %r: %r",
+                            'AuthnzApiKeysRepo.expire_keys_before: failed to parse driver status {}: {}',
                             result,
                             parse_exc,
                         )

@@ -425,7 +425,7 @@ async def process_text_for_chunking_json(
         provider_key = (summarization_provider or "").strip().lower()
         if not llm_api_config_to_use.get("api_key") and provider_requires_api_key(provider_key):
             logger.error(
-                "API key for '%s' for internal summarization step not found in server configuration.",
+                "API key for '{}' for internal summarization step not found in server configuration.",
                 summarization_provider,
             )
             _raise_missing_chunking_key(provider_key)

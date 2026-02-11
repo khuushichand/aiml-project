@@ -1,14 +1,19 @@
+import importlib.machinery
+import sys
+import types
+
 import pytest
-from httpx import AsyncClient, ASGITransport
-import sys, types
+from httpx import ASGITransport, AsyncClient
 
 # Stub heavy modules before importing the full app
 torch_stub = types.ModuleType("torch")
-setattr(torch_stub, "__spec__", None)
+torch_stub.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
+torch_stub.Tensor = object
+torch_stub.nn = types.SimpleNamespace(Module=object)
 sys.modules.setdefault('torch', torch_stub)
 
 dill_stub = types.ModuleType("dill")
-setattr(dill_stub, "__spec__", None)
+dill_stub.__spec__ = None
 sys.modules.setdefault('dill', dill_stub)
 
 
@@ -38,8 +43,8 @@ class _FakeDB:
 
 @pytest.mark.asyncio
 async def test_metadata_search_normalizes_doi(monkeypatch):
-    from tldw_Server_API.app.main import app
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+    from tldw_Server_API.app.main import app
 
     fake_db = _FakeDB()
     app.dependency_overrides[get_media_db_for_user] = lambda: fake_db
@@ -57,8 +62,8 @@ async def test_metadata_search_normalizes_doi(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_metadata_search_invalid_doi_returns_400(monkeypatch):
-    from tldw_Server_API.app.main import app
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+    from tldw_Server_API.app.main import app
 
     fake_db = _FakeDB()
     app.dependency_overrides[get_media_db_for_user] = lambda: fake_db

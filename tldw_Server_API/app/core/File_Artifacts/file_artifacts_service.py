@@ -270,7 +270,7 @@ class FileArtifactsService:
                 )
             except Exception as exc:
                 logger.error(
-                    "file_artifacts: failed to enqueue export job file_id=%s request_id=%s error=%s",
+                    'file_artifacts: failed to enqueue export job file_id={} request_id={} error={}',
                     file_id,
                     request_id or "",
                     exc,
@@ -383,7 +383,7 @@ class FileArtifactsService:
                         export_consumed_at=None,
                     )
                 except Exception as reset_exc:
-                    logger.warning("file_artifacts: failed to reset export state for %s: %s", file_id, reset_exc)
+                    logger.warning("file_artifacts: failed to reset export state for {}: {}", file_id, reset_exc)
             raise
         return FileExportInfo(
             status="ready" if export_req.mode == "url" or not inline_ready else "none",
@@ -446,7 +446,7 @@ class FileArtifactsService:
             if file_path.exists():
                 file_path.unlink()
         except Exception as exc:
-            logger.warning("file_artifacts: failed to delete export file %s: %s", storage_path, exc)
+            logger.warning("file_artifacts: failed to delete export file {}: {}", storage_path, exc)
 
     @staticmethod
     def _default_title(file_type: str) -> str:
@@ -514,7 +514,7 @@ class FileArtifactsService:
         try:
             self._cdb.delete_file_artifact(file_id, hard=True)
         except Exception as exc:
-            logger.warning("file_artifacts: failed to rollback file artifact %s: %s", file_id, exc)
+            logger.warning("file_artifacts: failed to rollback file artifact {}: {}", file_id, exc)
 
     @staticmethod
     def _validate_export_request(*, adapter: FileAdapter, export_req: FileExportRequest) -> None:

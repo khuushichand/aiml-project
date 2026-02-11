@@ -262,8 +262,23 @@ class DatabasePaths:
                 user_db_base = legacy_base
         if not user_db_base:
             if _is_test_context():
-                base_path = (Path.cwd() / "Databases" / "user_databases").resolve()
-                logger.warning(f"USER_DB_BASE_DIR not configured in tests, using cwd fallback: {base_path}")
+                import tempfile
+
+                run_tag = (
+                    os.getenv("TLDW_TEST_RUN_ID")
+                    or os.getenv("PYTEST_XDIST_WORKER")
+                    or "default"
+                )
+                safe_run_tag = "".join(
+                    ch if ch.isalnum() or ch in "-_." else "_"
+                    for ch in str(run_tag)
+                )
+                base_path = (
+                    Path(tempfile.gettempdir()) / "tldw_user_databases_test" / safe_run_tag
+                ).resolve()
+                logger.warning(
+                    f"USER_DB_BASE_DIR not configured in tests, using isolated fallback: {base_path}"
+                )
             else:
                 base_path = (project_root / "Databases" / "user_databases").resolve()
                 logger.warning(f"USER_DB_BASE_DIR not configured, using fallback: {base_path}")

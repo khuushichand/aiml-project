@@ -188,7 +188,7 @@ def _maybe_resample(audio_np: np.ndarray, sample_rate: int, target_sample_rate: 
         return resampled.squeeze(0).cpu().numpy().astype("float32"), target_sample_rate
     except _QWEN3_ASR_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(
-            "Qwen3-ASR: resampling from %s Hz to %s Hz failed; proceeding at original rate. Error: %s",
+            'Qwen3-ASR: resampling from {} Hz to {} Hz failed; proceeding at original rate. Error: {}',
             sample_rate,
             target_sample_rate,
             exc,
@@ -266,7 +266,7 @@ def _load_qwen3_asr_model(settings: dict[str, Any]) -> tuple[Any, Any, str]:
         torch_dtype = _get_torch_dtype(dtype_name)
         local_only = not allow_download
 
-        logger.info("Qwen3-ASR: loading model from '%s' on device '%s'", model_path, device)
+        logger.info("Qwen3-ASR: loading model from '{}' on device '{}'", model_path, device)
 
         processor = AutoProcessor.from_pretrained(
             str(validated_path),
@@ -288,7 +288,7 @@ def _load_qwen3_asr_model(settings: dict[str, Any]) -> tuple[Any, Any, str]:
         model.eval()
 
         _MODEL_CACHE[cache_key] = (processor, model, device)
-        logger.info("Qwen3-ASR: successfully loaded model on device '%s'", device)
+        logger.info("Qwen3-ASR: successfully loaded model on device '{}'", device)
         return processor, model, device
 
 
@@ -321,7 +321,7 @@ def _load_forced_aligner(settings: dict[str, Any]) -> tuple[Any, Any]:
 
         import torch
 
-        logger.info("Qwen3-ASR: loading forced aligner from '%s'", aligner_path)
+        logger.info("Qwen3-ASR: loading forced aligner from '{}'", aligner_path)
 
         processor = AutoProcessor.from_pretrained(
             str(path),
@@ -354,7 +354,7 @@ def _run_forced_alignment(
     try:
         aligner_processor, aligner_model = _load_forced_aligner(settings)
     except (BadRequestError, *_QWEN3_ASR_NONCRITICAL_EXCEPTIONS) as exc:
-        logger.warning("Qwen3-ASR: forced aligner not available: %s", exc)
+        logger.warning("Qwen3-ASR: forced aligner not available: {}", exc)
         return []
 
     import torch
@@ -625,7 +625,7 @@ def is_qwen3_asr_available() -> bool:
     # Check if model path exists
     model_path = Path(settings["model_path"])
     if not model_path.exists():
-        logger.debug("Qwen3-ASR: model path does not exist: %s", model_path)
+        logger.debug("Qwen3-ASR: model path does not exist: {}", model_path)
         return False
 
     # Check for required dependencies

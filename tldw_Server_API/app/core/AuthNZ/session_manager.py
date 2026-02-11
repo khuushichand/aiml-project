@@ -322,7 +322,7 @@ class SessionManager:
 
                     if persisted_key:
                         logger.warning(
-                            "Session key: preferred path invalid and persistence failed; using alternate persisted key from %s",
+                            'Session key: preferred path invalid and persistence failed; using alternate persisted key from {}',
                             str(self._persisted_key_path),
                         )
                         _append(persisted_key)
@@ -331,8 +331,7 @@ class SessionManager:
                         # to keep the service functional, then attempt to persist to an alternate
                         # safe location (or repair the invalid file) best-effort.
                         logger.warning(
-                            "Session key: persistence failed at preferred path %s and no alternate persisted key found; "
-                            "proceeding with in-memory key and attempting repair.",
+                            'Session key: persistence failed at preferred path {} and no alternate persisted key found; proceeding with in-memory key and attempting repair.',
                             str(preferred_path),
                         )
                         _append(generated)
@@ -1208,7 +1207,7 @@ class SessionManager:
                     cache_normalize_required = True
                 except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as normalize_exc:
                     logger.warning(
-                        "Failed to normalize session token hash for session %s: %s",
+                        'Failed to normalize session token hash for session {}: {}',
                         session_data.get("id"),
                         normalize_exc,
                     )

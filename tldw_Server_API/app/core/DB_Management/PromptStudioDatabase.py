@@ -430,7 +430,7 @@ class BackendPromptStudioDatabaseBase:
             raw_conn = wrapper.raw_connection
             self.backend.get_pool().return_connection(raw_conn)
         except BackendDatabaseError as exc:
-            logger.warning("Error returning backend connection to pool: %s", exc)
+            logger.warning("Error returning backend connection to pool: {}", exc)
 
     def _get_thread_connection(self) -> PromptStudioBackendConnectionWrapper:
         wrapper: Optional[PromptStudioBackendConnectionWrapper] = getattr(self._local, 'conn', None)
@@ -465,7 +465,7 @@ class BackendPromptStudioDatabaseBase:
         wrapper = PromptStudioBackendConnectionWrapper(self, raw_conn)
         self._local.conn = wrapper
         logger.debug(
-            "Acquired Prompt Studio backend connection (%s) for thread %s",
+            'Acquired Prompt Studio backend connection ({}) for thread {}',
             self.backend_type.value,
             threading.get_ident(),
         )
@@ -730,7 +730,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         for filename in self._MIGRATION_FILES_SQL:
             migration_path = self._MIGRATIONS_DIR / filename
             if not migration_path.exists():
-                logger.warning("Prompt Studio migration file missing: %s", migration_path)
+                logger.warning("Prompt Studio migration file missing: {}", migration_path)
                 continue
             sql = migration_path.read_text()
             statements = self._convert_sqlite_schema_to_postgres_statements(sql)
@@ -966,7 +966,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                             connection=conn.raw_connection,
                         )
                     except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:
-                        logger.debug("Prompt Studio sync_log availability check failed: %s", exc)
+                        logger.debug("Prompt Studio sync_log availability check failed: {}", exc)
                         self._sync_log_available = False
                         return
                 if not self._sync_log_available:
@@ -992,14 +992,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 # Table doesn't exist - expected in some deployments
                 self._sync_log_available = False
                 logger.debug(
-                    "Prompt Studio sync_log table not available; skipping event for %s/%s",
+                    'Prompt Studio sync_log table not available; skipping event for {}/{}',
                     entity,
                     entity_uuid,
                 )
             else:
                 # Actual write error - worth warning about
                 logger.warning(
-                    "Failed to log sync event for %s/%s: %s",
+                    'Failed to log sync event for {}/{}: {}',
                     entity,
                     entity_uuid,
                     e,
@@ -6207,7 +6207,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 created = self.get_test_case(test_case_id)
                 if created:
                     logger.info(
-                        "Created test case %s (ID: %s) for project %s",
+                        'Created test case {} (ID: {}) for project {}',
                         name,
                         test_case_id,
                         project_id,
@@ -6218,7 +6218,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 if "database is locked" in str(exc).lower() and attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)
                     logger.warning(
-                        "create_test_case locked, retrying in %.3fs (attempt %s/%s)",
+                        'create_test_case locked, retrying in {}s (attempt {}/{})',
                         delay,
                         attempt + 1,
                         max_retries,
@@ -6418,7 +6418,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 if cursor.rowcount > 0:
                     conn.commit()
                     logger.info(
-                        "%s deleted test case %s",
+                        '{} deleted test case {}',
                         "Hard" if hard_delete else "Soft",
                         test_case_id,
                     )
@@ -6490,7 +6490,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                             continue
                         raise DatabaseError(f"Failed to create test case in bulk: {exc}") from exc  # noqa: TRY003
 
-        logger.info("Created %s test cases in bulk for project %s", len(created), project_id)
+        logger.info("Created {} test cases in bulk for project {}", len(created), project_id)
         return created
 
     def search_test_cases(self, project_id: int, query: str, *, limit: int = 10) -> list[dict[str, Any]]:

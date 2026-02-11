@@ -1,3 +1,5 @@
+import configparser
+
 import pytest
 
 from tldw_Server_API.app.core import config as config_mod
@@ -52,3 +54,48 @@ def test_routes_stable_only_accepts_single_letter_y(
 
     # "benchmarks" is experimental by default and not force-enabled in pytest.
     assert config_mod.route_enabled("benchmarks") is False
+
+
+def test_clear_config_cache_resets_route_toggle_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ROUTES_STABLE_ONLY", "false")
+    monkeypatch.delenv("ROUTES_DISABLE", raising=False)
+    monkeypatch.delenv("ROUTES_ENABLE", raising=False)
+
+    config_mod.clear_config_cache()
+    assert config_mod.route_enabled("persona", default_stable=True) is True
+
+    monkeypatch.setenv("ROUTES_DISABLE", "persona")
+    config_mod.clear_config_cache()
+    assert config_mod.route_enabled("persona", default_stable=True) is False
+
+
+def test_route_toggle_defaults_to_stable_only_when_api_routes_section_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ROUTES_STABLE_ONLY", raising=False)
+    monkeypatch.delenv("ROUTES_DISABLE", raising=False)
+    monkeypatch.delenv("ROUTES_ENABLE", raising=False)
+    monkeypatch.setattr(config_mod, "load_comprehensive_config", lambda: configparser.ConfigParser())
+
+    policy = config_mod._route_toggle_policy()
+
+    assert policy["stable_only"] is True
+    # "benchmarks" is experimental by default and should be gated in stable-only mode.
+    assert config_mod.route_enabled("benchmarks") is False
+
+
+def test_route_toggle_env_override_disables_stable_only_when_api_routes_section_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ROUTES_STABLE_ONLY", "false")
+    monkeypatch.delenv("ROUTES_DISABLE", raising=False)
+    monkeypatch.delenv("ROUTES_ENABLE", raising=False)
+    monkeypatch.setattr(config_mod, "load_comprehensive_config", lambda: configparser.ConfigParser())
+
+    policy = config_mod._route_toggle_policy()
+
+    assert policy["stable_only"] is False
+    # Without stable-only gating, default_stable=True keeps experimental route enabled.
+    assert config_mod.route_enabled("benchmarks") is True

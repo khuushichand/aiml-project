@@ -30,7 +30,7 @@ def apply_alignment_anchors(
     for anchor in ordered:
         idx = _find_anchor_word_index(words, anchor.offset)
         if idx is None:
-            logger.warning("alignment anchor ignored: no word at offset %s", anchor.offset)
+            logger.warning("alignment anchor ignored: no word at offset {}", anchor.offset)
             continue
         valid_pairs.append((anchor, idx))
 
@@ -47,14 +47,14 @@ def apply_alignment_anchors(
             next_anchor_idx += 1
             next_word_boundary = valid_pairs[next_anchor_idx][1] if next_anchor_idx < len(valid_pairs) else len(words)
             if i > 0 and anchor.time_ms < words[i - 1].end_ms:
-                logger.warning("alignment anchor ignored: non-monotonic at %s", anchor.offset)
+                logger.warning("alignment anchor ignored: non-monotonic at {}", anchor.offset)
                 continue
             active_delta = anchor.time_ms - word.start_ms
 
         new_start = word.start_ms + active_delta
         new_end = word.end_ms + active_delta
         if new_start < 0 or new_end < 0:
-            logger.warning("alignment anchor produced negative timestamp at offset %s", word.char_start)
+            logger.warning("alignment anchor produced negative timestamp at offset {}", word.char_start)
             new_start = max(0, new_start)
             new_end = max(new_start, new_end)
         adjusted.append(word.model_copy(update={"start_ms": new_start, "end_ms": new_end}))
@@ -103,7 +103,7 @@ def stitch_alignment_payloads(
     words: list[AlignmentWord] = []
     for idx, payload in enumerate(payloads):
         if payload.engine != engine or payload.sample_rate != sample_rate:
-            logger.warning("alignment stitch: mismatched engine or sample_rate in segment %s", idx)
+            logger.warning("alignment stitch: mismatched engine or sample_rate in segment {}", idx)
         time_offset = int(segment_offsets_ms[idx])
         char_offset = int(segment_offsets_chars[idx]) if segment_offsets_chars is not None else 0
         for word in payload.words:

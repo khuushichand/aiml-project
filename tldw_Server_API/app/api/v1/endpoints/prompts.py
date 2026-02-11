@@ -24,7 +24,6 @@ from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
     InputError,
     PromptsDatabase,
 )
-from tldw_Server_API.app.core.testing import env_flag_enabled
 
 #
 # Local Imports
@@ -32,10 +31,7 @@ from tldw_Server_API.app.core.Prompt_Management.Prompts_Interop import (
     db_export_prompt_keywords_to_csv,
     db_export_prompts_formatted,  # Using the standalone function from interop
 )
-
-#
-# DB Mgmt
-from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 #from tldw_Server_API.app.core.DB_Management.DB_Manager import DBManager
 #
@@ -1159,54 +1155,53 @@ async def restore_prompt_version(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
 
 
-# === Collection Endpoints (minimal, in-memory for tests) ===
-
-_collections_store_key = "prompt_collections"
-
-def _get_collections_store():
-    store = ephemeral_storage.get_data(_collections_store_key)
-    if store is None:
-        store = {"next_id": 1, "items": {}}
-        ephemeral_storage._store[_collections_store_key] = store  # simple internal set
-    return store
+# === Collection Endpoints ===
 
 
 @router.post(
     "/collections/create",
-    summary="Create a prompt collection (minimal)",
-    dependencies=[Depends(verify_prompts_auth)]
+    response_model=schemas.PromptCollectionCreateResponse,
+    summary="Create a prompt collection",
+    dependencies=[Depends(verify_prompts_user)],
 )
 async def create_collection(
     payload: schemas.PromptCollectionCreateRequest = Body(...),
+    db: PromptsDatabase = Depends(get_prompts_db_for_user),
 ):
-    name = payload.name
-    description = payload.description
-    prompt_ids = payload.prompt_ids or []
-    store = _get_collections_store()
-    cid = store["next_id"]
-    store["next_id"] += 1
-    store["items"][cid] = {
-        "collection_id": cid,
-        "name": name,
-        "description": description,
-        "prompt_ids": prompt_ids,
-    }
-    return {"collection_id": cid}
+    try:
+        created = db.create_prompt_collection(
+            name=payload.name,
+            description=payload.description,
+            prompt_ids=payload.prompt_ids or [],
+        )
+        return schemas.PromptCollectionCreateResponse(collection_id=created["collection_id"])
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except DatabaseError as e:
+        logger.error(f"Database error creating prompt collection '{payload.name}': {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
 
 
 @router.get(
     "/collections/{collection_id}",
-    summary="Get a prompt collection (minimal)",
-    dependencies=[Depends(verify_prompts_auth)]
+    response_model=schemas.PromptCollectionResponse,
+    summary="Get a prompt collection",
+    dependencies=[Depends(verify_prompts_user)],
 )
 async def get_collection(
     collection_id: int,
+    db: PromptsDatabase = Depends(get_prompts_db_for_user),
 ):
-    store = _get_collections_store()
-    item = store["items"].get(collection_id)
-    if not item:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
-    return item
+    try:
+        item = db.get_prompt_collection_by_id(collection_id)
+        if not item:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+        return schemas.PromptCollectionResponse(**item)
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except DatabaseError as e:
+        logger.error(f"Database error fetching prompt collection '{collection_id}': {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
 
 
 #

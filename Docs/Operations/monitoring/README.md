@@ -63,6 +63,36 @@ mkdir -p Dockerfiles/Monitoring/secrets
 printf '%s' 'your-smtp-password' > Dockerfiles/Monitoring/secrets/smtp_password
 ```
 
+## Email Sync Metrics and Alerts
+
+Gmail connector sync now emits these Prometheus metrics:
+
+- `email_sync_runs_total{provider,status}`: counter for `success|failed|skipped`.
+- `email_sync_failures_total{provider,reason}`: failure counter by reason.
+- `email_sync_recovery_events_total{provider,outcome}`: cursor recovery outcomes (`bounded_replay|full_backfill_required`).
+- `email_sync_lag_seconds{provider}`: histogram of observed sync lag on successful runs.
+
+Suggested dashboard queries:
+
+```promql
+sum(rate(email_sync_runs_total{provider="gmail",status="success"}[15m]))
+```
+
+```promql
+sum(rate(email_sync_runs_total{provider="gmail",status="failed"}[15m]))
+/
+clamp_min(sum(rate(email_sync_runs_total{provider="gmail"}[15m])), 0.001)
+```
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (le) (rate(email_sync_lag_seconds_bucket{provider="gmail"}[30m]))
+)
+```
+
+Alert hooks for failure-rate and lag are defined in `prometheus_alerts_tldw.yml`.
+
 ## Notes
 
 - Ensure your tldw_server instance is reachable from the Prometheus container.

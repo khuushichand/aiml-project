@@ -39,6 +39,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     fetch_keywords_for_media_batch,
     permanently_delete_item,
 )
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
 
 router = APIRouter(tags=["Media Management"])
@@ -82,6 +83,56 @@ def _is_test_mode() -> bool:
 
 
 _SEARCH_RATE_LIMIT = "600/minute" if _is_test_mode() else "30/minute"
+
+_EMAIL_MEDIA_SEARCH_DELEGATION_MODES = {"opt_in", "auto_email"}
+
+
+def _normalize_media_types(media_types: list[str] | None) -> list[str]:
+    return [
+        str(media_type).strip().lower()
+        for media_type in (media_types or [])
+        if str(media_type).strip()
+    ]
+
+
+def _should_delegate_media_search_to_email(
+    *,
+    search_params: SearchRequest,
+    email_operator_enabled: bool,
+) -> bool:
+    explicit_mode = str(search_params.email_query_mode or "").strip().lower()
+    media_types = _normalize_media_types(search_params.media_types)
+    email_only_media_scope = bool(media_types) and all(media_type == "email" for media_type in media_types)
+
+    if explicit_mode == "operators":
+        if not email_operator_enabled:
+            raise HTTPException(
+                status_code=HTTP_422_UNPROCESSABLE,
+                detail="email_query_mode='operators' is disabled by server configuration.",
+            )
+        if not email_only_media_scope:
+            raise HTTPException(
+                status_code=HTTP_422_UNPROCESSABLE,
+                detail="email_query_mode='operators' requires media_types=['email'].",
+            )
+        return True
+
+    if explicit_mode == "legacy":
+        return False
+
+    delegation_mode = str(settings.get("EMAIL_MEDIA_SEARCH_DELEGATION_MODE", "opt_in") or "").strip().lower()
+    if delegation_mode not in _EMAIL_MEDIA_SEARCH_DELEGATION_MODES:
+        logger.warning(
+            "Invalid EMAIL_MEDIA_SEARCH_DELEGATION_MODE='{}'; falling back to 'opt_in'.",
+            delegation_mode or "<empty>",
+        )
+        delegation_mode = "opt_in"
+
+    return bool(
+        delegation_mode == "auto_email"
+        and email_operator_enabled
+        and email_only_media_scope
+    )
 
 
 @router.get(
@@ -821,19 +872,47 @@ async def search_media_items(
         elif search_params.query:
             query_text_for_match = search_params.query.strip()
 
-        items_data, total_items = db.search_media_db(
-            search_query=query_text_for_match,
-            search_fields=search_params.fields,
-            media_types=search_params.media_types,
-            date_range=search_params.date_range,
-            must_have_keywords=search_params.must_have,
-            must_not_have_keywords=search_params.must_not_have,
-            sort_by=search_params.sort_by,
-            page=page,
-            results_per_page=results_per_page,
-            include_trash=False,
-            include_deleted=False,
+        email_operator_enabled = bool(settings.get("EMAIL_OPERATOR_SEARCH_ENABLED", True))
+        use_email_operator_bridge = _should_delegate_media_search_to_email(
+            search_params=search_params,
+            email_operator_enabled=email_operator_enabled,
         )
+        if use_email_operator_bridge:
+            email_rows, total_items = db.search_email_messages(
+                query=query_text_for_match,
+                include_deleted=False,
+                limit=results_per_page,
+                offset=(page - 1) * results_per_page,
+            )
+            items_data: list[dict[str, Any]] = []
+            for row in email_rows:
+                media_id_raw = row.get("media_id")
+                try:
+                    media_id = int(media_id_raw)
+                except (TypeError, ValueError):
+                    continue
+                title_value = row.get("media_title") or row.get("subject") or f"Email {media_id}"
+                items_data.append(
+                    {
+                        "id": media_id,
+                        "title": str(title_value),
+                        "type": "email",
+                    }
+                )
+        else:
+            items_data, total_items = db.search_media_db(
+                search_query=query_text_for_match,
+                search_fields=search_params.fields,
+                media_types=search_params.media_types,
+                date_range=search_params.date_range,
+                must_have_keywords=search_params.must_have,
+                must_not_have_keywords=search_params.must_not_have,
+                sort_by=search_params.sort_by,
+                page=page,
+                results_per_page=results_per_page,
+                include_trash=False,
+                include_deleted=False,
+            )
 
         formatted_items = [
             MediaListItem(
@@ -903,6 +982,15 @@ async def search_media_items(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Internal server error: Response creation failed.",
             ) from ve
+    except InputError as exc:
+        logger.warning(
+            f"Invalid email operator query for media search bridge: {exc}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except ValueError as ve:
         logger.warning(
             f"Invalid parameters for media search: {ve}",

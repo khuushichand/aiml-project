@@ -24,23 +24,81 @@ and this project adheres to Some kind of Versioning
 ## [0.1.21] 2026-02-X
 
 ### Added
--
+- New security and regression tests for:
+  - Scheduler payload format/ref validation and legacy compatibility behavior.
+  - Web dedupe JSON persistence and controlled legacy migration.
+  - Placeholder-service guardrails and route isolation.
+  - Loguru formatting guardrail.
+- Operations runbook documenting secure defaults, compatibility flags, and migration steps.
+- Added a startup/CI route guard that fails fast when duplicate `(path, method)` routes are registered.
+- Added regression tests for duplicate-route detection, CORS guardrails, ULTRA_MINIMAL health routing, and OpenAPI CORS behavior.
 
 ### Changed
 -
+- Normalized Loguru formatting across tldw_Server_API/app from %-style placeholders to {} style.
+- Added CI/test guard to prevent reintroduction of %-style Loguru placeholders.
+- Sync client defaults now align with server routes (`/api/v1/sync/send` and `/api/v1/sync/get`) and support configurable auth headers (`Authorization` bearer and `X-API-KEY`).
+- Moved local LLM manager initialization out of import-time setup into lifespan startup, with lazy initialization behavior where applicable.
+- ULTRA_MINIMAL mode now uses control-plane health endpoints only (`/health`, `/ready`, `/health/ready`) to avoid duplicate route ownership.
 
 ### Removed
 - 
 
 ### Fixed
--
-fix(audio-ws): make transcribe startup resilient to Nemo probe failures
-
+- Auth/API: deprecated `PUT /api/v1/users/me` now returns `404 User not found` when the backing `users` row is missing, instead of returning a false-success profile payload.
+- Test isolation: hardened MediaDB2 `torch` stubs with minimal `Tensor`/`nn.Module` attributes so cross-suite pytest runs no longer fail during SciPy/NLTK import checks.
+- fix(audio-ws): make transcribe startup resilient to Nemo probe failures
 - Treat Nemo availability probe import errors as non-fatal in `websocket_transcribe`
 - Default to Whisper when Nemo probing cannot be resolved at runtime
 - Prevent WS startup aborts that caused downstream quota/metrics/concurrency test failures
 - Document the fail-safe fallback behavior in the audio streaming protocol docs
--
+- Hardening: Prompts/Sync/Workflows/Services
+  - Improved production safety and reliability across prompt collections, sync, workflow placeholders, and ephemeral processing.
+  - Documented /api/v1/prompts/collections/* as production-backed, user-scoped endpoints.
+  - Enforced and documented strict /api/v1/sync/send entity validation (Media, Keywords, MediaKeywords).
+  - Hardened sync error handling: internal failures stay 500; /api/v1/sync/get now fails closed on invalid sync rows instead of silently skipping.
+  - Confirmed workflow process_media placeholder kinds (ebook, xml, podcast) return explicit not_implemented.
+  - Added and documented ephemeral store controls (EPHEMERAL_STORE_TTL_SECONDS, EPHEMERAL_STORE_MAX_ENTRIES, EPHEMERAL_STORE_MAX_BYTES).
+  - Fixed XML placeholder temp-file lifecycle (always cleaned up) and preserved intended HTTP status behavior.
+  - Added regression tests for XML cleanup/error paths and rate-limiter type-hint/datetime integrity.
+- Fixed several backend reliability and API-behavior issues across Prompt DB lifecycle, sync processing, and service cleanup.
+  - Removed import-time async worker startup in prompts DB dependencies; worker lifecycle now starts safely under app runtime.
+  - Hardened /sync/send and /sync/get error handling:
+    - preserved HTTP exceptions instead of wrapping them into generic 500s,
+    - restored correct 400 classification for client validation errors (including disallowed sync entities),
+    - prevented silent partial /sync/get responses when invalid sync rows are encountered.
+  - Expanded sync conflict timestamp parsing to support ISO-8601 Z, fractional Z, +00 (line 0), and non-UTC offsets (normalized to UTC before LWW comparison).
+  - Fixed XML processing temp-file leak by ensuring cleanup on both success and failure paths.
+  - Removed deprecated FastAPI 422 fallback usage to eliminate import-time deprecation warnings in exception handling.
+  - Added regression coverage for all fixes, with targeted suite passing (69 passed).
+- Auth/API: deprecated `PUT /api/v1/users/me` no longer returns a false-success payload when the backing `users` row is missing; it now returns `404 User not found`.
+- Regression coverage: added legacy `/users/me` update tests for both missing-row (`404`) and successful update (`200`) paths.
+- Test stability: hardened MediaDB2 test `torch` stubs with minimal `Tensor`/`nn.Module` attributes to prevent cross-suite import failures during SciPy/NLTK initialization.
+- Security
+  - Hardened API key exposure paths:
+    - /api/v1/config/docs-info now always returns a safe placeholder key and api_key_configured status.
+    - Startup API key logging is masked by default (full key only when explicitly enabled).
+  - Hardened scheduler payload handling:
+    - External payload storage now uses safe JSON serialization by default.
+    - Added strict payload reference validation and payload header bounds checks.
+    - Disabled legacy pickle payload deserialization by default.
+  - Hardened web scraping dedupe persistence:
+    - Dedupe hashes now persist as JSON instead of pickle by default.
+    - Legacy pickle hash loading is disabled by default.
+  - Isolated placeholder processing services:
+    - Placeholder document/ebook/podcast/xml services are now blocked in production-like environments even if enabled.
+- Hardened deprecated `GET /api/v1/users/me` so missing-user fallback is only allowed in single-user mode; multi-user now correctly rejects missing backing users.
+- Prevented ephemeral-store “unusable key” behavior by rejecting payloads that exceed configured max-bytes before insertion.
+- Improved `/api/v1/sync/get` resilience: malformed sync rows are now logged and skipped while valid rows are still returned (partial success instead of full failure).
+- Added regression coverage for user fallback rules, sync client route/auth behavior, sync malformed-row handling, and ephemeral-store size-limit enforcement.
+- CORS now fails closed when enabled and `ALLOWED_ORIGINS` resolves to an explicit empty list (`[]`); a non-empty explicit origin list is required unless CORS is disabled.
+- Startup now rejects invalid CORS configuration when `ALLOWED_ORIGINS` includes `"*"` while credentials are enabled.
+- OpenAPI CORS handling no longer reflects disallowed origins.
+- `ALLOWED_ORIGINS=""` (empty string) now logs a warning and falls back to local default origins for backward compatibility.
+- Security hardening (Scheduler): fixed symlink-path validation bypass so base_path now rejects symlink ancestors (including symlink/child) instead of only direct symlink paths.
+- Regression coverage (Scheduler): updated test_security_fixes.py to match current backend detection (pool-based Postgres detection) and async DB mocks (AsyncMock + awaited call assertions).
+- Deprecation headers: replaced hardcoded fallback sunset dates with a shared UTC helper (build_deprecation_headers) used by auth, users, and legacy character-chat endpoints, with DEPRECATION_SUNSET_DAYS support and dynamic fallback computation.
+
 
 ## [0.1.20] 2026-02-07
 

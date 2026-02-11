@@ -68,7 +68,7 @@ class AuthnzRegistrationCodesRepo:
                 return int(updated or 0)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
-                "AuthnzRegistrationCodesRepo.deactivate_expired_codes failed: %s",
+                'AuthnzRegistrationCodesRepo.deactivate_expired_codes failed: {}',
                 exc,
             )
             raise

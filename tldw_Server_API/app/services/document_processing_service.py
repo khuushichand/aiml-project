@@ -1,6 +1,7 @@
 # /Server_API/app/services/document_processing_service.py
-
-# FIXME - This file is incomplete and needs to be completed. The code below is a placeholder and needs to be replaced.
+#
+# Legacy placeholder service kept for non-production scaffolding only.
+# Production deployments should use dedicated media/document ingestion paths.
 
 import os
 import tempfile
@@ -13,7 +14,6 @@ from docx2txt import docx2txt
 from fastapi import HTTPException
 from pypandoc import convert_file
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
@@ -22,6 +22,7 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.Utils.Utils import logging
+from tldw_Server_API.app.services._placeholder_guard import ensure_placeholder_service_enabled
 
 _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS = (
     AttributeError,
@@ -38,9 +39,7 @@ _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS = (
 
 
 def _ensure_placeholder_enabled():
-    s = get_settings()
-    if not getattr(s, "PLACEHOLDER_SERVICES_ENABLED", False):
-        raise HTTPException(status_code=503, detail="Document placeholder service is disabled. Set PLACEHOLDER_SERVICES_ENABLED=1 to enable.")
+    ensure_placeholder_service_enabled("Document")
 
 def _file_security_strict() -> bool:
     import os as _os

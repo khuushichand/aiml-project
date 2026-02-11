@@ -116,7 +116,9 @@ See `adapters.py` for configuration keys and behavior of each step.
 The following additional step types are available and surfaced via `/step-types` for schema discovery:
 
 - `tts`: Text-to-speech with optional transcript artifact save and download link attachment. Advanced options include `lang_code`, `normalization_options`, and provider-specific passthrough.
-- `process_media`: Ephemeral fetch/process of web media (internal provider). No DB persistence.
+- `process_media`: Ephemeral fetch/process of media via internal services. No DB persistence.
+  - Implemented workflow kinds currently include `web_scraping`, `pdf`, and `mediawiki_dump`.
+  - Placeholder kinds `ebook`, `xml`, and `podcast` return explicit `{"error":"not_implemented", ...}` responses until real handlers are wired.
 - `rss_fetch` / `atom_fetch`: Fetch and parse RSS/Atom feeds; returns `results[]` and concatenated `text` for downstream summarization.
 - `embed`: Create vector embeddings for provided text and upsert to a per-user Chroma collection.
 - `translate`: Provider-agnostic translation returning translated text and metadata (source/target languages).

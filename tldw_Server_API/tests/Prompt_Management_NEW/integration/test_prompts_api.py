@@ -5,10 +5,13 @@ Tests the complete API flow with real components, no mocking.
 """
 
 import pytest
-pytestmark = pytest.mark.integration
-import json
-from datetime import datetime
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from tldw_Server_API.app.api.v1.endpoints.prompts import router as prompts_router
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+
+pytestmark = pytest.mark.integration
 
 # ========================================================================
 # Prompt CRUD Endpoint Tests
@@ -482,6 +485,75 @@ class TestCollectionEndpoints:
         data = get_response.json()
         assert data['name'] == 'Get Test'
         assert data['description'] == 'Test'
+
+
+class TestCollectionTenantIsolation:
+    """Collections should remain isolated by authenticated user scope."""
+
+    @pytest.mark.integration
+    def test_collection_ids_are_not_shared_across_users(self, test_env_vars, auth_headers):
+        app = FastAPI()
+        app.include_router(prompts_router, prefix="/api/v1/prompts")
+
+        active_user = {"id": 101}
+
+        async def _override_user():
+            uid = int(active_user["id"])
+            return User(
+                id=uid,
+                username=f"user_{uid}",
+                email=None,
+                role="admin",
+                is_active=True,
+                is_verified=True,
+                is_superuser=True,
+                roles=["admin"],
+                permissions=["*"],
+                is_admin=True,
+            )
+
+        app.dependency_overrides[get_request_user] = _override_user
+
+        with TestClient(app) as client:
+            p1 = client.post(
+                "/api/v1/prompts",
+                json={"name": "Tenant A Prompt 1", "details": "A1"},
+                headers=auth_headers,
+            )
+            p2 = client.post(
+                "/api/v1/prompts",
+                json={"name": "Tenant A Prompt 2", "details": "A2"},
+                headers=auth_headers,
+            )
+            assert p1.status_code == 201, p1.text
+            assert p2.status_code == 201, p2.text
+
+            create_collection = client.post(
+                "/api/v1/prompts/collections/create",
+                json={
+                    "name": "Tenant A Collection",
+                    "description": "Owned by A",
+                    "prompt_ids": [p1.json()["id"], p2.json()["id"]],
+                },
+                headers=auth_headers,
+            )
+            assert create_collection.status_code == 200, create_collection.text
+            collection_id = create_collection.json()["collection_id"]
+
+            active_user["id"] = 202
+            cross_tenant_get = client.get(
+                f"/api/v1/prompts/collections/{collection_id}",
+                headers=auth_headers,
+            )
+            assert cross_tenant_get.status_code == 404, cross_tenant_get.text
+
+            active_user["id"] = 101
+            owner_get = client.get(
+                f"/api/v1/prompts/collections/{collection_id}",
+                headers=auth_headers,
+            )
+            assert owner_get.status_code == 200, owner_get.text
+            assert owner_get.json()["name"] == "Tenant A Collection"
 
 # ========================================================================
 # Error Handling Endpoint Tests

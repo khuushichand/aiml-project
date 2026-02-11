@@ -2107,7 +2107,7 @@ def migration_039_ensure_user_storage_columns(conn: sqlite3.Connection) -> None:
         conn.commit()
         logger.info("Migration 039: storage columns ensured on users table")
     except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error("Migration 039: failed to ensure storage columns: %s", exc)
+        logger.error("Migration 039: failed to ensure storage columns: {}", exc)
         raise
 
 
@@ -2167,7 +2167,7 @@ def migration_046_add_org_invite_allowlist_domain(conn: sqlite3.Connection) -> N
         conn.commit()
         logger.info("Migration 046: org_invites allowlist domain ensured")
     except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error("Migration 046: failed to add org_invites allowlist domain: %s", exc)
+        logger.error("Migration 046: failed to add org_invites allowlist domain: {}", exc)
         raise
 
 

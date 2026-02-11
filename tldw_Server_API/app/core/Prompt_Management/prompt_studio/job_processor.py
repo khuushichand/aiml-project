@@ -472,7 +472,7 @@ class JobProcessor:
                 job_id=payload.get("job_id"),
             ):
                 logger.info(
-                    "Processing optimization job %s with optimizer '%s' (max_iterations=%s)",
+                    "Processing optimization job {} with optimizer '{}' (max_iterations={})",
                     optimization_id,
                     optimizer_type,
                     max_iterations,

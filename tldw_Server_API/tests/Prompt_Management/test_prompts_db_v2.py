@@ -2,29 +2,36 @@
 # Description:
 #
 # Imports
+import os
 import re
-
-import pytest
 import sqlite3
 import uuid
 from pathlib import Path
-import os
-import time  # For testing last_modified updates
+
+import pytest
 
 #
 # Local Imports
 from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
-    PromptsDatabase,
-    DatabaseError,
-    SchemaError,
-    InputError,
     ConflictError,
+    InputError,
+    PromptsDatabase,
+)
+from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
     # Standalone functions
     add_or_update_prompt as standalone_add_or_update_prompt,
-    load_prompt_details_for_ui as standalone_load_prompt_details_for_ui,
+)
+from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
     export_prompt_keywords_to_csv as standalone_export_prompt_keywords_to_csv,
-    view_prompt_keywords_markdown as standalone_view_prompt_keywords_markdown,
+)
+from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
     export_prompts_formatted as standalone_export_prompts_formatted,
+)
+from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
+    load_prompt_details_for_ui as standalone_load_prompt_details_for_ui,
+)
+from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
+    view_prompt_keywords_markdown as standalone_view_prompt_keywords_markdown,
 )
 
 #
@@ -77,6 +84,43 @@ def test_database_initialization_file(file_db):
     conn = file_db.get_connection()
     cursor = conn.execute("SELECT version FROM schema_version")
     assert cursor.fetchone()["version"] == PromptsDatabase._CURRENT_SCHEMA_VERSION
+
+
+def test_schema_v1_migrates_to_v2_with_collections(tmp_path):
+    db_file = tmp_path / "test_prompts_v1.db"
+
+    with sqlite3.connect(db_file) as legacy_conn:
+        legacy_conn.executescript(
+            f"""
+            {PromptsDatabase._TABLES_SQL_V1}
+            {PromptsDatabase._INDICES_SQL_V1}
+            {PromptsDatabase._TRIGGERS_SQL_V1}
+            {PromptsDatabase._SCHEMA_UPDATE_VERSION_SQL_V1}
+            """
+        )
+        legacy_conn.commit()
+        legacy_version = legacy_conn.execute("SELECT version FROM schema_version").fetchone()[0]
+        assert legacy_version == 1
+        assert (
+            legacy_conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='PromptCollections'"
+            ).fetchone()
+            is None
+        )
+
+    migrated_db = PromptsDatabase(db_path=db_file, client_id=TEST_CLIENT_ID)
+    try:
+        conn = migrated_db.get_connection()
+        version_row = conn.execute("SELECT version FROM schema_version").fetchone()
+        assert version_row["version"] == 2
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='PromptCollections'"
+        ).fetchone() is not None
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='PromptCollectionItems'"
+        ).fetchone() is not None
+    finally:
+        migrated_db.close_connection()
 
 
 def test_initialization_empty_client_id():
@@ -142,6 +186,37 @@ def test_add_prompt(memory_db: PromptsDatabase):
     assert "updated" in msg3.lower()
     updated_prompt = memory_db.fetch_prompt_details(p_id)
     assert updated_prompt["author"] == "Updated Author"
+
+
+def test_create_and_get_prompt_collection(memory_db: PromptsDatabase):
+    p1_id, _, _ = memory_db.add_prompt(name="Collection Prompt A", author="Tester", details="A")
+    p2_id, _, _ = memory_db.add_prompt(name="Collection Prompt B", author="Tester", details="B")
+
+    created = memory_db.create_prompt_collection(
+        name="Research Bundle",
+        description="Useful prompts",
+        prompt_ids=[p1_id, p2_id],
+    )
+    assert created["collection_id"] > 0
+    assert created["name"] == "Research Bundle"
+    assert created["prompt_ids"] == [p1_id, p2_id]
+
+    fetched = memory_db.get_prompt_collection_by_id(created["collection_id"])
+    assert fetched is not None
+    assert fetched["collection_id"] == created["collection_id"]
+    assert fetched["name"] == "Research Bundle"
+    assert fetched["description"] == "Useful prompts"
+    assert fetched["prompt_ids"] == [p1_id, p2_id]
+
+
+def test_create_prompt_collection_validates_prompt_ids(memory_db: PromptsDatabase):
+    p1_id, _, _ = memory_db.add_prompt(name="Collection Prompt Existing", author="Tester", details="A")
+    with pytest.raises(InputError, match=r"Prompt\(s\) not found or deleted"):
+        memory_db.create_prompt_collection(
+            name="Invalid Bundle",
+            description=None,
+            prompt_ids=[p1_id, 999999],
+        )
 
 
 def test_soft_delete_and_undelete_prompt(memory_db: PromptsDatabase):
@@ -353,7 +428,7 @@ def test_standalone_export_functions(memory_db: PromptsDatabase, tmp_path: Path)
     assert "Successfully exported" in status_csv
     assert path_csv.exists()
     assert path_csv.suffix == ".csv"
-    with open(path_csv, "r") as f:
+    with open(path_csv) as f:
         content = f.read()
         assert "Export Prompt 1" in content
         assert "common_kw" in content  # Assuming keywords are exported
@@ -374,7 +449,7 @@ def test_standalone_export_functions(memory_db: PromptsDatabase, tmp_path: Path)
     assert "Successfully exported" in status_kw_csv
     assert path_kw_csv.exists()
     assert path_kw_csv.suffix == ".csv"
-    with open(path_kw_csv, "r") as f:
+    with open(path_kw_csv) as f:
         content = f.read()
         assert "export_kw" in content
         assert "common_kw" in content

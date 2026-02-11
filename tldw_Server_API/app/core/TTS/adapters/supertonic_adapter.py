@@ -172,7 +172,7 @@ class SupertonicOnnxAdapter(TTSAdapter):
         try:
             self.sample_rate = int(getattr(self._engine, "sample_rate", self.sample_rate))
         except Exception:
-            logger.debug("Supertonic: unable to read sample_rate from engine, using default %s", self.sample_rate)
+            logger.debug("Supertonic: unable to read sample_rate from engine, using default {}", self.sample_rate)
 
         self._voice_to_path, self._voice_infos = self._load_voice_mappings()
 
@@ -181,7 +181,7 @@ class SupertonicOnnxAdapter(TTSAdapter):
         self._initialized = True
         self._status = ProviderStatus.AVAILABLE
         logger.info(
-            "Supertonic adapter initialized (onnx_dir=%s, voices=%d, sample_rate=%s)",
+            'Supertonic adapter initialized (onnx_dir={}, voices={}, sample_rate={})',
             self.onnx_dir,
             len(self._voice_infos),
             self.sample_rate,
@@ -199,7 +199,7 @@ class SupertonicOnnxAdapter(TTSAdapter):
             if not path.exists():
                 if voice_id == self.default_voice:
                     missing_default = True
-                logger.warning("Supertonic voice style missing: voice_id=%s path=%s", voice_id, path)
+                logger.warning("Supertonic voice style missing: voice_id={} path={}", voice_id, path)
                 continue
             voice_map[voice_id] = path
             voices.append(

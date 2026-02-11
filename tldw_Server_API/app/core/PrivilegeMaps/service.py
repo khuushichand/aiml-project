@@ -214,7 +214,7 @@ class PrivilegeMapService:
                     team_id=None,
                 )
             except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("Unable to record privilege trend snapshot: %s", exc)
+                logger.debug("Unable to record privilege trend snapshot: {}", exc)
 
         generated_at = base_payload["generated_at"]
         buckets = base_payload["buckets"]
@@ -301,7 +301,7 @@ class PrivilegeMapService:
                     team_id=team_id,
                 )
             except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("Unable to record team privilege trend snapshot: %s", exc)
+                logger.debug("Unable to record team privilege trend snapshot: {}", exc)
 
         generated_at = base_payload["generated_at"]
         buckets = base_payload["buckets"]
@@ -364,7 +364,7 @@ class PrivilegeMapService:
         users = await self._fetch_users()
         filtered = [u for u in users if str(u["id"]) == str(user_id)]
         if not filtered:
-            logger.debug("Privilege detail requested for unknown user_id=%s", user_id)
+            logger.debug("Privilege detail requested for unknown user_id={}", user_id)
         items = self._build_detail_items(filtered, resource_filter=resource)
         return self._paginate_detail(items, page=page, page_size=page_size)
 
@@ -492,7 +492,7 @@ class PrivilegeMapService:
 
             return collect_privilege_route_registry(fastapi_app, self.catalog)
         except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
-            logger.warning("Privilege route introspection failed: %s", exc)
+            logger.warning("Privilege route introspection failed: {}", exc)
             return {}
 
     def _routes_for_scope(self, scope: ScopeEntry) -> list[RouteMetadata]:
@@ -568,7 +568,7 @@ class PrivilegeMapService:
                 )
             return users
         except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Falling back to single-user privilege dataset: %s", exc)
+            logger.debug("Falling back to single-user privilege dataset: {}", exc)
 
         # Fallback: single-user-style profile or empty DB
         single_user = get_single_user_instance()
@@ -611,7 +611,7 @@ class PrivilegeMapService:
                     memberships.append(record)
             return memberships
         except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Unable to load team memberships: %s", exc)
+            logger.debug("Unable to load team memberships: {}", exc)
             return []
 
     async def _fetch_org_memberships(self) -> list[dict[str, Any]]:
@@ -630,7 +630,7 @@ class PrivilegeMapService:
                     memberships.append(record)
             return memberships
         except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Unable to load org memberships: %s", exc)
+            logger.debug("Unable to load org memberships: {}", exc)
             return []
 
     async def _filter_users_for_team(
@@ -688,7 +688,7 @@ class PrivilegeMapService:
                 if user_id in base_users and role_name:
                     role_assignments[user_id].add(role_name)
         except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Unable to load role assignments: %s", exc)
+            logger.debug("Unable to load role assignments: {}", exc)
 
         role_permissions: dict[str, set[str]] = defaultdict(set)
         try:
@@ -709,7 +709,7 @@ class PrivilegeMapService:
                 if role_name and permission_name:
                     role_permissions[role_name].add(permission_name)
         except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Unable to load role permissions: %s", exc)
+            logger.debug("Unable to load role permissions: {}", exc)
 
         user_permissions_direct: dict[str, set[str]] = defaultdict(set)
         try:
@@ -732,7 +732,7 @@ class PrivilegeMapService:
                 if user_id in base_users and permission_name:
                     user_permissions_direct[user_id].add(permission_name)
         except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Unable to load direct user permissions: %s", exc)
+            logger.debug("Unable to load direct user permissions: {}", exc)
 
         for user_id, payload in base_users.items():
             roles = sorted(role_assignments.get(user_id, set())) or [payload.get("primary_role")]
@@ -1135,7 +1135,7 @@ class PrivilegeMapService:
                 team_id=team_id,
             )
         except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Privilege trend computation failed: %s", exc)
+            logger.debug("Privilege trend computation failed: {}", exc)
             return []
 
     def _build_recommended_actions(

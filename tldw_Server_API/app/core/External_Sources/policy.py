@@ -11,11 +11,21 @@ def _csv_env(name: str, default: str = "") -> list[str]:
     return [s.strip() for s in raw.split(",") if s.strip()]
 
 
+def _gmail_connector_enabled_from_env() -> bool:
+    value = str(os.getenv("EMAIL_GMAIL_CONNECTOR_ENABLED", "false") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def get_default_policy_from_env(org_id: int) -> dict[str, Any]:
     """Return a default org policy derived from environment variables."""
+    default_providers = (
+        "drive,notion,gmail"
+        if _gmail_connector_enabled_from_env()
+        else "drive,notion"
+    )
     return {
         "org_id": org_id,
-        "enabled_providers": _csv_env("ORG_CONNECTORS_ENABLED_PROVIDERS", "drive,notion"),
+        "enabled_providers": _csv_env("ORG_CONNECTORS_ENABLED_PROVIDERS", default_providers),
         "allowed_export_formats": _csv_env("ORG_CONNECTORS_ALLOWED_EXPORT_FORMATS", "md,txt,pdf"),
         "allowed_file_types": _csv_env("ORG_CONNECTORS_ALLOWED_FILE_TYPES", ""),
         "max_file_size_mb": int(os.getenv("ORG_CONNECTORS_MAX_FILE_SIZE_MB", "500") or 500),

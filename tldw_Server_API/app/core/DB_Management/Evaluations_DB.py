@@ -925,7 +925,7 @@ class EvaluationsDatabase:
             logger.debug("Embeddings A/B tests using SQLAlchemy repository backend")
         except _EVAL_DB_NONCRITICAL_EXCEPTIONS as exc:
             self._abtest_store = None
-            logger.warning("Falling back to legacy embeddings A/B persistence: %s", exc)
+            logger.warning("Falling back to legacy embeddings A/B persistence: {}", exc)
 
     # ============= Embeddings A/B Test Operations =============
 

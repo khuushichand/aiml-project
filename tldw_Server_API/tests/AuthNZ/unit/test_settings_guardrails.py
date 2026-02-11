@@ -40,6 +40,28 @@ def test_single_user_production_rejects_weak_key(monkeypatch):
     monkeypatch.delenv("tldw_production", raising=False)
 
 
+def test_single_user_non_production_allows_quickstart_default_key(monkeypatch):
+    monkeypatch.delenv("tldw_production", raising=False)
+    settings = Settings(
+        AUTH_MODE="single_user",
+        SINGLE_USER_API_KEY="THIS-IS-A-SECURE-KEY-123-FAKE-KEY",
+        PASSWORD_MIN_LENGTH=8,
+        PASSWORD_REQUIRE_UPPERCASE=True,
+        PASSWORD_REQUIRE_LOWERCASE=True,
+        PASSWORD_REQUIRE_DIGIT=True,
+        PASSWORD_REQUIRE_SPECIAL=False,
+        REGISTRATION_ENABLED=True,
+        REGISTRATION_REQUIRE_CODE=False,
+        REGISTRATION_CODES=[],
+        DEFAULT_USER_ROLE="user",
+        DEFAULT_STORAGE_QUOTA_MB=1000,
+        EMAIL_VERIFICATION_REQUIRED=False,
+        CORS_ORIGINS=["*"],
+        API_PREFIX="/api/v1",
+    )
+    assert settings.SINGLE_USER_API_KEY == "THIS-IS-A-SECURE-KEY-123-FAKE-KEY"
+
+
 def test_single_user_production_accepts_new_format(monkeypatch):
 
 

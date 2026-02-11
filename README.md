@@ -35,6 +35,7 @@
   - [At-a-Glance Commands](#at-a-glance-commands)
   - [No-Docker Path (Makefile)](#no-docker-path-makefile)
   - [Manual Setup](#manual-setup)
+  - [Tire Kicker: Add the WebUI](#tire-kicker-add-the-webui)
   - [Run the Web UI (WIP)](#run-the-web-ui-wip)
   - [Docker Compose](#docker-compose)
   - [Supporting Services via Docker](#supporting-services-via-docker)
@@ -288,9 +289,49 @@ See [MCP System Admin Guide](Docs/MCP/Unified/System_Admin_Guide.md) for details
 | I want to... | Guide |
 |--------------|-------|
 | Try it in 5 minutes with hand-holding | [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) |
+| Start from Tire Kicker, then launch the WebUI | [Tire Kicker: Add the WebUI](#tire-kicker-add-the-webui) |
 | Build apps against the API locally | [Local Development Guide](Docs/Getting_Started/Local_Development.md) |
 | Run on my home server with Docker | [Docker Self-Host Guide](Docs/Getting_Started/Docker_Self_Host.md) |
 | Deploy for a team with proper security | [Production Guide](Docs/Getting_Started/Production.md) |
+
+### Tire Kicker: Add the WebUI
+
+If you already completed the [Tire Kicker Guide](Docs/Getting_Started/Tire_Kicker.md) and your API is running at `http://127.0.0.1:8000`, use this add-on path.
+
+Install Bun (if needed):
+
+```bash
+# macOS/Linux
+curl -fsSL https://bun.sh/install | bash
+
+# Open a new terminal, then verify:
+bun --version
+```
+
+Set up the WebUI project and install dependencies:
+
+```bash
+# from the repo root
+cd apps/tldw-frontend
+cp .env.local.example .env.local
+bun install
+```
+
+Run the WebUI:
+
+```bash
+bun run dev --port 8080
+```
+
+Confirm `.env.local` contains:
+```bash
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_API_VERSION=v1
+# Optional in single-user mode:
+# NEXT_PUBLIC_X_API_KEY=your_single_user_api_key
+```
+
+Open `http://localhost:8080`.
 
 ### Sidecar workers (optional)
 

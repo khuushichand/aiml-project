@@ -30,7 +30,7 @@ def test_generate_secure_keys_includes_mcp_secrets():
     )
 
 
-def test_detect_env_issues_flags_quickstart_placeholder_single_user_key(monkeypatch):
+def test_detect_env_issues_allows_quickstart_default_single_user_key(monkeypatch):
     monkeypatch.setenv("SINGLE_USER_API_KEY", "THIS-IS-A-SECURE-KEY-123-FAKE-KEY")
     env_values = {
         "SINGLE_USER_API_KEY": "THIS-IS-A-SECURE-KEY-123-FAKE-KEY",
@@ -39,8 +39,8 @@ def test_detect_env_issues_flags_quickstart_placeholder_single_user_key(monkeypa
     }
     missing_keys, issues = _detect_env_issues("single_user", env_values)
 
-    assert "SINGLE_USER_API_KEY" in missing_keys
-    assert any("default placeholder" in issue for issue in issues)
+    assert "SINGLE_USER_API_KEY" not in missing_keys
+    assert not any("default placeholder" in issue for issue in issues)
 
 
 def test_resolve_env_locations_prefers_config_files_env_path():

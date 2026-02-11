@@ -573,7 +573,7 @@ class SQLiteBackend(DatabaseBackend):
         rank_expression = self._safe_fts_rank_expression(fts_query)
         if fts_query.rank_expression and rank_expression is None:
             logger.warning(
-                "Ignoring unsafe FTS rank_expression for table %s",
+                'Ignoring unsafe FTS rank_expression for table {}',
                 fts_query.table,
             )
         if rank_expression:

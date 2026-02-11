@@ -101,7 +101,7 @@ def _delete_embeddings_for_media(media_id: int, user_id: str) -> None:
         collection.delete(where={"media_id": str(media_id)})
     except Exception as exc:
         logger.warning(
-            "Where-delete failed for media %s embeddings, falling back to id delete: %s",
+            'Where-delete failed for media {} embeddings, falling back to id delete: {}',
             media_id,
             exc,
         )
@@ -115,7 +115,7 @@ def _delete_embeddings_for_media(media_id: int, user_id: str) -> None:
         if remaining_ids:
             collection.delete(ids=remaining_ids)
     except Exception as exc:
-        logger.warning("Failed to verify embeddings delete for media %s: %s", media_id, exc)
+        logger.warning("Failed to verify embeddings delete for media {}: {}", media_id, exc)
 
 
 async def _generate_embeddings(
@@ -148,12 +148,12 @@ async def _generate_embeddings(
         invalidate_rag_caches(None, namespaces=cache_namespaces, media_id=media_id)
     except Exception as exc:
         error_detail = f"{type(exc).__name__}: {exc}"
-        logger.error("Embeddings regeneration failed for media %s: %s", media_id, error_detail)
+        logger.error("Embeddings regeneration failed for media {}: {}", media_id, error_detail)
         try:
             db.mark_embeddings_error(media_id, error_detail)
         except Exception as update_exc:
             logger.error(
-                "Failed to mark embeddings error for media %s: %s",
+                'Failed to mark embeddings error for media {}: {}',
                 media_id,
                 update_exc,
             )
@@ -239,7 +239,7 @@ async def reprocess_media_item(
                 raw_chunks = improved_chunking_process(content, chunk_options)
         except Exception as exc:
             logger.error(
-                "Chunking failed for media %s: %s",
+                'Chunking failed for media {}: {}',
                 media_id,
                 exc,
                 exc_info=True,
@@ -311,7 +311,7 @@ async def reprocess_media_item(
             try:
                 _delete_embeddings_for_media(media_id, user_id)
             except Exception as exc:
-                logger.warning("Failed to delete embeddings for media %s: %s", media_id, exc)
+                logger.warning("Failed to delete embeddings for media {}: {}", media_id, exc)
 
         embeddings_started = True
         media_payload = {"media_item": media_item, "content": media_item}

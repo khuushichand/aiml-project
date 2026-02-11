@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import datetime
 
 from fastapi.testclient import TestClient
 
@@ -318,6 +319,40 @@ def test_admin_profile_update_team_member_add_remove(auth_headers) -> None:
         memberships = _run_async(_list_memberships())
         team_ids = {int(item.get("team_id")) for item in memberships}
         assert team_a_id not in team_ids
+
+
+def test_user_profile_update_rejects_inactive_user(auth_headers, monkeypatch) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import users as users_endpoints
+
+    async def _fake_resolve_user_context(_principal, *, allow_missing: bool = False):
+        del allow_missing
+        return {
+            "id": 1,
+            "username": "inactive-user",
+            "email": "inactive@example.invalid",
+            "role": "user",
+            "is_active": False,
+            "is_verified": True,
+            "storage_quota_mb": 5120,
+            "storage_used_mb": 0.0,
+            "created_at": datetime.utcnow(),
+            "last_login": None,
+        }
+
+    monkeypatch.setattr(users_endpoints, "_resolve_user_context", _fake_resolve_user_context)
+
+    with TestClient(app) as client:
+        resp = client.patch(
+            "/api/v1/users/me/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {"key": "preferences.ui.theme", "value": "paper"},
+                ]
+            },
+        )
+
+    assert resp.status_code == 403
 
 
 def test_admin_profile_update_audio_limits(auth_headers) -> None:

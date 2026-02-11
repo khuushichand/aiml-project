@@ -2087,7 +2087,7 @@ async def process_context_with_world_info(
             )
 
         logger.error(
-            "WorldBookService.process_context returned unexpected type %s",
+            'WorldBookService.process_context returned unexpected type {}',
             type(result).__name__,
         )
         raise HTTPException(

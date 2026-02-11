@@ -14,6 +14,7 @@ quickstart_url =
 
 [Server]
 disable_cors = false
+cors_allow_credentials = false
 
 [Files]
 # Max inline export size (bytes) for file artifacts. Default: 262144 (256KB).
@@ -1404,6 +1405,10 @@ cache_ttl = 300
 
 [Web-Scraping]
 stealth_wait_ms = 5000
+# Ephemeral web-scraping result store tuning (env-only today):
+# - EPHEMERAL_STORE_TTL_SECONDS (default: 900)
+# - EPHEMERAL_STORE_MAX_ENTRIES (default: 256)
+# - EPHEMERAL_STORE_MAX_BYTES (default: 0 = disabled)
 
 # --- Feature Flags: Personalization & Persona Agent ---
 [personalization]

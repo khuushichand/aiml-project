@@ -117,7 +117,9 @@ https://medium.com/@alphadesignglobal/full-screen-headers-are-obsolete-these-lay
 https://uxdesign.cc/perplexity-and-notebooklm-dont-use-better-ai-they-use-better-intelligence-flow-architecture-ace59eeda531
 https://thefwa.com/awards/page/1/?filterDate=&filterAwards=1.0-2.0-3.0-7.0-top100.1&filterCaseTypes=1.1-5.1-6.1-11.1&filterEditorials=1.0-2.0-3.0-4.0-5.0-6.0-7.0-8.0-9.0-10.0
 https://sakofchit.github.io/system.css/
-
+https://medium.com/@ryan.almeida86/10-ux-secrets-behind-great-design-7487ac7dd5d2
+https://uxmastery.com/10-secrets-behind-a-stunning-user-experience/
+https://medium.com/design-bootcamp/10-ui-ux-mistakes-developers-make-without-realizing-it-c7e521beab3a
 www.aiuxplayground.com/pattern/chat-artifact
 https://www.8bitcn.com/?ref=sidebar
 https://github.com/kagisearch/smallweb

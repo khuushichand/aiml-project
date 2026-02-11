@@ -600,7 +600,7 @@ async def list_data_tables(
             table_ids.append(int(row.get("id")))
         except (TypeError, ValueError) as exc:
             logger.warning(
-                "data_tables.list: invalid table id row_id=%s row=%s error=%s",
+                'data_tables.list: invalid table id row_id={} row={} error={}',
                 row.get("id"),
                 row,
                 exc,
@@ -614,7 +614,7 @@ async def list_data_tables(
             table_id = int(row.get("id"))
         except (TypeError, ValueError) as exc:
             logger.warning(
-                "data_tables.list: invalid table id for summary row_id=%s row=%s error=%s",
+                'data_tables.list: invalid table id for summary row_id={} row={} error={}',
                 row.get("id"),
                 row,
                 exc,

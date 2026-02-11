@@ -17,7 +17,6 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
 
-
 _EMOTION_KEYWORDS: dict[str, set[str]] = {
     "angry": {"angry", "furious", "mad", "outraged", "annoyed", "frustrated", "upset"},
     "happy": {"happy", "excited", "great", "awesome", "glad", "delighted", "love"},
@@ -64,6 +63,10 @@ _PROMPT_INJECTION_ACTION_TOKENS: set[str] = {
     "expose",
     "jailbreak",
 }
+
+# `.strip()` treats its argument as a set of single characters to trim from both
+# ends, which matches the token edge normalization semantics used here.
+_TOKEN_EDGE_STRIP_CHARS = ".,!?;:()[]{}\"'`).-_"
 
 _PROMPT_INJECTION_TARGET_TOKENS: set[str] = {
     "system",
@@ -144,7 +147,7 @@ def _tokenize(text: str) -> set[str]:
     if not text:
         return set()
     tokens = {
-        token.strip(".,!?;:()[]{}\"'`).-_").lower()
+        token.strip(_TOKEN_EDGE_STRIP_CHARS).lower()
         for token in text.split()
         if token.strip()
     }
@@ -289,30 +292,44 @@ def _retrieve_candidates(
     """Load candidate exemplars from DB using search + list fallback."""
     candidates_by_id: dict[str, dict[str, Any]] = {}
 
+    def _coerce_rows(raw_rows: Any) -> list[dict[str, Any]]:
+        if raw_rows is None:
+            return []
+        if isinstance(raw_rows, list):
+            source = raw_rows
+        elif isinstance(raw_rows, tuple):
+            source = list(raw_rows)
+        else:
+            return []
+        return [item for item in source if isinstance(item, dict)]
+
     try:
-        searched, _ = db.search_character_exemplars(
+        searched_payload = db.search_character_exemplars(
             character_id,
             query=user_turn,
             limit=candidate_pool_size,
             offset=0,
         )
+        searched_rows = searched_payload[0] if isinstance(searched_payload, tuple) and searched_payload else searched_payload
+        searched = _coerce_rows(searched_rows)
         for item in searched:
             item_id = str(item.get("id") or "")
             if item_id:
                 candidates_by_id[item_id] = item
-    except CharactersRAGDBError as exc:
+    except (CharactersRAGDBError, AttributeError, TypeError, ValueError) as exc:
         logger.warning("selector search_character_exemplars failed for character_id={}: {}", character_id, exc)
 
     if len(candidates_by_id) < candidate_pool_size:
         try:
-            listed = db.list_character_exemplars(character_id, limit=candidate_pool_size, offset=0)
+            listed_payload = db.list_character_exemplars(character_id, limit=candidate_pool_size, offset=0)
+            listed = _coerce_rows(listed_payload)
             for item in listed:
                 item_id = str(item.get("id") or "")
                 if item_id and item_id not in candidates_by_id:
                     candidates_by_id[item_id] = item
                 if len(candidates_by_id) >= candidate_pool_size:
                     break
-        except CharactersRAGDBError as exc:
+        except (CharactersRAGDBError, AttributeError, TypeError, ValueError) as exc:
             logger.warning("selector list_character_exemplars failed for character_id={}: {}", character_id, exc)
 
     return list(candidates_by_id.values())

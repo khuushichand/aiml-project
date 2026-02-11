@@ -2,7 +2,6 @@
 #
 # Imports
 import asyncio
-import os
 import uuid as _uuid
 from pathlib import Path
 from typing import Optional
@@ -52,7 +51,8 @@ _prompts_cache_lock = asyncio.Lock()
 # INVARIANT: All mutations to _user_db_instances and _user_db_locks MUST be
 # performed while holding _prompts_cache_lock. The eviction callbacks
 # cross-reference each other's caches and assume this lock is held.
-_pending_close_queue: asyncio.Queue[tuple[tuple[int, str], PromptsDatabase, str]] = asyncio.Queue()
+_pending_close_queue: asyncio.Queue[tuple[tuple[int, str], PromptsDatabase, str]] | None = None
+_pending_close_loop: asyncio.AbstractEventLoop | None = None
 _pending_close_task: asyncio.Task | None = None
 
 # --- Helper Functions ---
@@ -83,13 +83,13 @@ def _close_prompts_db_instance_sync(
     try:
         db_instance.close_connection()
         logger.info(
-            "Closed PromptsDatabase instance for cache_key=%s (reason=%s).",
+            'Closed PromptsDatabase instance for cache_key={} (reason={}).',
             cache_key,
             reason,
         )
     except (DatabaseError, OSError, RuntimeError, ValueError, TypeError) as exc:
         logger.error(
-            "Error closing PromptsDatabase instance for cache_key=%s (reason=%s): %s",
+            'Error closing PromptsDatabase instance for cache_key={} (reason={}): {}',
             cache_key,
             reason,
             exc,
@@ -103,11 +103,14 @@ def _enqueue_prompts_db_close(
     *,
     reason: str,
 ) -> None:
+    if not _ensure_pending_close_worker():
+        _close_prompts_db_instance_sync(cache_key, db_instance, reason=reason)
+        return
     try:
         _pending_close_queue.put_nowait((cache_key, db_instance, reason))
     except (asyncio.QueueFull, RuntimeError) as exc:
         logger.error(
-            "Failed to enqueue PromptsDatabase close for cache_key=%s (reason=%s): %s",
+            'Failed to enqueue PromptsDatabase close for cache_key={} (reason={}): {}',
             cache_key,
             reason,
             exc,
@@ -129,8 +132,15 @@ def _close_prompts_db_instance(
 
 
 async def _process_pending_closes() -> None:
+    global _pending_close_queue
+    queue = _pending_close_queue
+    if queue is None:
+        return
     while True:
-        cache_key, db_instance, reason = await _pending_close_queue.get()
+        try:
+            cache_key, db_instance, reason = await queue.get()
+        except asyncio.CancelledError:
+            return
         try:
             await asyncio.to_thread(
                 _close_prompts_db_instance_sync,
@@ -138,30 +148,63 @@ async def _process_pending_closes() -> None:
                 db_instance,
                 reason=reason,
             )
+        except asyncio.CancelledError:
+            raise
         except (DatabaseError, OSError, RuntimeError, ValueError, TypeError) as exc:
             logger.error(
-                "Error processing PromptsDatabase close for cache_key=%s (reason=%s): %s",
+                'Error processing PromptsDatabase close for cache_key={} (reason={}): {}',
                 cache_key,
                 reason,
                 exc,
                 exc_info=True,
             )
         finally:
-            _pending_close_queue.task_done()
+            queue.task_done()
 
 
-def _ensure_pending_close_worker() -> None:
-    global _pending_close_task
-    if _pending_close_task is not None:
-        return
+def _ensure_pending_close_worker() -> bool:
+    global _pending_close_loop, _pending_close_queue, _pending_close_task
+    if _pending_close_task is not None and not _pending_close_task.done():
+        return True
+    if _pending_close_task is not None and _pending_close_task.done():
+        _pending_close_task = None
     try:
-        _pending_close_task = asyncio.create_task(_process_pending_closes())
+        loop = asyncio.get_running_loop()
     except RuntimeError:
         # No running event loop yet; worker will be started on first async entry.
-        _pending_close_task = None
+        return False
+    if _pending_close_queue is None or _pending_close_loop is not loop:
+        _pending_close_queue = asyncio.Queue()
+        _pending_close_loop = loop
+    _pending_close_task = loop.create_task(_process_pending_closes())
+    return True
 
 
-_ensure_pending_close_worker()
+def start_prompts_pending_close_worker() -> bool:
+    """Start the async close worker when called from an active event loop."""
+    started = _ensure_pending_close_worker()
+    if not started:
+        logger.debug("Prompts close worker startup deferred: no running event loop.")
+    return started
+
+
+async def stop_prompts_pending_close_worker() -> None:
+    """Cancel the async close worker and clear the task reference."""
+    global _pending_close_loop, _pending_close_queue, _pending_close_task
+    task = _pending_close_task
+    if task is None:
+        _pending_close_queue = None
+        _pending_close_loop = None
+        return
+    _pending_close_task = None
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        _pending_close_queue = None
+        _pending_close_loop = None
 
 
 def _on_prompts_db_eviction(cache_key: tuple[int, str], db_instance: PromptsDatabase) -> None:
@@ -192,7 +235,7 @@ class _EvictingLRUCache(LRUCache):
                 self._on_evict(cache_key, value)
             except (OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
                 logger.error(
-                    "Prompts DB cache eviction callback failed for %s: %s",
+                    'Prompts DB cache eviction callback failed for {}: {}',
                     cache_key,
                     exc,
                     exc_info=True,
@@ -237,7 +280,7 @@ async def get_prompts_db_for_user(
     FastAPI dependency to get the PromptsDatabase instance for the identified user,
     managed via the prompts_interop layer.
     """
-    _ensure_pending_close_worker()
+    start_prompts_pending_close_worker()
     assert _user_db_instances is not None and _user_db_locks is not None
     # More robust check for User object and its id
     if not isinstance(current_user, User) or not hasattr(current_user, 'id') or not isinstance(current_user.id, int):
@@ -311,12 +354,7 @@ async def get_prompts_db_for_user(
             logger.warning(f"Cached PromptsDatabase for user {user_id} inactive. Re-creating.")
             async with _prompts_cache_lock:
                 _user_db_instances.pop(cache_key, None)
-            await asyncio.to_thread(
-                _close_prompts_db_instance,
-                cache_key,
-                db_instance,
-                reason="inactive",
-            )
+            _close_prompts_db_instance(cache_key, db_instance, reason="inactive")
 
         # If not cached or cache was bad, create a new one
         db_path: Optional[Path] = None

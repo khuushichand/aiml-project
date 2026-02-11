@@ -95,7 +95,7 @@ class IndexTTS2Adapter(TTSAdapter):
 
         if not self.cfg_path.exists() or not self.model_dir.exists():
             logger.warning(
-                "IndexTTS2 configuration missing: cfg=%s model_dir=%s",
+                'IndexTTS2 configuration missing: cfg={} model_dir={}',
                 self.cfg_path,
                 self.model_dir,
             )
@@ -145,7 +145,7 @@ class IndexTTS2Adapter(TTSAdapter):
             self._capabilities = await self.get_capabilities()
             self._initialized = True
             self._status = ProviderStatus.AVAILABLE
-            logger.info("IndexTTS2 adapter initialized (device=%s)", self.device or "auto")
+            logger.info("IndexTTS2 adapter initialized (device={})", self.device or "auto")
             return True
 
         except TTSModelNotFoundError:
@@ -183,7 +183,7 @@ class IndexTTS2Adapter(TTSAdapter):
             kwargs["use_cuda_kernel"] = self.use_cuda_kernel
 
         logger.info(
-            "Loading IndexTTS2 engine cfg=%s model_dir=%s device=%s fp16=%s deepspeed=%s cuda_kernel=%s",
+            'Loading IndexTTS2 engine cfg={} model_dir={} device={} fp16={} deepspeed={} cuda_kernel={}',
             kwargs.get("cfg_path"),
             kwargs.get("model_dir"),
             kwargs.get("device"),
@@ -310,7 +310,7 @@ class IndexTTS2Adapter(TTSAdapter):
         except TTSVoiceCloningError:
             raise
         except Exception as exc:
-            logger.error("IndexTTS2 generation failed: %s", exc, exc_info=True)
+            logger.error("IndexTTS2 generation failed: {}", exc, exc_info=True)
             raise TTSGenerationError(
                 "IndexTTS2 generation failed",
                 provider=self.provider_name,
@@ -441,7 +441,7 @@ class IndexTTS2Adapter(TTSAdapter):
                 if final_bytes:
                     yield final_bytes
             except Exception as exc:
-                logger.error("IndexTTS2 streaming failed: %s", exc, exc_info=True)
+                logger.error("IndexTTS2 streaming failed: {}", exc, exc_info=True)
                 raise TTSGenerationError(
                     "IndexTTS2 streaming failed",
                     provider=self.provider_name,
@@ -467,7 +467,7 @@ class IndexTTS2Adapter(TTSAdapter):
         try:
             np_chunk = chunk.detach().cpu().numpy() if hasattr(chunk, "detach") else np.asarray(chunk)
         except Exception as exc:
-            logger.warning("IndexTTS2 streaming chunk conversion error: %s", exc)
+            logger.warning("IndexTTS2 streaming chunk conversion error: {}", exc)
             return b""
 
         np_chunk = np.squeeze(np_chunk)
@@ -490,7 +490,7 @@ class IndexTTS2Adapter(TTSAdapter):
                 audio_float = resampled.squeeze(0).cpu().numpy()
             except Exception as exc:
                 logger.warning(
-                    "IndexTTS2 streaming using numpy resample fallback: %s",
+                    'IndexTTS2 streaming using numpy resample fallback: {}',
                     exc,
                 )
                 try:
@@ -504,7 +504,7 @@ class IndexTTS2Adapter(TTSAdapter):
                     audio_float = np.interp(target_idx, orig_idx, audio_float).astype(np.float32)
                 except Exception as interp_exc:
                     logger.error(
-                        "IndexTTS2 streaming interpolation failed: %s",
+                        'IndexTTS2 streaming interpolation failed: {}',
                         interp_exc,
                     )
                     # Fall back to native sample rate

@@ -363,7 +363,7 @@ async def resolve_byok_credentials(
                     )
                 except ValueError as exc:
                     logger.warning(
-                        "BYOK credential_fields invalid for user_id=%s provider=%s: %s",
+                        'BYOK credential_fields invalid for user_id={} provider={}: {}',
                         user_id,
                         provider_norm,
                         exc,
@@ -467,7 +467,7 @@ async def resolve_byok_credentials(
                 )
             except ValueError as exc:
                 logger.warning(
-                    "BYOK credential_fields invalid for team_id=%s provider=%s: %s",
+                    'BYOK credential_fields invalid for team_id={} provider={}: {}',
                     team_id,
                     provider_norm,
                     exc,
@@ -519,7 +519,7 @@ async def resolve_byok_credentials(
                 )
             except ValueError as exc:
                 logger.warning(
-                    "BYOK credential_fields invalid for org_id=%s provider=%s: %s",
+                    'BYOK credential_fields invalid for org_id={} provider={}: {}',
                     org_id,
                     provider_norm,
                     exc,

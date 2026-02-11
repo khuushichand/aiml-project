@@ -97,7 +97,6 @@ SINGLE_USER_API_KEY_PLACEHOLDERS = {
     "default-secret-key-for-single-user",
     "change-me-in-production",
     "CHANGE-ME-to-a-secure-key-at-least-16-chars",
-    "THIS-IS-A-SECURE-KEY-123-FAKE-KEY",
 }
 AUTHNZ_DEFAULT_ENV_FILE = Path(__file__).resolve().parents[3] / "Config_Files" / ".env"
 
@@ -707,7 +706,7 @@ class Settings(BaseSettings):
         if alg_upper.startswith(("RS", "ES")) and self.JWT_PRIVATE_KEY:
             # Asymmetric algorithms supply their own key material; a symmetric secret is unnecessary
             logger.debug(
-                "Asymmetric JWT algorithm %s detected with private key; skipping JWT secret requirement",
+                'Asymmetric JWT algorithm {} detected with private key; skipping JWT secret requirement',
                 self.JWT_ALGORITHM,
             )
             return
@@ -1159,14 +1158,14 @@ def get_settings() -> Settings:
                 profile_hint = _infer_profile_from_settings(_settings)
             if isinstance(profile_hint, str) and profile_hint.strip():
                 logger.info(
-                    "Settings initialized - Auth mode: %s, profile=%s",
+                    'Settings initialized - Auth mode: {}, profile={}',
                     _settings.AUTH_MODE,
                     profile_hint.strip(),
                 )
             else:
-                logger.info("Settings initialized - Auth mode: %s", _settings.AUTH_MODE)
+                logger.info("Settings initialized - Auth mode: {}", _settings.AUTH_MODE)
         except _SETTINGS_NONCRITICAL_EXCEPTIONS:
-            logger.info("Settings initialized - Auth mode: %s", _settings.AUTH_MODE)
+            logger.info("Settings initialized - Auth mode: {}", _settings.AUTH_MODE)
     return _settings
 
 

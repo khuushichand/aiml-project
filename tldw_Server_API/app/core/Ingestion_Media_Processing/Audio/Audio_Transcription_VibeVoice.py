@@ -172,7 +172,7 @@ def _maybe_resample(audio_np: np.ndarray, sample_rate: int, target_sample_rate: 
         return resampled.squeeze(0).cpu().numpy().astype("float32"), target_sample_rate
     except _VIBEVOICE_INFERENCE_EXCEPTIONS as exc:
         logger.warning(
-            "VibeVoice: resampling from %s Hz to %s Hz failed; proceeding at original rate. Error: %s",
+            'VibeVoice: resampling from {} Hz to {} Hz failed; proceeding at original rate. Error: {}',
             sample_rate,
             target_sample_rate,
             exc,
@@ -446,7 +446,7 @@ def _load_local_components(settings: dict[str, Any]) -> tuple[Any, Any, str]:
         model.eval()
 
         _MODEL_CACHE[cache_key] = (processor, model, device)
-        logger.info("VibeVoice: loaded local model '%s' on device '%s'", model_id, device)
+        logger.info("VibeVoice: loaded local model '{}' on device '{}'", model_id, device)
         return processor, model, device
 
 
@@ -740,7 +740,7 @@ def transcribe_with_vibevoice(
                 cancel_check=cancel_check,
             )
         except Exception as exc:
-            logger.warning("VibeVoice vLLM HTTP path failed; falling back to local inference: %s", exc)
+            logger.warning("VibeVoice vLLM HTTP path failed; falling back to local inference: {}", exc)
             if not settings.get("enabled"):
                 raise
 

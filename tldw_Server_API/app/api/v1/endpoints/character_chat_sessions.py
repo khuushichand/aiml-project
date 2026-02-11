@@ -61,6 +61,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     PresetTokenInfo,
     PresetUpdate,
 )
+from tldw_Server_API.app.api.v1.utils.deprecation import build_deprecation_headers
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
@@ -2431,20 +2432,11 @@ async def complete_chat_legacy(
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_chat_completion_rate(current_user.id)
 
-        # Deprecation headers for clients; also used if we reject a non-empty body
-        # Sunset date is configurable via DEPRECATION_SUNSET_DAYS env var (default 90 days)
-        try:
-            from datetime import datetime, timedelta
-            from datetime import timezone as _tz
-            sunset_days = int(os.getenv("DEPRECATION_SUNSET_DAYS", "90"))
-            sunset = (datetime.now(_tz.utc) + timedelta(days=sunset_days)).strftime("%a, %d %b %Y %H:%M:%S GMT")
-        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
-            sunset = "Tue, 31 Dec 2025 00:00:00 GMT"
-        dep_headers = {
-            "Deprecation": "true",
-            "Sunset": sunset,
-            "Link": f"</api/v1/chats/{chat_id}/complete-v2>; rel=successor-version",
-        }
+        # Deprecation headers for clients; also used if we reject a non-empty body.
+        dep_headers = build_deprecation_headers(
+            f"/api/v1/chats/{chat_id}/complete-v2",
+            default_sunset_days=90,
+        )
         try:
             if response is not None:
                 for k, v in dep_headers.items():
@@ -3576,7 +3568,7 @@ async def character_chat_completion(
                                 yield ensure_sse_line(line)
                         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                             if isinstance(e, AttributeError) and "object has no attribute 'close'" in str(e):
-                                logger.debug("Ignoring streaming session close error: %s", e)
+                                logger.debug("Ignoring streaming session close error: {}", e)
                             else:
                                 logger.exception("Exception occurred in streaming SSE async generator.")
                                 yield f"data: {json.dumps({'error': 'An internal error has occurred.'})}\n\n"

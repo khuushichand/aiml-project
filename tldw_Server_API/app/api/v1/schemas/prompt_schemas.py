@@ -228,3 +228,14 @@ class PromptCollectionCreateRequest(BaseModel):
     name: str
     description: Optional[str] = None
     prompt_ids: list[int] = Field(default_factory=list)
+
+
+class PromptCollectionCreateResponse(BaseModel):
+    collection_id: int
+
+
+class PromptCollectionResponse(BaseModel):
+    collection_id: int
+    name: str
+    description: Optional[str] = None
+    prompt_ids: list[int] = Field(default_factory=list)

@@ -289,7 +289,7 @@ async def create_transcription(
         limits = await _audio_shim_attr("get_limits_for_user")(current_user.id)
     except EXPECTED_DB_EXC as e:
         logger.exception(
-            "Failed to get limits for user %s during upload, using defaults: %s; request_id=%s",
+            'Failed to get limits for user {} during upload, using defaults: {}; request_id={}',
             current_user.id,
             e,
             rid,
@@ -304,7 +304,7 @@ async def create_transcription(
         max_file_size = int((limits.get("max_file_size_mb") or 25) * 1024 * 1024)
     except (ValueError, TypeError) as e:
         logger.warning(
-            "Could not parse max_file_size_mb for user %s; defaulting to 25MB: %s; request_id=%s",
+            'Could not parse max_file_size_mb for user {}; defaulting to 25MB: {}; request_id={}',
             current_user.id,
             e,
             rid,
@@ -336,7 +336,7 @@ async def create_transcription(
         acquired_job_slot = True
     except EXPECTED_DB_EXC as e:
         logger.exception(
-            "Failed to increment jobs started: user_id=%s, error=%s; request_id=%s",
+            'Failed to increment jobs started: user_id={}, error={}; request_id={}',
             current_user.id,
             e,
             rid,
@@ -373,7 +373,7 @@ async def create_transcription(
             )
         except ImportError as e:
             logger.debug(
-                "convert_to_wav import failed; using original temp file: path=%s, error=%s",
+                'convert_to_wav import failed; using original temp file: path={}, error={}',
                 temp_audio_path,
                 e,
             )
@@ -388,7 +388,7 @@ async def create_transcription(
                 )
             except (ConversionError, OSError, RuntimeError, ValueError) as e:
                 logger.debug(
-                    "convert_to_wav failed; using original temp file: path=%s, error=%s",
+                    'convert_to_wav failed; using original temp file: path={}, error={}',
                     temp_audio_path,
                     e,
                 )
@@ -505,7 +505,7 @@ async def create_transcription(
             allow, remaining_after = await _check_daily_minutes_allow(current_user.id, minutes_est)
         except EXPECTED_DB_EXC as e:
             logger.exception(
-                "check_daily_minutes_allow failed; allowing by default: user_id=%s, error=%s; request_id=%s",
+                'check_daily_minutes_allow failed; allowing by default: user_id={}, error={}; request_id={}',
                 current_user.id,
                 e,
                 rid,
@@ -516,7 +516,7 @@ async def create_transcription(
                 await _audio_shim_attr("finish_job")(current_user.id)
             except EXPECTED_DB_EXC as e:
                 logger.exception(
-                    "Failed to release job slot after quota denial: user_id=%s, error=%s; request_id=%s",
+                    'Failed to release job slot after quota denial: user_id={}, error={}; request_id={}',
                     current_user.id,
                     e,
                     rid,
@@ -645,7 +645,7 @@ async def create_transcription(
                     transcribed_text = artifact.get("text", "")
                 except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(
-                        "Transcription failed for provider=%s, model=%s: %s",
+                        'Transcription failed for provider={}, model={}: {}',
                         provider,
                         model_for_provider,
                         e,
@@ -667,7 +667,7 @@ async def create_transcription(
                     await _audio_shim_attr("finish_job")(current_user.id)
             except EXPECTED_DB_EXC as e:
                 logger.exception(
-                    "Failed to release job slot in finally: user_id=%s, error=%s; request_id=%s",
+                    'Failed to release job slot in finally: user_id={}, error={}; request_id={}',
                     current_user.id,
                     e,
                     rid,
@@ -688,7 +688,7 @@ async def create_transcription(
             await _add_daily_minutes(current_user.id, minutes_est)
         except EXPECTED_DB_EXC as e:
             logger.exception(
-                "Failed to record daily minutes: user_id=%s, error=%s; request_id=%s",
+                'Failed to record daily minutes: user_id={}, error={}; request_id={}',
                 current_user.id,
                 e,
                 rid,

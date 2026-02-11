@@ -7,6 +7,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+from tldw_Server_API.app.core.External_Sources.gmail import GmailConnector
 from tldw_Server_API.app.core.External_Sources.google_drive import GoogleDriveConnector
 from tldw_Server_API.app.core.External_Sources.notion import NotionConnector
 
@@ -59,6 +60,8 @@ def get_connector_by_name(name: str):
         return GoogleDriveConnector()
     if n == "notion":
         return NotionConnector()
+    if n == "gmail":
+        return GmailConnector()
     raise ValueError(f"Unknown connector provider: {name}")
 
 

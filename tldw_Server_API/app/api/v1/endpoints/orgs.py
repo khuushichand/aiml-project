@@ -323,14 +323,14 @@ async def transfer_ownership(
 
     # Prevent transferring ownership to the current owner (no-op that would demote them to admin)
     if principal.user_id is None:
-        logger.warning("transfer_ownership called without a concrete user_id for org %s", ctx.org_id)
+        logger.warning("transfer_ownership called without a concrete user_id for org {}", ctx.org_id)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Ownership transfer requires an authenticated user",
         )
     if body.new_owner_user_id == principal.user_id:
         logger.warning(
-            "User %s attempted to transfer ownership of org %s to themselves",
+            'User {} attempted to transfer ownership of org {} to themselves',
             principal.user_id,
             ctx.org_id,
         )

@@ -205,7 +205,7 @@ async def create_prompt(
 
         logger.info(f"User {user_context['user_id']} created prompt: {prompt_data.name} (project_id={prompt_data.project_id})")
         with contextlib.suppress(Exception):
-            logger.info("Created prompt record: %s", prompt_record)
+            logger.info("Created prompt record: {}", prompt_record)
 
         # Record idempotency mapping if provided
         if idempotency_key and prompt_record.get("id"):
@@ -516,7 +516,7 @@ async def update_prompt(
         )
 
         logger.info(
-            "User %s created version %s of prompt %s",
+            'User {} created version {} of prompt {}',
             user_context["user_id"],
             new_prompt.get("version_number"),
             prompt_id,
@@ -629,7 +629,7 @@ async def revert_prompt(
         )
 
         logger.info(
-            "User %s reverted prompt %s to version %s",
+            'User {} reverted prompt {} to version {}',
             user_context["user_id"],
             prompt_id,
             version,

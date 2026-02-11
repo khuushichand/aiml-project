@@ -448,7 +448,7 @@ async def list_audio_jobs_admin(
 ):
     try:
         logger.info(
-            "Admin list audio jobs: status_filter=%s, owner_user_id=%s, limit=%s",
+            'Admin list audio jobs: status_filter={}, owner_user_id={}, limit={}',
             status_filter,
             owner_user_id,
             limit,
@@ -489,7 +489,7 @@ async def summarize_audio_jobs_admin(
 ):
     try:
         logger.info(
-            "Admin summarize audio jobs by status: owner_user_id=%s",
+            'Admin summarize audio jobs by status: owner_user_id={}',
             owner_user_id,
         )
         by_status = jm.summarize_by_status(
@@ -563,7 +563,7 @@ async def owner_processing_summary(
 ):
     try:
         logger.info(
-            "Admin owner processing summary: owner_user_id=%s",
+            'Admin owner processing summary: owner_user_id={}',
             owner_user_id,
         )
         # Count processing jobs for this owner using JobManager APIs.

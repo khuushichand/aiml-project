@@ -1551,7 +1551,7 @@ async def build_context_and_messages(
     # Ensure a valid character ID is present before attempting persistence
     if should_persist and character_db_id is None:
         logger.warning(
-            "Persistence requested but no character ID is available; disabling persistence for conversation %s.",
+            'Persistence requested but no character ID is available; disabling persistence for conversation {}.',
             final_conversation_id or "<new>",
         )
         should_persist = False
@@ -1761,7 +1761,7 @@ async def build_context_and_messages(
                 overlap_cut = overlap_start + overlap_k
                 if overlap_cut > 0:
                     logger.debug(
-                        "Trimmed %d request messages overlapping history for conv_id %s.",
+                        'Trimmed {} request messages overlapping history for conv_id {}.',
                         overlap_cut,
                         conv_id,
                     )
@@ -1785,7 +1785,7 @@ async def build_context_and_messages(
                     if hist_sigs[-len(req_sigs):] == req_sigs:
                         overlap_cut = len(req_sigs)
                         logger.debug(
-                            "Trimmed %d user-only request messages overlapping history for conv_id %s.",
+                            'Trimmed {} user-only request messages overlapping history for conv_id {}.',
                             overlap_cut,
                             conv_id,
                         )

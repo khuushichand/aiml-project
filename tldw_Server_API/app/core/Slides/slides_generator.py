@@ -248,7 +248,7 @@ class SlidesGenerator:
                 max_tokens=max_tokens,
             )
         except Exception as exc:
-            logger.error("slides generation LLM call failed: %s", exc)
+            logger.error("slides generation LLM call failed: {}", exc)
             raise SlidesGenerationError("llm_call_failed") from exc
 
         content = extract_response_content(response)

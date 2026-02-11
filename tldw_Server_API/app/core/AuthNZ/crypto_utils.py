@@ -124,7 +124,8 @@ def derive_hmac_key_candidates(settings: Settings | None = None) -> list[bytes]:
         jwt_secret_candidate = getattr(s, "JWT_SECRET_KEY", None)
         only_public_key = bool(getattr(s, "JWT_PUBLIC_KEY", None)) and not getattr(s, "JWT_PRIVATE_KEY", None)
         auto_test_secret = in_test_context and jwt_secret_candidate == test_secret_env
-        if not (only_public_key and auto_test_secret):
+        placeholder_test_secret = jwt_secret_candidate == "CHANGE_ME_TO_SECURE_RANDOM_KEY_MIN_32_CHARS"
+        if not (only_public_key and (auto_test_secret or (in_test_context and placeholder_test_secret))):
             add_source(jwt_secret_candidate)
         add_source(getattr(s, "JWT_PRIVATE_KEY", None))
 

@@ -6,14 +6,14 @@ from pydantic import BaseModel, Field
 
 
 class ConnectorProvider(BaseModel):
-    name: Literal["drive", "notion"]
+    name: Literal["drive", "notion", "gmail"]
     auth_type: Literal["oauth2", "token"] = "oauth2"
     scopes_required: list[str] = Field(default_factory=list)
 
 
 class ConnectorAccount(BaseModel):
     id: int
-    provider: Literal["drive", "notion"]
+    provider: Literal["drive", "notion", "gmail"]
     display_name: str
     created_at: str | None = None
     connected: bool = True
@@ -30,7 +30,7 @@ class SyncOptions(BaseModel):
 class ConnectorSource(BaseModel):
     id: int
     account_id: int
-    provider: Literal["drive", "notion"]
+    provider: Literal["drive", "notion", "gmail"]
     remote_id: str
     type: Literal["folder", "page", "database", "link"]
     path: str | None = None
@@ -58,7 +58,7 @@ class AuthorizeURLResponse(BaseModel):
 
 class ConnectorPolicy(BaseModel):
     org_id: int
-    enabled_providers: list[Literal["drive", "notion"]] = Field(default_factory=lambda: ["drive", "notion"])
+    enabled_providers: list[Literal["drive", "notion", "gmail"]] = Field(default_factory=lambda: ["drive", "notion"])
     allowed_export_formats: list[Literal["md", "txt", "pdf"]] = Field(default_factory=lambda: ["md", "txt", "pdf"])
     allowed_file_types: list[str] = Field(default_factory=list, description="Extensions or MIME prefixes")
     max_file_size_mb: int = 500
@@ -78,7 +78,7 @@ class ConnectorSourceCreateRequest(BaseModel):
     model_config = {"extra": 'forbid'}
 
     account_id: int
-    provider: Literal["drive", "notion"]
+    provider: Literal["drive", "notion", "gmail"]
     remote_id: str
     type: Literal["folder", "page", "database", "link"]
     path: str | None = None

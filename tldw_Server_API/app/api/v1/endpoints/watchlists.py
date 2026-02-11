@@ -974,11 +974,11 @@ def _resolve_watchlist_log_path(*, user_id: int, log_path: str | None) -> Path |
         try:
             candidate_resolved.relative_to(base_resolved)
         except ValueError:
-            logger.warning("watchlists: log path outside user base dir: %s", candidate_resolved)
+            logger.warning("watchlists: log path outside user base dir: {}", candidate_resolved)
             return None
         return candidate_resolved
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug("watchlists: log path resolve failed: %s", exc)
+        logger.debug("watchlists: log path resolve failed: {}", exc)
         return None
 
 

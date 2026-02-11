@@ -167,7 +167,7 @@ def _apply_single_user_fallback(url: str, auth_mode: Optional[str] = None) -> st
     if mode == "single_user" and scheme and not scheme.startswith("sqlite") and not scheme.startswith("file"):
         with suppress(_AUTHNZ_DB_NONCRITICAL_EXCEPTIONS):
             logger.warning(
-                "Single-user mode: ignoring non-sqlite DATABASE_URL '%s'; using sqlite:///./Databases/users.db",
+                "Single-user mode: ignoring non-sqlite DATABASE_URL '{}'; using sqlite:///./Databases/users.db",
                 url,
             )
         return "sqlite:///./Databases/users.db"
@@ -350,7 +350,7 @@ class DatabasePool:
         if not schema_file.exists():
             # This path is expected in current builds: schema is provisioned by initialize.py/migrations.
             logger.warning(
-                "PostgreSQL schema file not found at %s. Run 'python -m tldw_Server_API.app.core.AuthNZ.initialize' or apply DB migrations to create schema.",
+                "PostgreSQL schema file not found at {}. Run 'python -m tldw_Server_API.app.core.AuthNZ.initialize' or apply DB migrations to create schema.",
                 schema_file,
             )
             return

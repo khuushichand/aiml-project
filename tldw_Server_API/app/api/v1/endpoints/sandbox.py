@@ -454,7 +454,7 @@ async def create_session(
                     rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
                 except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                     rt = str(rt_attr) if rt_attr is not None else "unknown"
-            logger.exception("RuntimeUnavailable error occurred on sandbox session creation: %s", str(e))
+            logger.exception("RuntimeUnavailable error occurred on sandbox session creation: {}", str(e))
             return JSONResponse(status_code=503, content={
                 "error": {
                     "code": "runtime_unavailable",

@@ -96,15 +96,15 @@ def _resolve_output_size_bytes(user_id: str, storage_path: str | None) -> int | 
     try:
         user_int = int(user_id)
     except (TypeError, ValueError):
-        logger.warning("audiobook_quota: invalid user id for output size: %s", user_id)
+        logger.warning("audiobook_quota: invalid user id for output size: {}", user_id)
         return None
     try:
         outputs_dir = DatabasePaths.get_user_outputs_dir(user_int)
         return (outputs_dir / storage_path).stat().st_size
     except FileNotFoundError:
-        logger.warning("audiobook_quota: missing output file %s", storage_path)
+        logger.warning("audiobook_quota: missing output file {}", storage_path)
     except OSError as exc:
-        logger.warning("audiobook_quota: failed to stat %s: %s", storage_path, exc)
+        logger.warning("audiobook_quota: failed to stat {}: {}", storage_path, exc)
     return None
 
 _SQLITE_PRAGMA_TABLES = {
@@ -332,7 +332,7 @@ class CollectionsDatabase:
         try:
             self.backend.close_all()
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("collections_db: failed to close backend for user %s: %s", self.user_id, exc)
+            logger.debug("collections_db: failed to close backend for user {}: {}", self.user_id, exc)
 
     def __enter__(self) -> CollectionsDatabase:
         return self
@@ -428,7 +428,7 @@ class CollectionsDatabase:
                 (),
             ).rows
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("collections backfill: audiobook_projects.project_id fetch failed: %s", exc)
+            logger.debug("collections backfill: audiobook_projects.project_id fetch failed: {}", exc)
             return
         updated = 0
         for row in rows:
@@ -449,9 +449,9 @@ class CollectionsDatabase:
                 )
                 updated += 1
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("collections backfill: audiobook_projects.project_id update failed: %s", exc)
+                logger.debug("collections backfill: audiobook_projects.project_id update failed: {}", exc)
         if updated:
-            logger.debug("collections backfill: audiobook_projects.project_id updated %s rows", updated)
+            logger.debug("collections backfill: audiobook_projects.project_id updated {} rows", updated)
 
     def ensure_schema(self) -> None:
         """Create tables if they do not already exist."""
@@ -1232,7 +1232,7 @@ class CollectionsDatabase:
                 self.backend.execute(f"ALTER TABLE content_items ADD COLUMN {column} {col_type}", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
-                    logger.debug("collections backfill: content_items.%s already exists or skipped", column)
+                    logger.debug("collections backfill: content_items.{} already exists or skipped", column)
                 else:
                     raise
         self._fts_available = fts_available
@@ -1247,13 +1247,13 @@ class CollectionsDatabase:
         try:
             from tldw_Server_API.app.core.Watchlists import template_store
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("collections: watchlists template store unavailable: %s", exc)
+            logger.debug("collections: watchlists template store unavailable: {}", exc)
             return
 
         try:
             summaries = template_store.list_templates()
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("collections: failed to list watchlists templates: %s", exc)
+            logger.debug("collections: failed to list watchlists templates: {}", exc)
             return
 
         if not summaries:
@@ -1269,7 +1269,7 @@ class CollectionsDatabase:
             try:
                 record = template_store.load_template(name)
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("collections: failed to load watchlists template %s: %s", name, exc)
+                logger.debug("collections: failed to load watchlists template {}: {}", name, exc)
                 continue
             fmt = record.format.lower()
             type_ = self._infer_output_template_type(record.name, fmt)
@@ -1294,7 +1294,7 @@ class CollectionsDatabase:
                     )
                     existing.add(record.name)
                 except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-                    logger.debug("collections: failed to seed watchlists template %s: %s", record.name, exc)
+                    logger.debug("collections: failed to seed watchlists template {}: {}", record.name, exc)
                 continue
 
             try:
@@ -1302,7 +1302,7 @@ class CollectionsDatabase:
             except KeyError:
                 continue
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("collections: failed to lookup watchlists template %s: %s", name, exc)
+                logger.debug("collections: failed to lookup watchlists template {}: {}", name, exc)
                 continue
 
             current_meta: dict[str, Any] = {}
@@ -1356,7 +1356,7 @@ class CollectionsDatabase:
                 try:
                     self.update_output_template(current.id, patch)
                 except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-                    logger.debug("collections: failed to refresh watchlists template %s: %s", name, exc)
+                    logger.debug("collections: failed to refresh watchlists template {}: {}", name, exc)
 
     # ------------------------
     # Collections Tags helpers
@@ -2712,7 +2712,7 @@ class CollectionsDatabase:
             try:
                 self.update_audiobook_output_usage(-size_bytes)
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.warning("audiobook_quota: failed to decrement usage: %s", exc)
+                logger.warning("audiobook_quota: failed to decrement usage: {}", exc)
         return ok
 
     def get_output_artifact_by_title(self, title: str, format_: str | None = None, include_deleted: bool = False) -> CollectionsDatabase.OutputArtifactRow:
@@ -2886,7 +2886,7 @@ class CollectionsDatabase:
         try:
             user_int = int(self.user_id)
         except (TypeError, ValueError):
-            logger.warning("audiobook_quota: invalid user id for recompute: %s", self.user_id)
+            logger.warning("audiobook_quota: invalid user id for recompute: {}", self.user_id)
             return 0
         DatabasePaths.get_user_outputs_dir(user_int)
         total_bytes = 0

@@ -123,7 +123,7 @@ async def touch_shared_last_used_if_match(
         payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
     except (ValueError, KeyError, TypeError) as exc:
         logger.debug(
-            "BYOK: failed to decrypt shared secret for %s:%s (%s): %s",
+            'BYOK: failed to decrypt shared secret for {}:{} ({}): {}',
             scope_type,
             scope_id,
             provider,
@@ -149,7 +149,7 @@ async def list_user_keys(
     try:
         rows = await repo.list_secrets_for_user(user_id)
     except Exception as exc:
-        logger.error("BYOK: failed to list user keys for user_id=%s: %s", user_id, exc)
+        logger.error("BYOK: failed to list user keys for user_id={}: {}", user_id, exc)
         raise HTTPException(status_code=500, detail="Failed to list user BYOK keys") from exc
     allowlist = resolve_byok_allowlist()
     items = [
@@ -185,7 +185,7 @@ async def revoke_user_key(
         )
     except Exception as exc:
         logger.error(
-            "BYOK: failed to revoke user key for user_id=%s provider=%s: %s",
+            'BYOK: failed to revoke user key for user_id={} provider={}: {}',
             user_id,
             provider_norm,
             exc,
@@ -249,7 +249,7 @@ async def upsert_shared_key(
         )
     except Exception as exc:
         logger.error(
-            "BYOK: failed to upsert shared key for %s:%s provider=%s: %s",
+            'BYOK: failed to upsert shared key for {}:{} provider={}: {}',
             payload.scope_type,
             payload.scope_id,
             provider_norm,
@@ -348,7 +348,7 @@ async def list_shared_keys(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.error(
-            "BYOK: failed to list shared keys for scope_type=%s scope_id=%s provider=%s: %s",
+            'BYOK: failed to list shared keys for scope_type={} scope_id={} provider={}: {}',
             scope_type,
             scope_id,
             provider,
@@ -386,7 +386,7 @@ async def delete_shared_key(
         )
     except Exception as exc:
         logger.error(
-            "BYOK: failed to delete shared key for scope_type=%s scope_id=%s provider=%s: %s",
+            'BYOK: failed to delete shared key for scope_type={} scope_id={} provider={}: {}',
             scope_type,
             scope_id,
             provider_norm,

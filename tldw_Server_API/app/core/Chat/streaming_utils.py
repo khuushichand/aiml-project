@@ -953,7 +953,7 @@ class StreamingResponseHandler:
                             self.saved_message_id = parsed_message_id
                         extra_events = parsed_events
                         logger.info(
-                            "Saved streaming response for %s (text_len=%d, tool_calls=%d, function_call=%s, events=%d)",
+                            'Saved streaming response for {} (text_len={}, tool_calls={}, function_call={}, events={})',
                             self.conversation_id,
                             len(full_text),
                             len(aggregated_tool_calls or []),

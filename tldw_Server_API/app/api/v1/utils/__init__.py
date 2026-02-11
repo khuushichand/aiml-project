@@ -15,6 +15,7 @@ from __future__ import annotations
 
 __all__ = [
     "cache",
+    "deprecation",
     "http_errors",
     "request_parsing",
     "datetime_utils",

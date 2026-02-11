@@ -105,7 +105,7 @@ class NotesInteropService:
                     user_dir.mkdir(parents=True, exist_ok=True)
                 except OSError as exc:
                     logger.exception(
-                        "Failed to create notes directory '%s' for user_id '%s': %s",
+                        "Failed to create notes directory '{}' for user_id '{}': {}",
                         user_dir,
                         user_id,
                         exc,
@@ -118,7 +118,7 @@ class NotesInteropService:
                     candidate_path.relative_to(db_directory_resolved)
                 except ValueError as exc:
                     logger.exception(
-                        "Resolved database path '%s' escapes base directory '%s' for user_id '%s'.",
+                        "Resolved database path '{}' escapes base directory '{}' for user_id '{}'.",
                         candidate_path,
                         db_directory_resolved,
                         user_id,

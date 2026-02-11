@@ -58,6 +58,17 @@ def _reload_main_app(
     return importlib.reload(app_main).app
 
 
+def _route_method_count(app: FastAPI, path: str, method: str) -> int:
+    method_upper = method.upper()
+    count = 0
+    for route in app.routes:
+        route_path = getattr(route, "path", None)
+        route_methods = getattr(route, "methods", set()) or set()
+        if route_path == path and method_upper in route_methods:
+            count += 1
+    return count
+
+
 def test_main_mounts_evaluations_routes_in_minimal_startup(monkeypatch):
     app = _reload_main_app(monkeypatch, minimal=True)
     paths = {route.path for route in app.routes if hasattr(route, "path")}
@@ -85,6 +96,42 @@ def test_main_omits_evaluations_routes_in_minimal_startup_when_disabled(monkeypa
     assert "/api/v1/evaluations/geval" not in paths
     assert "/api/v1/evaluations/rag" not in paths
     assert "/api/v1/evaluations/embeddings/abtest" not in paths
+
+
+def test_main_registers_abtest_post_route_once_in_minimal_startup(monkeypatch):
+    app = _reload_main_app(monkeypatch, minimal=True)
+    count = _route_method_count(app, "/api/v1/evaluations/embeddings/abtest", "POST")
+    assert count == 1
+
+
+def test_main_registers_abtest_post_route_once_in_full_startup(monkeypatch):
+    app = _reload_main_app(monkeypatch, minimal=False)
+    count = _route_method_count(app, "/api/v1/evaluations/embeddings/abtest", "POST")
+    assert count == 1
+
+
+def test_main_has_no_duplicate_method_path_pairs_in_full_startup(monkeypatch):
+    app = _reload_main_app(monkeypatch, minimal=False)
+    seen: set[tuple[str, str]] = set()
+    duplicates: list[tuple[str, str]] = []
+    allowed_methods = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+    path_prefix = "/api/v1/evaluations/"
+
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None) or set()
+        if not path or not str(path).startswith(path_prefix):
+            continue
+        for method in methods:
+            if method not in allowed_methods:
+                continue
+            key = (method, path)
+            if key in seen:
+                duplicates.append(key)
+            else:
+                seen.add(key)
+
+    assert not duplicates
 
 
 def test_propositions_preserves_http_429_when_rate_limited(monkeypatch):
@@ -122,7 +169,7 @@ def test_history_preserves_http_403_for_non_admin_cross_user_request(monkeypatch
             return 0
 
     async def _principal_override():
-        return SimpleNamespace(is_admin=False, roles=[])
+        return SimpleNamespace(is_admin=False, roles=[], permissions=[])
 
     monkeypatch.setattr(
         eval_unified,

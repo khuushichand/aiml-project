@@ -78,13 +78,13 @@ def list_image_models_for_catalog() -> list[dict[str, Any]]:
             try:
                 is_configured = _is_sd_cpp_configured(cfg, enabled)
             except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("Image backend config check failed for %s: %s", name, exc)
+                logger.debug("Image backend config check failed for {}: {}", name, exc)
                 is_configured = False
         if name == "swarmui":
             try:
                 is_configured = _is_swarmui_configured(cfg, enabled)
             except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("Image backend config check failed for %s: %s", name, exc)
+                logger.debug("Image backend config check failed for {}: {}", name, exc)
                 is_configured = False
 
         entry: dict[str, Any] = {

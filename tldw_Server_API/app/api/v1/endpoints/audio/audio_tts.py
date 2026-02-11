@@ -346,7 +346,7 @@ async def create_speech(
         request=request,
     )
     logger.info(
-        "Received speech request: model=%s, voice=%s, format=%s, request_id=%s",
+        'Received speech request: model={}, voice={}, format={}, request_id={}',
         request_data.model,
         request_data.voice,
         request_data.response_format,
@@ -927,7 +927,7 @@ async def reset_tts_metrics(
             for name, method in provider_methods:
                 if _can_call_with_provider(method):
                     await _call_reset(method, provider)
-                    logger.info("reset_tts_metrics: reset metrics for provider=%s via %s", provider, name)
+                    logger.info("reset_tts_metrics: reset metrics for provider={} via {}", provider, name)
                     return {"message": f"Metrics reset for provider {provider}"}
 
             raise HTTPException(
@@ -946,7 +946,7 @@ async def reset_tts_metrics(
         for name, method in global_methods:
             if _can_call_without_args(method):
                 await _call_reset(method)
-                logger.info("reset_tts_metrics: reset all TTS metrics via %s", name)
+                logger.info("reset_tts_metrics: reset all TTS metrics via {}", name)
                 return {"message": "All TTS metrics reset"}
 
         raise HTTPException(

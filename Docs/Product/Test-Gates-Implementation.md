@@ -54,7 +54,7 @@ Non‑Goals
 ## Environment & Config Toggles
 
 Config file: `tldw_Server_API/Config_Files/config.txt` section `[API-Routes]`
-- `stable_only = true|false` (default is false when config is loaded; if config cannot be read, a conservative default of true is used).
+- `stable_only = true|false` (conservative default is true when `[API-Routes]` is missing or config cannot be read; if section exists but omits the key, parser fallback is false).
 - `disable = a,b,c`
 - `enable = x,y,z`
 - `experimental_routes = k1,k2`

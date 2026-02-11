@@ -608,7 +608,7 @@ def _write_config_preserving_comments(config_path: Path, updates: dict[str, dict
     # Sanity: Ensure all keys were applied; if not, fall back to parser write for missed keys
     leftovers = sum(len(items) for items in pending.values())
     if leftovers:
-        logger.warning("Some config updates were not applied via comment-preserving writer; falling back for %d keys.", leftovers)
+        logger.warning("Some config updates were not applied via comment-preserving writer; falling back for {} keys.", leftovers)
         # As a conservative fallback: append missing keys at end of their section
         text = "".join(out_lines)
         for section, items in pending.items():

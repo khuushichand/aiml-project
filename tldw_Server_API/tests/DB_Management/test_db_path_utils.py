@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from tldw_Server_API.app.core.DB_Management import db_path_utils
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
@@ -114,3 +115,18 @@ def test_prompts_db_path_salt_accepts_safe_value(monkeypatch, tmp_path):
     path = DatabasePaths.get_prompts_db_path(1, salt="safe_123")
 
     assert path.name == "user_prompts_v2_safe_123.sqlite"
+
+
+def test_user_db_base_dir_test_fallback_is_not_repo_local(monkeypatch):
+    """Test mode fallback should be isolated and must not write into repo-local Databases/user_databases."""
+    monkeypatch.delenv("USER_DB_BASE_DIR", raising=False)
+    monkeypatch.delenv("USER_DB_BASE", raising=False)
+    monkeypatch.setitem(settings, "USER_DB_BASE_DIR", None)
+    monkeypatch.setitem(settings, "USER_DB_BASE", None)
+    monkeypatch.setattr(db_path_utils, "_is_test_context", lambda: True)
+
+    repo_local_default = (Path.cwd() / "Databases" / "user_databases").resolve()
+    resolved = DatabasePaths.get_user_db_base_dir()
+
+    assert resolved != repo_local_default
+    assert repo_local_default not in resolved.parents

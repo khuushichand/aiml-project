@@ -23,13 +23,21 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+from fastapi.routing import APIRoute
 from loguru import logger
 from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
+from tldw_Server_API.app.core.startup_logging import (
+    startup_api_key_log_value as _startup_api_key_log_value,
+)
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled as _shared_env_flag_enabled,
+)
+from tldw_Server_API.app.core.testing import (
     is_explicit_pytest_runtime as _shared_is_explicit_pytest_runtime,
+)
+from tldw_Server_API.app.core.testing import (
     is_truthy as _shared_is_truthy,
 )
 
@@ -826,13 +834,9 @@ def _startup_trace(msg: str) -> None:
 _startup_trace(f"Endpoint import gating: ULTRA_MINIMAL_APP={_ULTRA_MINIMAL_APP}, MINIMAL_TEST_APP={_MINIMAL_TEST_APP}")
 #
 if _ULTRA_MINIMAL_APP:
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
-
-        _HAS_HEALTH = True
-    except _IMPORT_EXCEPTIONS as _h_e:
-        logger.warning(f"Health endpoints unavailable; skipping import: {_h_e}")
-        _HAS_HEALTH = False
+    # Keep ultra-minimal import surface tiny; health is provided by the
+    # control-plane routes registered later in this module.
+    _startup_trace("ULTRA_MINIMAL_APP enabled: skipping API router imports (control-plane health only).")
 else:
     # Audio Endpoint (includes WebSocket streaming transcription)
     try:
@@ -918,6 +922,8 @@ else:
     try:
         from tldw_Server_API.app.api.v1.endpoints.collections_websub import (
             callback_router as websub_callback_router,
+        )
+        from tldw_Server_API.app.api.v1.endpoints.collections_websub import (
             router as collections_websub_router,
         )
 
@@ -1006,9 +1012,15 @@ else:
         from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_optimization import (
             router as prompt_studio_optimization_router,
         )
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_projects import router as prompt_studio_projects_router
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_prompts import router as prompt_studio_prompts_router
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_status import router as prompt_studio_status_router
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_projects import (
+            router as prompt_studio_projects_router,
+        )
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_prompts import (
+            router as prompt_studio_prompts_router,
+        )
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_status import (
+            router as prompt_studio_status_router,
+        )
         from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_test_cases import (
             router as prompt_studio_test_cases_router,
         )
@@ -1207,8 +1219,6 @@ Optional JSON-structured logs sink (enable with LOG_JSON=true)
 - Adds an additional sink which serializes records as JSON to stdout.
 """
 try:
-    import os as _jsonlog_os
-
     if _shared_env_flag_enabled("LOG_JSON") or _shared_env_flag_enabled("ENABLE_JSON_LOGS"):
         logger.add(
             _SafeStreamWrapper(sys.stdout),
@@ -1278,6 +1288,8 @@ async def lifespan(app: FastAPI):
         _JM.set_acquire_gate(False)
     except _IMPORT_EXCEPTIONS:
         pass
+    # Fail fast if the assembled app contains duplicate method+path route registrations.
+    _fail_on_duplicate_route_method_pairs(app, context="lifespan startup")
     # Determine if heavy (non-critical) startup should be deferred to background
     # Read environment knobs with precedence:
     # - DISABLE_HEAVY_STARTUP=true  => force synchronous (no deferral)
@@ -1297,6 +1309,15 @@ async def lifespan(app: FastAPI):
     with suppress(_STARTUP_GUARD_EXCEPTIONS):
         app.state.bg_tasks = {}
     chat_config: dict[str, object] = {}
+    # Startup: initialize Prompts DB close worker on a running event loop.
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.Prompts_DB_Deps import (
+            start_prompts_pending_close_worker,
+        )
+
+        start_prompts_pending_close_worker()
+    except _STARTUP_GUARD_EXCEPTIONS as _prompts_start_err:
+        logger.debug(f"App Startup: Prompts close worker startup skipped/failed: {_prompts_start_err}")
     # Startup: Validate MCP configuration in production (fail fast)
     try:
         if get_mcp_config and validate_mcp_config:
@@ -1712,6 +1733,49 @@ async def lifespan(app: FastAPI):
     provider_manager = None
     request_queue = None
 
+    async def _init_local_llm_manager(*, deferred: bool) -> None:
+        try:
+            if getattr(app.state, "llm_manager", None) is not None:
+                return
+
+            # Lazy skip: only initialize if local-LLM routes are available in the current policy.
+            try:
+                _llm_routes_enabled = route_enabled("llamacpp") or route_enabled("llm")
+            except _STARTUP_GUARD_EXCEPTIONS:
+                _llm_routes_enabled = True
+            if not _llm_routes_enabled:
+                logger.debug("Local LLM inference manager skipped (llm/llamacpp routes disabled)")
+                return
+
+            from tldw_Server_API.app.core.config import get_llamacpp_handler_config
+            from tldw_Server_API.app.core.Local_LLM import LLMInferenceManager, LLMManagerConfig
+
+            _llama_cfg = get_llamacpp_handler_config()
+            cfg_kwargs = {}
+            if _llama_cfg:
+                cfg_kwargs["llamacpp"] = _llama_cfg
+
+            manager = await asyncio.to_thread(LLMInferenceManager, LLMManagerConfig(**cfg_kwargs))
+            app.state.llm_manager = manager
+            try:
+                from tldw_Server_API.app.api.v1.endpoints import llamacpp as _llamacpp_module
+
+                _llamacpp_module.llm_manager = manager
+            except _STARTUP_GUARD_EXCEPTIONS as _llm_ep_err:
+                logger.debug(f"LLM manager initialized but not injected into llama.cpp endpoints: {_llm_ep_err}")
+            logger.info(
+                ("Deferred startup: " if deferred else "App Startup: ")
+                + "Local LLM inference manager initialized"
+            )
+        except _STARTUP_GUARD_EXCEPTIONS as _llm_init_err:
+            if deferred:
+                logger.debug(f"Deferred startup: local LLM manager skipped/failed: {_llm_init_err}")
+            else:
+                logger.warning(
+                    "Local LLM inference manager not initialized; llama.cpp endpoints will return 503: "
+                    f"{_llm_init_err}"
+                )
+
     async def _init_mcp_server(*, deferred: bool) -> None:
         nonlocal mcp_server
         try:
@@ -1976,6 +2040,8 @@ async def lifespan(app: FastAPI):
     async def _run_heavy_initializations(*, deferred: bool) -> None:
         if deferred:
             logger.info("Deferred startup: beginning non-critical initializations in background")
+        # Local LLM manager
+        await _init_local_llm_manager(deferred=deferred)
         # MCP Unified server
         await _init_mcp_server(deferred=deferred)
         # Provider manager
@@ -2340,6 +2406,8 @@ async def lifespan(app: FastAPI):
 
         from tldw_Server_API.app.services.media_ingest_jobs_worker import (
             run_media_ingest_heavy_jobs_worker as _run_media_heavy_jobs,
+        )
+        from tldw_Server_API.app.services.media_ingest_jobs_worker import (
             run_media_ingest_jobs_worker as _run_media_jobs,
         )
 
@@ -2893,20 +2961,11 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Reading digest scheduler: {e}")
 
-    # Display authentication mode (mask API key in production)
+    # Display authentication mode (API key masked by default unless explicitly requested)
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
 
         settings = get_settings()
-        import os as _os
-
-        def _mask_key(_key: str) -> str:
-            if not _key or len(_key) < 8:
-                return "********"
-            return f"{_key[:4]}...{_key[-4:]}"
-
-        _is_prod = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
-        _show_key = _os.getenv("SHOW_API_KEY_ON_STARTUP", "false").lower() in {"true", "1", "yes"}
 
         logger.info("=" * 60)
         logger.info("🚀 TLDW Server Started Successfully")
@@ -2914,11 +2973,11 @@ async def lifespan(app: FastAPI):
 
         if is_single_user_mode():
             logger.info("🔐 Authentication Mode: SINGLE USER")
-            # Never log full API key in production unless explicitly allowed
-            if _is_prod and not _show_key:
-                logger.info(f"🔑 API Key: {_mask_key(settings.SINGLE_USER_API_KEY)} (masked)")
-            else:
-                logger.info(f"🔑 API Key: {settings.SINGLE_USER_API_KEY}")
+            _display_key = _startup_api_key_log_value(settings.SINGLE_USER_API_KEY)
+            _masked_note = ""
+            if _display_key != settings.SINGLE_USER_API_KEY:
+                _masked_note = " (masked; set SHOW_API_KEY_ON_STARTUP=true to display once)"
+            logger.info(f"🔑 API Key: {_display_key}{_masked_note}")
             logger.info("=" * 60)
             logger.info("Use this API key in the X-API-KEY header for requests")
         else:
@@ -2954,6 +3013,9 @@ async def lifespan(app: FastAPI):
             ALLOWED_ORIGINS as _ALLOWED_ORIGINS,
         )
         from tldw_Server_API.app.core.config import (
+            should_allow_cors_credentials as _should_allow_cors_credentials,
+        )
+        from tldw_Server_API.app.core.config import (
             should_disable_cors as _should_disable_cors,
         )
         from tldw_Server_API.app.core.Metrics import OTEL_AVAILABLE as _OTEL
@@ -2977,6 +3039,7 @@ async def lifespan(app: FastAPI):
         )
         _csrf_enabled = (_auth_mode == "multi_user") or (_csrf_globals.get("CSRF_ENABLED", None) is True)
         _cors_count = len(_ALLOWED_ORIGINS) if isinstance(_ALLOWED_ORIGINS, list) else 0
+        _cors_allow_credentials = _should_allow_cors_credentials()
         _has_limiter = hasattr(app.state, "limiter")
         _pm = _get_pm()
         _providers = len(_pm.providers) if _pm and hasattr(_pm, "providers") else 0
@@ -2996,7 +3059,9 @@ async def lifespan(app: FastAPI):
         if _should_disable_cors():
             logger.info("• CORS: disabled")
         else:
-            logger.info(f"• CORS: allowed_origins={_cors_count}")
+            logger.info(
+                f"• CORS: allowed_origins={_cors_count} | allow_credentials={_cors_allow_credentials}"
+            )
         logger.info(f"• Global rate limiter: {_has_limiter}")
         logger.info(f"• Providers configured: {_providers}")
         logger.info(f"• OpenTelemetry available: {bool(_OTEL)}")
@@ -3474,6 +3539,19 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error shutting down ChaChaNotes resources: {e}")
 
+    # Shutdown Prompts DB cache and close worker
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.Prompts_DB_Deps import (
+            close_all_cached_prompts_db_instances,
+            stop_prompts_pending_close_worker,
+        )
+
+        await close_all_cached_prompts_db_instances()
+        await stop_prompts_pending_close_worker()
+        logger.info("App Shutdown: Prompts DB resources cleaned up")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.exception(f"App Shutdown: Error shutting down Prompts DB resources: {e}")
+
     # Shutdown Chat Module Components
     logger.info("App Shutdown: Cleaning up Chat module components...")
 
@@ -3492,6 +3570,15 @@ async def lifespan(app: FastAPI):
             logger.info("App Shutdown: Request queue stopped")
     except _IMPORT_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error stopping request queue: {e}")
+
+    # Shutdown Local LLM manager (best effort)
+    try:
+        _llm_manager = getattr(app.state, "llm_manager", None)
+        if _llm_manager is not None and hasattr(_llm_manager, "cleanup_on_exit"):
+            await asyncio.to_thread(_llm_manager.cleanup_on_exit)
+            logger.info("App Shutdown: Local LLM manager cleanup complete")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.exception(f"App Shutdown: Error cleaning up local LLM manager: {e}")
 
     # Shutdown Evaluations pool via lazy helper (no-op if never initialized)
     try:
@@ -4023,6 +4110,94 @@ app = FastAPI(
 _startup_trace("FastAPI app created")
 
 
+def _iter_route_method_pairs(app: FastAPI) -> list[tuple[str, str, str]]:
+    """Return explicit route method/path pairs for duplicate detection."""
+    rows: list[tuple[str, str, str]] = []
+    for route in getattr(app, "routes", []):
+        if not isinstance(route, APIRoute):
+            continue
+        path = str(getattr(route, "path", "") or "")
+        if not path:
+            continue
+        methods = set(getattr(route, "methods", set()) or set())
+        for method in sorted(methods):
+            method_upper = str(method).upper()
+            # Ignore framework-generated methods to keep duplicate checks focused.
+            if method_upper in {"HEAD", "OPTIONS"}:
+                continue
+            rows.append((path, method_upper, str(getattr(route, "name", "<unnamed>"))))
+    return rows
+
+
+def _fail_on_duplicate_route_method_pairs(app: FastAPI, *, context: str) -> None:
+    seen: dict[tuple[str, str], str] = {}
+    duplicates: list[tuple[str, str, str, str]] = []
+    for path, method, route_name in _iter_route_method_pairs(app):
+        key = (path, method)
+        previous = seen.get(key)
+        if previous is None:
+            seen[key] = route_name
+            continue
+        duplicates.append((path, method, previous, route_name))
+    if not duplicates:
+        return
+
+    sample = "; ".join(
+        f"{method} {path} ({first} vs {second})"
+        for path, method, first, second in duplicates[:10]
+    )
+    message = (
+        f"Duplicate route registrations detected during {context}: "
+        f"{len(duplicates)} duplicate (path, method) pairs. Sample: {sample}"
+    )
+    logger.critical(message)
+    raise RuntimeError(message)
+
+
+def _resolve_cors_origins_or_raise(allowed_origins: list[str] | None) -> list[str]:
+    origins = [str(origin).strip() for origin in (allowed_origins or []) if str(origin).strip()]
+    if origins:
+        return origins
+    message = (
+        "CORS is enabled but ALLOWED_ORIGINS is empty. "
+        "Set ALLOWED_ORIGINS to a non-empty list (for example: ['http://localhost:3000']) "
+        "or disable CORS explicitly via DISABLE_CORS=true."
+    )
+    logger.critical(message)
+    raise RuntimeError(message)
+
+
+def _validate_cors_configuration_or_raise(origins: list[str], *, allow_credentials: bool) -> None:
+    """Reject invalid CORS combinations at startup."""
+    if allow_credentials and "*" in origins:
+        message = (
+            "Invalid CORS configuration: ALLOWED_ORIGINS cannot include '*' "
+            "when credentials are enabled. Configure explicit origins instead."
+        )
+        logger.critical(message)
+        raise RuntimeError(message)
+
+
+def _compute_openapi_cors_allow_origin(
+    origin: str | None,
+    *,
+    allow_all_origins: bool,
+    allow_credentials: bool,
+    allowed_openapi_origins: set[str],
+) -> str | None:
+    """Return the value to emit for Access-Control-Allow-Origin on OpenAPI responses."""
+    if allow_all_origins:
+        if allow_credentials:
+            return origin or None
+        return "*"
+    if not origin:
+        return None
+    normalized_origin = str(origin).rstrip("/")
+    if normalized_origin in allowed_openapi_origins:
+        return origin
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Global exception handler – surfaces tracebacks that BaseHTTPMiddleware
 # layers would otherwise swallow, producing only a bare
@@ -4044,29 +4219,6 @@ async def _global_unhandled_exception_handler(request, exc):
         content={"detail": "Internal server error"},
     )
 
-
-# Initialize shared local LLM inference manager (ollama/hf/llamafile/llamacpp)
-llm_manager = None
-try:
-    from tldw_Server_API.app.core.config import get_llamacpp_handler_config
-    from tldw_Server_API.app.core.Local_LLM import LLMInferenceManager, LLMManagerConfig
-
-    _llama_cfg = get_llamacpp_handler_config()
-    cfg_kwargs = {}
-    if _llama_cfg:
-        cfg_kwargs["llamacpp"] = _llama_cfg
-
-    llm_manager = LLMInferenceManager(LLMManagerConfig(**cfg_kwargs))
-    app.state.llm_manager = llm_manager
-    try:
-        from tldw_Server_API.app.api.v1.endpoints import llamacpp as _llamacpp_module
-
-        _llamacpp_module.llm_manager = llm_manager
-    except _STARTUP_GUARD_EXCEPTIONS as _llm_ep_err:
-        logger.debug(f"LLM manager initialized but not injected into llama.cpp endpoints: {_llm_ep_err}")
-    logger.info("Local LLM inference manager initialized")
-except _STARTUP_GUARD_EXCEPTIONS as _llm_init_err:
-    logger.warning(f"Local LLM inference manager not initialized; llama.cpp endpoints will return 503: {_llm_init_err}")
 
 # Early middleware to guard workflow templates path traversal attempts
 
@@ -4256,20 +4408,15 @@ async def _display_startup_info_and_warm():
     if is_single_user_mode():
         settings = get_settings()
         api_key = settings.SINGLE_USER_API_KEY
-        import os as _os
-
-        def _mask_key(_key: str) -> str:
-            if not _key or len(_key) < 8:
-                return "********"
-            return f"{_key[:4]}...{_key[-4:]}"
-
-        _is_prod = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
-        _show_key = _os.getenv("SHOW_API_KEY_ON_STARTUP", "false").lower() in {"true", "1", "yes"}
+        _display_key = _startup_api_key_log_value(api_key)
+        _masked_note = ""
+        if _display_key != api_key:
+            _masked_note = " (masked; set SHOW_API_KEY_ON_STARTUP=true to display once)"
         logger.info("=" * 70)
         logger.info("🚀 TLDW Server Started in SINGLE USER MODE")
         logger.info("=" * 70)
         logger.info("📌 API Key for authentication:")
-        logger.info(f"   {_mask_key(api_key) if (_is_prod and not _show_key) else api_key}")
+        logger.info(f"   {_display_key}{_masked_note}")
         logger.info("🌐 Access URLs:")
         logger.info("   Quickstart: http://localhost:8000/api/v1/config/quickstart")
         logger.info("   Setup UI:   http://localhost:8000/setup (if required)")
@@ -4298,18 +4445,28 @@ async def _display_startup_info_and_warm():
 
 # --- FIX: Add CORS Middleware ---
 # Import from config
-from tldw_Server_API.app.core.config import ALLOWED_ORIGINS, API_V1_PREFIX, route_enabled, should_disable_cors
+from tldw_Server_API.app.core.config import (
+    ALLOWED_ORIGINS,
+    API_V1_PREFIX,
+    route_enabled,
+    should_allow_cors_credentials,
+    should_disable_cors,
+)
 
 # FIXME - CORS
 if should_disable_cors():
     logger.warning("CORS middleware disabled via configuration/ENV flag.")
 else:
-    origins = ALLOWED_ORIGINS if ALLOWED_ORIGINS else ["*"]
+    origins = _resolve_cors_origins_or_raise(ALLOWED_ORIGINS)
+    _cors_allow_credentials = should_allow_cors_credentials()
+    _validate_cors_configuration_or_raise(origins, allow_credentials=_cors_allow_credentials)
+    _cors_allow_all_origins = "*" in origins
+    _cors_allowed_openapi_origins = {str(o).rstrip("/") for o in origins if isinstance(o, str)}
     # # -- If you have any global middleware, add it here --
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_credentials=True,
+        allow_credentials=_cors_allow_credentials,
         allow_methods=["*"],  # Must include OPTIONS, GET, POST, DELETE etc.
         allow_headers=["*"],
         expose_headers=["X-Request-ID", "traceparent", "X-Trace-Id"],
@@ -4324,11 +4481,16 @@ else:
         try:
             if request.url.path == _openapi_url:
                 origin = request.headers.get("origin")
-                if origin:
-                    response.headers.setdefault("Access-Control-Allow-Origin", origin)
-                    response.headers.setdefault("Vary", "Origin")
-                else:
-                    response.headers.setdefault("Access-Control-Allow-Origin", "*")
+                allow_origin = _compute_openapi_cors_allow_origin(
+                    origin,
+                    allow_all_origins=_cors_allow_all_origins,
+                    allow_credentials=_cors_allow_credentials,
+                    allowed_openapi_origins=_cors_allowed_openapi_origins,
+                )
+                if allow_origin:
+                    response.headers.setdefault("Access-Control-Allow-Origin", allow_origin)
+                    if allow_origin != "*":
+                        response.headers.setdefault("Vary", "Origin")
                 response.headers.setdefault("Access-Control-Allow-Methods", "GET, OPTIONS")
                 response.headers.setdefault("Access-Control-Allow-Headers", "*")
                 response.headers.setdefault("Access-Control-Expose-Headers", "X-Request-ID, traceparent, X-Trace-Id")
@@ -4363,10 +4525,13 @@ from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddlewa
 from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware
 from tldw_Server_API.app.core.Security.setup_access_guard import SetupAccessGuardMiddleware
 from tldw_Server_API.app.core.Security.setup_csp import SetupCSPMiddleware
-
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled as _test_env_flag_enabled,
+)
+from tldw_Server_API.app.core.testing import (
     is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+)
+from tldw_Server_API.app.core.testing import (
     is_test_mode as _shared_is_test_mode,
 )
 
@@ -4657,14 +4822,9 @@ async def api_metrics():
 
 # Router for health monitoring endpoints (NEW)
 if _ULTRA_MINIMAL_APP:
-    # Ultra-minimal: only mount health endpoints (no optional routers, no gating)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
-
-        app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])
-        app.include_router(health_router, prefix="", tags=["health"])
-    except _IMPORT_EXCEPTIONS as _health_ultra_err:
-        logger.warning(f"Health router unavailable in ULTRA_MINIMAL_APP: {_health_ultra_err}")
+    # Ultra-minimal mode relies exclusively on control-plane health routes
+    # (/health, /ready, /health/ready) registered below.
+    logger.info("ULTRA_MINIMAL_APP enabled: using control-plane health routes only.")
 elif _MINIMAL_TEST_APP:
     # Minimal set for paper_search tests
     app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
@@ -4703,13 +4863,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
     except _IMPORT_EXCEPTIONS as _media_min_err:
         logger.debug(f"Skipping media router in minimal test app: {_media_min_err}")
-    # Chat (OpenAI-compatible) endpoints for quota enforcement tests
+    # Email search endpoint (normalized email tables)
     try:
-        from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
+        from tldw_Server_API.app.api.v1.endpoints.email import router as email_router
 
-        app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat", tags=["chat"])
-    except _IMPORT_EXCEPTIONS as _chat_min_err:
-        logger.debug(f"Skipping chat router in minimal test app: {_chat_min_err}")
+        app.include_router(email_router, prefix=f"{API_V1_PREFIX}/email", tags=["email"])
+    except _IMPORT_EXCEPTIONS as _email_min_err:
+        logger.debug(f"Skipping email router in minimal test app: {_email_min_err}")
     # LLM Providers endpoints (used by Chat_NEW unit tests)
     try:
         from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
@@ -4827,6 +4987,8 @@ elif _MINIMAL_TEST_APP:
     try:
         from tldw_Server_API.app.api.v1.endpoints.collections_websub import (
             callback_router as websub_callback_router,
+        )
+        from tldw_Server_API.app.api.v1.endpoints.collections_websub import (
             router as collections_websub_router,
         )
 
@@ -5092,12 +5254,6 @@ elif _MINIMAL_TEST_APP:
         from tldw_Server_API.app.api.v1.endpoints.orgs import router as orgs_router
 
         app.include_router(orgs_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
-        try:
-            from tldw_Server_API.app.api.v1.endpoints.shared_keys_scoped import router as shared_keys_scoped_router
-
-            app.include_router(shared_keys_scoped_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
-        except _IMPORT_EXCEPTIONS as _org_keys_min_err:
-            logger.debug(f"Skipping shared_keys_scoped router in minimal test app: {_org_keys_min_err}")
     except _IMPORT_EXCEPTIONS as _orgs_min_err:
         logger.debug(f"Skipping orgs router in minimal test app: {_orgs_min_err}")
     try:
@@ -5151,14 +5307,11 @@ elif _MINIMAL_TEST_APP:
     # Evaluations endpoints in minimal mode: policy-gated by route toggles.
     try:
         if route_enabled("evaluations"):
-            from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import router as _evaluations_router
-
-            app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
-            from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest import (
-                abtest_router as _abtest_router,
+            from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import (
+                router as _evaluations_router,
             )
 
-            app.include_router(_abtest_router, prefix=f"{API_V1_PREFIX}/evaluations", tags=["evaluations"])
+            app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
         else:
             logger.info("Route disabled by policy: evaluations (minimal test app)")
     except _STARTUP_GUARD_EXCEPTIONS as _evals_min_err:
@@ -5197,7 +5350,6 @@ else:
         _include_if_enabled(
             "health", health_router, prefix=f"{API_V1_PREFIX}", tags=["health"]
         )  # /api/v1/healthz, /api/v1/readyz
-        _include_if_enabled("health", health_router, prefix="", tags=["health"])  # /healthz, /readyz
     _include_if_enabled("moderation", moderation_router, prefix=f"{API_V1_PREFIX}", tags=["moderation"])
     _include_if_enabled("monitoring", monitoring_router, prefix=f"{API_V1_PREFIX}", tags=["monitoring"])
     from tldw_Server_API.app.api.v1.endpoints.audit import router as audit_router
@@ -5259,6 +5411,12 @@ else:
         logger.warning(f"Skipping billing_webhooks router due to import error: {_wh_err}")
     if _HAS_MEDIA:
         _include_if_enabled("media", media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.email import router as email_router
+
+        _include_if_enabled("email", email_router, prefix=f"{API_V1_PREFIX}/email", tags=["email"])
+    except _IMPORT_EXCEPTIONS as _email_route_err:
+        logger.debug(f"Email endpoints unavailable; skipping import: {_email_route_err}")
     if _HAS_AUDIO:
         _include_if_enabled("audio", audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
     if _HAS_AUDIO_JOBS:
@@ -5496,14 +5654,11 @@ else:
     # Heavy routers: import only when enabled to avoid import-time side effects
     try:
         if route_enabled("evaluations"):
-            from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import router as _evaluations_router
-
-            app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
-            from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest import (
-                abtest_router as _abtest_router,
+            from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import (
+                router as _evaluations_router,
             )
 
-            app.include_router(_abtest_router, prefix=f"{API_V1_PREFIX}/evaluations", tags=["evaluations"])
+            app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
         else:
             logger.info("Route disabled by policy: evaluations")
     except _IMPORT_EXCEPTIONS as _evals_rt_err:
@@ -5825,6 +5980,9 @@ except _STARTUP_GUARD_EXCEPTIONS as _health_rt_err:
     app.add_api_route("/health", health_check, methods=["GET"], openapi_extra={"security": []})
     app.add_api_route("/ready", readiness_check, methods=["GET"], openapi_extra={"security": []})
     app.add_api_route("/health/ready", readiness_alias, methods=["GET"], openapi_extra={"security": []})
+
+# Import-time CI/startup guard: fail immediately if the route table contains duplicates.
+_fail_on_duplicate_route_method_pairs(app, context="module import")
 
 
 #

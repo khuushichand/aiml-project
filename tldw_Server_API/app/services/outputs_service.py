@@ -90,7 +90,7 @@ def _sum_audiobook_output_bytes_for_ids(cdb, user_id: int, ids: list[int]) -> in
             tuple([user_id] + list(ids)),
         ).rows
     except _OUTPUTS_DB_FALLBACK_EXCEPTIONS as exc:
-        logger.warning("outputs_service: audiobook quota lookup failed: %s", exc)
+        logger.warning("outputs_service: audiobook quota lookup failed: {}", exc)
         return 0
     outputs_dir = _outputs_dir_for_user(user_id)
     for row in rows:
@@ -112,7 +112,7 @@ def _sum_audiobook_output_bytes_for_ids(cdb, user_id: int, ids: list[int]) -> in
             except FileNotFoundError:
                 continue
             except OSError as exc:
-                logger.warning("outputs_service: failed to stat output for quota: %s", exc)
+                logger.warning("outputs_service: failed to stat output for quota: {}", exc)
                 continue
         if size_bytes:
             total_bytes += size_bytes
@@ -126,7 +126,7 @@ def render_output_template(template_str: str, context: dict[str, Any]) -> str:
         template = _OUTPUT_TEMPLATE_ENV.from_string(normalized)
         return template.render(**context)
     except _OUTPUTS_TEMPLATE_EXCEPTIONS as exc:
-        logger.error("outputs: template render failed: %s", exc)
+        logger.error("outputs: template render failed: {}", exc)
         return template_str
 
 
@@ -516,7 +516,7 @@ def delete_outputs_by_ids(cdb, user_id: int, ids: list[int]) -> int:
             try:
                 cdb.update_audiobook_output_usage(-audiobook_bytes)
             except _OUTPUTS_DB_FALLBACK_EXCEPTIONS as exc:
-                logger.warning("outputs_service: failed to decrement audiobook usage: %s", exc)
+                logger.warning("outputs_service: failed to decrement audiobook usage: {}", exc)
         return len(ids)
     except Exception as e:
         logger.error(f"outputs_service.purge: delete failed: {e}")

@@ -350,7 +350,7 @@ def _rate_limit_mode() -> str:
     if not _rate_limit_mode_warned:
         _rate_limit_mode_warned = True
         logger.warning(
-            "Unknown EMBEDDINGS_RATE_LIMIT_MODE=%r; defaulting to 'tokens'.",
+            "Unknown EMBEDDINGS_RATE_LIMIT_MODE={}; defaulting to 'tokens'.",
             raw,
         )
     return "tokens"

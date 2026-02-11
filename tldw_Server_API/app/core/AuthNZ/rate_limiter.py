@@ -13,6 +13,7 @@ methods to ``LockoutTracker``.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool

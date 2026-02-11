@@ -110,7 +110,7 @@ async def generate_document(
         _is_test_mode = is_test_mode()
 
         if request.api_key:
-            logger.debug("Ignoring per-request api_key override for provider=%s", provider_name)
+            logger.debug("Ignoring per-request api_key override for provider={}", provider_name)
         explicit_key = None
         provider_api_key = None
         byok_resolution = None
@@ -144,7 +144,7 @@ async def generate_document(
         if provider_requires_api_key(provider_key) and not provider_api_key:
             if (_is_pytest or _is_test_mode) and bool(request.stream):
                 logger.debug(
-                    "Bypassing provider API key requirement for streaming document generation during tests (provider=%s)",
+                    'Bypassing provider API key requirement for streaming document generation during tests (provider={})',
                     provider_name,
                 )
                 provider_api_key = None
@@ -198,7 +198,7 @@ async def generate_document(
             if content.get("success") is False:
                 detail = content.get("error") or "Document generation failed"
                 logger.warning(
-                    "Document generation failed for conversation %s: %s",
+                    'Document generation failed for conversation {}: {}',
                     request.conversation_id,
                     detail,
                 )
@@ -207,7 +207,7 @@ async def generate_document(
                     detail=detail,
                 )
             logger.error(
-                "Unexpected document generation payload for conversation %s: %s",
+                'Unexpected document generation payload for conversation {}: {}',
                 request.conversation_id,
                 type(content).__name__,
             )
@@ -304,14 +304,14 @@ async def generate_document(
                                 )
                             else:
                                 logger.info(
-                                    "Streamed document produced no content for conversation %s; skipping persistence",
+                                    'Streamed document produced no content for conversation {}; skipping persistence',
                                     request.conversation_id,
                                 )
                             if byok_resolution and byok_resolution.uses_byok and not explicit_key:
                                 await byok_resolution.touch_last_used()
                         except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as persist_exc:
                             logger.error(
-                                "Failed to persist streamed document for conversation %s: %s",
+                                'Failed to persist streamed document for conversation {}: {}',
                                 request.conversation_id,
                                 persist_exc,
                             )
@@ -331,7 +331,7 @@ async def generate_document(
                             yield _encode_sse(payload)
                 except asyncio.CancelledError:
                     logger.info(
-                        "Document generation stream cancelled for conversation %s",
+                        'Document generation stream cancelled for conversation {}',
                         request.conversation_id,
                     )
                     raise
@@ -351,14 +351,14 @@ async def generate_document(
                             )
                         else:
                             logger.info(
-                                "Streamed document produced no content for conversation %s; skipping persistence",
+                                'Streamed document produced no content for conversation {}; skipping persistence',
                                 request.conversation_id,
                             )
                         if byok_resolution and byok_resolution.uses_byok and not explicit_key:
                             await byok_resolution.touch_last_used()
                     except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as persist_exc:
                         logger.error(
-                            "Failed to persist streamed document for conversation %s: %s",
+                            'Failed to persist streamed document for conversation {}: {}',
                             request.conversation_id,
                             persist_exc,
                         )

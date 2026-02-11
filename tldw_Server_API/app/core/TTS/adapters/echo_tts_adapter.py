@@ -369,7 +369,7 @@ class EchoTTSAdapter(TTSAdapter):
                 model=request.model or self.model_repo,
             )
         except Exception as exc:
-            logger.error("Echo-TTS generation failed: %s", exc, exc_info=True)
+            logger.error("Echo-TTS generation failed: {}", exc, exc_info=True)
             raise TTSGenerationError(
                 "Echo-TTS generation failed",
                 provider=self.PROVIDER_KEY,

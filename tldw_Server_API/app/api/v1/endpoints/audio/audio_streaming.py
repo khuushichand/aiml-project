@@ -1914,8 +1914,7 @@ async def websocket_audio_chat_stream(
                     )
                 except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                     logger.debug(
-                        "metrics observe failed "
-                        "(stt_final_latency_seconds, endpoint=audio.chat.stream): %s",
+                        'metrics observe failed (stt_final_latency_seconds, endpoint=audio.chat.stream): {}',
                         exc,
                     )
 

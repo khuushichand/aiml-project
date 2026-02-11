@@ -1,0 +1,74 @@
+{
+  "pages": [
+    {
+      "cursor": null,
+      "next_cursor": "c1",
+      "ids": [
+        "m001",
+        "m002",
+        "m003",
+        "m004",
+        "m005",
+        "m006",
+        "m007",
+        "m008",
+        "m009",
+        "m010",
+        "m011",
+        "m012",
+        "m013",
+        "m014",
+        "m015"
+      ]
+    },
+    {
+      "cursor": "c1",
+      "next_cursor": "c2",
+      "ids": [
+        "m016",
+        "m017",
+        "m018",
+        "m019",
+        "m020",
+        "m021",
+        "m022",
+        "m023",
+        "m024",
+        "m025",
+        "m026",
+        "m027",
+        "m028",
+        "m029",
+        "m030"
+      ]
+    },
+    {
+      "cursor": "c2",
+      "next_cursor": null,
+      "ids": [
+        "m031",
+        "m032",
+        "m033",
+        "m034",
+        "m035",
+        "m036",
+        "m037",
+        "m038",
+        "m039",
+        "m040",
+        "m041",
+        "m042",
+        "m043",
+        "m044",
+        "m045"
+      ]
+    }
+  ],
+  "edge_case_ids": {
+    "m001": "multipart_plain_html_attachment",
+    "m002": "html_only",
+    "m003": "root_plain",
+    "m004": "duplicate_attachment_parts",
+    "m005": "inline_attachment_only"
+  }
+}

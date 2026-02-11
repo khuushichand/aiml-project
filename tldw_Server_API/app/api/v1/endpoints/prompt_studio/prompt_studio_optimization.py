@@ -536,7 +536,7 @@ async def create_optimization_simple(
         trace_id=tp,
     )
     with log_context(request_id=req_id, traceparent=tp, ps_component="endpoint", ps_job_kind="optimization"):
-        logger.info("Created optimization job via simple endpoint: job_id=%s", job.get("id"))
+        logger.info("Created optimization job via simple endpoint: job_id={}", job.get("id"))
     job_id = str(job.get("uuid") or job.get("id"))
     return {"id": job_id, "status": job.get("status", "pending")}
 
@@ -782,7 +782,7 @@ async def create_optimization(
         )
         with log_context(request_id=req_id, traceparent=tp, ps_component="endpoint", ps_job_kind="optimization"):
             logger.info(
-                "User %s created optimization %s",
+                'User {} created optimization {}',
                 user_context.get("user_id"),
                 optimization_record.get("id"),
             )
@@ -1499,7 +1499,7 @@ async def compare_strategies(
             job_ids.append(str(job.get("uuid") or job.get("id")))
         with log_context(request_id=req_id, traceparent=tp, ps_component="endpoint", ps_job_kind="optimization"):
             logger.info(
-                "User %s created strategy comparison for prompt %s",
+                'User {} created strategy comparison for prompt {}',
                 user_context.get("user_id"),
                 request.prompt_id,
             )

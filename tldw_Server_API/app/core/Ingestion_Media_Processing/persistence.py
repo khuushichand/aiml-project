@@ -582,6 +582,24 @@ def _emit_ingestion_embeddings_enqueue_metric(*, path_kind: str, outcome: str) -
     )
 
 
+def _is_email_native_persist_enabled() -> bool:
+    try:
+        return bool(settings.get("EMAIL_NATIVE_PERSIST_ENABLED", True))
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        return True
+
+
+def _emit_email_native_persist_metric(*, path_kind: str, outcome: str) -> None:
+    _emit_ingestion_metric_increment(
+        "email_native_persist_total",
+        1,
+        labels={
+            "path_kind": _coerce_ingestion_label(path_kind),
+            "outcome": _coerce_ingestion_label(outcome),
+        },
+    )
+
+
 def _ingestion_request_outcome_from_status(status_code: int) -> str:
     if status_code == status.HTTP_200_OK:
         return "success"
@@ -4950,19 +4968,77 @@ async def persist_doc_item_and_children(
                 worker_db: MediaDatabase | None = None
                 try:
                     worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
-                    return worker_db.add_media_with_keywords(**db_add_kwargs)
+                    media_id_local, media_uuid_local, db_message_local = worker_db.add_media_with_keywords(
+                        **db_add_kwargs
+                    )
+                    email_graph_local: dict[str, Any] | None = None
+                    if media_type == "email" and media_id_local:
+                        if _is_email_native_persist_enabled():
+                            try:
+                                email_graph_local = worker_db.upsert_email_message_graph(
+                                    media_id=int(media_id_local),
+                                    metadata=metadata_for_db if isinstance(metadata_for_db, dict) else {},
+                                    body_text=str(content_for_db or ""),
+                                    tenant_id=str(client_id),
+                                    provider="upload",
+                                    source_key=str(processing_filename or item_input_ref or "upload"),
+                                    labels=(metadata_for_db or {}).get("labels")
+                                    if isinstance(metadata_for_db, dict)
+                                    else None,
+                                )
+                                _emit_email_native_persist_metric(
+                                    path_kind="primary",
+                                    outcome=(
+                                        "success"
+                                        if isinstance(email_graph_local, dict)
+                                        and email_graph_local.get("email_message_id")
+                                        else "noop"
+                                    ),
+                                )
+                            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+                                logger.debug(
+                                    "Email native upsert skipped due to non-fatal error (primary): {}",
+                                    exc,
+                                )
+                                _emit_email_native_persist_metric(
+                                    path_kind="primary",
+                                    outcome="error",
+                                )
+                        else:
+                            _emit_email_native_persist_metric(
+                                path_kind="primary",
+                                outcome="skipped_flag",
+                            )
+                    return (
+                        media_id_local,
+                        media_uuid_local,
+                        db_message_local,
+                        email_graph_local,
+                    )
                 finally:
                     if worker_db is not None:
                         worker_db.close_connection()
 
-            media_id_result, media_uuid_result, db_message_result = await loop.run_in_executor(  # type: ignore[arg-type]
+            db_worker_result = await loop.run_in_executor(  # type: ignore[arg-type]
                 None,
                 _db_worker,
             )
+            if isinstance(db_worker_result, tuple) and len(db_worker_result) == 4:
+                (
+                    media_id_result,
+                    media_uuid_result,
+                    db_message_result,
+                    email_graph_result,
+                ) = db_worker_result
+            else:
+                media_id_result, media_uuid_result, db_message_result = db_worker_result
+                email_graph_result = None
 
             final_result["db_id"] = media_id_result
             final_result["db_message"] = db_message_result
             final_result["media_uuid"] = media_uuid_result
+            if isinstance(email_graph_result, dict) and email_graph_result.get("email_message_id"):
+                final_result["email_message_id"] = email_graph_result.get("email_message_id")
             await _enforce_chunk_consistency_after_persist(
                 result=final_result,
                 form_data=form_data,
@@ -5126,6 +5202,7 @@ async def persist_doc_item_and_children(
                                         child_url: str = child_url,
                                         child_title: str = child_title,
                                         child_content: str = child_content,
+                                        child_metadata_local: dict[str, Any] = child_meta if isinstance(child_meta, dict) else {},
                                         final_keywords: list[str] = final_keywords_list,
                                         safe_child_meta_json_local: str | None = safe_child_meta_json,
                                         model_used_local: str | None = model_used,
@@ -5143,7 +5220,7 @@ async def persist_doc_item_and_children(
                                                 db_path=db_path_local,
                                                 client_id=client_id_local,
                                             )
-                                            return worker_db.add_media_with_keywords(
+                                            child_id_local, child_uuid_local, child_msg_local = worker_db.add_media_with_keywords(
                                                 url=_normalize_dedupe_url_for_db(child_url),
                                                 title=child_title,
                                                 media_type=media_type_local,
@@ -5162,6 +5239,41 @@ async def persist_doc_item_and_children(
                                                 chunk_options=chunk_options_local,
                                                 chunks=child_chunks_for_sql_local,
                                             )
+                                            if media_type_local == "email" and child_id_local:
+                                                if _is_email_native_persist_enabled():
+                                                    try:
+                                                        child_email_graph_local = worker_db.upsert_email_message_graph(
+                                                            media_id=int(child_id_local),
+                                                            metadata=child_metadata_local,
+                                                            body_text=str(child_content or ""),
+                                                            tenant_id=str(client_id_local),
+                                                            provider="upload",
+                                                            source_key=str(child_url),
+                                                        )
+                                                        _emit_email_native_persist_metric(
+                                                            path_kind="attachment_child",
+                                                            outcome=(
+                                                                "success"
+                                                                if isinstance(child_email_graph_local, dict)
+                                                                and child_email_graph_local.get("email_message_id")
+                                                                else "noop"
+                                                            ),
+                                                        )
+                                                    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+                                                        logger.debug(
+                                                            "Email native upsert skipped due to non-fatal error (attachment_child): {}",
+                                                            exc,
+                                                        )
+                                                        _emit_email_native_persist_metric(
+                                                            path_kind="attachment_child",
+                                                            outcome="error",
+                                                        )
+                                                else:
+                                                    _emit_email_native_persist_metric(
+                                                        path_kind="attachment_child",
+                                                        outcome="skipped_flag",
+                                                    )
+                                            return child_id_local, child_uuid_local, child_msg_local
                                         finally:
                                             if worker_db is not None:
                                                 worker_db.close_connection()
@@ -5383,6 +5495,7 @@ async def persist_doc_item_and_children(
                                     child_url_local: str = child_url,
                                     child_title_local: str = child_title,
                                     child_content_local: str = child_content,
+                                    child_metadata_local: dict[str, Any] = child_meta if isinstance(child_meta, dict) else {},
                                     final_keywords_local: list[str] = final_keywords_list,
                                     safe_child_meta_json_local: str | None = safe_child_meta_json,
                                     model_used_local: str | None = model_used,
@@ -5400,7 +5513,7 @@ async def persist_doc_item_and_children(
                                             db_path=db_path_local,
                                             client_id=client_id_local,
                                         )
-                                        return worker_db.add_media_with_keywords(
+                                        child_id_local, child_uuid_local, child_msg_local = worker_db.add_media_with_keywords(
                                             url=_normalize_dedupe_url_for_db(child_url_local),
                                             title=child_title_local,
                                             media_type=media_type_local,
@@ -5419,6 +5532,41 @@ async def persist_doc_item_and_children(
                                             chunk_options=chunk_options_local,
                                             chunks=child_chunks_for_sql_local,
                                         )
+                                        if media_type_local == "email" and child_id_local:
+                                            if _is_email_native_persist_enabled():
+                                                try:
+                                                    child_email_graph_local = worker_db.upsert_email_message_graph(
+                                                        media_id=int(child_id_local),
+                                                        metadata=child_metadata_local,
+                                                        body_text=str(child_content_local or ""),
+                                                        tenant_id=str(client_id_local),
+                                                        provider="upload",
+                                                        source_key=str(child_url_local),
+                                                    )
+                                                    _emit_email_native_persist_metric(
+                                                        path_kind="archive_child",
+                                                        outcome=(
+                                                            "success"
+                                                            if isinstance(child_email_graph_local, dict)
+                                                            and child_email_graph_local.get("email_message_id")
+                                                            else "noop"
+                                                        ),
+                                                    )
+                                                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+                                                    logger.debug(
+                                                        "Email native upsert skipped due to non-fatal error (archive_child): {}",
+                                                        exc,
+                                                    )
+                                                    _emit_email_native_persist_metric(
+                                                        path_kind="archive_child",
+                                                        outcome="error",
+                                                    )
+                                            else:
+                                                _emit_email_native_persist_metric(
+                                                    path_kind="archive_child",
+                                                    outcome="skipped_flag",
+                                                )
+                                        return child_id_local, child_uuid_local, child_msg_local
                                     finally:
                                         if worker_db is not None:
                                             worker_db.close_connection()

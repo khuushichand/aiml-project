@@ -1224,13 +1224,13 @@ def load_chat_history_from_file_and_save_to_db(
                 db.soft_delete_conversation(conversation_id, version)
             except (CharactersRAGDBError, ConflictError) as cleanup_exc:
                 logger.warning(
-                    "Non-fatal: failed to clean up conversation %s after import failure: %s",
+                    'Non-fatal: failed to clean up conversation {} after import failure: {}',
                     conversation_id,
                     cleanup_exc,
                 )
             except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as cleanup_exc:
                 logger.warning(
-                    "Unexpected error while cleaning up conversation %s after import failure: %s",
+                    'Unexpected error while cleaning up conversation {} after import failure: {}',
                     conversation_id,
                     cleanup_exc,
                 )
@@ -1243,7 +1243,7 @@ def load_chat_history_from_file_and_save_to_db(
                 seeded_messages = db.get_messages_for_conversation(conversation_id, limit=50)
             except CharactersRAGDBError as fetch_exc:
                 logger.debug(
-                    "Unable to inspect seeded messages for conversation %s: %s",
+                    'Unable to inspect seeded messages for conversation {}: {}',
                     conversation_id,
                     fetch_exc,
                 )
@@ -1254,7 +1254,7 @@ def load_chat_history_from_file_and_save_to_db(
                     db.soft_delete_message(seeded_msg["id"], seeded_msg.get("version", 1))
                 except (CharactersRAGDBError, ConflictError) as delete_exc:
                     logger.debug(
-                        "Non-fatal: failed to remove seeded message %s from conversation %s during import: %s",
+                        'Non-fatal: failed to remove seeded message {} from conversation {} during import: {}',
                         seeded_msg.get("id"),
                         conversation_id,
                         delete_exc,

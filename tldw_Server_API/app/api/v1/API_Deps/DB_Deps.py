@@ -93,7 +93,7 @@ def _get_db_path_for_user(user_id: int) -> Path:
             os.environ.setdefault("USER_DB_BASE_DIR", base_dir_env)
         except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(
-                "TESTING mode: failed to derive project-root user DB dir; falling back to temp dir. Error: %s",
+                'TESTING mode: failed to derive project-root user DB dir; falling back to temp dir. Error: {}',
                 e,
                 exc_info=True,
             )

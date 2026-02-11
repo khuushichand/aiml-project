@@ -567,7 +567,7 @@ def _build_mediawiki_embedding_config(
         }
     else:
         logger.warning(
-            "Unsupported embeddings provider '%s' for MediaWiki vector storage.",
+            "Unsupported embeddings provider '{}' for MediaWiki vector storage.",
             provider_norm,
         )
         return None

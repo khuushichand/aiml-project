@@ -1149,7 +1149,7 @@ class AuthnzOrgsTeamsRepo:
             }
         except Exception:  # pragma: no cover - surfaced via callers
             logger.exception(
-                "AuthnzOrgsTeamsRepo.remove_team_member failed for team_id=%s user_id=%s",
+                'AuthnzOrgsTeamsRepo.remove_team_member failed for team_id={} user_id={}',
                 team_id,
                 user_id,
             )
@@ -1357,7 +1357,7 @@ class AuthnzOrgsTeamsRepo:
                     await self._ensure_user_in_default_team(conn, org_id, user_id)
                 except Exception as exc:
                     logger.warning(
-                        "Default team auto-enroll failed for org_id=%s, user_id=%s: %s",
+                        'Default team auto-enroll failed for org_id={}, user_id={}: {}',
                         org_id,
                         user_id,
                         exc,
@@ -1486,7 +1486,7 @@ class AuthnzOrgsTeamsRepo:
                             await self._remove_user_from_default_team(conn, org_id, user_id)
                         except Exception as exc:
                             logger.warning(
-                                "Default team removal failed for org_id=%s, user_id=%s: %s",
+                                'Default team removal failed for org_id={}, user_id={}: {}',
                                 org_id,
                                 user_id,
                                 exc,
@@ -1534,7 +1534,7 @@ class AuthnzOrgsTeamsRepo:
                             await self._remove_user_from_default_team(conn, org_id, user_id)
                         except Exception as exc:
                             logger.warning(
-                                "Default team removal failed for org_id=%s, user_id=%s: %s",
+                                'Default team removal failed for org_id={}, user_id={}: {}',
                                 org_id,
                                 user_id,
                                 exc,

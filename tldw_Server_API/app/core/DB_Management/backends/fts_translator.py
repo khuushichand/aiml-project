@@ -33,7 +33,7 @@ class FTSQueryTranslator:
             return ''
         if len(normalized) > MAX_FTS_QUERY_LENGTH:
             logger.warning(
-                "FTS query length %d exceeds max %d; truncating",
+                'FTS query length {} exceeds max {}; truncating',
                 len(normalized),
                 MAX_FTS_QUERY_LENGTH,
             )

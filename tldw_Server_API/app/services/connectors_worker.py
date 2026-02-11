@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
+import html
+import json
 import os
+import re
+from datetime import datetime, timezone
 from typing import Any
 
 from loguru import logger
@@ -30,6 +35,384 @@ _CONNECTOR_NONCRITICAL_EXCEPTIONS = (
 
 
 DOMAIN = "connectors"
+_EMAIL_SYNC_METRICS_REGISTERED = False
+
+
+def _email_sync_metric_labels(
+    *,
+    provider: str,
+    status: str | None = None,
+    reason: str | None = None,
+    outcome: str | None = None,
+) -> dict[str, str]:
+    labels: dict[str, str] = {"provider": str(provider or "unknown")}
+    if status:
+        labels["status"] = str(status)
+    if reason:
+        labels["reason"] = str(reason)
+    if outcome:
+        labels["outcome"] = str(outcome)
+    return labels
+
+
+def _get_email_sync_metrics_registry():
+    global _EMAIL_SYNC_METRICS_REGISTERED
+    try:
+        from tldw_Server_API.app.core.Metrics import (
+            MetricDefinition,
+            MetricType,
+            get_metrics_registry,
+        )
+    except Exception:
+        return None
+
+    try:
+        registry = get_metrics_registry()
+    except Exception:
+        return None
+
+    if _EMAIL_SYNC_METRICS_REGISTERED:
+        return registry
+
+    with contextlib.suppress(Exception):
+        registry.register_metric(
+            MetricDefinition(
+                name="email_sync_runs_total",
+                type=MetricType.COUNTER,
+                description="Total email sync runs by provider and status",
+                labels=["provider", "status"],
+            )
+        )
+        registry.register_metric(
+            MetricDefinition(
+                name="email_sync_failures_total",
+                type=MetricType.COUNTER,
+                description="Total email sync failure events by provider and reason",
+                labels=["provider", "reason"],
+            )
+        )
+        registry.register_metric(
+            MetricDefinition(
+                name="email_sync_recovery_events_total",
+                type=MetricType.COUNTER,
+                description="Email sync recovery events for cursor invalidation and replay",
+                labels=["provider", "outcome"],
+            )
+        )
+        registry.register_metric(
+            MetricDefinition(
+                name="email_sync_lag_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Observed lag in seconds for successful email sync cycles",
+                unit="s",
+                labels=["provider"],
+                buckets=[30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 43200, 86400],
+            )
+        )
+    _EMAIL_SYNC_METRICS_REGISTERED = True
+    return registry
+
+
+def _email_sync_metrics_increment(
+    metric_name: str,
+    *,
+    labels: dict[str, str],
+    value: float = 1,
+) -> None:
+    registry = _get_email_sync_metrics_registry()
+    if registry is None:
+        return
+    with contextlib.suppress(Exception):
+        registry.increment(metric_name, value, labels=labels)
+
+
+def _email_sync_metrics_observe(
+    metric_name: str,
+    value: float,
+    *,
+    labels: dict[str, str],
+) -> None:
+    registry = _get_email_sync_metrics_registry()
+    if registry is None:
+        return
+    with contextlib.suppress(Exception):
+        registry.observe(metric_name, float(value), labels=labels)
+
+
+def _decode_gmail_base64url(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    pad = "=" * ((4 - (len(raw) % 4)) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode((raw + pad).encode("utf-8"))
+        return decoded.decode("utf-8", errors="replace")
+    except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+        return ""
+
+
+def _gmail_headers_map(payload: dict[str, Any] | None) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not isinstance(payload, dict):
+        return out
+    headers = payload.get("headers") or []
+    if not isinstance(headers, list):
+        return out
+    for header in headers:
+        if not isinstance(header, dict):
+            continue
+        key = str(header.get("name") or "").strip().lower()
+        value = str(header.get("value") or "").strip()
+        if not key or not value:
+            continue
+        if key not in out:
+            out[key] = value
+    return out
+
+
+def _gmail_part_headers_map(part: dict[str, Any] | None) -> dict[str, str]:
+    if not isinstance(part, dict):
+        return {}
+    headers = part.get("headers")
+    if not isinstance(headers, list):
+        return {}
+    out: dict[str, str] = {}
+    for header in headers:
+        if not isinstance(header, dict):
+            continue
+        key = str(header.get("name") or "").strip().lower()
+        value = str(header.get("value") or "").strip()
+        if key and value and key not in out:
+            out[key] = value
+    return out
+
+
+def _gmail_attachment_disposition(part: dict[str, Any] | None) -> str:
+    headers_map = _gmail_part_headers_map(part)
+    return str(headers_map.get("content-disposition") or "").strip().lower()
+
+
+def _html_to_text(value: str) -> str:
+    raw = str(value or "")
+    if not raw:
+        return ""
+    no_script = re.sub(r"(?is)<script[^>]*>.*?</script>", " ", raw)
+    no_style = re.sub(r"(?is)<style[^>]*>.*?</style>", " ", no_script)
+    no_tags = re.sub(r"(?is)<[^>]+>", " ", no_style)
+    collapsed = re.sub(r"\s+", " ", html.unescape(no_tags)).strip()
+    return collapsed
+
+
+def _safe_int_or_zero(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+        return 0
+
+
+def _safe_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+        return int(default)
+    return parsed if parsed > 0 else int(default)
+
+
+def _parse_iso_utc(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _gmail_retry_policy() -> tuple[int, int, int]:
+    max_attempts = _safe_positive_int(os.getenv("EMAIL_SYNC_RETRY_MAX_ATTEMPTS"), 5)
+    base_seconds = _safe_positive_int(os.getenv("EMAIL_SYNC_RETRY_BASE_SECONDS"), 60)
+    max_backoff_seconds = _safe_positive_int(
+        os.getenv("EMAIL_SYNC_RETRY_MAX_BACKOFF_SECONDS"), 3600
+    )
+    if max_backoff_seconds < base_seconds:
+        max_backoff_seconds = base_seconds
+    return max_attempts, base_seconds, max_backoff_seconds
+
+
+def _compute_exponential_backoff_seconds(
+    retry_count: int,
+    *,
+    base_seconds: int,
+    max_backoff_seconds: int,
+) -> int:
+    retry_n = max(1, int(retry_count))
+    try:
+        delay = int(base_seconds) * (2 ** (retry_n - 1))
+    except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+        delay = int(max_backoff_seconds)
+    return min(int(max_backoff_seconds), max(int(base_seconds), int(delay)))
+
+
+def _extract_error_status_code(err: Exception) -> int | None:
+    try:
+        response = getattr(err, "response", None)
+        if response is not None:
+            for attr in ("status_code", "status"):
+                value = getattr(response, attr, None)
+                if value is not None:
+                    return int(value)
+        for attr in ("status_code", "status"):
+            value = getattr(err, attr, None)
+            if value is not None:
+                return int(value)
+    except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+        return None
+    return None
+
+
+def _is_gmail_history_cursor_invalid(err: Exception) -> bool:
+    status_code = _extract_error_status_code(err)
+    text = str(err or "").strip().lower()
+    if "starthistoryid" in text and ("too old" in text or "invalid" in text):
+        return True
+    if "history id" in text and ("too old" in text or "invalid" in text):
+        return True
+    if "historyid" in text and ("too old" in text or "invalid" in text):
+        return True
+    if status_code in {400, 404} and ("history" in text or "gmail/v1/users/me/history" in text):
+        return True
+    return False
+
+
+def _append_query_term(query: str | None, term: str | None) -> str | None:
+    base = str(query or "").strip()
+    addon = str(term or "").strip()
+    if not addon:
+        return base or None
+    if not base:
+        return addon
+    return f"{base} {addon}"
+
+
+def _collect_gmail_body_text(payload: dict[str, Any] | None) -> str:
+    if not isinstance(payload, dict):
+        return ""
+
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
+
+    def _walk(part: dict[str, Any]) -> None:
+        mime = str(part.get("mimeType") or "").strip().lower()
+        body = part.get("body") if isinstance(part.get("body"), dict) else {}
+        disposition = _gmail_attachment_disposition(part)
+        filename = str(part.get("filename") or "").strip()
+        is_attachment = bool(filename) or ("attachment" in disposition)
+        if not is_attachment and mime.startswith("text/"):
+            decoded = _decode_gmail_base64url(body.get("data"))
+            if decoded.strip():
+                if mime == "text/plain":
+                    plain_parts.append(decoded.strip())
+                elif mime == "text/html":
+                    html_text = _html_to_text(decoded)
+                    if html_text:
+                        html_parts.append(html_text)
+                else:
+                    plain_parts.append(decoded.strip())
+        for child in part.get("parts") or []:
+            if isinstance(child, dict):
+                _walk(child)
+
+    _walk(payload)
+    if plain_parts:
+        return "\n\n".join(part for part in plain_parts if part).strip()
+    if html_parts:
+        return "\n\n".join(part for part in html_parts if part).strip()
+    # Some messages place plain data at the root body with no parts.
+    root_body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+    return _decode_gmail_base64url(root_body.get("data")).strip()
+
+
+def _collect_gmail_attachments(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+
+    attachments: list[dict[str, Any]] = []
+    seen_keys: set[tuple[Any, ...]] = set()
+
+    def _walk(part: dict[str, Any]) -> None:
+        body = part.get("body") if isinstance(part.get("body"), dict) else {}
+        filename = str(part.get("filename") or "").strip()
+        attachment_id = str(body.get("attachmentId") or "").strip()
+        disposition = _gmail_attachment_disposition(part)
+        has_attachment_like_disposition = ("attachment" in disposition) or (
+            "inline" in disposition and bool(filename or attachment_id)
+        )
+        if filename or attachment_id or has_attachment_like_disposition:
+            headers_map = _gmail_part_headers_map(part)
+            content_type = str(part.get("mimeType") or "").strip().lower() or None
+            size_bytes = _safe_int_or_zero(body.get("size"))
+            dedupe_key = (
+                filename.lower(),
+                content_type,
+                size_bytes,
+                attachment_id,
+                headers_map.get("content-id"),
+            )
+            if dedupe_key in seen_keys:
+                for child in part.get("parts") or []:
+                    if isinstance(child, dict):
+                        _walk(child)
+                return
+            seen_keys.add(dedupe_key)
+            attachments.append(
+                {
+                    "filename": filename or None,
+                    "content_type": content_type,
+                    "size_bytes": size_bytes,
+                    "content_id": headers_map.get("content-id"),
+                    "disposition": headers_map.get("content-disposition"),
+                }
+            )
+        for child in part.get("parts") or []:
+            if isinstance(child, dict):
+                _walk(child)
+
+    _walk(payload)
+    return attachments
+
+
+def _gmail_internal_date_iso(message: dict[str, Any]) -> str | None:
+    raw = str(message.get("internalDate") or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromtimestamp(int(raw) / 1000, tz=timezone.utc)
+        return dt.isoformat()
+    except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+        return None
+
+
+def _normalize_gmail_history_cursor(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _merge_gmail_history_cursor(current: str | None, candidate: Any) -> str | None:
+    current_text = _normalize_gmail_history_cursor(current)
+    candidate_text = _normalize_gmail_history_cursor(candidate)
+    if not candidate_text:
+        return current_text
+    if not current_text:
+        return candidate_text
+    try:
+        return candidate_text if int(candidate_text) >= int(current_text) else current_text
+    except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+        return candidate_text if candidate_text >= current_text else current_text
 
 
 async def run_connectors_worker(stop_event: asyncio.Event | None = None) -> None:
@@ -155,7 +538,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
                 raise
             try:
                 new_toks = None
-                if provider == 'drive' and hasattr(conn, 'refresh_access_token') or provider == 'notion' and hasattr(conn, 'refresh_access_token'):
+                if provider in {"drive", "notion", "gmail"} and hasattr(conn, "refresh_access_token"):
                     new_toks = await conn.refresh_access_token(rtok)
                 if not new_toks or not new_toks.get('access_token'):
                     raise
@@ -167,8 +550,142 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
                 return await call_coro(*args, **kwargs)
             except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
                 raise
+
+    # Prepare DB instance
+    media_db_path = str(DatabasePaths.get_media_db_path(user_id))
+    mdb = MediaDatabase(db_path=media_db_path, client_id=str(user_id))
+
+    gmail_sync_state_supported = bool(
+        provider == "gmail"
+        and hasattr(mdb, "get_email_sync_state")
+        and hasattr(mdb, "mark_email_sync_run_started")
+        and hasattr(mdb, "mark_email_sync_run_succeeded")
+        and hasattr(mdb, "mark_email_sync_run_failed")
+    )
+    gmail_sync_state_started = False
+    gmail_previous_cursor: str | None = None
+    gmail_cursor_candidate: str | None = None
+    gmail_sync_errors: list[str] = []
+    gmail_sync_source_key = str(source_id)
+    gmail_sync_tenant_id = str(user_id)
+    gmail_previous_success_at: datetime | None = None
+    gmail_latest_message_internal_at: datetime | None = None
+    gmail_run_status: str | None = None
+    gmail_failure_reason: str | None = None
+    gmail_cursor_recovery_active = False
+    gmail_cursor_recovery_window_days = _safe_positive_int(
+        os.getenv("EMAIL_SYNC_CURSOR_RECOVERY_WINDOW_DAYS"),
+        7,
+    )
+    gmail_cursor_recovery_max_messages = _safe_positive_int(
+        os.getenv("EMAIL_SYNC_CURSOR_RECOVERY_MAX_MESSAGES"),
+        2000,
+    )
+
+    if gmail_sync_state_supported:
+        try:
+            state = mdb.get_email_sync_state(
+                provider="gmail",
+                source_key=gmail_sync_source_key,
+                tenant_id=gmail_sync_tenant_id,
+            )
+            retry_count = int((state or {}).get("retry_backoff_count") or 0)
+            last_error = str((state or {}).get("error_state") or "").strip()
+            if retry_count > 0 and last_error:
+                max_attempts, base_seconds, max_backoff_seconds = _gmail_retry_policy()
+                backoff_seconds = _compute_exponential_backoff_seconds(
+                    retry_count,
+                    base_seconds=base_seconds,
+                    max_backoff_seconds=max_backoff_seconds,
+                )
+                if retry_count >= max_attempts:
+                    logger.warning(
+                        "gmail sync retry budget exhausted for source_id={} user_id={} "
+                        "(retry_count={}, max_attempts={})",
+                        source_id,
+                        user_id,
+                        retry_count,
+                        max_attempts,
+                    )
+                    jm.complete_job(
+                        jid,
+                        result={
+                            "processed": 0,
+                            "total": 0,
+                            "skipped": "retry_budget_exhausted",
+                            "retry_backoff_count": retry_count,
+                            "retry_backoff_seconds": backoff_seconds,
+                            "last_error": last_error,
+                        },
+                        worker_id=worker_id,
+                        lease_id=lease_id,
+                        completion_token=lease_id,
+                    )
+                    _email_sync_metrics_increment(
+                        "email_sync_runs_total",
+                        labels=_email_sync_metric_labels(
+                            provider="gmail",
+                            status="skipped",
+                        ),
+                    )
+                    return
+
+                last_run_at = _parse_iso_utc((state or {}).get("last_run_at"))
+                if last_run_at is not None:
+                    retry_after_ts = last_run_at.timestamp() + float(backoff_seconds)
+                    now_ts = datetime.now(timezone.utc).timestamp()
+                    if now_ts < retry_after_ts:
+                        retry_after_iso = datetime.fromtimestamp(
+                            retry_after_ts,
+                            tz=timezone.utc,
+                        ).isoformat()
+                        logger.info(
+                            "gmail sync backoff active for source_id={} user_id={} "
+                            "(retry_count={}, retry_after={})",
+                            source_id,
+                            user_id,
+                            retry_count,
+                            retry_after_iso,
+                        )
+                        jm.complete_job(
+                            jid,
+                            result={
+                                "processed": 0,
+                                "total": 0,
+                                "skipped": "backoff_active",
+                                "retry_backoff_count": retry_count,
+                                "retry_backoff_seconds": backoff_seconds,
+                                "retry_after": retry_after_iso,
+                                "last_error": last_error,
+                            },
+                            worker_id=worker_id,
+                            lease_id=lease_id,
+                            completion_token=lease_id,
+                        )
+                        _email_sync_metrics_increment(
+                            "email_sync_runs_total",
+                            labels=_email_sync_metric_labels(
+                                provider="gmail",
+                                status="skipped",
+                            ),
+                        )
+                        return
+
+            gmail_previous_cursor = _normalize_gmail_history_cursor((state or {}).get("cursor"))
+            gmail_previous_success_at = _parse_iso_utc((state or {}).get("last_success_at"))
+            mdb.mark_email_sync_run_started(
+                provider="gmail",
+                source_key=gmail_sync_source_key,
+                tenant_id=gmail_sync_tenant_id,
+                cursor=gmail_previous_cursor,
+            )
+            gmail_sync_state_started = True
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
+            logger.warning(f"gmail sync-state start failed for source {source_id}: {e}")
     # Determine listing function
     async def _enumerate_items() -> list[dict[str, Any]]:
+        nonlocal gmail_cursor_candidate
+        nonlocal gmail_cursor_recovery_active
         items: list[dict[str, Any]] = []
         page_size = 100
         recursive = bool(options.get("recursive", True))
@@ -210,16 +727,101 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
                     items.extend(batch or [])
                     if not cursor:
                         break
+        elif provider == "gmail":
+            cursor = None
+            query = str(options.get("query") or "").strip() or None
+            max_messages = _safe_int_or_zero(options.get("max_messages"))
+            label_id = None
+            remote_hint = (remote_id or "").strip()
+            if remote_hint and remote_hint.lower() not in {"root", "all"}:
+                label_id = remote_hint
+            can_use_history_api = bool(
+                gmail_previous_cursor and hasattr(conn, "list_history")
+            )
+            if can_use_history_api:
+                seen_ids: set[str] = set()
+                while True:
+                    try:
+                        batch, cursor, history_cursor = await _attempt_with_refresh(
+                            conn.list_history,
+                            acct,
+                            start_history_id=gmail_previous_cursor,
+                            label_id=label_id,
+                            page_size=page_size,
+                            cursor=cursor,
+                        )
+                    except _CONNECTOR_NONCRITICAL_EXCEPTIONS as exc:
+                        if not _is_gmail_history_cursor_invalid(exc):
+                            raise
+                        gmail_cursor_recovery_active = True
+                        logger.warning(
+                            "gmail history cursor invalid for source_id={} user_id={} "
+                            "(cursor={}): {}",
+                            source_id,
+                            user_id,
+                            gmail_previous_cursor,
+                            exc,
+                        )
+                        break
+                    gmail_cursor_candidate = _merge_gmail_history_cursor(
+                        gmail_cursor_candidate,
+                        history_cursor,
+                    )
+                    for row in (batch or []):
+                        if not isinstance(row, dict):
+                            continue
+                        msg_id = str(row.get("id") or "").strip()
+                        if not msg_id or msg_id in seen_ids:
+                            continue
+                        seen_ids.add(msg_id)
+                        items.append(row)
+                    if not cursor:
+                        break
+            if gmail_cursor_recovery_active or not can_use_history_api:
+                replay_query = query
+                replay_limit = max_messages
+                if gmail_cursor_recovery_active:
+                    replay_query = _append_query_term(
+                        query,
+                        f"newer_than:{gmail_cursor_recovery_window_days}d",
+                    )
+                    replay_limit = gmail_cursor_recovery_max_messages
+                    if max_messages > 0:
+                        replay_limit = min(replay_limit, max_messages)
+                seen_ids: set[str] = set()
+                for row in items:
+                    if not isinstance(row, dict):
+                        continue
+                    msg_id = str(row.get("id") or "").strip()
+                    if msg_id:
+                        seen_ids.add(msg_id)
+                cursor = None
+                while True:
+                    batch, cursor = await _attempt_with_refresh(
+                        conn.list_messages,
+                        acct,
+                        label_id=label_id,
+                        page_size=page_size,
+                        cursor=cursor,
+                        query=replay_query,
+                    )
+                    for row in (batch or []):
+                        if not isinstance(row, dict):
+                            continue
+                        msg_id = str(row.get("id") or "").strip()
+                        if not msg_id or msg_id in seen_ids:
+                            continue
+                        seen_ids.add(msg_id)
+                        items.append(row)
+                    if replay_limit > 0 and len(items) >= replay_limit:
+                        items = items[:replay_limit]
+                        break
+                    if not cursor:
+                        break
         return items
 
-    items = await _enumerate_items()
-    total = max(1, len(items))
-
-    # Prepare DB instance
-    media_db_path = str(DatabasePaths.get_media_db_path(user_id))
-    mdb = MediaDatabase(db_path=media_db_path, client_id=str(user_id))
-
     processed = 0
+    total = 1
     # Policy helpers
     from fnmatch import fnmatch
 
@@ -232,118 +834,492 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
     include_types = [str(x).lower() for x in (options.get("include_types") or [])]
     exclude_patterns = [str(x) for x in (options.get("exclude_patterns") or [])]
     export_overrides = {str(k): str(v).lower() for k, v in (options.get("export_format_overrides") or {}).items()}
-    for idx, it in enumerate(items):
-        try:
-            # Renew lease with progress
-            pct = int((idx / total) * 100)
-            jm.renew_job_lease(jid, seconds=120, worker_id=worker_id, lease_id=lease_id, progress_percent=pct)
-        except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
-            pass
-        # Skip folders
-        if (it.get("is_folder") is True) or (str(it.get("mimeType") or "").startswith("application/vnd.google-apps.folder")):
-            continue
-        fid = str(it.get("id"))
-        name = str(it.get("name") or fid)
-        modified_at = it.get("modifiedTime") or it.get("last_edited_time")
-        size = it.get("size")
-        mime = it.get("mimeType") or ("text/markdown" if provider == "notion" else None)
-        version = it.get("md5Checksum") or None
+    try:
+        from tldw_Server_API.app.core.config import settings as app_settings
 
-        # Enforce include/exclude on name
-        try:
-            if exclude_patterns and any(fnmatch(name, pat) for pat in exclude_patterns):
-                continue
-            if include_types:
-                ext = name.lower().rsplit(".", 1)[-1] if "." in name else ""
-                if ext not in include_types:
-                    continue
-        except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
-            pass
+        email_native_persist_enabled = bool(
+            app_settings.get("EMAIL_NATIVE_PERSIST_ENABLED", True)
+        )
+    except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+        email_native_persist_enabled = True
 
-        # Enforce policy: file type and size
-        if not is_file_type_allowed(name=name, mime=mime, allowed=allowed_file_types):
-            continue
-        if max_bytes is not None and size is not None:
+    try:
+        items = await _enumerate_items()
+        total = max(1, len(items))
+
+        for idx, it in enumerate(items):
             try:
-                if int(size) > max_bytes:
+                # Renew lease with progress
+                pct = int((idx / total) * 100)
+                jm.renew_job_lease(jid, seconds=120, worker_id=worker_id, lease_id=lease_id, progress_percent=pct)
+            except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+                pass
+            if provider == "gmail":
+                fid = str(it.get("id") or "").strip()
+                if not fid:
                     continue
-            except (TypeError, ValueError):
+                history_id_hint = _normalize_gmail_history_cursor(it.get("historyId"))
+                gmail_cursor_candidate = _merge_gmail_history_cursor(
+                    gmail_cursor_candidate,
+                    history_id_hint,
+                )
+                history_message_added = bool(it.get("message_added"))
+                history_message_deleted = bool(it.get("message_deleted"))
+
+                labels_added_raw = it.get("labels_added")
+                labels_removed_raw = it.get("labels_removed")
+                labels_added: list[str] = []
+                labels_removed: list[str] = []
+                if isinstance(labels_added_raw, list):
+                    seen_added: set[str] = set()
+                    for label in labels_added_raw:
+                        label_text = str(label or "").strip()
+                        key = label_text.lower()
+                        if not label_text or key in seen_added:
+                            continue
+                        seen_added.add(key)
+                        labels_added.append(label_text)
+                if isinstance(labels_removed_raw, list):
+                    seen_removed: set[str] = set()
+                    for label in labels_removed_raw:
+                        label_text = str(label or "").strip()
+                        key = label_text.lower()
+                        if not label_text or key in seen_removed:
+                            continue
+                        seen_removed.add(key)
+                        labels_removed.append(label_text)
+
+                if (
+                    history_message_deleted
+                    and not history_message_added
+                    and hasattr(mdb, "reconcile_email_message_state")
+                ):
+                    try:
+                        state_res = mdb.reconcile_email_message_state(
+                            provider="gmail",
+                            source_key=str(source_id),
+                            source_message_id=fid,
+                            tenant_id=str(user_id),
+                            deleted=True,
+                        )
+                        if bool((state_res or {}).get("applied")):
+                            processed += 1
+                        continue
+                    except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"gmail state reconcile failed for {fid}: {e}")
+                        gmail_sync_errors.append(f"state_reconcile:{fid}")
+                        continue
+
+                if (
+                    not history_message_added
+                    and not history_message_deleted
+                    and (labels_added or labels_removed)
+                    and hasattr(mdb, "apply_email_label_delta")
+                ):
+                    try:
+                        delta_res = mdb.apply_email_label_delta(
+                            provider="gmail",
+                            source_key=str(source_id),
+                            source_message_id=fid,
+                            labels_added=labels_added,
+                            labels_removed=labels_removed,
+                            tenant_id=str(user_id),
+                        )
+                        if bool((delta_res or {}).get("applied")):
+                            processed += 1
+                            continue
+                        # If we cannot resolve the local message yet, fall back to full fetch.
+                        delta_reason = str((delta_res or {}).get("reason") or "").strip().lower()
+                        if delta_reason not in {"message_not_found", "source_not_found"}:
+                            continue
+                    except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"gmail label delta apply failed for {fid}: {e}")
+                        gmail_sync_errors.append(f"label_delta:{fid}")
+                        continue
+
+                try:
+                    message = await _attempt_with_refresh(conn.get_message, acct, message_id=fid, format="full")
+                except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
+                    logger.warning(f"gmail get_message failed for {fid}: {e}")
+                    gmail_sync_errors.append(f"get_message:{fid}")
+                    continue
+
+                payload = message.get("payload") if isinstance(message.get("payload"), dict) else {}
+                headers_map = _gmail_headers_map(payload)
+                subject = str(headers_map.get("subject") or "").strip() or f"Gmail message {fid}"
+                from_text = str(headers_map.get("from") or "").strip() or None
+                to_text = str(headers_map.get("to") or "").strip() or None
+                cc_text = str(headers_map.get("cc") or "").strip() or None
+                bcc_text = str(headers_map.get("bcc") or "").strip() or None
+                message_id_header = str(headers_map.get("message-id") or "").strip() or None
+                date_header = str(headers_map.get("date") or "").strip() or None
+
+                body_text = _collect_gmail_body_text(payload)
+                if not body_text:
+                    body_text = str(message.get("snippet") or "").strip()
+
+                attachments = _collect_gmail_attachments(payload)
+                label_ids: list[str] = []
+                seen_labels: set[str] = set()
+                for label in (message.get("labelIds") or []):
+                    label_text = str(label).strip()
+                    if not label_text:
+                        continue
+                    key = label_text.lower()
+                    if key in seen_labels:
+                        continue
+                    seen_labels.add(key)
+                    label_ids.append(label_text)
+                internal_date = _gmail_internal_date_iso(message)
+                internal_date_dt = _parse_iso_utc(internal_date)
+                if internal_date_dt is not None:
+                    if (
+                        gmail_latest_message_internal_at is None
+                        or internal_date_dt > gmail_latest_message_internal_at
+                    ):
+                        gmail_latest_message_internal_at = internal_date_dt
+                history_id = str(message.get("historyId") or "").strip() or None
+                gmail_cursor_candidate = _merge_gmail_history_cursor(
+                    gmail_cursor_candidate,
+                    history_id,
+                )
+                content_hash = hashlib.sha256(body_text.encode()).hexdigest() if body_text else None
+
+                async with pool.transaction() as db:
+                    should = await should_ingest_item(
+                        db,
+                        source_id=source_id,
+                        provider=provider,
+                        external_id=fid,
+                        version=history_id,
+                        modified_at=internal_date,
+                        content_hash=content_hash,
+                    )
+                if not should:
+                    continue
+
+                metadata_map: dict[str, Any] = {
+                    "source": "gmail_connector",
+                    "labels": label_ids,
+                    "email": {
+                        "source_message_id": fid,
+                        "message_id": message_id_header,
+                        "subject": subject,
+                        "date": date_header,
+                        "internal_date": internal_date,
+                        "from": from_text,
+                        "to": to_text,
+                        "cc": cc_text,
+                        "bcc": bcc_text,
+                        "labels": label_ids,
+                        "headers_map": headers_map,
+                        "attachments": attachments,
+                    },
+                }
+                safe_metadata_json = json.dumps(metadata_map, ensure_ascii=False)
+
+                url = f"gmail://{source_id}/{fid}"
+                try:
+                    media_id, _, _ = mdb.add_media_with_keywords(
+                        url=url,
+                        title=subject,
+                        media_type="email",
+                        content=body_text or f"[empty content for gmail:{fid}]",
+                        keywords=[],
+                        safe_metadata=safe_metadata_json,
+                        author=from_text,
+                        ingestion_date=internal_date,
+                        overwrite=False,
+                    )
+                except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
+                    logger.warning(f"add_media_with_keywords failed for gmail:{fid}: {e}")
+                    gmail_sync_errors.append(f"ingest:{fid}")
+                    continue
+
+                if media_id and email_native_persist_enabled:
+                    try:
+                        mdb.upsert_email_message_graph(
+                            media_id=int(media_id),
+                            metadata=metadata_map,
+                            body_text=body_text,
+                            tenant_id=str(user_id),
+                            provider="gmail",
+                            source_key=str(source_id),
+                            source_message_id=fid,
+                            labels=label_ids,
+                        )
+                    except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"email native upsert failed for gmail:{fid}: {e}")
+
+                async with pool.transaction() as db:
+                    await record_ingested_item(
+                        db,
+                        source_id=source_id,
+                        provider=provider,
+                        external_id=fid,
+                        name=subject,
+                        mime="message/rfc822",
+                        size=None,
+                        version=history_id,
+                        modified_at=internal_date,
+                        content_hash=content_hash,
+                    )
+                processed += 1
+                continue
+            # Skip folders
+            if (it.get("is_folder") is True) or (str(it.get("mimeType") or "").startswith("application/vnd.google-apps.folder")):
+                continue
+            fid = str(it.get("id"))
+            name = str(it.get("name") or fid)
+            modified_at = it.get("modifiedTime") or it.get("last_edited_time")
+            size = it.get("size")
+            mime = it.get("mimeType") or ("text/markdown" if provider == "notion" else None)
+            version = it.get("md5Checksum") or None
+
+            # Enforce include/exclude on name
+            try:
+                if exclude_patterns and any(fnmatch(name, pat) for pat in exclude_patterns):
+                    continue
+                if include_types:
+                    ext = name.lower().rsplit(".", 1)[-1] if "." in name else ""
+                    if ext not in include_types:
+                        continue
+            except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
                 pass
 
-        # Determine desired export for Drive Google types according to policy/overrides
-        export_mime = None
-        if provider == "drive" and (mime or "").startswith("application/vnd.google-apps."):
-            override_key = mime or ""
-            ov = export_overrides.get(override_key) or export_overrides.get(override_key.split(".")[-1])
-            if ov in {"pdf", "txt", "md"} and ov in allowed_export_set:
-                export_mime = "application/pdf" if ov == "pdf" else "text/plain"
-            else:
-                if mime == "application/vnd.google-apps.presentation":
-                    export_mime = "application/pdf" if "pdf" in allowed_export_formats else "text/plain"
-                elif mime == "application/vnd.google-apps.document":
-                    export_mime = "text/plain" if ("txt" in allowed_export_formats or "md" in allowed_export_formats) else ("application/pdf" if "pdf" in allowed_export_formats else "text/plain")
-                elif mime == "application/vnd.google-apps.spreadsheet":
-                    export_mime = "text/csv" if "txt" in allowed_export_formats else ("application/pdf" if "pdf" in allowed_export_formats else "text/csv")
-
-        # Download/export
-        try:
-            if provider == "drive":
-                raw = await _attempt_with_refresh(conn.download_file, acct, fid, mime_type=mime, export_mime=export_mime)
-            else:
-                raw = await _attempt_with_refresh(conn.download_file, acct, fid) if provider == "notion" else await _attempt_with_refresh(conn.download_file, acct, fid, mime_type=mime)
-        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
-            logger.warning(f"download failed for {provider}:{fid}: {e}")
-            raw = b""
-
-        # Convert to text content
-        content_text = ""
-        effective_mime = (export_mime or mime or "").lower()
-        try:
-            if effective_mime == "application/pdf" or (not effective_mime and name.lower().endswith(".pdf")):
-                # PDF pipeline with docling preferred
+            # Enforce policy: file type and size
+            if not is_file_type_allowed(name=name, mime=mime, allowed=allowed_file_types):
+                continue
+            if max_bytes is not None and size is not None:
                 try:
-                    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf
-                    res = process_pdf(file_input=raw, filename=name, parser="docling")
-                except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
-                    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf
-                    res = process_pdf(file_input=raw, filename=name, parser="pymupdf4llm")
-                if isinstance(res, dict):
-                    content_text = (res.get("content") or "").strip()
-            else:
-                if raw:
-                    content_text = raw.decode("utf-8", errors="replace")
-        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as _e:
-            logger.warning(f"content conversion failed for {provider}:{fid}: {_e}")
-        # Hash for dedup
-        content_hash = hashlib.sha256(content_text.encode()).hexdigest() if content_text else None
-        # Dedup check
-        async with pool.transaction() as db:
-            should = await should_ingest_item(db, source_id=source_id, provider=provider, external_id=fid, version=version, modified_at=modified_at, content_hash=content_hash)
-        if not should:
-            continue
-        # Ingest minimal record
-        title = name
-        url = f"{provider}://{fid}"
-        ingested = False
-        try:
-            mid, m_uuid, msg = mdb.add_media_with_keywords(
-                url=url,
-                title=title,
-                media_type="document",
-                content=content_text or f"[empty content for {provider}:{fid}]",
-                keywords=[],
-                overwrite=False,
-            )
-            processed += 1
-            ingested = True
-        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
-            logger.warning(f"add_media_with_keywords failed: {e}")
-        if ingested:
-            # Record ingestion cache
+                    if int(size) > max_bytes:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+
+            # Determine desired export for Drive Google types according to policy/overrides
+            export_mime = None
+            if provider == "drive" and (mime or "").startswith("application/vnd.google-apps."):
+                override_key = mime or ""
+                ov = export_overrides.get(override_key) or export_overrides.get(override_key.split(".")[-1])
+                if ov in {"pdf", "txt", "md"} and ov in allowed_export_set:
+                    export_mime = "application/pdf" if ov == "pdf" else "text/plain"
+                else:
+                    if mime == "application/vnd.google-apps.presentation":
+                        export_mime = "application/pdf" if "pdf" in allowed_export_formats else "text/plain"
+                    elif mime == "application/vnd.google-apps.document":
+                        export_mime = "text/plain" if ("txt" in allowed_export_formats or "md" in allowed_export_formats) else ("application/pdf" if "pdf" in allowed_export_formats else "text/plain")
+                    elif mime == "application/vnd.google-apps.spreadsheet":
+                        export_mime = "text/csv" if "txt" in allowed_export_formats else ("application/pdf" if "pdf" in allowed_export_formats else "text/csv")
+
+            # Download/export
+            try:
+                if provider == "drive":
+                    raw = await _attempt_with_refresh(conn.download_file, acct, fid, mime_type=mime, export_mime=export_mime)
+                else:
+                    raw = await _attempt_with_refresh(conn.download_file, acct, fid) if provider == "notion" else await _attempt_with_refresh(conn.download_file, acct, fid, mime_type=mime)
+            except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
+                logger.warning(f"download failed for {provider}:{fid}: {e}")
+                raw = b""
+
+            # Convert to text content
+            content_text = ""
+            effective_mime = (export_mime or mime or "").lower()
+            try:
+                if effective_mime == "application/pdf" or (not effective_mime and name.lower().endswith(".pdf")):
+                    # PDF pipeline with docling preferred
+                    try:
+                        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf
+                        res = process_pdf(file_input=raw, filename=name, parser="docling")
+                    except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
+                        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf
+                        res = process_pdf(file_input=raw, filename=name, parser="pymupdf4llm")
+                    if isinstance(res, dict):
+                        content_text = (res.get("content") or "").strip()
+                else:
+                    if raw:
+                        content_text = raw.decode("utf-8", errors="replace")
+            except _CONNECTOR_NONCRITICAL_EXCEPTIONS as _e:
+                logger.warning(f"content conversion failed for {provider}:{fid}: {_e}")
+            # Hash for dedup
+            content_hash = hashlib.sha256(content_text.encode()).hexdigest() if content_text else None
+            # Dedup check
             async with pool.transaction() as db:
-                await record_ingested_item(db, source_id=source_id, provider=provider, external_id=fid, name=name, mime=mime, size=size, version=version, modified_at=modified_at, content_hash=content_hash)
+                should = await should_ingest_item(db, source_id=source_id, provider=provider, external_id=fid, version=version, modified_at=modified_at, content_hash=content_hash)
+            if not should:
+                continue
+            # Ingest minimal record
+            title = name
+            url = f"{provider}://{fid}"
+            ingested = False
+            try:
+                _mid, _m_uuid, _msg = mdb.add_media_with_keywords(
+                    url=url,
+                    title=title,
+                    media_type="document",
+                    content=content_text or f"[empty content for {provider}:{fid}]",
+                    keywords=[],
+                    overwrite=False,
+                )
+                processed += 1
+                ingested = True
+            except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
+                logger.warning(f"add_media_with_keywords failed: {e}")
+            if ingested:
+                # Record ingestion cache
+                async with pool.transaction() as db:
+                    await record_ingested_item(db, source_id=source_id, provider=provider, external_id=fid, name=name, mime=mime, size=size, version=version, modified_at=modified_at, content_hash=content_hash)
+    except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
+        if gmail_sync_state_supported and gmail_sync_state_started:
+            with contextlib.suppress(_CONNECTOR_NONCRITICAL_EXCEPTIONS):
+                mdb.mark_email_sync_run_failed(
+                    provider="gmail",
+                    source_key=gmail_sync_source_key,
+                    tenant_id=gmail_sync_tenant_id,
+                    error_state=f"run_exception:{type(e).__name__}",
+                )
+        if provider == "gmail":
+            _email_sync_metrics_increment(
+                "email_sync_failures_total",
+                labels=_email_sync_metric_labels(
+                    provider="gmail",
+                    reason="run_exception",
+                ),
+            )
+            _email_sync_metrics_increment(
+                "email_sync_runs_total",
+                labels=_email_sync_metric_labels(
+                    provider="gmail",
+                    status="failed",
+                ),
+            )
+        raise
+
+    cursor_recovery_full_backfill_required = bool(
+        provider == "gmail"
+        and gmail_cursor_recovery_active
+        and not bool(_normalize_gmail_history_cursor(gmail_cursor_candidate))
+    )
+
+    if gmail_sync_state_supported and gmail_sync_state_started:
+        try:
+            if cursor_recovery_full_backfill_required:
+                mdb.mark_email_sync_run_failed(
+                    provider="gmail",
+                    source_key=gmail_sync_source_key,
+                    tenant_id=gmail_sync_tenant_id,
+                    error_state=(
+                        "cursor_invalid_full_backfill_required:"
+                        f"window={gmail_cursor_recovery_window_days}d"
+                    ),
+                )
+                gmail_run_status = "failed"
+                gmail_failure_reason = "cursor_invalid_full_backfill_required"
+            elif gmail_sync_errors:
+                summary = ", ".join(gmail_sync_errors[:5])
+                if len(gmail_sync_errors) > 5:
+                    summary = f"{summary}, +{len(gmail_sync_errors) - 5} more"
+                mdb.mark_email_sync_run_failed(
+                    provider="gmail",
+                    source_key=gmail_sync_source_key,
+                    tenant_id=gmail_sync_tenant_id,
+                    error_state=f"partial_failure:{summary}",
+                )
+                gmail_run_status = "failed"
+                gmail_failure_reason = "partial_failure"
+            else:
+                final_cursor = _merge_gmail_history_cursor(
+                    gmail_previous_cursor,
+                    gmail_cursor_candidate,
+                )
+                mdb.mark_email_sync_run_succeeded(
+                    provider="gmail",
+                    source_key=gmail_sync_source_key,
+                    tenant_id=gmail_sync_tenant_id,
+                    cursor=final_cursor,
+                )
+                gmail_run_status = "success"
+                gmail_failure_reason = None
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
+            logger.warning(f"gmail sync-state finalize failed for source {source_id}: {e}")
+
+    if provider == "gmail" and gmail_run_status is None:
+        if cursor_recovery_full_backfill_required:
+            gmail_run_status = "failed"
+            gmail_failure_reason = "cursor_invalid_full_backfill_required"
+        elif gmail_sync_errors:
+            gmail_run_status = "failed"
+            gmail_failure_reason = "partial_failure"
+        else:
+            gmail_run_status = "success"
+            gmail_failure_reason = None
+
+    if provider == "gmail":
+        if gmail_run_status == "failed":
+            _email_sync_metrics_increment(
+                "email_sync_failures_total",
+                labels=_email_sync_metric_labels(
+                    provider="gmail",
+                    reason=gmail_failure_reason or "sync_failed",
+                ),
+            )
+            _email_sync_metrics_increment(
+                "email_sync_runs_total",
+                labels=_email_sync_metric_labels(
+                    provider="gmail",
+                    status="failed",
+                ),
+            )
+        elif gmail_run_status == "success":
+            _email_sync_metrics_increment(
+                "email_sync_runs_total",
+                labels=_email_sync_metric_labels(
+                    provider="gmail",
+                    status="success",
+                ),
+            )
+            lag_reference = gmail_latest_message_internal_at or gmail_previous_success_at
+            lag_seconds = 0.0
+            if lag_reference is not None:
+                lag_seconds = max(
+                    0.0,
+                    (datetime.now(timezone.utc) - lag_reference).total_seconds(),
+                )
+            _email_sync_metrics_observe(
+                "email_sync_lag_seconds",
+                lag_seconds,
+                labels=_email_sync_metric_labels(provider="gmail"),
+            )
+        if gmail_cursor_recovery_active:
+            _email_sync_metrics_increment(
+                "email_sync_recovery_events_total",
+                labels=_email_sync_metric_labels(
+                    provider="gmail",
+                    outcome=(
+                        "full_backfill_required"
+                        if cursor_recovery_full_backfill_required
+                        else "bounded_replay"
+                    ),
+                ),
+            )
+
+    result_payload: dict[str, Any] = {"processed": processed, "total": total}
+    if provider == "gmail" and gmail_cursor_recovery_active:
+        result_payload["cursor_recovery"] = (
+            "full_backfill_required"
+            if cursor_recovery_full_backfill_required
+            else "bounded_replay"
+        )
+        result_payload["cursor_recovery_window_days"] = gmail_cursor_recovery_window_days
+
     # Complete job
-    jm.complete_job(jid, result={"processed": processed, "total": total}, worker_id=worker_id, lease_id=lease_id, completion_token=lease_id)
+    jm.complete_job(
+        jid,
+        result=result_payload,
+        worker_id=worker_id,
+        lease_id=lease_id,
+        completion_token=lease_id,
+    )
 
 
 if __name__ == "__main__":

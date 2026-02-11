@@ -1,8 +1,9 @@
+import asyncio
+import importlib
 from pathlib import Path
 
 from tldw_Server_API.app.api.v1.endpoints import config_info
-from tldw_Server_API.app.core.config import _route_toggle_policy
-from tldw_Server_API.app.core.config import settings as core_settings
+from tldw_Server_API.app.core import config as config_mod
 
 
 def _write_minimal_config(path: Path, *, stable_only: bool = True) -> None:
@@ -35,8 +36,8 @@ def test_docs_info_persona_capability_enabled_by_default_even_when_stable_only_t
     monkeypatch.setenv("ROUTES_STABLE_ONLY", "true")
     monkeypatch.delenv("ROUTES_DISABLE", raising=False)
     monkeypatch.delenv("ROUTES_ENABLE", raising=False)
-    monkeypatch.setitem(core_settings, "PERSONA_ENABLED", True)
-    _route_toggle_policy.cache_clear()
+    monkeypatch.setitem(config_mod.settings, "PERSONA_ENABLED", True)
+    config_mod._route_toggle_policy.cache_clear()
 
     safe_config = config_info.load_safe_config()
 
@@ -55,8 +56,8 @@ def test_docs_info_persona_capability_can_be_disabled_via_route_toggle(
     monkeypatch.setenv("ROUTES_STABLE_ONLY", "true")
     monkeypatch.setenv("ROUTES_DISABLE", "persona")
     monkeypatch.delenv("ROUTES_ENABLE", raising=False)
-    monkeypatch.setitem(core_settings, "PERSONA_ENABLED", True)
-    _route_toggle_policy.cache_clear()
+    monkeypatch.setitem(config_mod.settings, "PERSONA_ENABLED", True)
+    config_mod._route_toggle_policy.cache_clear()
 
     safe_config = config_info.load_safe_config()
 
@@ -74,8 +75,8 @@ def test_docs_info_persona_feature_flag_disables_capability_even_when_route_enab
     monkeypatch.setenv("ROUTES_STABLE_ONLY", "true")
     monkeypatch.setenv("ROUTES_ENABLE", "persona")
     monkeypatch.delenv("ROUTES_DISABLE", raising=False)
-    monkeypatch.setitem(core_settings, "PERSONA_ENABLED", False)
-    _route_toggle_policy.cache_clear()
+    monkeypatch.setitem(config_mod.settings, "PERSONA_ENABLED", False)
+    config_mod._route_toggle_policy.cache_clear()
 
     safe_config = config_info.load_safe_config()
 
@@ -93,10 +94,64 @@ def test_docs_info_persona_capability_enabled_by_default_when_stable_only_false(
     monkeypatch.setenv("ROUTES_STABLE_ONLY", "false")
     monkeypatch.delenv("ROUTES_DISABLE", raising=False)
     monkeypatch.delenv("ROUTES_ENABLE", raising=False)
-    monkeypatch.setitem(core_settings, "PERSONA_ENABLED", True)
-    _route_toggle_policy.cache_clear()
+    monkeypatch.setitem(config_mod.settings, "PERSONA_ENABLED", True)
+    config_mod._route_toggle_policy.cache_clear()
 
     safe_config = config_info.load_safe_config()
 
     assert safe_config["capabilities"]["persona"] is True
     assert safe_config["supported_features"]["persona"] is True
+
+
+def test_docs_info_never_exposes_real_api_key(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.txt"
+    _write_minimal_config(config_path)
+
+    monkeypatch.setenv("TLDW_CONFIG_PATH", str(config_path))
+    config_mod._route_toggle_policy.cache_clear()
+
+    safe_config = config_info.load_safe_config()
+
+    assert safe_config["api_key_for_docs"] == ""
+    assert safe_config["api_key_configured"] is True
+
+
+def test_docs_info_endpoint_returns_placeholder_api_key(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.txt"
+    _write_minimal_config(config_path)
+
+    monkeypatch.setenv("TLDW_CONFIG_PATH", str(config_path))
+    config_mod._route_toggle_policy.cache_clear()
+
+    payload = asyncio.run(config_info.get_documentation_config())
+
+    assert payload["api_key"] == "YOUR_API_KEY"
+    assert payload["api_key_configured"] is True
+    assert "test-key" not in payload["examples"]["python"]
+    assert "test-key" not in payload["examples"]["curl"]
+    assert "test-key" not in payload["examples"]["javascript"]
+
+
+def test_docs_info_persona_capability_stable_across_config_module_reload(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.txt"
+    _write_minimal_config(config_path)
+
+    monkeypatch.setenv("TLDW_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("ROUTES_STABLE_ONLY", "true")
+    monkeypatch.setenv("ROUTES_DISABLE", "persona")
+    monkeypatch.delenv("ROUTES_ENABLE", raising=False)
+    monkeypatch.setitem(config_mod.settings, "PERSONA_ENABLED", True)
+    config_mod._route_toggle_policy.cache_clear()
+
+    disabled_caps = config_info.load_safe_config()["capabilities"]
+    assert disabled_caps["persona"] is False
+
+    monkeypatch.delenv("ROUTES_DISABLE", raising=False)
+    reloaded_config_mod = importlib.reload(config_mod)
+    monkeypatch.setitem(reloaded_config_mod.settings, "PERSONA_ENABLED", True)
+    reloaded_config_mod._route_toggle_policy.cache_clear()
+
+    enabled_caps = config_info.load_safe_config()["capabilities"]
+    assert enabled_caps["persona"] is True

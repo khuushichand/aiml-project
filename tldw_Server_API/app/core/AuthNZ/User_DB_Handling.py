@@ -607,7 +607,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             if pii_redact_logs:
                 logger.warning("Scoped token used without scope enforcement (details redacted)")
             else:
-                logger.warning("Scoped token used without scope enforcement for subject %s", raw_subject)
+                logger.warning("Scoped token used without scope enforcement for subject {}", raw_subject)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Scoped token requires endpoint scope enforcement",

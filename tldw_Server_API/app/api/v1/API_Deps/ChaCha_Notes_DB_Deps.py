@@ -381,7 +381,7 @@ async def _get_or_init_db_instance(user_id: int, client_id: str) -> CharactersRA
 
 async def warm_chacha_db_for_user(user_id: int, client_id: str | None = None) -> None:
     if _is_chacha_shutting_down():
-        logger.debug("ChaChaNotes shutdown in progress; skipping warmup for user %s", user_id)
+        logger.debug("ChaChaNotes shutdown in progress; skipping warmup for user {}", user_id)
         return
     try:
         db_instance = await _get_or_init_db_instance(user_id, client_id or str(user_id))

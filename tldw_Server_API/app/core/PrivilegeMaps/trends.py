@@ -282,7 +282,7 @@ class PrivilegeTrendStore:
                     """
                 )
         except Exception as exc:
-            logger.debug("Privilege trend index creation skipped: %s", exc)
+            logger.debug("Privilege trend index creation skipped: {}", exc)
         self._initialized = True
 
     @staticmethod

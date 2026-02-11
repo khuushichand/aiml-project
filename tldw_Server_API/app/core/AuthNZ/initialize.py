@@ -29,7 +29,6 @@ SINGLE_USER_API_KEY_PLACEHOLDERS = {
     "default-secret-key-for-single-user",
     "change-me-in-production",
     "CHANGE-ME-to-a-secure-key-at-least-16-chars",
-    "THIS-IS-A-SECURE-KEY-123-FAKE-KEY",
 }
 
 # Add parent directory to path for imports

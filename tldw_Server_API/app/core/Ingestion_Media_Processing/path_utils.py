@@ -28,7 +28,7 @@ def resolve_safe_local_path(path: Path, base_dir: Path) -> Path | None:
             common_path = os.path.commonpath([str(base_resolved), str(path_resolved)])
         except ValueError:
             logger.warning(
-                "Rejected path on different drive for local media source: %s",
+                'Rejected path on different drive for local media source: {}',
                 path,
             )
             return None
@@ -50,7 +50,7 @@ def resolve_safe_local_path(path: Path, base_dir: Path) -> Path | None:
         )
         return None
     except Exception as exc:
-        logger.warning("Error while validating local media path %s: %s", path, exc)
+        logger.warning("Error while validating local media path {}: {}", path, exc)
         return None
 
 
@@ -94,10 +94,10 @@ def _open_safe_posix(
     mode: str,
 ) -> IO | None:
     if not relative_path.parts:
-        logger.warning("Rejected empty relative path under base directory: %s", base_dir)
+        logger.warning("Rejected empty relative path under base directory: {}", base_dir)
         return None
     if relative_path.is_absolute() or os.pardir in relative_path.parts:
-        logger.warning("Rejected unsafe relative path for secure open: %s", relative_path)
+        logger.warning("Rejected unsafe relative path for secure open: {}", relative_path)
         return None
 
     nofollow = getattr(os, "O_NOFOLLOW", 0)
@@ -117,7 +117,7 @@ def _open_safe_posix(
         return os.fdopen(fd, mode)
     except Exception as exc:
         logger.warning(
-            "Secure open failed for %s under %s: %s",
+            'Secure open failed for {} under {}: {}',
             relative_path,
             base_dir,
             exc,
@@ -128,7 +128,7 @@ def _open_safe_posix(
             try:
                 os.close(current_fd)
             except Exception:
-                logger.debug("Failed to close directory fd for %s", base_dir)
+                logger.debug("Failed to close directory fd for {}", base_dir)
 
 
 def _open_safe_windows(
@@ -139,7 +139,7 @@ def _open_safe_windows(
     try:
         handle = open(safe_path, mode)
     except Exception as exc:
-        logger.warning("Failed to open %s: %s", safe_path, exc)
+        logger.warning("Failed to open {}: {}", safe_path, exc)
         return None
 
     try:
@@ -147,18 +147,18 @@ def _open_safe_windows(
         handle_real = os.path.normcase(os.path.realpath(handle.name))
         if os.path.commonpath([base_real, handle_real]) != base_real:
             logger.warning(
-                "Rejected path outside base directory after open: %s (base: %s)",
+                'Rejected path outside base directory after open: {} (base: {})',
                 handle_real,
                 base_real,
             )
             handle.close()
             return None
     except Exception as exc:
-        logger.warning("Failed to validate opened path %s: %s", safe_path, exc)
+        logger.warning("Failed to validate opened path {}: {}", safe_path, exc)
         try:
             handle.close()
         except Exception:
-            logger.debug("Failed to close handle for %s", safe_path)
+            logger.debug("Failed to close handle for {}", safe_path)
         return None
     return handle
 
@@ -185,7 +185,7 @@ def open_safe_local_path(
         relative_path = safe_path.relative_to(base_resolved)
     except ValueError:
         logger.warning(
-            "Rejected path outside of base directory for secure open: %s (base: %s)",
+            'Rejected path outside of base directory for secure open: {} (base: {})',
             safe_path,
             base_resolved,
         )
@@ -220,4 +220,4 @@ async def open_safe_local_path_async(
         try:
             await wrapped.close()
         except Exception:
-            logger.debug("Failed to close async handle for %s", path)
+            logger.debug("Failed to close async handle for {}", path)

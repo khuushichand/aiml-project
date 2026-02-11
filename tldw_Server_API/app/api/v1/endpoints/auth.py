@@ -35,6 +35,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_registration_service_dep,
     get_session_manager_dep,
 )
+from tldw_Server_API.app.api.v1.utils.deprecation import build_deprecation_headers
 
 #
 # Local imports
@@ -158,20 +159,6 @@ def _extract_bearer_token(auth_header: Optional[str]) -> str:
         return credential.strip()
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         return ""
-
-def _build_deprecation_headers(successor: str) -> dict[str, str]:
-    try:
-        sunset_days = int(os.getenv("DEPRECATION_SUNSET_DAYS", "120"))
-        sunset = (datetime.now(timezone.utc) + timedelta(days=sunset_days)).strftime(
-            "%a, %d %b %Y %H:%M:%S GMT"
-        )
-    except _AUTH_NONCRITICAL_EXCEPTIONS:
-        sunset = "Tue, 31 Dec 2025 00:00:00 GMT"
-    return {
-        "Deprecation": "true",
-        "Sunset": sunset,
-        "Link": f"<{successor}>; rel=successor-version",
-    }
 
 
 def _legacy_user_me_enabled() -> bool:
@@ -3197,7 +3184,7 @@ async def get_current_user_info(
         )
     try:
         if response is not None:
-            response.headers.update(_build_deprecation_headers(successor))
+            response.headers.update(build_deprecation_headers(successor))
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         pass
 

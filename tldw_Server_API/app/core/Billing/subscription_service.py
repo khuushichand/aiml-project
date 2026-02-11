@@ -705,7 +705,7 @@ class SubscriptionService:
         await repo.update_org_subscription(org_id, **update_fields)
 
         logger.info(
-            "Subscription updated for org %s: status=%s, plan_updated=%s",
+            'Subscription updated for org {}: status={}, plan_updated={}',
             org_id,
             subscription.get("status"),
             bool(plan_updates),

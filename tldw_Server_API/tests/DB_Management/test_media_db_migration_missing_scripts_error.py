@@ -49,7 +49,12 @@ def test_media_db_upgrade_no_migrations_reports_explicit_diagnostics(
         MediaDatabase(db_path=str(db_path), client_id="migration-diagnostics-test")
 
     msg = str(exc_info.value)
-    assert "No migration scripts available to upgrade database schema from version 8 to 20" in msg
+    target_version = MediaDatabase._CURRENT_SCHEMA_VERSION
+    assert (
+        f"No migration scripts available to upgrade database schema from version 8 to {target_version}"
+        in msg
+    )
     assert f"migrations_dir={fake_migrations_dir}" in msg
     assert "discovered_versions=[1, 2, 3, 4, 5, 6, 7, 8]" in msg
-    assert "missing_versions=[9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]" in msg
+    expected_missing = str(list(range(9, target_version + 1)))
+    assert f"missing_versions={expected_missing}" in msg

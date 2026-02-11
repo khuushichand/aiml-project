@@ -13,6 +13,7 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `tldw_production`: Enable production guards (`true|false`). Masks API key in logs and enforces DB/secret checks.
 - `ENABLE_OPENAPI`: Show OpenAPI/Swagger UI when `true`. Defaults to hidden in production unless explicitly enabled.
 - `ALLOWED_ORIGINS`: CORS allowlist. Comma-separated or JSON array.
+- `CORS_ALLOW_CREDENTIALS`: Enable credentialed CORS responses (`true|false`). Default `false`.
 - `TLDW_CONFIG_PATH`: Absolute path to the primary `config.txt`. When set, the parent directory is treated as the config root for auxiliary assets (e.g., `Synonyms/`).
 - `TLDW_CONFIG_DIR`: Explicit directory containing `config.txt` and related config assets. Checked after `TLDW_CONFIG_PATH`.
 - `ENABLE_SECURITY_HEADERS`: Enable security headers middleware (defaults to true in production).
@@ -121,6 +122,12 @@ Notes:
 - `INGEST_ENABLE_DEDUP`: Enable near-duplicate removal at ingestion time (`true|false`, default `true`).
 - `INGEST_DEDUP_THRESHOLD`: Jaccard similarity threshold for shingle-based dedupe (0-1, default `0.9`).
 - Chunker adaptive controls are primarily request-level, but ingestion defaults set `adaptive=true` and `adaptive_overlap=true`.
+
+### Web Scraping Ephemeral Store
+- `EPHEMERAL_STORE_TTL_SECONDS`: Default TTL for ephemeral web-scraping results (seconds). Default `900`.
+- `EPHEMERAL_STORE_MAX_ENTRIES`: Maximum number of in-memory ephemeral entries retained before oldest-first eviction. Default `256`.
+- `EPHEMERAL_STORE_MAX_BYTES`: Optional aggregate payload size cap (bytes) for the in-memory ephemeral store. Default `0` (disabled).
+  - Applies to process-local storage (`app/services/ephemeral_store.py`) used by ephemeral scraping/result retrieval paths.
 
 ### RAG Adaptive Post-Verification
 - `RAG_ADAPTIVE_TIME_BUDGET_SEC`: Optional hard cap (seconds) for post-generation verification and repair. When unset or `0`, no cap is applied. Other knobs are request-level (`enable_post_verification`, `adaptive_max_retries`, `adaptive_unsupported_threshold`, `adaptive_max_claims`).
@@ -237,6 +244,19 @@ Notes:
 
 ## Media Ingest Jobs
 - `MEDIA_INGEST_JOBS_WORKER_ENABLED`: Enable the in-process media ingest jobs worker (`true|false`, default follows route policy for `media`). When true, the worker starts at app startup and polls the Jobs backend for the `media_ingest` domain.
+
+## Email Search Rollout
+- `EMAIL_NATIVE_PERSIST_ENABLED`: Enable normalized email persistence on ingest (`true|false`, default `true`).
+- `EMAIL_OPERATOR_SEARCH_ENABLED`: Enable normalized email operator search APIs and bridge support (`true|false`, default `true`).
+- `EMAIL_MEDIA_SEARCH_DELEGATION_MODE`: Default `/api/v1/media/search` delegation mode for email-only scope when `email_query_mode` is not explicitly set. Allowed: `opt_in` (default, delegate only when `email_query_mode=operators`) or `auto_email` (delegate automatically when `media_types=['email']` and operator search is enabled).
+- `EMAIL_GMAIL_CONNECTOR_ENABLED`: Enable Gmail source/sync endpoints (`true|false`, default `false`).
+
+## Email Connector Sync
+- `EMAIL_SYNC_RETRY_MAX_ATTEMPTS`: Maximum retry budget for failed Gmail sync runs before a source is skipped until operator intervention/data correction (default `5`).
+- `EMAIL_SYNC_RETRY_BASE_SECONDS`: Base retry backoff duration in seconds (default `60`).
+- `EMAIL_SYNC_RETRY_MAX_BACKOFF_SECONDS`: Maximum exponential backoff cap in seconds (default `3600`).
+- `EMAIL_SYNC_CURSOR_RECOVERY_WINDOW_DAYS`: Window (days) used for bounded replay when Gmail `startHistoryId` is invalid/expired (default `7`).
+- `EMAIL_SYNC_CURSOR_RECOVERY_MAX_MESSAGES`: Max replay message cap for invalid-cursor recovery runs (default `2000`).
 
 Pytest markers
 - `-m jobs`: Run all core Jobs tests (SQLite + PG-gated).

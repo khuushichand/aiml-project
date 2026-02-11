@@ -2458,7 +2458,7 @@ def _resolve_artifact_file_path(
         if _artifact_validation_strict(validation_mode):
             raise HTTPException(status_code=400, detail="Invalid artifact path scope")
         logger.warning(
-            "Workflows artifact path outside allowed roots; proceeding due to non-strict setting: %s",
+            'Workflows artifact path outside allowed roots; proceeding due to non-strict setting: {}',
             p,
         )
     return p

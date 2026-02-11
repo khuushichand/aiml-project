@@ -23,6 +23,8 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.schemas.sync_server_models import (
+    ALLOWED_SYNC_OPERATIONS,
+    ALLOWED_SYNC_SEND_ENTITIES,
     ClientChangesPayload,
     ServerChangesResponse,
     SyncLogEntry,
@@ -75,6 +77,52 @@ router = APIRouter()
 #
 # --- FastAPI Endpoint Definitions ---
 
+
+def _is_client_validation_error(errors: list[str]) -> bool:
+    if not errors:
+        return False
+
+    validation_markers = (
+        "unsupported sync entity",
+        "unsupported sync operation",
+        "only valid for mediakeywords",
+        "only supports 'link'/'unlink'",
+        "missing payload",
+        "failed to decode payload",
+        "payload decode error",
+        "rejecting sync change",
+    )
+    batch_wrapper_markers = (
+        "failed processing change id",
+        "rolling back batch",
+    )
+    saw_validation_error = False
+
+    for err in errors:
+        lowered = err.lower()
+        if any(marker in lowered for marker in validation_markers):
+            saw_validation_error = True
+            continue
+
+        # Batch-level wrappers can accompany client validation failures.
+        if all(marker in lowered for marker in batch_wrapper_markers):
+            continue
+
+        if "failed to apply change" in lowered and "rolling back batch" in lowered:
+            continue
+
+        if "transaction rolled back" in lowered:
+            continue
+
+        if "unexpected server error" in lowered:
+            return False
+
+        # Unknown/non-validation errors are treated as server faults.
+        return False
+
+    return saw_validation_error
+
+
 @router.post("/send",
              status_code=status.HTTP_200_OK,
              summary="Receive changes from a client")
@@ -108,17 +156,26 @@ async def receive_changes_from_client(
         if not success:
             detail = {"message": "Failed to apply changes atomically.", "errors": errors}
             logger.error(f"[{user_id.username}] Failed processing batch from {requesting_client_id}: {errors}")
-            # Use 400 Bad Request if errors suggest bad client data, 500 otherwise
-            error_code = status.HTTP_400_BAD_REQUEST if any("payload" in e.lower() or "value" in e.lower() for e in errors) else status.HTTP_500_INTERNAL_SERVER_ERROR
+            # Use 400 Bad Request if errors suggest bad client data, 500 otherwise.
+            error_code = (
+                status.HTTP_400_BAD_REQUEST
+                if _is_client_validation_error(errors)
+                else status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
             raise HTTPException(status_code=error_code, detail=detail)
 
         logger.info(f"[{user_id.username}] Successfully processed batch from client {requesting_client_id}.")
         return {"status": "success"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         # Catch unexpected errors during thread execution or processing
         logger.exception(f"[{user_id.username}] Unexpected error in /send endpoint from client {requesting_client_id}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal server error: {e}") from e
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error while processing sync changes.",
+        ) from e
 
 
 @router.get("/get",
@@ -172,14 +229,33 @@ async def send_changes_to_client(
         # --- End Thread Pool Execution ---
 
         changes_models: list[SyncLogEntry] = []
+        invalid_rows: list[int] = []
         for row_dict in changes_raw: # Assuming fetchall returns list of dicts/Rows
              try:
                   # Convert row (which should be dict-like if row_factory is set) to SyncLogEntry model
-                  entry = SyncLogEntry(**dict(row_dict))
+                  row_data = dict(row_dict)
+                  entry = SyncLogEntry(**row_data)
                   changes_models.append(entry)
              except Exception as pydantic_err:
-                  logger.error(f"[{user_id.username}] Error validating sync log entry data (ID: {row_dict.get('change_id', 'N/A')}) against model: {pydantic_err}", exc_info=True)
-                  continue # Skip bad entry
+                  row_change_id = "N/A"
+                  try:
+                      row_change_id = dict(row_dict).get("change_id", "N/A")
+                  except Exception:
+                      pass
+                  logger.error(
+                      f"[{user_id.username}] Error validating sync log entry data "
+                      f"(ID: {row_change_id}) against model: {pydantic_err}",
+                      exc_info=True,
+                  )
+                  if isinstance(row_change_id, int):
+                      invalid_rows.append(row_change_id)
+                  continue
+
+        if invalid_rows:
+            logger.warning(
+                f"[{user_id.username}] Invalid sync log rows encountered; returning partial /sync/get response. "
+                f"invalid_change_ids={invalid_rows} valid_rows={len(changes_models)} latest_change_id={latest_server_id}"
+            )
 
         logger.info(f"[{user_id.username}] Sending {len(changes_models)} changes to client '{client_id}'. Server latest ID: {latest_server_id}.")
 
@@ -191,9 +267,14 @@ async def send_changes_to_client(
     except (DatabaseError, sqlite3.Error) as e: # Catch errors raised from sync helper
         logger.error(f"Database error getting changes for user '{user_id.username}', client '{client_id}': {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve changes from database.") from e
+    except HTTPException:
+        raise
     except Exception as e: # Catch unexpected errors
         logger.error(f"Unexpected server error getting changes for user '{user_id.username}', client '{client_id}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal server error: {e}") from e
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error while retrieving sync changes.",
+        ) from e
 
 #
 # End of API endpoints
@@ -210,6 +291,54 @@ class ServerSyncProcessor:
         self.user_id = user_id
         self.requesting_client_id = requesting_client_id # Client making the current API call
         logger.info(f"ServerSyncProcessor initialized for user '{self.user_id}', request from '{self.requesting_client_id}'.")
+
+    @staticmethod
+    def _validate_entity_operation(entity: str, operation: str) -> Optional[str]:
+        if entity not in ALLOWED_SYNC_SEND_ENTITIES:
+            return f"Unsupported sync entity '{entity}'"
+        if operation not in ALLOWED_SYNC_OPERATIONS:
+            return f"Unsupported sync operation '{operation}'"
+        if entity == "MediaKeywords" and operation not in {"link", "unlink"}:
+            return "MediaKeywords only supports 'link'/'unlink' operations"
+        if entity != "MediaKeywords" and operation in {"link", "unlink"}:
+            return f"Operation '{operation}' is only valid for MediaKeywords"
+        return None
+
+    @staticmethod
+    def _parse_iso8601_timestamp_utc(timestamp_str: str, *, label: str) -> datetime:
+        """
+        Parse an ISO-8601 timestamp and normalize it to UTC.
+
+        Accepted formats:
+        - YYYY-MM-DDTHH:MM:SS.sssZ
+        - YYYY-MM-DDTHH:MM:SSZ
+        - YYYY-MM-DDTHH:MM:SS.sss+HH:MM
+        - YYYY-MM-DDTHH:MM:SS+HH:MM
+        """
+        if not isinstance(timestamp_str, str) or not timestamp_str.strip():
+            raise ValueError(f"{label} timestamp is empty or invalid")
+
+        ts_value = timestamp_str.strip()
+        parse_formats = (
+            "%Y-%m-%dT%H:%M:%S.%fZ",
+            "%Y-%m-%dT%H:%M:%SZ",
+            "%Y-%m-%dT%H:%M:%S.%f%z",
+            "%Y-%m-%dT%H:%M:%S%z",
+        )
+
+        parse_error: ValueError | None = None
+        for parse_format in parse_formats:
+            try:
+                parsed_dt = datetime.strptime(ts_value, parse_format)
+                if parse_format.endswith("Z") or parsed_dt.tzinfo is None:
+                    parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+                return parsed_dt.astimezone(timezone.utc)
+            except ValueError as exc:
+                parse_error = exc
+
+        raise ValueError(
+            f"Could not parse {label} timestamp '{timestamp_str}' as ISO-8601 (Z or offset)."
+        ) from parse_error
 
     # --- SYNCHRONOUS BATCH APPLICATION ---
     def apply_client_changes_batch(self, changes: list[dict]) -> tuple[bool, list[str]]:
@@ -278,6 +407,11 @@ class ServerSyncProcessor:
         payload = {}
         error_msg = None
 
+        validation_error = self._validate_entity_operation(str(entity), str(operation))
+        if validation_error:
+            logger.warning(f"[{self.user_id}] Rejecting sync change: {validation_error}")
+            return False, validation_error
+
         # Payload validation
         if not payload_str and not (entity == "MediaKeywords" and operation in ['link', 'unlink']):
             error_msg = f"Missing payload for incoming change: {change.get('change_id', 'N/A')}"
@@ -290,6 +424,27 @@ class ServerSyncProcessor:
              error_msg = f"Failed to decode payload for change ID {change.get('change_id', 'N/A')}: {e}"
              logger.error(f"[{self.user_id}] {error_msg}", exc_info=True)
              return False, error_msg
+
+        # MediaKeywords is a non-versioned junction table. Apply idempotently and
+        # skip generic uuid/version lookups used by versioned entities.
+        if entity == "MediaKeywords":
+            try:
+                self._execute_server_change_sql_sync(
+                    cursor,
+                    entity,
+                    operation,
+                    payload,
+                    entity_uuid,
+                    client_version,
+                    originating_client_id,
+                    current_server_time_str,
+                    force_apply=False,
+                )
+                return True, None
+            except (DatabaseError, sqlite3.Error, KeyError, ValueError) as e:
+                error_msg = f"Error applying MediaKeywords change for {entity_uuid}: {e}"
+                logger.error(f"[{self.user_id}] {error_msg}", exc_info=True)
+                return False, error_msg
 
         try:
             # --- Fetch current server state ---
@@ -372,42 +527,14 @@ class ServerSyncProcessor:
 
         # --- LWW Resolution (using datetime objects) ---
         try:
-            # Define the EXPECTED standard formats
-            iso_format_frac_z = '%Y-%m-%dT%H:%M:%S.%fZ'  # Primary format
-            iso_format_no_frac_z = '%Y-%m-%dT%H:%M:%SZ'  # Fallback for older data / no fractional
-
-            server_dt = None
-            authoritative_dt = None
-
-            # --- Try parsing server timestamp ---
-            try:
-                # Try with fractional seconds first
-                server_dt = datetime.strptime(server_last_modified_str, iso_format_frac_z)
-            except ValueError:
-                try:
-                    # Fallback to parsing without fractional seconds
-                    server_dt = datetime.strptime(server_last_modified_str, iso_format_no_frac_z)
-                except ValueError:
-                    # If both fail, raise a clearer error
-                    raise ValueError(
-                        f"Could not parse server timestamp '{server_last_modified_str}' with formats '{iso_format_frac_z}' or '{iso_format_no_frac_z}'") from None
-
-            # --- Try parsing authoritative timestamp ---
-            # (It should match iso_format_frac_z generated by strftime)
-            try:
-                authoritative_dt = datetime.strptime(current_server_time_str, iso_format_frac_z)
-            except ValueError:
-                # Add fallback just in case strftime behaves unexpectedly
-                try:
-                    authoritative_dt = datetime.strptime(current_server_time_str, iso_format_no_frac_z)
-                except ValueError:
-                    raise ValueError(
-                        f"Could not parse authoritative timestamp '{current_server_time_str}' with formats '{iso_format_frac_z}' or '{iso_format_no_frac_z}'") from None
-
-            # Ensure timezone aware (strptime with %Z *should* handle UTC, but explicit is safer)
-            # If %Z parsing worked, tzinfo might already be set. replace() only sets if naive.
-            server_dt = server_dt.replace(tzinfo=timezone.utc)
-            authoritative_dt = authoritative_dt.replace(tzinfo=timezone.utc)
+            server_dt = self._parse_iso8601_timestamp_utc(
+                server_last_modified_str,
+                label="server",
+            )
+            authoritative_dt = self._parse_iso8601_timestamp_utc(
+                current_server_time_str,
+                label="authoritative",
+            )
 
         except ValueError as parse_err:
             error_msg = f"Timestamp parsing error during conflict resolution: {parse_err}"

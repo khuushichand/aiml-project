@@ -199,6 +199,47 @@ You should see the Swagger UI with all available endpoints.
 
 ---
 
+## Optional: Add the WebUI (Bun)
+
+If your API is already running on `http://127.0.0.1:8000`, you can launch the Next.js WebUI with Bun.
+
+### Step 1: Install Bun (if needed)
+
+```bash
+# macOS/Linux
+curl -fsSL https://bun.sh/install | bash
+
+# Open a new terminal, then verify:
+bun --version
+```
+
+### Step 2: Set up the WebUI project
+
+```bash
+# from the repo root
+cd apps/tldw-frontend
+cp .env.local.example .env.local
+bun install
+```
+
+### Step 3: Run the WebUI
+
+```bash
+bun run dev --port 8080
+```
+
+Confirm `.env.local` has:
+```bash
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_API_VERSION=v1
+# Optional in single-user mode:
+# NEXT_PUBLIC_X_API_KEY=your_single_user_api_key
+```
+
+Open in browser: http://localhost:8080
+
+---
+
 ## Common Issues
 
 | Symptom | Likely Cause | Fix |
@@ -219,6 +260,7 @@ Now that your server is running:
 | I want to... | Guide |
 |--------------|-------|
 | Add LLM providers (OpenAI, Anthropic, etc.) | [Local Development Guide](./Local_Development.md) |
+| Launch the WebUI with Bun | [Optional: Add the WebUI (Bun)](#optional-add-the-webui-bun) |
 | Run on my home server with Docker | [Docker Self-Host Guide](./Docker_Self_Host.md) |
 | Deploy for a team with proper security | [Production Guide](./Production.md) |
 | Process my first media file | See README.md Usage Examples |

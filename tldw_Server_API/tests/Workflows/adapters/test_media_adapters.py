@@ -13,12 +13,7 @@ TEST_MODE and mocks to avoid heavy operations.
 
 from __future__ import annotations
 
-import asyncio
-import json
-import os
-from pathlib import Path
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch
+import builtins
 
 import pytest
 
@@ -364,22 +359,21 @@ class TestProcessMediaAdapter:
         """Test process_media returns error when web_scraping_service unavailable."""
         from tldw_Server_API.app.core.Workflows.adapters import run_process_media_adapter
 
-        # Mock the import to fail
-        def mock_import(*args, **kwargs):
-            raise ImportError("Module not found")
+        original_import = builtins.__import__
 
-        # This will cause the import to fail
-        import sys
-        original_modules = sys.modules.copy()
+        def _import_with_scraping_failure(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "tldw_Server_API.app.services.web_scraping_service":
+                raise ImportError("simulated web scraping import failure")
+            return original_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", _import_with_scraping_failure)
 
         config = {"kind": "web_scraping", "url_input": "https://example.com"}
         context = {}
 
-        # The adapter handles ImportError gracefully
         result = await run_process_media_adapter(config, context)
 
-        # Should return error or succeed depending on mock
-        assert "error" in result or "kind" in result
+        assert result.get("error") == "web_scraping_service_unavailable"
 
     @pytest.mark.asyncio
     async def test_process_media_pdf_missing_file_uri(self, test_mode_env):
@@ -406,8 +400,8 @@ class TestProcessMediaAdapter:
         assert result.get("error") == "missing_or_invalid_file_uri"
 
     @pytest.mark.asyncio
-    async def test_process_media_ebook_missing_file_uri(self, test_mode_env):
-        """Test process_media ebook kind requires file_uri."""
+    async def test_process_media_ebook_not_implemented(self, test_mode_env):
+        """Test process_media ebook kind returns explicit not_implemented."""
         from tldw_Server_API.app.core.Workflows.adapters import run_process_media_adapter
 
         config = {"kind": "ebook"}
@@ -415,11 +409,12 @@ class TestProcessMediaAdapter:
 
         result = await run_process_media_adapter(config, context)
 
-        assert result.get("error") == "missing_or_invalid_file_uri"
+        assert result.get("error") == "not_implemented"
+        assert result.get("kind") == "ebook"
 
     @pytest.mark.asyncio
-    async def test_process_media_xml_missing_file_uri(self, test_mode_env):
-        """Test process_media xml kind requires file_uri."""
+    async def test_process_media_xml_not_implemented(self, test_mode_env):
+        """Test process_media xml kind returns explicit not_implemented."""
         from tldw_Server_API.app.core.Workflows.adapters import run_process_media_adapter
 
         config = {"kind": "xml"}
@@ -427,7 +422,8 @@ class TestProcessMediaAdapter:
 
         result = await run_process_media_adapter(config, context)
 
-        assert result.get("error") == "missing_or_invalid_file_uri"
+        assert result.get("error") == "not_implemented"
+        assert result.get("kind") == "xml"
 
     @pytest.mark.asyncio
     async def test_process_media_mediawiki_dump_missing_file_uri(self, test_mode_env):
@@ -442,8 +438,8 @@ class TestProcessMediaAdapter:
         assert result.get("error") == "missing_or_invalid_file_uri"
 
     @pytest.mark.asyncio
-    async def test_process_media_podcast_missing_url(self, test_mode_env):
-        """Test process_media podcast kind requires url."""
+    async def test_process_media_podcast_not_implemented(self, test_mode_env):
+        """Test process_media podcast kind returns explicit not_implemented."""
         from tldw_Server_API.app.core.Workflows.adapters import run_process_media_adapter
 
         config = {"kind": "podcast"}
@@ -451,7 +447,34 @@ class TestProcessMediaAdapter:
 
         result = await run_process_media_adapter(config, context)
 
-        assert result.get("error") == "missing_url"
+        assert result.get("error") == "not_implemented"
+        assert result.get("kind") == "podcast"
+
+    @pytest.mark.asyncio
+    async def test_process_media_podcast_does_not_import_placeholder_service(self, test_mode_env, monkeypatch):
+        """Test podcast returns not_implemented before any placeholder-service imports."""
+        from tldw_Server_API.app.core.Workflows.adapters import run_process_media_adapter
+
+        original_import = builtins.__import__
+        attempted_podcast_service_import = False
+
+        def _import_with_podcast_failure(name, globals=None, locals=None, fromlist=(), level=0):
+            nonlocal attempted_podcast_service_import
+            if name == "tldw_Server_API.app.services.podcast_processing_service":
+                attempted_podcast_service_import = True
+                raise AssertionError("podcast placeholder service should not be imported")
+            return original_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", _import_with_podcast_failure)
+
+        config = {"kind": "podcast", "url": "https://example.com/podcast-episode"}
+        context = {}
+
+        result = await run_process_media_adapter(config, context)
+
+        assert attempted_podcast_service_import is False
+        assert result.get("error") == "not_implemented"
+        assert result.get("kind") == "podcast"
 
     @pytest.mark.asyncio
     async def test_process_media_unsupported_kind(self, test_mode_env):

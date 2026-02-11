@@ -36,6 +36,9 @@ How to apply changes
 
 ## [Server]
 - `disable_cors` (bool): Disable CORS protections for development.
+- `cors_allow_credentials` (bool): Include `Access-Control-Allow-Credentials` on CORS responses.
+  - Default: `false` (safer; compatible with wildcard origins in local/test).
+  - Env override: `CORS_ALLOW_CREDENTIALS=true|false`
 - `trusted_proxies` (csv): Proxy IPs/CIDRs trusted for X-Forwarded-For/X-Real-IP processing.
   - If the socket peer is in this list, the server uses the leftmost X-Forwarded-For IP as the client.
   - Env override: `TLDW_TRUSTED_PROXIES="10.0.0.0/8,192.168.0.0/16,127.0.0.1"`

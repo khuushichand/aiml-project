@@ -94,6 +94,14 @@ class SearchRequest(BaseModel):
     fields: list[str] = ["title", "content"]
     exact_phrase: Optional[str] = None
     media_types: Optional[list[str]] = None
+    email_query_mode: Optional[Literal["legacy", "operators"]] = Field(
+        None,
+        description=(
+            "Optional email search mode. Use 'operators' with media_types=['email'] "
+            "to delegate /media/search to the email operator planner. "
+            "Use 'legacy' to force legacy planner behavior even when server default delegation is enabled."
+        ),
+    )
     date_range: Optional[dict[str, datetime]] = None
     must_have: Optional[list[str]] = None
     must_not_have: Optional[list[str]] = None

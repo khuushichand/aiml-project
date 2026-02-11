@@ -149,7 +149,7 @@ def _replace_conversation_keywords(
             try:
                 db.unlink_conversation_from_keyword(conversation_id, kw_id)
             except Exception as exc:
-                logger.warning("Failed to unlink keyword %s from %s: %s", kw_id, conversation_id, exc)
+                logger.warning("Failed to unlink keyword {} from {}: {}", kw_id, conversation_id, exc)
 
     for key, original in target_map.items():
         if key in existing_map:
@@ -162,7 +162,7 @@ def _replace_conversation_keywords(
             if kw and kw.get("id") is not None:
                 db.link_conversation_to_keyword(conversation_id, int(kw["id"]))
         except Exception as exc:
-            logger.warning("Failed to link keyword %s to %s: %s", original, conversation_id, exc)
+            logger.warning("Failed to link keyword {} to {}: {}", original, conversation_id, exc)
 
 
 def _load_recent_message_texts(
@@ -347,7 +347,7 @@ def schedule_auto_tagging(
                 min_new_messages=min_new_messages,
             )
         except Exception as exc:
-            logger.warning("Auto-tagging job failed for %s: %s", conversation_id, exc)
+            logger.warning("Auto-tagging job failed for {}: {}", conversation_id, exc)
 
     thread = threading.Thread(target=_runner, daemon=True)
     thread.start()
@@ -366,7 +366,7 @@ def schedule_conversation_clustering(
         try:
             cluster_conversations_for_user(db, client_id=client_id)
         except Exception as exc:
-            logger.warning("Conversation clustering job failed: %s", exc)
+            logger.warning("Conversation clustering job failed: {}", exc)
 
     thread = threading.Thread(target=_runner, daemon=True)
     thread.start()

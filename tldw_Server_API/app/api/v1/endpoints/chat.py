@@ -96,6 +96,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
     ChatCompletionSystemMessageParam,
     RagContext,
+    get_api_keys,  # noqa: F401 - legacy tests patch this endpoint symbol
 )
 from tldw_Server_API.app.api.v1.schemas.chat_validators import (
     validate_character_id,
@@ -122,6 +123,7 @@ from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_selector i
 from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_telemetry import (
     compute_persona_exemplar_telemetry,
 )
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.Chat.chat_exceptions import (
     ChatDatabaseError,
     ChatErrorCode,
@@ -146,6 +148,12 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     queue_is_active,
     resolve_provider_and_model,
     resolve_provider_api_key,
+)
+
+# Backward-compatible re-exports for legacy tests patching these symbols on the endpoint module.
+from tldw_Server_API.app.core.Chat.prompt_template_manager import (  # noqa: F401
+    apply_template_to_string,
+    load_template,
 )
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.Chat.rate_limiter import get_rate_limiter
@@ -204,7 +212,11 @@ from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled as _shared_env_flag_enabled,
+)
+from tldw_Server_API.app.core.testing import (
     is_test_mode as _shared_is_test_mode,
+)
+from tldw_Server_API.app.core.testing import (
     is_truthy as _shared_is_truthy,
 )
 from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
@@ -229,6 +241,7 @@ _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
     ValueError,
     UnicodeDecodeError,
     json.JSONDecodeError,
+    ChatAPIError,
     HTTPException,
     ChatModuleException,
     ChatDatabaseError,
@@ -1164,7 +1177,7 @@ async def _process_content_for_db_sync(
         processed_content_iterable = content_iterable
     else:
         logger.warning(
-            "[DB SYNC] Unsupported content type=%s for conv=%s, treating as unsupported text.",
+            '[DB SYNC] Unsupported content type={} for conv={}, treating as unsupported text.',
             type(content_iterable),
             conversation_id
         )
@@ -1180,7 +1193,7 @@ async def _process_content_for_db_sync(
                     part = part.model_dump(exclude_none=True)
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(
-                        "model_dump failed for part type=%s, falling back to string: %s",
+                        'model_dump failed for part type={}, falling back to string: {}',
                         type(part).__name__,
                         e,
                     )
@@ -1196,7 +1209,7 @@ async def _process_content_for_db_sync(
                         try:
                             image_url_obj = image_url_obj.model_dump(exclude_none=True)
                         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
-                            logger.debug("model_dump failed for image_url_obj, setting to None: %s", e)
+                            logger.debug("model_dump failed for image_url_obj, setting to None: {}", e)
                             image_url_obj = None
                     if not isinstance(image_url_obj, dict):
                         image_url_obj = {"url": getattr(image_url_obj, "url", "") if image_url_obj is not None else ""}
@@ -1209,7 +1222,7 @@ async def _process_content_for_db_sync(
             snippet = str(part.get("text", ""))[:MAX_TEXT_LENGTH + 1] # Ensure text is string
             if len(snippet) > MAX_TEXT_LENGTH:
                 logger.info(
-                    "[DB SYNC] Trimmed over-long text part (>%d chars) for conv=%s",
+                    '[DB SYNC] Trimmed over-long text part (>{} chars) for conv={}',
                     MAX_TEXT_LENGTH,
                     conversation_id
                 )
@@ -1236,10 +1249,10 @@ async def _process_content_for_db_sync(
                     )
                     if is_valid and decoded_bytes:
                         images_sync.append((decoded_bytes, mime_type))
-                        logger.debug("[DB SYNC] Successfully processed large image for conv=%s", conversation_id)
+                        logger.debug("[DB SYNC] Successfully processed large image for conv={}", conversation_id)
                     else:
                         logger.warning(
-                            "[DB SYNC] Large image processing failed for conv=%s: %s",
+                            '[DB SYNC] Large image processing failed for conv={}: {}',
                             conversation_id, error_msg
                         )
                         text_parts_sync.append(f"<Image failed: {error_msg}>")
@@ -1248,17 +1261,17 @@ async def _process_content_for_db_sync(
                     is_valid, mime_type, decoded_bytes = validate_image_url(url_str)
                     if is_valid and decoded_bytes:
                         images_sync.append((decoded_bytes, mime_type))
-                        logger.debug("[DB SYNC] Successfully validated and decoded image for conv=%s", conversation_id)
+                        logger.debug("[DB SYNC] Successfully validated and decoded image for conv={}", conversation_id)
                     else:
                         logger.warning(
-                            "[DB SYNC] Image validation failed for conv=%s, storing as text placeholder",
+                            '[DB SYNC] Image validation failed for conv={}, storing as text placeholder',
                             conversation_id
                         )
                         # Provide more context about the failed image
                         text_parts_sync.append(f"<Image failed validation: {mime_type if mime_type else 'unknown type'}>")
             else:
                 logger.warning(
-                    "[DB SYNC] image_url part was not a valid data URI or did not pass checks, storing as text placeholder. conv=%s, url_start='%.50s...'",
+                    "[DB SYNC] image_url part was not a valid data URI or did not pass checks, storing as text placeholder. conv={}, url_start='{}...'",
                     conversation_id, url_str
                 )
                 text_parts_sync.append(f"<Image URL (not processed): {url_str[:200]}>")
@@ -1276,7 +1289,7 @@ def _jsonify_metadata_payload(value: Any) -> Any:
         return json.loads(json.dumps(encoded, default=str))
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(
-            "Failed to normalize metadata payload of type %s: %s",
+            'Failed to normalize metadata payload of type {}: {}',
             type(value).__name__,
             exc,
         )
@@ -1373,7 +1386,7 @@ async def _save_message_turn_to_db(
     current_loop = asyncio.get_running_loop()
     role = message_obj.get("role")
     if role not in ("user", "assistant", "tool", "system"):
-        logger.warning("Skip DB save: invalid role='%s' for conv=%s", role, conversation_id)
+        logger.warning("Skip DB save: invalid role='{}' for conv={}", role, conversation_id)
         return None
 
     content = message_obj.get("content")
@@ -1447,7 +1460,7 @@ async def _save_message_turn_to_db(
             text_parts = [display]
         else:
             logger.warning(
-                "Message with no valid content after processing for conv=%s, saving placeholder",
+                'Message with no valid content after processing for conv={}, saving placeholder',
                 conversation_id,
             )
             text_parts = ["<Message processing failed - no valid content>"]
@@ -1593,7 +1606,7 @@ async def _persist_system_message_if_needed(
                 )
             except (CharactersRAGDBError, RuntimeError) as exc:
                 logger.debug(
-                    "System message presence check failed for conv=%s: %s",
+                    'System message presence check failed for conv={}: {}',
                     conversation_id,
                     exc,
                 )
@@ -1619,7 +1632,7 @@ async def _persist_system_message_if_needed(
                 )
             except (CharactersRAGDBError, InputError, ConflictError, RuntimeError) as exc:
                 logger.warning(
-                    "Failed to persist system message for conv=%s: %s",
+                    'Failed to persist system message for conv={}: {}',
                     conversation_id,
                     exc,
                 )
@@ -2802,7 +2815,7 @@ async def create_chat_completion(
             cleaned_args['api_endpoint'] = selected_provider
             if selected_provider != provider:
                 try:
-                    refreshed_args, refreshed_model = rebuild_call_params_for_provider(selected_provider)
+                    refreshed_args, refreshed_model = await rebuild_call_params_for_provider(selected_provider)
                     override_error = validate_provider_override(selected_provider, refreshed_model or model)
                     if override_error:
                         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
@@ -2812,7 +2825,7 @@ async def create_chat_completion(
                     raise
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as refresh_exc:
                     logger.error(
-                        "Failed to rebuild call params for fallback provider '%s': %s",
+                        "Failed to rebuild call params for fallback provider '{}': {}",
                         selected_provider,
                         refresh_exc,
                     )
@@ -2865,7 +2878,7 @@ async def create_chat_completion(
                     priority = RequestPriority.HIGH if bool(request_data.stream) else RequestPriority.NORMAL
                     # Use request_id generated for this call
                     logger.debug(
-                        "Queue admission: enqueue request_id=%s client_id=%s priority=%s est_tokens=%s",
+                        'Queue admission: enqueue request_id={} client_id={} priority={} est_tokens={}',
                         request_id,
                         str(user_id),
                         getattr(priority, "name", str(priority)),
@@ -2881,12 +2894,12 @@ async def create_chat_completion(
                     # Await admission; if queue times out internally, it will raise
                     await q_future
                     logger.debug(
-                        "Queue admission: admitted request_id=%s", request_id
+                        'Queue admission: admitted request_id={}', request_id
                     )
                 except ValueError as e:
                     # Queue full or rate limit in queue -> 429
                     logger.warning(
-                        "Queue admission rejected for request_id=%s: %s", request_id, e
+                        'Queue admission rejected for request_id={}: {}', request_id, e
                     )
                     raise HTTPException(
                         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -2895,7 +2908,7 @@ async def create_chat_completion(
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
                     # Treat unexpected queue errors as service unavailable
                     logger.error(
-                        "Queue admission error for request_id=%s: %s", request_id, e
+                        'Queue admission error for request_id={}: {}', request_id, e
                     )
                     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service busy. Please retry.") from e
             # The request queue system has been initialized in main.py but is not yet
@@ -3617,7 +3630,7 @@ def _replace_conversation_keywords(
             try:
                 db.unlink_conversation_from_keyword(conversation_id, kw_id)
             except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-                logger.warning("Failed to unlink keyword %s from %s: %s", kw_id, conversation_id, exc)
+                logger.warning("Failed to unlink keyword {} from {}: {}", kw_id, conversation_id, exc)
 
     for key, original in target_map.items():
         if key in existing_map:
@@ -3630,7 +3643,7 @@ def _replace_conversation_keywords(
             if kw and kw.get("id") is not None:
                 db.link_conversation_to_keyword(conversation_id, int(kw["id"]))
         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-            logger.warning("Failed to link keyword %s to %s: %s", original, conversation_id, exc)
+            logger.warning("Failed to link keyword {} to {}: {}", original, conversation_id, exc)
 
 
 @router.post(
@@ -3980,7 +3993,7 @@ async def update_chat_conversation(
 
                 schedule_conversation_clustering(db)
             except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug("Conversation clustering skipped after manual topic update: %s", exc)
+                logger.debug("Conversation clustering skipped after manual topic update: {}", exc)
 
         updated = db.get_conversation_by_id(conversation_id) or conversation
         keyword_rows = db.get_keywords_for_conversation(conversation_id)

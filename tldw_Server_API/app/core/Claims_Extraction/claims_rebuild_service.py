@@ -132,7 +132,7 @@ class ClaimsRebuildService:
         try:
             db_path = get_user_media_db_path(user_id)
         except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Claims rebuild health persistence skipped: %s", exc)
+            logger.debug("Claims rebuild health persistence skipped: {}", exc)
             return
         try:
             db = create_media_database(
@@ -140,7 +140,7 @@ class ClaimsRebuildService:
                 db_path=db_path,
             )
         except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Claims rebuild health persistence DB init failed: %s", exc)
+            logger.debug("Claims rebuild health persistence DB init failed: {}", exc)
             return
         try:
             if not self._health_db_initialized:
@@ -148,7 +148,7 @@ class ClaimsRebuildService:
                     db.initialize_db()
                     self._health_db_initialized = True
                 except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
-                    logger.debug("Claims rebuild health persistence DB setup failed: %s", exc)
+                    logger.debug("Claims rebuild health persistence DB setup failed: {}", exc)
                     return
             last_failure_reason = None
             last_failure_at = None
@@ -165,7 +165,7 @@ class ClaimsRebuildService:
                 last_failure_reason=last_failure_reason,
             )
         except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Claims rebuild health persistence failed: %s", exc)
+            logger.debug("Claims rebuild health persistence failed: {}", exc)
         finally:
             with contextlib.suppress(_CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS):
                 db.close_connection()

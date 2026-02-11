@@ -258,27 +258,34 @@ def _parse_allowed_origins_env(raw: str):
     # Fallback: comma-separated list
     return [s.strip() for s in raw.split(",") if s.strip()]
 
+_DEFAULT_ALLOWED_ORIGINS = [
+    # Common local origins
+    "http://localhost",
+    "http://localhost:8000",
+    "http://localhost:8080",
+    "http://localhost:8081",
+    "http://localhost:3000",  # Next.js frontend default
+    "http://localhost:3001",  # Admin UI
+    "http://127.0.0.1",
+    "http://127.0.0.1:8000",
+    "http://127.0.0.1:8080",
+    "http://127.0.0.1:8081",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "https://localhost",
+    "https://localhost:8080",
+]
+
 _ENV_ALLOWED = os.getenv("ALLOWED_ORIGINS")
-if _ENV_ALLOWED:
-    ALLOWED_ORIGINS = _parse_allowed_origins_env(_ENV_ALLOWED)
+if _ENV_ALLOWED is None:
+    ALLOWED_ORIGINS = list(_DEFAULT_ALLOWED_ORIGINS)
+elif not str(_ENV_ALLOWED).strip():
+    _log_warning(
+        "ALLOWED_ORIGINS is set but empty; falling back to default local origins for compatibility."
+    )
+    ALLOWED_ORIGINS = list(_DEFAULT_ALLOWED_ORIGINS)
 else:
-    ALLOWED_ORIGINS = [
-        # Common local origins
-        "http://localhost",
-        "http://localhost:8000",
-        "http://localhost:8080",
-        "http://localhost:8081",
-        "http://localhost:3000",  # Next.js frontend default
-        "http://localhost:3001",  # Admin UI
-        "http://127.0.0.1",
-        "http://127.0.0.1:8000",
-        "http://127.0.0.1:8080",
-        "http://127.0.0.1:8081",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "https://localhost",
-        "https://localhost:8080",
-    ]
+    ALLOWED_ORIGINS = _parse_allowed_origins_env(_ENV_ALLOWED)
 
 # --- API Configuration ---
 # API version prefix for all endpoints
@@ -1171,6 +1178,23 @@ def load_settings():
         "SANDBOX_DOCKER_APPARMOR_PROFILE": SANDBOX_DOCKER_APPARMOR_PROFILE,
         "SANDBOX_STORE_BACKEND": SANDBOX_STORE_BACKEND,
         "SANDBOX_STORE_DB_PATH": SANDBOX_STORE_DB_PATH,
+        # Email ingestion/search rollout controls
+        "EMAIL_NATIVE_PERSIST_ENABLED": is_truthy(
+            os.getenv("EMAIL_NATIVE_PERSIST_ENABLED", "true")
+        ),
+        "EMAIL_OPERATOR_SEARCH_ENABLED": is_truthy(
+            os.getenv("EMAIL_OPERATOR_SEARCH_ENABLED", "true")
+        ),
+        "EMAIL_MEDIA_SEARCH_DELEGATION_MODE": (
+            lambda raw_mode: (
+                raw_mode if raw_mode in {"opt_in", "auto_email"} else "opt_in"
+            )
+        )(
+            str(os.getenv("EMAIL_MEDIA_SEARCH_DELEGATION_MODE", "opt_in")).strip().lower()
+        ),
+        "EMAIL_GMAIL_CONNECTOR_ENABLED": is_truthy(
+            os.getenv("EMAIL_GMAIL_CONNECTOR_ENABLED", "false")
+        ),
         # --- HYDE/doc2query (per-chunk) feature flags ---
         "HYDE_ENABLED": is_truthy(os.getenv("HYDE_ENABLED", "false")),
         "HYDE_QUESTIONS_PER_CHUNK": int(os.getenv("HYDE_QUESTIONS_PER_CHUNK", "0")),
@@ -1752,7 +1776,6 @@ def load_settings():
         # actual server startup paths still validate and will hard-fail
         # when SINGLE_USER_API_KEY is required.
         try:
-            import os as _os
             import sys as _sys
             _in_test = is_explicit_pytest_runtime() or is_test_mode() or ("pytest" in _sys.modules)
         except _CONFIG_NONCRITICAL_EXCEPTIONS:
@@ -2501,6 +2524,23 @@ def should_disable_cors() -> bool:
         _log_debug(f"Unable to read disable_cors flag from config: {exc}")
     return False
 
+
+@lru_cache(maxsize=1)
+def should_allow_cors_credentials() -> bool:
+    """Return True when CORS should allow credentials (cookies/auth)."""
+    env_value = os.getenv("CORS_ALLOW_CREDENTIALS")
+    if env_value is not None:
+        return is_truthy(env_value)
+
+    try:
+        config_parser = load_comprehensive_config()
+        if config_parser.has_section("Server"):
+            return config_parser.getboolean("Server", "cors_allow_credentials", fallback=False)
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
+        _log_debug(f"Unable to read cors_allow_credentials flag from config: {exc}")
+    return False
+
+
 def load_comprehensive_config_with_tts():
     """
     Load comprehensive configuration including TTS settings.
@@ -2566,8 +2606,14 @@ def _route_toggle_policy() -> dict:
 
     Priority: ENV overrides > config.txt > defaults.
 
+    Defaults:
+      - Conservative baseline is `stable_only=True` when config cannot be read
+        or the [API-Routes] section is missing.
+      - If [API-Routes] exists but omits `stable_only`, parser fallback is false.
+      - ROUTES_STABLE_ONLY (when set) overrides the computed value.
+
     ENV variables supported:
-      - ROUTES_STABLE_ONLY: true|false (default false)
+      - ROUTES_STABLE_ONLY: true|false
       - ROUTES_DISABLE: comma-separated list of route keys
       - ROUTES_ENABLE: comma-separated list of route keys
       - ROUTES_EXPERIMENTAL: comma-separated list of additional experimental route keys
@@ -2607,7 +2653,8 @@ def _route_toggle_policy() -> dict:
         "self-monitoring",
     }
 
-    # Load from config.txt (if available)
+    # Load from config.txt (if available). Keep a conservative default when
+    # section/config are unavailable.
     cfg_stable_only = True
     cfg_disable: set[str] = set()
     cfg_enable: set[str] = set()
@@ -2987,7 +3034,7 @@ def load_and_log_configs():
         aphrodite_model = config_parser_object.get('Local-API', 'aphrodite_model', fallback='')
         aphrodite_max_tokens = config_parser_object.get('Local-API', 'aphrodite_max_tokens', fallback='4096')
         aphrodite_streaming = config_parser_object.get('Local-API', 'aphrodite_streaming', fallback='False')
-        aphrodite_api_timeout = config_parser_object.get('Local-API', 'llama_api_timeout', fallback='90')
+        aphrodite_api_timeout = config_parser_object.get('Local-API', 'aphrodite_api_timeout', fallback='90')
         aphrodite_api_retries = config_parser_object.get('Local-API', 'aphrodite_api_retry', fallback='3')
         aphrodite_api_retry_delay = config_parser_object.get('Local-API', 'aphrodite_api_retry_delay', fallback='5')
 
@@ -3009,7 +3056,7 @@ def load_and_log_configs():
         custom_openai2_api_model = config_parser_object.get('API', 'custom_openai2_api_model', fallback=None)
         custom_openai2_api_streaming = config_parser_object.get('API', 'custom_openai2_api_streaming', fallback='False')
         custom_openai2_api_temperature = config_parser_object.get('API', 'custom_openai2_api_temperature', fallback='0.7')
-        custom_openai2_api_top_p = config_parser_object.get('API', 'custom_openai_api2_top_p', fallback='0.95')
+        custom_openai2_api_top_p = config_parser_object.get('API', 'custom_openai2_api_top_p', fallback='0.95')
         custom_openai2_api_min_p = config_parser_object.get('API', 'custom_openai2_api_min_p', fallback='0.05')
         custom_openai2_api_max_tokens = config_parser_object.get('API', 'custom_openai2_api_max_tokens', fallback='4096')
         custom_openai2_api_timeout = config_parser_object.get('API', 'custom_openai2_api_timeout', fallback='90')
@@ -4514,6 +4561,9 @@ def refresh_config_cache() -> None:
     _CONFIG_PARSER_CACHE = None
     _CONFIG_SOURCE_METADATA.update({"path": None, "loaded": False})
     load_comprehensive_config.cache_clear()
+    _route_toggle_policy.cache_clear()
+    should_disable_cors.cache_clear()
+    should_allow_cors_credentials.cache_clear()
 
 
 def clear_config_cache() -> None:

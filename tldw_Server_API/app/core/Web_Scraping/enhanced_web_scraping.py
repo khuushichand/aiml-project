@@ -20,7 +20,6 @@ import contextlib
 import hashlib
 import json
 import os
-import pickle
 import re
 import time
 import uuid
@@ -434,12 +433,18 @@ class CookieManager:
 class ContentDeduplicator:
     """Handles content deduplication"""
 
+    _LEGACY_PICKLE_ENV_VAR = "WEBSCRAPER_ALLOW_LEGACY_PICKLE_HASHES"
+
     def __init__(self, storage_path: Optional[Path] = None):
         if storage_path is None:
             base = Path(get_database_dir()) / "webscraper"
             base.mkdir(parents=True, exist_ok=True)
-            storage_path = base / "content_hashes.pkl"
-        self.storage_path = storage_path
+            storage_path = base / "content_hashes.json"
+        self.storage_path = Path(storage_path)
+        self._legacy_storage_path = self.storage_path.with_suffix(".pkl")
+        self._allow_legacy_pickle_hashes = is_truthy(
+            os.getenv(self._LEGACY_PICKLE_ENV_VAR, "false")
+        )
         self._hashes: dict[str, dict[str, Any]] = {}
         self._load_hashes()
 
@@ -447,19 +452,72 @@ class ContentDeduplicator:
         """Load content hashes from storage"""
         if self.storage_path.exists():
             try:
-                with open(self.storage_path, 'rb') as f:
-                    self._hashes = pickle.load(f)
+                with open(self.storage_path, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                self._hashes = self._normalize_hash_data(loaded)
                 logger.info(f"Loaded {len(self._hashes)} content hashes")
+                return
             except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to load hashes: {e}")
+                # If the configured path itself is the legacy .pkl file, continue
+                # to optional compatibility loading below.
+                if self.storage_path != self._legacy_storage_path:
+                    return
+
+        if self._legacy_storage_path.exists():
+            if not self._allow_legacy_pickle_hashes:
+                logger.warning(
+                    "Legacy dedupe hash file detected at {} but loading is disabled. "
+                    "Set {}=true to migrate it.",
+                    self._legacy_storage_path,
+                    self._LEGACY_PICKLE_ENV_VAR,
+                )
+                return
+
+            try:
+                import pickle
+
+                with open(self._legacy_storage_path, 'rb') as f:
+                    loaded = pickle.load(f)
+                self._hashes = self._normalize_hash_data(loaded)
+                self._save_hashes()
+                logger.info(
+                    "Loaded and migrated {} legacy content hashes from {}",
+                    len(self._hashes),
+                    self._legacy_storage_path,
+                )
+            except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as e:
+                logger.error(f"Failed to load legacy hashes: {e}")
 
     def _save_hashes(self):
         """Save content hashes to storage"""
         try:
-            with open(self.storage_path, 'wb') as f:
-                pickle.dump(self._hashes, f)
+            self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = self.storage_path.with_name(f"{self.storage_path.name}.tmp")
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(self._hashes, f, ensure_ascii=True, indent=2)
+            tmp_path.replace(self.storage_path)
         except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to save hashes: {e}")
+
+    def _normalize_hash_data(self, data: Any) -> dict[str, dict[str, Any]]:
+        """Normalize persisted hash data into the expected dictionary shape."""
+        if not isinstance(data, dict):
+            return {}
+
+        normalized: dict[str, dict[str, Any]] = {}
+        for key, value in data.items():
+            if not isinstance(key, str) or not isinstance(value, dict):
+                continue
+
+            normalized[key] = {
+                "url": str(value.get("url", "")),
+                "title": str(value.get("title", "")),
+                "first_seen": str(value.get("first_seen", "")),
+                "last_seen": str(value.get("last_seen", "")),
+            }
+
+        return normalized
 
     def compute_hash(self, content: str) -> str:
         """Compute hash for content"""

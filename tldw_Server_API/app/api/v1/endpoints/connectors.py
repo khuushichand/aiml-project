@@ -52,6 +52,7 @@ from tldw_Server_API.app.core.External_Sources.policy import (
     evaluate_policy_constraints,
     get_default_policy_from_env,
 )
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.http_client import RetryPolicy as _RetryPolicy
 from tldw_Server_API.app.core.http_client import afetch as _http_afetch
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
@@ -118,12 +119,37 @@ def get_connectors_job_counter() -> Callable[[int], int]:
     return count_connectors_jobs_today
 
 
+def _gmail_connector_enabled() -> bool:
+    try:
+        return bool(settings.get("EMAIL_GMAIL_CONNECTOR_ENABLED", False))
+    except Exception:
+        return False
+
+
+def _ensure_connector_provider_enabled(provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    if normalized not in {"drive", "notion", "gmail"}:
+        raise HTTPException(status_code=404, detail=f"Unknown connector provider: {provider}")
+    if normalized == "gmail" and not _gmail_connector_enabled():
+        raise HTTPException(status_code=404, detail="Connector provider 'gmail' is disabled.")
+    return normalized
+
+
 @router.get("/providers", response_model=list[ConnectorProvider])
 async def list_providers() -> list[ConnectorProvider]:
-    return [
+    providers: list[ConnectorProvider] = [
         ConnectorProvider(name="drive", scopes_required=["drive.readonly"], auth_type="oauth2"),
         ConnectorProvider(name="notion", scopes_required=[], auth_type="oauth2"),
     ]
+    if _gmail_connector_enabled():
+        providers.append(
+            ConnectorProvider(
+                name="gmail",
+                scopes_required=["https://www.googleapis.com/auth/gmail.readonly"],
+                auth_type="oauth2",
+            )
+        )
+    return providers
 
 
 @router.post("/providers/{provider}/authorize", response_model=AuthorizeURLResponse)
@@ -135,6 +161,7 @@ async def start_authorize(
     db=Depends(get_db_transaction),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> AuthorizeURLResponse:
+    provider = _ensure_connector_provider_enabled(provider)
     conn = get_connector_by_name(provider)
     redirect_base = _resolve_redirect_base(request, conn)
     if redirect_base:
@@ -157,6 +184,7 @@ async def oauth_callback(
     principal: AuthPrincipal = Depends(get_auth_principal),
     org_policy: dict[str, Any] = Depends(get_org_policy_from_principal),
 ) -> ConnectorAccount:
+    provider = _ensure_connector_provider_enabled(provider)
     conn = get_connector_by_name(provider)
     pol = org_policy
     user_id = _get_user_id(principal)
@@ -312,6 +340,7 @@ async def browse_provider_sources(
     db=Depends(get_db_transaction),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> dict[str, Any]:
+    provider = _ensure_connector_provider_enabled(provider)
     user_id = _get_user_id(principal)
     tokens = await get_account_tokens(db, user_id, account_id)
     if not tokens:
@@ -343,6 +372,7 @@ async def add_source(
     # payload keys: account_id, provider, remote_id, type, path, options
     account_id = int(payload.account_id)
     provider = str(payload.provider)
+    provider = _ensure_connector_provider_enabled(provider)
     remote_id = str(payload.remote_id)
     type_ = str(payload.type)
     path = payload.path

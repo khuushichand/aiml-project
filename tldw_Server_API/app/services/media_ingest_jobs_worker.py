@@ -173,7 +173,7 @@ async def _schedule_embeddings(
             chunk_overlap=getattr(form_data, "overlap", None) or 200,
         )
     except Exception as exc:
-        logger.warning("Embedding generation failed for media %s: %s", media_id, exc)
+        logger.warning("Embedding generation failed for media {}: {}", media_id, exc)
 
 
 async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressState) -> dict[str, Any]:
@@ -230,7 +230,7 @@ async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressSt
                     first_filename=first_filename,
                 )
             except Exception as exc:
-                logger.debug("Chunking template auto-apply failed: %s", exc)
+                logger.debug("Chunking template auto-apply failed: {}", exc)
 
         if str(form_data.media_type) in {"video", "audio"}:
             urls = [source] if source_kind == "url" else []

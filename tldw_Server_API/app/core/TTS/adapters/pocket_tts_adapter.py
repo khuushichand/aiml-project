@@ -189,7 +189,7 @@ class PocketTTSOnnxAdapter(TTSAdapter):
         self._status = ProviderStatus.AVAILABLE
         self._initialized = True
         logger.info(
-            "PocketTTS adapter initialized (models_dir=%s, precision=%s, device=%s)",
+            'PocketTTS adapter initialized (models_dir={}, precision={}, device={})',
             self.models_dir,
             self.precision,
             self.device,
@@ -336,7 +336,7 @@ class PocketTTSOnnxAdapter(TTSAdapter):
                 model=request.model or "pocket-tts-onnx",
             )
         except Exception as exc:
-            logger.error("PocketTTS generation failed: %s", exc, exc_info=True)
+            logger.error("PocketTTS generation failed: {}", exc, exc_info=True)
             raise TTSGenerationError(
                 "PocketTTS generation failed",
                 provider=self.PROVIDER_KEY,
@@ -533,7 +533,7 @@ class PocketTTSOnnxAdapter(TTSAdapter):
                 if final_bytes:
                     yield final_bytes
             except Exception as exc:
-                logger.error("PocketTTS streaming failed: %s", exc, exc_info=True)
+                logger.error("PocketTTS streaming failed: {}", exc, exc_info=True)
                 raise TTSGenerationError(
                     "PocketTTS streaming failed",
                     provider=self.PROVIDER_KEY,
@@ -556,7 +556,7 @@ class PocketTTSOnnxAdapter(TTSAdapter):
         try:
             audio_np = np.asarray(chunk).astype(np.float32)
         except Exception as exc:
-            logger.warning("PocketTTS stream chunk conversion error: %s", exc)
+            logger.warning("PocketTTS stream chunk conversion error: {}", exc)
             return b""
 
         audio_np = np.squeeze(audio_np)

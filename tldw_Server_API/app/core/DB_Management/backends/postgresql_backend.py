@@ -405,7 +405,7 @@ class PostgreSQLBackend(DatabaseBackend):
             try:
                 connection.rollback()
             except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as rollback_exc:
-                logger.debug("Rollback while configuring scope failed: %s", rollback_exc)
+                logger.debug("Rollback while configuring scope failed: {}", rollback_exc)
             try:
                 if cursor_factory:
                     with cursor_factory() as cur:

@@ -201,7 +201,7 @@ def _env_int(name: str, default: int) -> int:
     try:
         return int(raw)
     except (TypeError, ValueError):
-        logger.warning("slides export: invalid %s value %r", name, raw)
+        logger.warning("slides export: invalid {} value {}", name, raw)
         return default
 
 
@@ -214,7 +214,7 @@ def _env_bool(name: str, default: bool) -> bool:
         return True
     if value in {"0", "false", "no", "off"}:
         return False
-    logger.warning("slides export: invalid %s value %r", name, raw)
+    logger.warning("slides export: invalid {} value {}", name, raw)
     return default
 
 
@@ -385,7 +385,7 @@ def _sanitize_custom_css(css_text: str | None) -> str | None:
             sanitizer = CSSSanitizer(allowed_css_properties=_ALLOWED_CSS_PROPERTIES)
             cleaned = sanitizer.sanitize_css(css_text)
         except Exception as exc:
-            logger.warning("slides export: css sanitizer failed: %s", exc)
+            logger.warning("slides export: css sanitizer failed: {}", exc)
             cleaned = ""
     cleaned = cleaned.replace("\x00", "").strip()
     return cleaned or None

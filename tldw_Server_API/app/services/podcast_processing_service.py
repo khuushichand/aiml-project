@@ -1,12 +1,11 @@
 # /Server_API/app/services/podcast_processing_service.py
 
-# FIXME - File is dummy code, needs to be updated
+# Legacy placeholder service kept for non-production scaffolding only.
 
-from fastapi import HTTPException
+from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.logging import logger
 from tldw_Server_API.app.core.Utils.Utils import convert_to_seconds, extract_text_from_segments
+from tldw_Server_API.app.services._placeholder_guard import ensure_placeholder_service_enabled
 
 # Hypothetical library that does the actual podcast ingestion/transcription:
 # e.g. from App_Function_Libraries.Audio.Audio_Files import process_podcast
@@ -29,9 +28,7 @@ async def process_podcast_task(
     """
     Ingests a podcast, runs transcription, optionally summarizes, and returns data for ephemeral or DB storage.
     """
-    s = get_settings()
-    if not getattr(s, "PLACEHOLDER_SERVICES_ENABLED", False):
-        raise HTTPException(status_code=503, detail="Podcast placeholder service is disabled. Set PLACEHOLDER_SERVICES_ENABLED=1 to enable.")
+    ensure_placeholder_service_enabled("Podcast")
     try:
         logger.info(f"Processing podcast from URL: {url}")
 

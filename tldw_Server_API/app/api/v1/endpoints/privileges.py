@@ -95,7 +95,7 @@ async def get_self_privilege_map(
     try:
         return await service.get_self_map(user_id=user_id, resource=resource)
     except ValueError as exc:
-        logger.warning("Invalid self privilege request: %s", exc)
+        logger.warning("Invalid self privilege request: {}", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
@@ -135,7 +135,7 @@ async def get_org_privilege_map(
     except PaginationLimitExceeded as exc:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except ValueError as exc:
-        logger.warning("Invalid privilege detail request: %s", exc)
+        logger.warning("Invalid privilege detail request: {}", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
@@ -175,7 +175,7 @@ async def get_team_privilege_map(
     except PaginationLimitExceeded as exc:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except ValueError as exc:
-        logger.warning("Invalid team privilege request: %s", exc)
+        logger.warning("Invalid team privilege request: {}", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
@@ -200,7 +200,7 @@ async def get_user_privilege_map(
     except PaginationLimitExceeded as exc:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except ValueError as exc:
-        logger.warning("Invalid user privilege request: %s", exc)
+        logger.warning("Invalid user privilege request: {}", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 

@@ -252,7 +252,7 @@ def _init_audiobook_quota(collections_db: CollectionsDatabase) -> AudiobookArtif
     if used_bytes is None or _should_recompute_audiobook_usage():
         used_bytes = collections_db.recompute_audiobook_output_usage()
     logger.debug(
-        "audiobook_quota: user=%s used=%s limit=%s",
+        'audiobook_quota: user={} used={} limit={}',
         collections_db.user_id,
         used_bytes,
         limit_bytes,
@@ -812,9 +812,9 @@ def _create_output_and_link(
         try:
             size_bytes = file_path.stat().st_size
         except FileNotFoundError:
-            logger.warning("audiobook output missing for quota check: %s", normalized_path)
+            logger.warning("audiobook output missing for quota check: {}", normalized_path)
         except OSError as exc:
-            logger.warning("audiobook output stat failed: %s error=%s", normalized_path, exc)
+            logger.warning("audiobook output stat failed: {} error={}", normalized_path, exc)
 
     if quota_tracker is not None and size_bytes is not None:
         try:
@@ -824,7 +824,7 @@ def _create_output_and_link(
                 try:
                     file_path.unlink()
                 except OSError as exc:
-                    logger.warning("audiobook output cleanup failed: %s error=%s", file_path, exc)
+                    logger.warning("audiobook output cleanup failed: {} error={}", file_path, exc)
             raise
 
     metadata_json = _merge_metadata_with_bytes(metadata_json, size_bytes)
@@ -843,7 +843,7 @@ def _create_output_and_link(
         try:
             collections_db.update_audiobook_output_usage(size_bytes)
         except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.warning("audiobook_quota: failed to increment usage: %s", exc)
+            logger.warning("audiobook_quota: failed to increment usage: {}", exc)
     if project_db_id is None:
         return row
     artifact_type = OUTPUT_TO_ARTIFACT_TYPE.get(output_type)
@@ -1285,7 +1285,7 @@ async def process_audiobook_job(
                     alignment_payload = segment_alignments[0]
                 elif segment_alignments and not all(segment_alignments):
                     logger.warning(
-                        "audiobook worker: missing alignment for one or more segments in %s",
+                        'audiobook worker: missing alignment for one or more segments in {}',
                         chapter.chapter_id,
                     )
 
@@ -1319,7 +1319,7 @@ async def process_audiobook_job(
                             replaced = False
                         if not replaced:
                             logger.warning(
-                                "audiobook worker: time-stretch replace failed for %s",
+                                'audiobook worker: time-stretch replace failed for {}',
                                 chapter.chapter_id,
                             )
                             with contextlib.suppress(_AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS):
@@ -1330,7 +1330,7 @@ async def process_audiobook_job(
                             alignment_payload = alignment_model.model_dump()
                     else:
                         logger.warning(
-                            "audiobook worker: time-stretch failed for %s (ratio=%s)",
+                            'audiobook worker: time-stretch failed for {} (ratio={})',
                             chapter.chapter_id,
                             time_stretch_ratio,
                         )
@@ -1595,7 +1595,7 @@ async def process_audiobook_job(
                 )
 
             if merge and not per_chapter:
-                logger.info("audiobook worker: merge-only output requested for %s", item_tag)
+                logger.info("audiobook worker: merge-only output requested for {}", item_tag)
 
             if merge:
                 merged_base_path: Path | None = None
@@ -1648,13 +1648,13 @@ async def process_audiobook_job(
                         if fmt == base_format:
                             continue
                         if fmt not in SUPPORTED_TTS_FORMATS:
-                            logger.warning("audiobook worker: unsupported merged format %s; skipping", fmt)
+                            logger.warning("audiobook worker: unsupported merged format {}; skipping", fmt)
                             continue
                         merged_filename = _build_filename(item_prefix, "merged_audio", fmt)
                         merged_path = outputs_dir / merged_filename
                         ok_convert = await AudioConverter.convert_format(merged_base_path, merged_path, fmt)
                         if not ok_convert:
-                            logger.warning("audiobook worker: merge conversion failed for %s -> %s", base_format, fmt)
+                            logger.warning("audiobook worker: merge conversion failed for {} -> {}", base_format, fmt)
                             continue
                         merged_meta = {
                             "project_id": project_id,
@@ -1751,7 +1751,7 @@ async def process_audiobook_job(
             try:
                 collections_db.update_audiobook_project_status(project_db_id, status="completed")
             except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.warning("audiobook worker: failed to update project status: %s", exc)
+                logger.warning("audiobook worker: failed to update project status: {}", exc)
         jm.complete_job(
             job_id,
             result={"project_id": project_id, "outputs": outputs},
@@ -1764,7 +1764,7 @@ async def process_audiobook_job(
             try:
                 collections_db.update_audiobook_project_status(project_db_id, status="failed")
             except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS as status_exc:
-                logger.warning("audiobook worker: failed to update project status: %s", status_exc)
+                logger.warning("audiobook worker: failed to update project status: {}", status_exc)
         jm.fail_job(
             job_id,
             error=str(exc),
@@ -1778,7 +1778,7 @@ async def process_audiobook_job(
             try:
                 collections_db.update_audiobook_project_status(project_db_id, status="failed")
             except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS as status_exc:
-                logger.warning("audiobook worker: failed to update project status: %s", status_exc)
+                logger.warning("audiobook worker: failed to update project status: {}", status_exc)
         jm.fail_job(
             job_id,
             error=str(exc),

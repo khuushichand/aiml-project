@@ -348,7 +348,7 @@ class BackendManagedTransaction:
                         self._raw_conn.commit()
                     except _CHACHA_NONCRITICAL_EXCEPTIONS as commit_exc:
                         logger.error(
-                            "Commit failed for backend transaction on %s: %s",
+                            'Commit failed for backend transaction on {}: {}',
                             self._db.db_path_str,
                             commit_exc,
                             exc_info=True,
@@ -357,7 +357,7 @@ class BackendManagedTransaction:
                             self._raw_conn.rollback()
                         except _CHACHA_NONCRITICAL_EXCEPTIONS as rollback_exc:  # noqa: BLE001
                             logger.error(
-                                "Rollback after commit failure also failed on %s: %s",
+                                'Rollback after commit failure also failed on {}: {}',
                                 self._db.db_path_str,
                                 rollback_exc,
                                 exc_info=True,
@@ -368,7 +368,7 @@ class BackendManagedTransaction:
                         self._raw_conn.rollback()
                     except _CHACHA_NONCRITICAL_EXCEPTIONS as rollback_exc:  # noqa: BLE001
                         logger.error(
-                            "Rollback failed for backend transaction on %s: %s",
+                            'Rollback failed for backend transaction on {}: {}',
                             self._db.db_path_str,
                             rollback_exc,
                             exc_info=True,
@@ -2674,7 +2674,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return True  # noqa: TRY300
             except _CHACHA_NONCRITICAL_EXCEPTIONS as rollback_exc:  # noqa: BLE001
                 logger.warning(
-                    "Rollback failed after %s while setting PostgreSQL session scope: %s",
+                    'Rollback failed after {} while setting PostgreSQL session scope: {}',
                     context,
                     rollback_exc,
                 )
@@ -2686,7 +2686,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 conn.commit()
             except _CHACHA_NONCRITICAL_EXCEPTIONS as commit_exc:  # noqa: BLE001
                 logger.warning(
-                    "Commit failed after setting PostgreSQL session scope; attempting rollback: %s",
+                    'Commit failed after setting PostgreSQL session scope; attempting rollback: {}',
                     commit_exc,
                 )
                 if not _safe_rollback(conn, "commit failure"):
@@ -2696,13 +2696,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         conn.commit()
                     except _CHACHA_NONCRITICAL_EXCEPTIONS as retry_exc:  # noqa: BLE001
                         logger.warning(
-                            "Retrying PostgreSQL session scope setup failed: %s",
+                            'Retrying PostgreSQL session scope setup failed: {}',
                             retry_exc,
                         )
                         _safe_rollback(conn, "retry failure")
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             logger.warning(
-                "Failed to set PostgreSQL session scope; attempting rollback: %s",
+                'Failed to set PostgreSQL session scope; attempting rollback: {}',
                 exc,
             )
             if not _safe_rollback(conn, "SET failure"):
@@ -2712,7 +2712,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     conn.commit()
                 except _CHACHA_NONCRITICAL_EXCEPTIONS as retry_exc:  # noqa: BLE001
                     logger.warning(
-                        "Retrying PostgreSQL session scope setup failed: %s",
+                        'Retrying PostgreSQL session scope setup failed: {}',
                         retry_exc,
                     )
                     _safe_rollback(conn, "retry failure")
@@ -2734,7 +2734,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             else:
                 self.backend.get_pool().return_connection(connection)
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
-            logger.warning("Error while releasing connection: %s", exc)
+            logger.warning("Error while releasing connection: {}", exc)
 
     def _ensure_sqlite_backend(self) -> None:
         if self.backend_type != BackendType.SQLITE:
@@ -2766,13 +2766,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     return conn  # noqa: TRY300
                 except (sqlite3.ProgrammingError, sqlite3.OperationalError):
                     logger.warning(
-                        "Thread-local connection for %s was closed or became unusable. Reopening.",
+                        'Thread-local connection for {} was closed or became unusable. Reopening.',
                         self.db_path_str,
                     )
                     try:
                         conn.close()
                     except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
-                        logger.warning("Failed to close database connection: %s", exc)
+                        logger.warning("Failed to close database connection: {}", exc)
                     try:
                         # Prefer public helper to clear thread-local connection state
                         if hasattr(pool, 'clear_thread_local_connection'):
@@ -2787,7 +2787,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 conn = self._open_new_connection()
                 self._local.conn = conn
                 logger.debug(
-                    "Opened/Reopened SQLite connection to %s for thread %s",
+                    'Opened/Reopened SQLite connection to {} for thread {}',
                     self.db_path_str,
                     threading.get_ident(),
                 )
@@ -2803,7 +2803,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             conn = self._open_new_connection()
             self._local.conn = conn
             logger.debug(
-                "Acquired backend connection (%s) for thread %s",
+                'Acquired backend connection ({}) for thread {}',
                 self.backend_type.value,
                 threading.get_ident(),
             )
@@ -2836,13 +2836,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if conn.in_transaction:
                         try:
                             logger.warning(
-                                "Connection to %s is in an uncommitted transaction during close. Attempting rollback.",
+                                'Connection to {} is in an uncommitted transaction during close. Attempting rollback.',
                                 self.db_path_str,
                             )
                             conn.rollback()
                         except sqlite3.Error as rb_err:
                             logger.error(
-                                "Rollback attempt during close for %s failed: %s",
+                                'Rollback attempt during close for {} failed: {}',
                                 self.db_path_str,
                                 rb_err,
                             )
@@ -2852,31 +2852,31 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         if mode_row and mode_row[0].lower() == 'wal':
                             try:
                                 logger.debug(
-                                    "Attempting WAL checkpoint (TRUNCATE) before closing %s on thread %s.",
+                                    'Attempting WAL checkpoint (TRUNCATE) before closing {} on thread {}.',
                                     self.db_path_str,
                                     threading.get_ident(),
                                 )
                                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-                                logger.debug("WAL checkpoint TRUNCATE executed for %s.", self.db_path_str)
+                                logger.debug("WAL checkpoint TRUNCATE executed for {}.", self.db_path_str)
                             except sqlite3.Error as cp_err:
-                                logger.warning("WAL checkpoint failed for %s: %s", self.db_path_str, cp_err)
+                                logger.warning("WAL checkpoint failed for {}: {}", self.db_path_str, cp_err)
 
                 conn.close()
                 logger.debug(
-                    "Closed SQLite connection for thread %s to %s.",
+                    'Closed SQLite connection for thread {} to {}.',
                     threading.get_ident(),
                     self.db_path_str,
                 )
             else:
                 self.backend.get_pool().return_connection(conn)
                 logger.debug(
-                    "Returned backend connection (%s) for thread %s.",
+                    'Returned backend connection ({}) for thread {}.',
                     self.backend_type.value,
                     threading.get_ident(),
                 )
         except sqlite3.Error as exc:
             logger.warning(
-                "Error during SQLite connection close/checkpoint for %s on thread %s: %s",
+                'Error during SQLite connection close/checkpoint for {} on thread {}: {}',
                 self.db_path_str,
                 threading.get_ident(),
                 exc,
@@ -2901,7 +2901,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             pool = self.backend.get_pool()
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
-            logger.warning("Unable to retrieve backend pool while closing connections: %s", exc)
+            logger.warning("Unable to retrieve backend pool while closing connections: {}", exc)
             pool = None
 
         if self.backend_type == BackendType.SQLITE and pool is not None:
@@ -2910,14 +2910,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 try:
                     close_all()
                 except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
-                    logger.warning("Error closing all SQLite connections for %s: %s", self.db_path_str, exc)
+                    logger.warning("Error closing all SQLite connections for {}: {}", self.db_path_str, exc)
         elif pool is not None:
             try:
                 pool.close_all()
             except AttributeError:
                 pass
             except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
-                logger.warning("Error closing all backend connections for %s: %s", self.db_path_str, exc)
+                logger.warning("Error closing all backend connections for {}: {}", self.db_path_str, exc)
 
         # Reset thread-local reference regardless of backend
         with contextlib.suppress(_CHACHA_NONCRITICAL_EXCEPTIONS):
@@ -3010,7 +3010,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         conn = self.get_connection()
         try:
             logger.debug(
-                "Executing SQL (script=%s, backend=%s): %s... Params: %s...",
+                'Executing SQL (script={}, backend={}): {}... Params: {}...',
                 script,
                 self.backend_type.value,
                 query[:300],
@@ -3034,7 +3034,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         conn.commit()
                 except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
                     logger.error(
-                        "Commit failed after execute_query on backend %s: %s",
+                        'Commit failed after execute_query on backend {}: {}',
                         self.backend_type.value,
                         exc,
                         exc_info=True,
@@ -3056,7 +3056,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if "duplicate key" in msg or "unique constraint" in msg:
                 raise ConflictError(message=f"Database constraint violation: {exc}") from exc
             logger.error(
-                "Backend query execution failed (%s): %s",
+                'Backend query execution failed ({}): {}',
                 self.backend_type.value,
                 exc,
                 exc_info=True,
@@ -3093,7 +3093,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return None
         try:
             logger.debug(
-                "Executing Many on backend %s: %s... with %d sets.",
+                'Executing Many on backend {}: {}... with {} sets.',
                 self.backend_type.value,
                 query[:150],
                 len(params_list),
@@ -3111,7 +3111,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         conn.commit()
                 except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
                     logger.error(
-                        "Commit failed after execute_many on backend %s: %s",
+                        'Commit failed after execute_many on backend {}: {}',
                         self.backend_type.value,
                         exc,
                         exc_info=True,
@@ -3131,7 +3131,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if "duplicate key" in msg or "unique constraint" in msg:
                 raise ConflictError(message=f"Database constraint violation during batch: {exc}") from exc
             logger.error(
-                "Backend execute_many failed (%s): %s",
+                'Backend execute_many failed ({}): {}',
                 self.backend_type.value,
                 exc,
                 exc_info=True,
@@ -3176,7 +3176,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if "does not exist" in str(e).lower():
                 return 0
             logger.error(
-                "Could not determine database schema version for '%s' (backend %s): %s",
+                "Could not determine database schema version for '{}' (backend {}): {}",
                 self._SCHEMA_NAME,
                 self.backend_type.value,
                 e,
@@ -3741,7 +3741,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if "character_cards" not in msg or not any(marker in msg for marker in missing_markers):
                     raise
                 logger.warning(
-                    "Detected missing character_cards table for %s; re-initializing schema.",
+                    'Detected missing character_cards table for {}; re-initializing schema.',
                     self.db_path_str,
                 )
 
@@ -3757,7 +3757,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self.execute_query("SELECT 1 FROM character_cards LIMIT 1")
             except CharactersRAGDBError as exc:
                 logger.error(
-                    "Failed to verify character_cards table after schema re-initialization for %s: %s",
+                    'Failed to verify character_cards table after schema re-initialization for {}: {}',
                     self.db_path_str,
                     exc,
                 )
@@ -4212,6 +4212,38 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as e:
             raise SchemaError(f"Failed verifying FTS tables for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _ensure_character_cards_fts_columns_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Add legacy-missing character card columns required by FTS rebuild."""
+
+        required_columns = (
+            "description",
+            "personality",
+            "scenario",
+            "system_prompt",
+        )
+        try:
+            rows = conn.execute("PRAGMA table_info('character_cards')").fetchall()
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed reading character_cards schema: {exc}") from exc  # noqa: TRY003
+
+        existing_columns = {str(row[1]) for row in rows} if rows else set()
+        if not existing_columns:
+            return
+
+        missing_columns = [col for col in required_columns if col not in existing_columns]
+        for column_name in missing_columns:
+            try:
+                conn.execute(f"ALTER TABLE character_cards ADD COLUMN {column_name} TEXT")
+            except sqlite3.Error as exc:
+                raise SchemaError(
+                    f"Failed adding character_cards.{column_name} required for FTS rebuild: {exc}"
+                ) from exc  # noqa: TRY003
+        if missing_columns:
+            logger.warning(
+                "Added missing character_cards columns required for FTS rebuild: {}",
+                ", ".join(missing_columns),
+            )
+
     def _self_heal_character_cards_fts_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild character_cards_fts when active card rows are not indexed.
 
@@ -4222,13 +4254,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
           active row, and the first UPDATE trigger delete op can fail with:
           "database disk image is malformed".
         """
+        self._ensure_character_cards_fts_columns_sqlite(conn)
         try:
             active_cards_row = conn.execute(
                 "SELECT COUNT(*) FROM character_cards WHERE deleted = 0"
             ).fetchone()
             active_cards = int(active_cards_row[0]) if active_cards_row else 0
         except sqlite3.Error as exc:
-            logger.warning("Failed counting active character cards for FTS heal: %s", exc)
+            logger.warning("Failed counting active character cards for FTS heal: {}", exc)
             return
 
         if active_cards <= 0:
@@ -4242,7 +4275,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             indexed_cards = int(docsize_row[0]) if docsize_row else 0
         except sqlite3.Error as exc:
             logger.warning(
-                "Failed counting character_cards_fts_docsize rows; rebuilding index defensively: %s",
+                'Failed counting character_cards_fts_docsize rows; rebuilding index defensively: {}',
                 exc,
             )
             indexed_cards = -1
@@ -4251,14 +4284,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return
 
         logger.warning(
-            "character_cards_fts out of sync (active=%s indexed=%s); rebuilding.",
+            'character_cards_fts out of sync (active={} indexed={}); rebuilding.',
             active_cards,
             indexed_cards,
         )
         try:
             conn.execute("INSERT INTO character_cards_fts(character_cards_fts) VALUES('rebuild')")
         except sqlite3.Error as exc:
-            logger.error("Failed rebuilding character_cards_fts: %s", exc)
+            logger.error("Failed rebuilding character_cards_fts: {}", exc)
             raise SchemaError(f"Failed rebuilding character_cards_fts: {exc}") from exc  # noqa: TRY003
 
     def _initialize_schema_postgres(self):
@@ -4347,8 +4380,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
             if current_version < target_version:
                 logger.warning(
-                    "ChaChaNotes PostgreSQL schema is at version %s but code expects %s. Pending migrations will "
-                    "be addressed in a future update.",
+                    'ChaChaNotes PostgreSQL schema is at version {} but code expects {}. Pending migrations will be addressed in a future update.',
                     current_version,
                     target_version,
                 )
@@ -4359,7 +4391,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if self.backend.table_exists('keywords', connection=conn) and not self.backend.table_exists('chacha_keywords', connection=conn):
                         self.backend.execute("ALTER TABLE keywords RENAME TO chacha_keywords", connection=conn)
                 except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
-                    logger.warning("Failed to rename legacy keywords table: %s", exc)
+                    logger.warning("Failed to rename legacy keywords table: {}", exc)
 
                 self._ensure_postgres_fts(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
@@ -4453,7 +4485,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         connection=conn,
                     )
                 except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
-                    logger.warning("Failed to ensure ChaChaNotes PostgreSQL indexes: %s", exc)
+                    logger.warning("Failed to ensure ChaChaNotes PostgreSQL indexes: {}", exc)
             except BackendDatabaseError as exc:
                 raise SchemaError(f"Failed to ensure PostgreSQL FTS structures: {exc}") from exc  # noqa: TRY003
 
@@ -4495,14 +4527,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 backend.execute(update_sql, connection=connection)
             except BackendDatabaseError as exc:
                 logger.warning(
-                    "Failed to refresh PostgreSQL FTS vector for %s.%s: %s",
+                    'Failed to refresh PostgreSQL FTS vector for {}.{}: {}',
                     actual_source,
                     fts_column,
                     exc,
                 )
             except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.warning(
-                    "Unexpected error while refreshing PostgreSQL FTS vector for %s.%s: %s",
+                    'Unexpected error while refreshing PostgreSQL FTS vector for {}.{}: {}',
                     actual_source,
                     fts_column,
                     exc,
@@ -5258,7 +5290,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         "SELECT deleted, version FROM skill_registry WHERE name = ?", (name,)
                     ).fetchone()
                     if check_deleted and check_deleted["deleted"]:
-                        logger.info("Skill '%s' already deleted; soft-delete is idempotent.", name)
+                        logger.info("Skill '{}' already deleted; soft-delete is idempotent.", name)
                         return True
                     raise
 
@@ -5831,7 +5863,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
             except BackendDatabaseError as exc:  # noqa: BLE001
                 logger.warning(
-                    "Failed to synchronize PostgreSQL sequence for %s.%s: %s",
+                    'Failed to synchronize PostgreSQL sequence for {}.{}: {}',
                     table_name,
                     column_name,
                     exc,
@@ -6378,7 +6410,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except BackendDatabaseError as e:
             if self._is_unique_violation(e):
                 logger.warning(
-                    "Character card with name '%s' already exists (backend %s).",
+                    "Character card with name '{}' already exists (backend {}).",
                     card_data['name'],
                     self.backend_type.value,
                 )
@@ -6455,7 +6487,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     return self._deserialize_row_fields(row, self._CHARACTER_CARD_JSON_FIELDS)
                 except (CharactersRAGDBError, SchemaError):
                     logger.error(
-                        "Schema recovery failed while fetching character card by name '%s'.",
+                        "Schema recovery failed while fetching character card by name '{}'.",
                         name,
                         exc_info=True,
                     )
@@ -6612,7 +6644,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if self._is_unique_violation(e):
                 updated_name = card_data.get("name", "[name not in update_data]")
                 logger.warning(
-                    "Update for character card ID %s failed on backend %s: name '%s' already exists.",
+                    "Update for character card ID {} failed on backend {}: name '{}' already exists.",
                     character_id,
                     self.backend_type.value,
                     updated_name,
@@ -6623,7 +6655,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     entity_id=updated_name,
                 ) from e
             logger.critical(
-                "Backend error during update_character_card (SINGLE UPDATE STRATEGY) for ID %s: %s",
+                'Backend error during update_character_card (SINGLE UPDATE STRATEGY) for ID {}: {}',
                 character_id,
                 e,
                 exc_info=True,
@@ -6726,7 +6758,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
         except BackendDatabaseError as e:
             logger.error(
-                "Backend error soft-deleting character card ID %s (expected v%s): %s",
+                'Backend error soft-deleting character card ID {} (expected v{}): {}',
                 character_id,
                 expected_version,
                 e,
@@ -6822,7 +6854,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
         except BackendDatabaseError as e:
             logger.error(
-                "Backend error restoring character card ID %s (expected v%s): %s",
+                'Backend error restoring character card ID {} (expected v{}): {}',
                 character_id,
                 expected_version,
                 e,
@@ -6861,7 +6893,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
             if not tsquery:
-                logger.debug("FTS normalization produced empty tsquery for input '%s'", search_term)
+                logger.debug("FTS normalization produced empty tsquery for input '{}'", search_term)
                 return []
 
             query = """
@@ -6881,7 +6913,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if row
                 ]
             except CharactersRAGDBError as exc:
-                logger.error("PostgreSQL FTS search failed for character cards term '%s': %s", search_term, exc)
+                logger.error("PostgreSQL FTS search failed for character cards term '{}': {}", search_term, exc)
                 raise
 
         # Escape embedded quotes to avoid breaking the literal phrase wrapper
@@ -7565,7 +7597,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             rows = cursor.fetchall()
         except CharactersRAGDBError as exc:
             logger.error(
-                "Error searching character exemplars for character_id=%s query='%s': %s",
+                "Error searching character exemplars for character_id={} query='{}': {}",
                 character_id,
                 normalized_query,
                 exc,
@@ -7906,7 +7938,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     result[str(conv_id)] = int(cnt or 0)
             return result  # noqa: TRY300
         except CharactersRAGDBError as e:
-            logger.error("Database error counting messages for conversations: %s", e)
+            logger.error("Database error counting messages for conversations: {}", e)
             raise
 
     def get_latest_message_for_conversation(self, conversation_id: str) -> dict[str, Any] | None:
@@ -7929,7 +7961,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "sender": row[3],
             }
         except CharactersRAGDBError as exc:
-            logger.error("Database error fetching latest message for conversation %s: %s", conversation_id, exc)
+            logger.error("Database error fetching latest message for conversation {}: {}", conversation_id, exc)
             raise
 
     def count_messages_since(
@@ -7969,7 +8001,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             except _CHACHA_NONCRITICAL_EXCEPTIONS:
                 return int(row.get("COUNT(1)") or row.get("count") or 0)
         except CharactersRAGDBError as exc:
-            logger.error("Database error counting messages after %s: %s", since_message_id, exc)
+            logger.error("Database error counting messages after {}: {}", since_message_id, exc)
             raise
 
     def upsert_conversation_cluster(
@@ -8006,7 +8038,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self.backend.execute(query, (cluster_id, title, centroid, int(size)))
             return True  # noqa: TRY300
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
-            logger.error("Failed to upsert conversation cluster %s: %s", cluster_id, exc)
+            logger.error("Failed to upsert conversation cluster {}: {}", cluster_id, exc)
             return False
 
     def get_conversation_cluster(self, cluster_id: str) -> dict[str, Any] | None:
@@ -8026,7 +8058,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "updated_at": row[5],
             }
         except CharactersRAGDBError as exc:
-            logger.error("Failed to fetch conversation cluster %s: %s", cluster_id, exc)
+            logger.error("Failed to fetch conversation cluster {}: {}", cluster_id, exc)
             raise
 
     def count_conversations_for_user_by_character(self, client_id: str, character_id: int) -> int:
@@ -8425,7 +8457,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(title_query, 'postgresql')
             if not tsquery:
-                logger.debug("Conversation title query normalized to empty tsquery for input '%s'", title_query)
+                logger.debug("Conversation title query normalized to empty tsquery for input '{}'", title_query)
                 return []
 
             base_query = """
@@ -8449,7 +8481,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 cursor = self.execute_query(base_query, tuple(params_list))
                 rows = [dict(row) for row in cursor.fetchall()]
             except CharactersRAGDBError as exc:
-                logger.error("PostgreSQL FTS search failed for conversations term '%s': %s", title_query, exc)
+                logger.error("PostgreSQL FTS search failed for conversations term '{}': {}", title_query, exc)
                 raise
 
             if not rows:
@@ -8600,7 +8632,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 cursor = self.execute_query(base_query, tuple(params))
                 return [dict(row) for row in cursor.fetchall()]
             except CharactersRAGDBError as exc:
-                logger.error("PostgreSQL conversation search failed: %s", exc)
+                logger.error("PostgreSQL conversation search failed: {}", exc)
                 raise
 
         date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(NULLIF(c.last_modified,''), c.created_at)"
@@ -8792,7 +8824,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if normalized_images:
                     self._insert_message_images(msg_id, normalized_images)
             logger.info(
-                "Added message ID: %s to conversation %s (Images stored: %s).",
+                'Added message ID: {} to conversation {} (Images stored: {}).',
                 msg_id,
                 msg_data['conversation_id'],
                 len(normalized_images) if normalized_images else ("Yes" if msg_data.get('image_data') else "No"),
@@ -8966,7 +8998,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             except _CHACHA_NONCRITICAL_EXCEPTIONS:
                 return int(row.get("COUNT(1)") or row.get("count") or 0)
         except CharactersRAGDBError as e:
-            logger.error("Database error counting root messages for conversation %s: %s", conversation_id, e)
+            logger.error("Database error counting root messages for conversation {}: {}", conversation_id, e)
             raise
 
     def get_root_messages_for_conversation(
@@ -9001,7 +9033,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 results.append(record)
             return results  # noqa: TRY300
         except CharactersRAGDBError as e:
-            logger.error("Database error fetching root messages for conversation %s: %s", conversation_id, e)
+            logger.error("Database error fetching root messages for conversation {}: {}", conversation_id, e)
             raise
 
     def get_messages_for_conversation_by_parent_ids(
@@ -9039,7 +9071,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return results  # noqa: TRY300
         except CharactersRAGDBError as e:
             logger.error(
-                "Database error fetching child messages for conversation %s: %s",
+                'Database error fetching child messages for conversation {}: {}',
                 conversation_id,
                 e,
             )
@@ -9079,7 +9111,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return cursor.fetchone() is not None
         except CharactersRAGDBError as e:
             logger.error(
-                "Database error checking system messages for conversation ID %s: %s",
+                'Database error checking system messages for conversation ID {}: {}',
                 conversation_id,
                 e,
             )
@@ -9298,7 +9330,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(content_query, 'postgresql')
             if not tsquery:
-                logger.debug("Message content query normalized to empty tsquery for input '%s'", content_query)
+                logger.debug("Message content query normalized to empty tsquery for input '{}'", content_query)
                 return []
 
             base_query = [
@@ -9321,7 +9353,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 cursor = self.execute_query("\n".join(base_query), tuple(params_list))
                 return [dict(row) for row in cursor.fetchall()]
             except CharactersRAGDBError as exc:
-                logger.error("PostgreSQL FTS search failed for messages term '%s': %s", content_query, exc)
+                logger.error("PostgreSQL FTS search failed for messages term '{}': {}", content_query, exc)
                 raise
 
         safe_search_term = f'"{content_query}"'
@@ -9843,7 +9875,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
             if not tsquery:
                 logger.debug(
-                    "Generic FTS query normalized to empty tsquery for table '%s' with input '%s'",
+                    "Generic FTS query normalized to empty tsquery for table '{}' with input '{}'",
                     main_table_name,
                     search_term,
                 )
@@ -9862,7 +9894,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 cursor = self.execute_query(query, (tsquery, tsquery, limit))
                 return [dict(row) for row in cursor.fetchall()]
             except CharactersRAGDBError as exc:
-                logger.error("PostgreSQL FTS search failed for table '%s': %s", main_table_name, exc)
+                logger.error("PostgreSQL FTS search failed for table '{}': {}", main_table_name, exc)
                 raise
 
         # Use explicit table-name for MATCH and bm25() for SQLite FTS5 compatibility
@@ -10021,9 +10053,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         cursor = self.execute_query(query, (tsquery, tsquery, limit))
                         return [dict(row) for row in cursor.fetchall()]
                     except CharactersRAGDBError as exc:
-                        logger.error("PostgreSQL FTS search failed for keywords term '%s': %s", search_term, exc)
+                        logger.error("PostgreSQL FTS search failed for keywords term '{}': {}", search_term, exc)
                         raise
-                logger.debug("Keyword search term normalized to empty tsquery for input '%s'", search_term)
+                logger.debug("Keyword search term normalized to empty tsquery for input '{}'", search_term)
                 return []
 
             # Non-simple tokens (e.g., "C++") skip FTS and fall back to ILIKE.
@@ -10513,7 +10545,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
         except BackendDatabaseError as e:
             logger.error(
-                "Backend error restoring note ID %s (expected v%s): %s",
+                'Backend error restoring note ID {} (expected v{}): {}',
                 note_id,
                 expected_version,
                 e,
@@ -10558,7 +10590,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             """
             fallback_params = (f"%{search_term}%", f"%{search_term}%", limit, offset)
             if not tsquery:
-                logger.debug("Notes search term normalized to empty tsquery for input '%s'", search_term)
+                logger.debug("Notes search term normalized to empty tsquery for input '{}'", search_term)
                 cursor = self.execute_query(fallback_query, fallback_params)
                 return [dict(row) for row in cursor.fetchall()]
 
@@ -10579,7 +10611,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 cursor = self.execute_query(fallback_query, fallback_params)
                 return [dict(row) for row in cursor.fetchall()]
             except CharactersRAGDBError as exc:
-                logger.error("PostgreSQL FTS search failed for notes term '%s': %s", search_term, exc)
+                logger.error("PostgreSQL FTS search failed for notes term '{}': {}", search_term, exc)
                 raise
 
         safe_literal = search_term.replace('"', '""')
@@ -10624,7 +10656,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if search_term and str(search_term).strip():
                 tsquery = FTSQueryTranslator.normalize_query(str(search_term), 'postgresql')
                 if not tsquery:
-                    logger.debug("Notes search term normalized to empty tsquery for input '%s'", search_term)
+                    logger.debug("Notes search term normalized to empty tsquery for input '{}'", search_term)
                     return []
                 query = f"""
                     SELECT DISTINCT n.*, ts_rank(n.notes_fts_tsv, to_tsquery('english', ?)) AS rank
@@ -10707,7 +10739,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 row = cursor.fetchone()
                 return int(row["cnt"]) if row else 0
             except CharactersRAGDBError as exc:
-                logger.error("PostgreSQL FTS count failed for notes term '%s': %s", search_term, exc)
+                logger.error("PostgreSQL FTS count failed for notes term '{}': {}", search_term, exc)
                 raise
 
         safe_literal = search_term.replace('"', '""')
@@ -10724,7 +10756,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             row = cursor.fetchone()
             return int(row["cnt"]) if row else 0
         except CharactersRAGDBError as exc:
-            logger.error("SQLite FTS count failed for notes term '%s': %s", search_term, exc)
+            logger.error("SQLite FTS count failed for notes term '{}': {}", search_term, exc)
             raise
 
 
@@ -10805,7 +10837,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise CharactersRAGDBError(f"Database error during {operation} for {link_table}: {e}") from e  # noqa: TRY003
         except BackendDatabaseError as exc:
             logger.error(
-                "Backend error during %s for %s (%s=%s, %s=%s): %s",
+                'Backend error during {} for {} ({}={}, {}={}): {}',
                 operation,
                 link_table,
                 col1_name,
@@ -11287,7 +11319,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if self.backend_type == BackendType.POSTGRESQL:
                 tsquery = FTSQueryTranslator.normalize_query(q, 'postgresql')
                 if not tsquery:
-                    logger.debug("Flashcard query normalized to empty tsquery for input '%s'", q)
+                    logger.debug("Flashcard query normalized to empty tsquery for input '{}'", q)
                     return []
                 fts_filter = "AND f.flashcards_fts_tsv @@ to_tsquery('english', ?)"
                 params.append(tsquery)
@@ -11295,7 +11327,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 # Normalize query for SQLite FTS5 (quotes/operators)
                 norm_q = FTSQueryTranslator.normalize_query(q, 'sqlite')
                 if not norm_q:
-                    logger.debug("Flashcard query normalized to empty sqlite tsquery for input '%s'", q)
+                    logger.debug("Flashcard query normalized to empty sqlite tsquery for input '{}'", q)
                     return []
                 fts_filter = "AND f.rowid IN (SELECT rowid FROM flashcards_fts WHERE flashcards_fts MATCH ?)"
                 params.append(norm_q)
@@ -12540,7 +12572,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             with self.transaction() as conn:
                 conn.execute(query, params)
-                logger.info("Added writing session '%s' with ID: %s.", session_name, final_id)
+                logger.info("Added writing session '{}' with ID: {}.", session_name, final_id)
                 return final_id
         except sqlite3.IntegrityError as e:
             msg = str(e).lower()

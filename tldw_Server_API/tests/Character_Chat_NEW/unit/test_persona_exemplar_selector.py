@@ -20,6 +20,18 @@ class _StubExemplarDB:
         return self._exemplars[offset:offset + limit]
 
 
+class _MalformedSearchDB:
+    def __init__(self, exemplars: list[dict]):
+        self._exemplars = exemplars
+
+    def search_character_exemplars(self, character_id: int, query: str, limit: int, offset: int):
+        # Regression shape: malformed/non-tuple search responses should not crash selector.
+        return ()
+
+    def list_character_exemplars(self, character_id: int, limit: int, offset: int):
+        return self._exemplars[offset:offset + limit]
+
+
 @pytest.mark.unit
 def test_classify_user_turn_detects_scenario_and_emotion():
     heuristics = classify_user_turn("The reporter asked an angry media question in the interview")
@@ -241,6 +253,37 @@ def test_selector_returns_empty_for_blank_turn():
     assert result.selected == []
     assert result.budget_tokens_used == 0
     assert result.scores == []
+
+
+@pytest.mark.unit
+def test_selector_handles_malformed_search_shape_with_list_fallback():
+    db = _MalformedSearchDB(
+        [
+            {
+                "id": "fallback",
+                "text": "fallback exemplar line for press response",
+                "scenario": "press_challenge",
+                "emotion": "neutral",
+                "novelty_hint": "unknown",
+                "rhetorical": ["opener"],
+                "length_tokens": 20,
+            },
+        ]
+    )
+
+    result = select_character_exemplars(
+        db=db,  # type: ignore[arg-type]
+        character_id=1,
+        user_turn="How should I answer this reporter question?",
+        config=PersonaExemplarSelectorConfig(
+            budget_tokens=80,
+            max_exemplar_tokens=40,
+            mmr_lambda=0.7,
+            candidate_pool_size=20,
+        ),
+    )
+
+    assert [item["id"] for item in result.selected] == ["fallback"]
 
 
 @pytest.mark.unit
