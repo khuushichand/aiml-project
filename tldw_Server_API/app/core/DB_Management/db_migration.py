@@ -15,7 +15,6 @@ Based on ADR-002: Alembic-style migrations within SQLite constraints.
 import json
 import os
 import re
-import shutil
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -24,6 +23,10 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.DB_Backups import (
+    _sqlite_error_is_busy,
+    restore_sqlite_database_file,
+)
 from tldw_Server_API.app.core.Utils.path_utils import resolve_path
 
 
@@ -623,17 +626,12 @@ class DatabaseMigrator:
         safety_backup = self.create_backup("before_rollback")
 
         try:
-            # Replace current database with backup
-            shutil.copy2(backup_path_str, self.db_path)
-            for suffix in ("-wal", "-shm"):
-                backup_sidecar = f"{backup_path_str}{suffix}"
-                target_sidecar = f"{self.db_path}{suffix}"
-                if os.path.exists(backup_sidecar):
-                    shutil.copy2(backup_sidecar, target_sidecar)
-                    logger.info(f"Restored journal file: {target_sidecar}")
-                elif os.path.exists(target_sidecar):
-                    os.remove(target_sidecar)
-                    logger.info(f"Removed stale journal file: {target_sidecar}")
+            # Restore via SQLite backup API to avoid unsafe raw file replacement.
+            restore_sqlite_database_file(
+                source_db_path=backup_path_str,
+                target_db_path=self.db_path,
+                lock_timeout_seconds=0.5,
+            )
             logger.info(f"Rolled back to backup: {backup_path}")
 
             return {
@@ -642,6 +640,12 @@ class DatabaseMigrator:
                 "safety_backup": safety_backup
             }
 
+        except sqlite3.Error as exc:
+            if _sqlite_error_is_busy(exc):
+                raise MigrationError(
+                    "Rollback failed: target database is busy/locked; stop active clients and retry"
+                ) from exc
+            raise MigrationError(f"Rollback failed: {exc}") from exc
         except Exception as e:
             raise MigrationError(f"Rollback failed: {e}") from e
 

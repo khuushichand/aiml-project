@@ -1182,6 +1182,9 @@ else:
 
 # Metrics and Telemetry - import directly and fail fast on errors
 from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
+from tldw_Server_API.app.core.AuthNZ.startup_integrity import (
+    verify_authnz_sqlite_startup_integrity,
+)
 
 # Core helpers - import directly (fail fast if missing)
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import get_cached_evaluation_manager
@@ -1394,6 +1397,30 @@ async def lifespan(app: FastAPI):
 
     # Startup: Initialize auth services
     logger.info("App Startup: Initializing authentication services...")
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_auth_settings
+
+        _auth_settings = _get_auth_settings()
+        _allow_corrupt_startup = _shared_is_truthy(
+            os.getenv("TLDW_ALLOW_CORRUPT_AUTHNZ_STARTUP")
+        )
+        await verify_authnz_sqlite_startup_integrity(
+            database_url=str(getattr(_auth_settings, "DATABASE_URL", "")),
+            auth_mode=str(getattr(_auth_settings, "AUTH_MODE", "single_user")),
+            dispatch_alerts=True,
+            fail_on_error=not _allow_corrupt_startup,
+        )
+        if _allow_corrupt_startup:
+            logger.warning(
+                "App Startup: Corrupt AuthNZ DB fail-open mode enabled via "
+                "TLDW_ALLOW_CORRUPT_AUTHNZ_STARTUP=true"
+            )
+    except _STARTUP_GUARD_EXCEPTIONS as _integrity_err:
+        logger.exception(
+            f"App Startup: AuthNZ SQLite integrity preflight failed: {_integrity_err}"
+        )
+        raise
+
     try:
         # Initialize database pool for auth
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool

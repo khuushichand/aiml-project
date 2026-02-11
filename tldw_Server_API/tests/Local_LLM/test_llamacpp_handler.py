@@ -498,6 +498,75 @@ async def test_llamacpp_allow_unvalidated_args_unknown_flags_passthrough(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_llamacpp_start_server_accepts_structured_aliases(monkeypatch, tmp_path: Path):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "toy.gguf").write_text("fake")
+
+    cfg = LlamaCppConfig(
+        executable_path=exe,
+        models_dir=model_dir,
+        default_host="127.0.0.1",
+        default_port=8011,
+    )
+    handler = LlamaCppHandler(cfg, global_app_config={})
+
+    captured_cmd = {"args": ()}
+
+    class DP:
+        pid = 101
+        returncode = None
+        stdout = None
+        stderr = None
+
+        async def wait(self):
+            return 0
+
+    async def fake_cpe(*args, **kwargs):
+        captured_cmd["args"] = args
+        return DP()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_cpe)
+
+    import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
+    monkeypatch.setattr(llama_mod, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
+
+    res = await handler.start_server(
+        "toy.gguf",
+        server_args={
+            "n_ctx": 8192,
+            "n_batch": 1024,
+            "cache_type": "f16",
+            "row_split": True,
+            "streaming_llm": True,
+            "cpu_moe": True,
+            "n_cpu_moe": 7,
+            "flash_attn": "on",
+            "no_mmproj": True,
+            "draft_max": 16,
+        },
+    )
+
+    assert res["status"] == "started"
+    args = list(captured_cmd["args"])
+
+    assert "-c" in args and "8192" in args
+    assert "-b" in args and "1024" in args
+    assert "--cache-type-k" in args and "f16" in args
+    assert "--cache-type-v" in args and "f16" in args
+    assert "--split-mode" in args and "row" in args
+    assert "--context-shift" in args
+    assert "--cpu-moe" in args
+    assert "--n-cpu-moe" in args and "7" in args
+    assert "--flash-attn" in args and "on" in args
+    assert "--no-mmproj" in args
+    assert "--draft-max" in args and "16" in args
+
+
+@pytest.mark.asyncio
 async def test_llamacpp_inference_forces_non_streaming(monkeypatch, tmp_path: Path):
     exe = tmp_path / "llama_server"
     exe.write_text("#!/bin/sh\n")

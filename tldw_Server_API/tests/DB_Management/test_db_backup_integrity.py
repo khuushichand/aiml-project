@@ -1,5 +1,4 @@
 import sqlite3
-from pathlib import Path
 
 import pytest
 
@@ -113,7 +112,7 @@ def test_incremental_backup_accepts_sqlite_file_uri(backup_env):
     assert rows == [("hello",)]
 
 
-def test_rollback_to_backup_restores_wal_sidecars(backup_env):
+def test_rollback_to_backup_restores_data(backup_env):
 
     db_path = backup_env / "waltest.db"
     with sqlite3.connect(db_path) as conn:
@@ -133,15 +132,6 @@ def test_rollback_to_backup_restores_wal_sidecars(backup_env):
 
     assert result["status"] == "success"
 
-    for suffix in ("-wal", "-shm"):
-        backup_sidecar = Path(backup_path + suffix)
-        current_sidecar = Path(str(db_path) + suffix)
-        if backup_sidecar.exists():
-            assert current_sidecar.exists()
-            assert current_sidecar.read_bytes() == backup_sidecar.read_bytes()
-        else:
-            assert not current_sidecar.exists()
-
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute("SELECT val FROM entries ORDER BY rowid").fetchall()
     assert rows == [("original",)]
@@ -153,13 +143,18 @@ def test_restore_skips_snapshot_when_target_missing(backup_env):
     backup_dir.mkdir()
     backup_name = "test_backup.db"
     backup_file = backup_dir / backup_name
-    backup_file.write_text("restored content")
+    with sqlite3.connect(backup_file) as conn:
+        conn.execute("CREATE TABLE entries (val TEXT)")
+        conn.execute("INSERT INTO entries (val) VALUES ('restored content')")
+        conn.commit()
 
     db_path = backup_env / "nested" / "restored.db"
     result = restore_single_db_backup(str(db_path), str(backup_dir), "testdb", backup_name)
 
     assert "restored" in result.lower()
-    assert db_path.read_text() == "restored content"
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute("SELECT val FROM entries").fetchall()
+    assert rows == [("restored content",)]
     pre_restore = list(backup_dir.glob("testdb_pre_restore_*.db"))
     assert pre_restore == []
 
@@ -170,18 +165,58 @@ def test_restore_creates_snapshot_when_target_exists(backup_env):
     backup_dir.mkdir()
     backup_name = "test_backup.db"
     backup_file = backup_dir / backup_name
-    backup_file.write_text("new data")
+    with sqlite3.connect(backup_file) as conn:
+        conn.execute("CREATE TABLE entries (val TEXT)")
+        conn.execute("INSERT INTO entries (val) VALUES ('new data')")
+        conn.commit()
 
     db_path = backup_env / "existing.db"
-    db_path.write_text("old data")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE entries (val TEXT)")
+        conn.execute("INSERT INTO entries (val) VALUES ('old data')")
+        conn.commit()
 
     result = restore_single_db_backup(str(db_path), str(backup_dir), "testdb", backup_name)
 
     assert "restored" in result.lower()
     snapshot_files = list(backup_dir.glob("testdb_pre_restore_*.db"))
     assert len(snapshot_files) == 1
-    assert snapshot_files[0].read_text() == "old data"
-    assert db_path.read_text() == "new data"
+    with sqlite3.connect(snapshot_files[0]) as conn:
+        snapshot_rows = conn.execute("SELECT val FROM entries").fetchall()
+    assert snapshot_rows == [("old data",)]
+    with sqlite3.connect(db_path) as conn:
+        restored_rows = conn.execute("SELECT val FROM entries").fetchall()
+    assert restored_rows == [("new data",)]
+
+
+def test_restore_busy_target_fails_without_overwrite(backup_env):
+    db_path = backup_env / "busy.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE entries (val TEXT)")
+        conn.execute("INSERT INTO entries (val) VALUES ('live')")
+        conn.commit()
+
+    backup_dir = backup_env / "backups"
+    backup_dir.mkdir()
+    backup_name = "busy_backup.db"
+    backup_file = backup_dir / backup_name
+    with sqlite3.connect(backup_file) as conn:
+        conn.execute("CREATE TABLE entries (val TEXT)")
+        conn.execute("INSERT INTO entries (val) VALUES ('backup')")
+        conn.commit()
+
+    blocker = sqlite3.connect(db_path, timeout=0.1)
+    blocker.execute("BEGIN EXCLUSIVE")
+    try:
+        result = restore_single_db_backup(str(db_path), str(backup_dir), "busy", backup_name)
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    assert "busy/locked" in result.lower()
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute("SELECT val FROM entries").fetchall()
+    assert rows == [("live",)]
 
 
 def test_restore_rejects_invalid_backup_name(backup_env):
@@ -189,12 +224,17 @@ def test_restore_rejects_invalid_backup_name(backup_env):
     backup_dir = backup_env / "backups"
     backup_dir.mkdir()
     db_path = backup_env / "restore.db"
-    db_path.write_text("existing data")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE entries (val TEXT)")
+        conn.execute("INSERT INTO entries (val) VALUES ('existing data')")
+        conn.commit()
 
     result = restore_single_db_backup(str(db_path), str(backup_dir), "data", "../evil.db")
 
     assert "invalid backup name" in result.lower()
-    assert db_path.read_text() == "existing data"
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute("SELECT val FROM entries").fetchall()
+    assert rows == [("existing data",)]
 
 
 def test_backup_round_trip_uses_flat_directory(backup_env):
@@ -243,7 +283,10 @@ def test_create_backup_rejects_absolute_db_path_outside_allowed_root(backup_env)
 
 def test_create_backup_rejects_traversal_backup_dir(backup_env):
     db_path = backup_env / "data.db"
-    db_path.write_text("data")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE entries (val TEXT)")
+        conn.execute("INSERT INTO entries (val) VALUES ('data')")
+        conn.commit()
     backup_dir = "../escape"
 
     result = create_backup(str(db_path), backup_dir, "testdb")

@@ -19,6 +19,10 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.DB_Backups import (
+    _sqlite_error_is_busy,
+    restore_sqlite_database_file,
+)
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import (
     BundleConcurrencyError,
@@ -690,7 +694,11 @@ def import_bundle(
                     warnings.append(f"Extracted file missing for dataset '{ds}'")
                     continue
                 os.makedirs(os.path.dirname(live_db_path), exist_ok=True)
-                shutil.copy2(extracted_path, live_db_path)
+                restore_sqlite_database_file(
+                    source_db_path=extracted_path,
+                    target_db_path=live_db_path,
+                    lock_timeout_seconds=0.5,
+                )
                 datasets_restored.append(ds)
             except Exception as exc:
                 logger.error("Failed to restore dataset {}: {}", ds, exc)
@@ -717,6 +725,11 @@ def import_bundle(
                                 f"{restored_ds}: {rollback_exc}"
                             )
                 detail = f"restore_failed:{ds}: {exc}"
+                if isinstance(exc, sqlite3.Error) and _sqlite_error_is_busy(exc):
+                    detail = (
+                        f"restore_failed:{ds}: target database is busy/locked; "
+                        "stop active clients and retry"
+                    )
                 if rollback_failures:
                     detail += (
                         f"; rollback_failures: {'; '.join(rollback_failures)}"
