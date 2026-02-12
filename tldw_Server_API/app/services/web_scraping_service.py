@@ -605,12 +605,27 @@ async def ingest_web_content_orchestrate(
             request, "cookies", None
         ):
             raw_cookies = request.cookies
-            try:
-                parsed = json.loads(raw_cookies)
-            except json.JSONDecodeError:
+            if isinstance(raw_cookies, (bytes, bytearray)):
+                try:
+                    raw_cookies = raw_cookies.decode("utf-8")
+                except UnicodeDecodeError:
+                    raise HTTPException(
+                        status_code=400, detail="Invalid cookies format"
+                    ) from None
+
+            if isinstance(raw_cookies, str):
+                try:
+                    parsed = json.loads(raw_cookies)
+                except json.JSONDecodeError:
+                    raise HTTPException(
+                        status_code=400, detail="Invalid JSON format for cookies"
+                    ) from None
+            elif isinstance(raw_cookies, (dict, list)):
+                parsed = raw_cookies
+            else:
                 raise HTTPException(
-                    status_code=400, detail="Invalid JSON format for cookies"
-                ) from None
+                    status_code=400, detail="Invalid cookies format"
+                )
 
             if isinstance(parsed, dict):
                 custom_cookies_list = [parsed]

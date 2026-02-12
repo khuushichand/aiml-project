@@ -74,6 +74,61 @@ def test_parse_google_results_minimal():
     assert item["content"] == "snippet"
 
 
+def test_parse_google_results_prefers_lr_for_result_language():
+    raw = {
+        "queries": {
+            "request": [
+                {
+                    "searchTerms": "q",
+                    "language": "en",
+                    "count": 1,
+                    "lr": "lang_fr",
+                    "hl": "en",
+                }
+            ]
+        }
+    }
+    out = {"results": []}
+    parse_google_results(raw, out)
+    assert out.get("search_result_language") == "lang_fr"
+
+
+def test_parse_google_results_falls_back_to_hl_for_result_language():
+    raw = {
+        "queries": {
+            "request": [
+                {
+                    "searchTerms": "q",
+                    "language": "en",
+                    "count": 1,
+                    "hl": "en",
+                }
+            ]
+        }
+    }
+    out = {"results": []}
+    parse_google_results(raw, out)
+    assert out.get("search_result_language") == "en"
+
+
+def test_parse_google_results_accepts_lowercase_googlehost():
+    raw = {
+        "queries": {
+            "request": [
+                {
+                    "searchTerms": "q",
+                    "language": "en",
+                    "count": 1,
+                    "googlehost": "google.de",
+                }
+            ]
+        }
+    }
+    out = {"results": []}
+    parse_google_results(raw, out)
+    assert out.get("google_domain") == "google.de"
+
+
 def test_parse_kagi_results_minimal():
     raw = {
         "meta": {"ms": 120, "id": "abc"},

@@ -2357,7 +2357,7 @@ def parse_transcription_model(model_name: str) -> tuple:
     - "nemo-canary-1b" -> ("canary", "canary", "standard")
     - "nemo-parakeet-tdt-1.1b" -> ("parakeet", "parakeet", "standard")
     - "whisper-large-v3" -> ("whisper", "large-v3", None)
-    - "distil-whisper-large-v3" -> ("whisper", "distil-whisper-large-v3", None)
+    - "distil-whisper-large-v3" -> ("whisper", "distil-large-v3", None)
 
     Returns:
         Tuple of (provider, model, variant)
@@ -3002,7 +3002,7 @@ def speech_to_text(
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Parakeet transcription failed, falling back to whisper: {e}")
             provider = "whisper"
-            model = "distil-whisper-large-v3"  # Default fallback model
+            model = "distil-large-v3"  # Default fallback model
 
     elif provider == "canary":
         _check_cancel(cancel_check, label="speech-to-text")
@@ -3022,7 +3022,7 @@ def speech_to_text(
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Canary transcription failed, falling back to whisper: {e}")
             provider = "whisper"
-            model = "distil-whisper-large-v3"
+            model = "distil-large-v3"
 
     elif provider == "qwen2audio":
         _check_cancel(cancel_check, label="speech-to-text")
@@ -3042,7 +3042,7 @@ def speech_to_text(
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Qwen2Audio transcription failed, falling back to whisper: {e}")
             provider = "whisper"
-            model = "distil-whisper-large-v3"
+            model = "distil-large-v3"
 
     elif provider == "qwen3-asr":
         _check_cancel(cancel_check, label="speech-to-text")
@@ -3076,7 +3076,7 @@ def speech_to_text(
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Qwen3-ASR transcription failed, falling back to whisper: {e}")
             provider = "whisper"
-            model = "distil-whisper-large-v3"
+            model = "distil-large-v3"
 
     elif provider == "vibevoice":
         _check_cancel(cancel_check, label="speech-to-text")
@@ -3110,7 +3110,7 @@ def speech_to_text(
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"VibeVoice-ASR transcription failed, falling back to whisper: {e}")
             provider = "whisper"
-            model = "distil-whisper-large-v3"
+            model = "distil-large-v3"
 
     # If we get here, use the original whisper implementation
     # Update whisper_model to use the parsed model name (in case we fell back)

@@ -264,11 +264,17 @@ errors.log
 *.csv
 *.json
 !apps/package.json
+!apps/extension/package.json
 !apps/packages/ui/src/assets/locale/*/settings.json
 !apps/packages/ui/src/assets/locale/*/sidepanel.json
 !admin-ui/package.json
 all_summaries.txt
 all_transcriptions.json
+
+# Allow extension token-sync verifier script only.
+!apps/extension/scripts/
+apps/extension/scripts/*
+!apps/extension/scripts/verify-shared-token-sync.mjs
 
 # Temporary files
 temp_*.png

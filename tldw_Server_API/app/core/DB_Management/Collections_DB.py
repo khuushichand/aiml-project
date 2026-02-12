@@ -2741,6 +2741,7 @@ class CollectionsDatabase:
         run_id: int | None = None,
         type_: str | None = None,
         workspace_tag: str | None = None,
+        metadata_origin: str | None = None,
         include_deleted: bool = False,
         only_deleted: bool = False,
     ) -> tuple[list[CollectionsDatabase.OutputArtifactRow], int]:
@@ -2762,6 +2763,14 @@ class CollectionsDatabase:
         if workspace_tag:
             where.append("workspace_tag = ?")
             params.append(workspace_tag)
+        if metadata_origin:
+            origin = str(metadata_origin).strip()
+            if origin:
+                where.append("(metadata_json LIKE ? OR metadata_json LIKE ?)")
+                params.extend([
+                    f'%\"origin\":\"{origin}\"%',
+                    f'%\"origin\": \"{origin}\"%',
+                ])
         where_sql = " AND ".join(where)
 
         cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"

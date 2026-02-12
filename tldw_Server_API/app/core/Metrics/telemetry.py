@@ -42,11 +42,13 @@ class DummySpan:
         pass
     def set_attribute(self, key, value):
         pass
+    def set_attributes(self, attributes):
+        pass
     def set_status(self, status):
         pass
     def add_event(self, name, attributes=None):
         pass
-    def record_exception(self, exception):
+    def record_exception(self, exception, *args, **kwargs):
         pass
 
 

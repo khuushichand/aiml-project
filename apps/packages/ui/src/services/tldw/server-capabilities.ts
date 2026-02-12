@@ -1,5 +1,6 @@
 import { tldwClient } from "./TldwApiClient"
 import { bgRequest } from "@/services/background-proxy"
+import { createSafeStorage } from "@/utils/safe-storage"
 
 export type ServerCapabilities = {
   hasChat: boolean
@@ -147,6 +148,61 @@ type DocsInfoResponse = {
   capabilities?: Record<string, unknown> | null
   supported_features?: Record<string, unknown> | null
 }
+
+const CAPABILITIES_CACHE_TTL_MS = 5 * 60 * 1000
+const CAPABILITIES_STORAGE_KEY = "__tldwServerCapabilitiesCacheV1"
+
+type CapabilitiesCachePayload = {
+  key: string
+  fetchedAt: number
+  capabilities: ServerCapabilities
+}
+
+export type ServerCapabilitiesCacheDiagnostics = {
+  calls: number
+  forceRefreshCalls: number
+  inMemoryHits: number
+  persistedHits: number
+  inFlightHits: number
+  staleMemoryMisses: number
+  stalePersistedMisses: number
+  networkFetches: number
+  networkErrors: number
+  fallbackSpecUses: number
+  lastSource: "in-memory" | "persisted" | "in-flight" | "network" | "fallback" | null
+  lastCacheKey: string | null
+  lastFetchAt: number | null
+  lastFetchDurationMs: number | null
+  lastError: string | null
+  inMemoryCacheEntries: number
+  inFlightRequests: number
+}
+
+const DIAGNOSTICS_LOG_INTERVAL_MS = 30_000
+
+const createEmptyDiagnostics = (): Omit<
+  ServerCapabilitiesCacheDiagnostics,
+  "inMemoryCacheEntries" | "inFlightRequests"
+> => ({
+  calls: 0,
+  forceRefreshCalls: 0,
+  inMemoryHits: 0,
+  persistedHits: 0,
+  inFlightHits: 0,
+  staleMemoryMisses: 0,
+  stalePersistedMisses: 0,
+  networkFetches: 0,
+  networkErrors: 0,
+  fallbackSpecUses: 0,
+  lastSource: null,
+  lastCacheKey: null,
+  lastFetchAt: null,
+  lastFetchDurationMs: null,
+  lastError: null
+})
+
+const capabilitiesDiagnostics = createEmptyDiagnostics()
+let lastDiagnosticsLogAt = 0
 
 const normalizePaths = (raw: any): Record<string, any> => {
   const out: Record<string, any> = {}
@@ -337,35 +393,232 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
   }
 }
 
-let capabilitiesPromise: Promise<ServerCapabilities> | null = null
+const inMemoryCapabilitiesCache = new Map<string, CapabilitiesCachePayload>()
+const inFlightByCacheKey = new Map<string, Promise<ServerCapabilities>>()
+let capabilitiesStorage: ReturnType<typeof createSafeStorage> | null = null
 
-export const getServerCapabilities = async (): Promise<ServerCapabilities> => {
-  if (!capabilitiesPromise) {
-    capabilitiesPromise = (async () => {
-      let spec: any | null = null
-      let docsInfo: DocsInfoResponse | null = null
-      try {
-        const healthy = await tldwClient.healthCheck()
-        if (healthy) {
-          const [openApiSpec, docsInfoResponse] = await Promise.all([
-            tldwClient.getOpenAPISpec(),
-            bgRequest<DocsInfoResponse, any>({
-              path: "/api/v1/config/docs-info" as any,
-              method: "GET" as any,
-              noAuth: true
-            }).catch(() => null)
-          ])
-          spec = openApiSpec
-          docsInfo = docsInfoResponse
-        }
-      } catch {
-        // ignore, fall back to bundled spec
-      }
-      if (!spec) {
-        spec = fallbackSpec
-      }
-      return applyDocsInfoFeatureGates(computeCapabilities(spec), docsInfo)
-    })()
+const isDevRuntime = (): boolean => {
+  try {
+    const env: any = (import.meta as any)?.env || {}
+    return Boolean(env?.DEV) || env?.MODE === "development"
+  } catch {
+    return false
   }
-  return capabilitiesPromise
+}
+
+const toErrorString = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message || String(error)
+  }
+  return typeof error === "string" ? error : "unknown-error"
+}
+
+export const getServerCapabilitiesCacheDiagnostics =
+  (): ServerCapabilitiesCacheDiagnostics => ({
+    ...capabilitiesDiagnostics,
+    inMemoryCacheEntries: inMemoryCapabilitiesCache.size,
+    inFlightRequests: inFlightByCacheKey.size
+  })
+
+const publishCapabilitiesDiagnostics = (): void => {
+  if (typeof globalThis === "undefined") return
+  const root = globalThis as typeof globalThis & {
+    __tldwDiagnostics?: Record<string, unknown>
+  }
+  if (!root.__tldwDiagnostics) {
+    root.__tldwDiagnostics = {}
+  }
+  root.__tldwDiagnostics.getServerCapabilitiesCacheDiagnostics =
+    getServerCapabilitiesCacheDiagnostics
+  root.__tldwDiagnostics.serverCapabilitiesCache =
+    getServerCapabilitiesCacheDiagnostics()
+}
+
+const maybeLogDiagnostics = (reason: string): void => {
+  publishCapabilitiesDiagnostics()
+  if (!isDevRuntime()) return
+
+  const now = Date.now()
+  const shouldLog =
+    capabilitiesDiagnostics.calls <= 5 ||
+    now - lastDiagnosticsLogAt >= DIAGNOSTICS_LOG_INTERVAL_MS
+  if (!shouldLog) return
+
+  lastDiagnosticsLogAt = now
+  // Keep this lightweight and periodic to avoid noisy logs.
+  console.debug(
+    "[tldw:capabilities-cache]",
+    reason,
+    getServerCapabilitiesCacheDiagnostics()
+  )
+}
+
+const getCapabilitiesStorage = () => {
+  if (capabilitiesStorage) return capabilitiesStorage
+  capabilitiesStorage = createSafeStorage({ area: "local" })
+  return capabilitiesStorage
+}
+
+const isFreshCache = (fetchedAt: number, now: number): boolean =>
+  Number.isFinite(fetchedAt) && now - fetchedAt < CAPABILITIES_CACHE_TTL_MS
+
+const isCapabilitiesCachePayload = (
+  raw: unknown
+): raw is CapabilitiesCachePayload => {
+  if (!raw || typeof raw !== "object") return false
+  const payload = raw as Partial<CapabilitiesCachePayload>
+  return (
+    typeof payload.key === "string" &&
+    typeof payload.fetchedAt === "number" &&
+    !!payload.capabilities &&
+    typeof payload.capabilities === "object"
+  )
+}
+
+const normalizeServerUrl = (raw: unknown): string => {
+  if (typeof raw !== "string") return ""
+  return raw.trim().replace(/\/$/, "")
+}
+
+const getCapabilitiesCacheKey = async (): Promise<string> => {
+  try {
+    const cfg = await tldwClient.getConfig()
+    const base = normalizeServerUrl(cfg?.serverUrl)
+    const authMode = String(cfg?.authMode || "unknown")
+    return `${base || "default"}::${authMode}`
+  } catch {
+    return "default::unknown"
+  }
+}
+
+const readPersistedCapabilities = async (
+  cacheKey: string,
+  now: number
+): Promise<CapabilitiesCachePayload | null> => {
+  try {
+    const storage = getCapabilitiesStorage()
+    const raw = await storage.get<unknown>(CAPABILITIES_STORAGE_KEY)
+    if (!isCapabilitiesCachePayload(raw)) return null
+    if (raw.key !== cacheKey) return null
+    if (!isFreshCache(raw.fetchedAt, now)) {
+      capabilitiesDiagnostics.stalePersistedMisses += 1
+      return null
+    }
+    return raw
+  } catch {
+    return null
+  }
+}
+
+const persistCapabilities = async (
+  payload: CapabilitiesCachePayload
+): Promise<void> => {
+  try {
+    const storage = getCapabilitiesStorage()
+    await storage.set(CAPABILITIES_STORAGE_KEY, payload)
+  } catch {
+    // best-effort cache write only
+  }
+}
+
+const fetchCapabilitiesFromServer = async (): Promise<ServerCapabilities> => {
+  const startedAt = Date.now()
+  capabilitiesDiagnostics.networkFetches += 1
+  let spec: any | null = null
+  let docsInfo: DocsInfoResponse | null = null
+  try {
+    const [openApiSpec, docsInfoResponse] = await Promise.all([
+      tldwClient.getOpenAPISpec(),
+      bgRequest<DocsInfoResponse, any>({
+        path: "/api/v1/config/docs-info" as any,
+        method: "GET" as any,
+        noAuth: true
+      }).catch(() => null)
+    ])
+    spec = openApiSpec
+    docsInfo = docsInfoResponse
+    capabilitiesDiagnostics.lastError = null
+  } catch (error) {
+    capabilitiesDiagnostics.networkErrors += 1
+    capabilitiesDiagnostics.lastError = toErrorString(error)
+    // ignore, fall back to bundled spec
+  }
+  let source: ServerCapabilitiesCacheDiagnostics["lastSource"] = "network"
+  if (!spec) {
+    spec = fallbackSpec
+    source = "fallback"
+    capabilitiesDiagnostics.fallbackSpecUses += 1
+  }
+  capabilitiesDiagnostics.lastFetchAt = Date.now()
+  capabilitiesDiagnostics.lastFetchDurationMs =
+    capabilitiesDiagnostics.lastFetchAt - startedAt
+  capabilitiesDiagnostics.lastSource = source
+
+  maybeLogDiagnostics(source === "fallback" ? "fallback-spec" : "network-fetch")
+  return applyDocsInfoFeatureGates(computeCapabilities(spec), docsInfo)
+}
+
+export const getServerCapabilities = async (
+  options?: { forceRefresh?: boolean }
+): Promise<ServerCapabilities> => {
+  const cacheKey = await getCapabilitiesCacheKey()
+  const now = Date.now()
+  const forceRefresh = options?.forceRefresh === true
+  capabilitiesDiagnostics.calls += 1
+  capabilitiesDiagnostics.lastCacheKey = cacheKey
+
+  if (forceRefresh) {
+    capabilitiesDiagnostics.forceRefreshCalls += 1
+  }
+
+  if (!forceRefresh) {
+    const inMemory = inMemoryCapabilitiesCache.get(cacheKey)
+    if (inMemory) {
+      if (!isFreshCache(inMemory.fetchedAt, now)) {
+        capabilitiesDiagnostics.staleMemoryMisses += 1
+      } else {
+        capabilitiesDiagnostics.inMemoryHits += 1
+        capabilitiesDiagnostics.lastSource = "in-memory"
+        maybeLogDiagnostics("in-memory-hit")
+        return inMemory.capabilities
+      }
+    }
+
+    const persisted = await readPersistedCapabilities(cacheKey, now)
+    if (persisted) {
+      capabilitiesDiagnostics.persistedHits += 1
+      capabilitiesDiagnostics.lastSource = "persisted"
+      inMemoryCapabilitiesCache.set(cacheKey, persisted)
+      maybeLogDiagnostics("persisted-hit")
+      return persisted.capabilities
+    }
+  }
+
+  const existing = inFlightByCacheKey.get(cacheKey)
+  if (existing) {
+    capabilitiesDiagnostics.inFlightHits += 1
+    capabilitiesDiagnostics.lastSource = "in-flight"
+    maybeLogDiagnostics("in-flight-hit")
+    return existing
+  }
+
+  const request = (async () => {
+    const capabilities = await fetchCapabilitiesFromServer()
+    const payload: CapabilitiesCachePayload = {
+      key: cacheKey,
+      fetchedAt: Date.now(),
+      capabilities
+    }
+    inMemoryCapabilitiesCache.set(cacheKey, payload)
+    void persistCapabilities(payload)
+    return capabilities
+  })()
+
+  inFlightByCacheKey.set(cacheKey, request)
+  try {
+    return await request
+  } finally {
+    inFlightByCacheKey.delete(cacheKey)
+    publishCapabilitiesDiagnostics()
+  }
 }

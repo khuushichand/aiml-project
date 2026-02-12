@@ -58,6 +58,7 @@ def test_websearch_aggregate_path(client_with_user: TestClient, monkeypatch: pyt
         }
 
     async def fake_analyze_and_aggregate(web_results_dict, sub_query_dict, search_params, **_):
+        assert search_params.get("relevance_analysis_llm") == "openai"
         return {
             "final_answer": {
                 "text": "Paris is the capital of France.",
@@ -80,6 +81,7 @@ def test_websearch_aggregate_path(client_with_user: TestClient, monkeypatch: pyt
         "engine": "google",
         "result_count": 3,
         "aggregate": True,
+        "final_answer_llm": "openai",
     }
 
     resp = client.post("/api/v1/research/websearch", json=payload)
@@ -90,3 +92,18 @@ def test_websearch_aggregate_path(client_with_user: TestClient, monkeypatch: pyt
     assert 0.0 <= data["final_answer"]["confidence"] <= 1.0
     assert data["final_answer"]["evidence"]
     assert "chunks" in data["final_answer"]
+
+
+def test_websearch_aggregate_requires_llm_config(client_with_user: TestClient):
+    client = client_with_user
+    payload = {
+        "query": "what is the capital of france",
+        "engine": "google",
+        "result_count": 3,
+        "aggregate": True,
+    }
+
+    resp = client.post("/api/v1/research/websearch", json=payload)
+    assert resp.status_code == 422
+    detail = resp.json().get("detail", "")
+    assert "aggregate=true requires" in detail

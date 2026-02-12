@@ -879,6 +879,22 @@ class WebScrapingService:
                 "initialized": False
             }
 
+        if self.scraper is None:
+            return {
+                "status": "unavailable",
+                "initialized": True,
+                "scraper_available": False,
+                "queue": {
+                    "active_jobs": 0,
+                    "completed_jobs": 0,
+                    "pending_by_priority": {
+                        priority.name: 0 for priority in JobPriority
+                    },
+                },
+                "active_jobs": 0,
+                "rate_limiter": None,
+            }
+
         queue_status = self.scraper.job_queue.get_status()
 
         return {

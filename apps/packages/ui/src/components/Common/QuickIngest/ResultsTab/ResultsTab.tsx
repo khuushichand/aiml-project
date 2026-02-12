@@ -16,6 +16,8 @@ type ResultsTabProps = {
       done: number
       pct: number
       elapsedLabel?: string | null
+      state?: "running" | "failed" | "complete" | "ready"
+      error?: string | null
     }
     filters: {
       value: ResultsFilter

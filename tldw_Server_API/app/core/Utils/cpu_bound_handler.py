@@ -139,13 +139,12 @@ async def run_cpu_bound_thread(func: Callable[..., T], *args, **kwargs) -> T:
         The function's return value
     """
     loop = asyncio.get_event_loop()
+    partial_func = functools.partial(func, *args, **kwargs)
 
     try:
         result = await loop.run_in_executor(
             get_cpu_thread_pool(),
-            func,
-            *args,
-            **kwargs,
+            partial_func,
         )
         return result
     except Exception as e:

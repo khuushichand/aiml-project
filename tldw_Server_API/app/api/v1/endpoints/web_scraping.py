@@ -22,7 +22,6 @@ router = APIRouter(
 _WEB_SCRAPING_ENDPOINT_EXCEPTIONS = (
     AttributeError,
     ConnectionError,
-    HTTPException,
     KeyError,
     LookupError,
     OSError,

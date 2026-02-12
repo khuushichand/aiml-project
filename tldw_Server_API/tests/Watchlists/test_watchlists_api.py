@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from importlib import import_module
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 
@@ -21,8 +22,8 @@ def client_with_user(monkeypatch, tmp_path):
     async def override_user():
         return User(id=555, username="wluser", email=None, is_active=True)
 
-    # Route user DB base dir into project Databases to avoid permission issues
-    base_dir = Path.cwd() / "Databases" / "test_user_dbs"
+    # Route user DB base dir into an isolated temp directory per test.
+    base_dir = tmp_path / "test_user_dbs"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     # Keep this suite focused on watchlists API behavior; seeding behavior is covered separately.
@@ -617,6 +618,70 @@ def test_watchlists_outputs_variants_and_ingest(client_with_user, monkeypatch):
     assert r.status_code == 200, r.text
     r = c.delete(f"/api/v1/outputs/templates/{tts_id}")
     assert r.status_code == 200, r.text
+
+
+def test_watchlists_outputs_pagination_excludes_mixed_origin_rows(client_with_user):
+    c = client_with_user
+    cdb = CollectionsDatabase.for_user(555)
+    suffix = uuid.uuid4().hex[:8]
+    job_id = int(f"91{suffix[:6]}", 16) % 1_000_000
+    run_id = job_id + 1
+
+    wl_old = cdb.create_output_artifact(
+        type_="briefing_markdown",
+        title=f"wl-old-{suffix}",
+        format_="md",
+        storage_path=f"wl-old-{suffix}.md",
+        metadata_json=json.dumps({"origin": "watchlists"}),
+        job_id=job_id,
+        run_id=run_id,
+    )
+    wl_new = cdb.create_output_artifact(
+        type_="briefing_markdown",
+        title=f"wl-new-{suffix}",
+        format_="md",
+        storage_path=f"wl-new-{suffix}.md",
+        metadata_json=json.dumps({"origin": "watchlists"}),
+        job_id=job_id,
+        run_id=run_id,
+    )
+    nw_1 = cdb.create_output_artifact(
+        type_="briefing_markdown",
+        title=f"non-watch-1-{suffix}",
+        format_="md",
+        storage_path=f"non-watch-1-{suffix}.md",
+        metadata_json=json.dumps({"origin": "outputs"}),
+        job_id=job_id,
+        run_id=run_id,
+    )
+    nw_2 = cdb.create_output_artifact(
+        type_="briefing_markdown",
+        title=f"non-watch-2-{suffix}",
+        format_="md",
+        storage_path=f"non-watch-2-{suffix}.md",
+        metadata_json=json.dumps({"origin": "outputs"}),
+        job_id=job_id,
+        run_id=run_id,
+    )
+
+    r = c.get("/api/v1/watchlists/outputs", params={"job_id": job_id, "page": 1, "size": 1})
+    assert r.status_code == 200, r.text
+    page1 = r.json()
+    assert page1["total"] == 2
+    assert len(page1["items"]) == 1
+    assert page1["items"][0]["id"] == wl_new.id
+
+    r = c.get("/api/v1/watchlists/outputs", params={"job_id": job_id, "page": 2, "size": 1})
+    assert r.status_code == 200, r.text
+    page2 = r.json()
+    assert page2["total"] == 2
+    assert len(page2["items"]) == 1
+    assert page2["items"][0]["id"] == wl_old.id
+
+    returned_ids = {page1["items"][0]["id"], page2["items"][0]["id"]}
+    assert returned_ids == {wl_old.id, wl_new.id}
+    assert nw_1.id not in returned_ids
+    assert nw_2.id not in returned_ids
 
 
 def test_preview_site_sources_returns_items(client_with_user, monkeypatch):

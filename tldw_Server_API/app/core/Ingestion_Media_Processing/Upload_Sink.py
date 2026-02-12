@@ -114,7 +114,7 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
     "audio": {
         "allowed_extensions": {'.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a'},
         "allowed_mimetypes": {'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/flac', 'audio/aac', 'audio/ogg',
-                              'audio/mp4', 'audio/x-m4a'},
+                              'audio/mp4', 'audio/x-m4a', 'audio/mp4a-latm'},
         "max_size_mb": media_config.get('max_audio_file_size_mb', 500),
     },
     "video": {

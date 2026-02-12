@@ -37,6 +37,30 @@ def test_validate_file_mime_mismatch_hard_fail(tmp_path, monkeypatch):
     assert any("Detected MIME" in i for i in res.issues), res.issues
 
 
+def test_validate_audio_file_accepts_mp4a_latm(tmp_path, monkeypatch):
+
+
+    """Accept AAC-in-MP4 streams commonly detected as audio/mp4a-latm."""
+    p = tmp_path / "sample.m4a"
+    p.write_bytes(b"fake-audio")
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink as US
+
+    class DummyMagic:
+        @staticmethod
+        def from_file(path, mime=True):
+            return "audio/mp4a-latm"
+
+    monkeypatch.setattr(US, "puremagic", DummyMagic)
+
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
+
+    v = FileValidator()
+    res = v.validate_file(p, original_filename="sample.m4a", media_type_key="audio")
+    assert res, res.issues
+    assert (res.detected_mime_type or "").lower() == "audio/mp4a-latm"
+
+
 def test_validate_archive_rejects_encrypted_zip(tmp_path, monkeypatch):
 
 

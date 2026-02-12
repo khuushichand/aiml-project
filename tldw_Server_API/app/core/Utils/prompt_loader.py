@@ -116,9 +116,5 @@ def load_prompt(module: str, key: str) -> Optional[str]:
             m = pattern.search(text)
             if m:
                 return m.group(2).strip()
-            # Fallback: first fenced code block in file
-            any_block = re.search(r"```([\s\S]*?)```", text)
-            if any_block:
-                return any_block.group(1).strip()
 
     return None

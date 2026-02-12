@@ -5,6 +5,7 @@ Tests the trigger function, workflow input construction, and workflow definition
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -120,7 +121,7 @@ class TestTriggerAudioBriefing:
         )
 
         db = MagicMock()
-        db.list_scraped_items.return_value = []
+        db.list_items.return_value = ([], 0)
 
         result = await trigger_audio_briefing(
             user_id=1,
@@ -138,10 +139,13 @@ class TestTriggerAudioBriefing:
         )
 
         db = MagicMock()
-        db.list_scraped_items.return_value = [
-            {"title": "Story 1", "summary": "Summary 1", "url": "https://example.com/1"},
-            {"title": "Story 2", "summary": "Summary 2", "url": "https://example.com/2"},
-        ]
+        db.list_items.return_value = (
+            [
+                {"title": "Story 1", "summary": "Summary 1", "url": "https://example.com/1"},
+                {"title": "Story 2", "summary": "Summary 2", "url": "https://example.com/2"},
+            ],
+            2,
+        )
 
         mock_scheduler = AsyncMock()
         mock_scheduler.enqueue.return_value = "task_abc123"
@@ -175,6 +179,7 @@ class TestTriggerAudioBriefing:
         assert len(task.payload["inputs"]["items"]) == 2
         assert task.payload["metadata"]["watchlist_job_id"] == 42
         assert task.payload["metadata"]["watchlist_run_id"] == 7
+        db.list_items.assert_called_once_with(run_id=7, status="ingested", limit=100, offset=0)
 
     @pytest.mark.asyncio
     async def test_trigger_handles_scheduler_failure(self):
@@ -183,9 +188,12 @@ class TestTriggerAudioBriefing:
         )
 
         db = MagicMock()
-        db.list_scraped_items.return_value = [
-            {"title": "Story", "summary": "S", "url": "https://x.com"},
-        ]
+        db.list_items.return_value = (
+            [
+                {"title": "Story", "summary": "S", "url": "https://x.com"},
+            ],
+            1,
+        )
 
         with patch(
             "tldw_Server_API.app.core.Scheduler.get_global_scheduler",
@@ -209,7 +217,7 @@ class TestTriggerAudioBriefing:
         )
 
         db = MagicMock()
-        db.list_scraped_items.side_effect = RuntimeError("db error")
+        db.list_items.side_effect = RuntimeError("db error")
 
         result = await trigger_audio_briefing(
             user_id=1,
@@ -219,3 +227,37 @@ class TestTriggerAudioBriefing:
             db=db,
         )
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_trigger_enqueues_with_object_rows(self):
+        from tldw_Server_API.app.core.Watchlists.audio_briefing_workflow import (
+            trigger_audio_briefing,
+        )
+
+        db = MagicMock()
+        db.list_items.return_value = (
+            [SimpleNamespace(title="Story Obj", summary="Summary Obj", url="https://example.com/obj")],
+            1,
+        )
+
+        mock_scheduler = AsyncMock()
+        mock_scheduler.enqueue.return_value = "task_object_row"
+
+        with patch(
+            "tldw_Server_API.app.core.Scheduler.get_global_scheduler",
+            new_callable=AsyncMock,
+            return_value=mock_scheduler,
+        ):
+            result = await trigger_audio_briefing(
+                user_id=1,
+                job_id=99,
+                run_id=123,
+                output_prefs={"generate_audio": True},
+                db=db,
+            )
+
+        assert result == "task_object_row"
+        task = mock_scheduler.enqueue.call_args[0][0]
+        assert task.payload["inputs"]["items"] == [
+            {"title": "Story Obj", "summary": "Summary Obj", "url": "https://example.com/obj"}
+        ]

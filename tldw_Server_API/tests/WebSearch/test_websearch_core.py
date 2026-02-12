@@ -206,6 +206,114 @@ def test_generate_and_search_propagates_searx_overrides(monkeypatch: pytest.Monk
     assert captured.get("json_mode") is True
 
 
+def test_analyze_question_accepts_json_array_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        web_search,
+        "_call_adapter_text",
+        lambda **_kwargs: '["alpha", " beta ", "", "ALPHA"]',
+    )
+    monkeypatch.setattr(web_search, "get_loaded_config", lambda: {})
+
+    result = web_search.analyze_question("main query", "openai")
+
+    assert result["sub_questions"] == ["alpha", "beta"]
+    assert result["search_queries"] == ["alpha", "beta"]
+
+
+def test_analyze_question_accepts_json_object_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        web_search,
+        "_call_adapter_text",
+        lambda **_kwargs: '{"sub_questions": ["one", "two"]}',
+    )
+    monkeypatch.setattr(web_search, "get_loaded_config", lambda: {})
+
+    result = web_search.analyze_question("main query", "openai")
+
+    assert result["sub_questions"] == ["one", "two"]
+    assert result["search_queries"] == ["one", "two"]
+
+
+def test_analyze_question_empty_response_falls_back_to_no_subquestions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web_search, "_call_adapter_text", lambda **_kwargs: "{}")
+    monkeypatch.setattr(web_search, "get_loaded_config", lambda: {})
+
+    result = web_search.analyze_question("main query", "openai")
+
+    assert result["sub_questions"] == []
+    assert result["search_queries"] == []
+
+
+def test_generate_and_search_dedupes_and_sanitizes_subqueries(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_queries: list[str] = []
+
+    def fake_analyze_question(question: str, _api_endpoint: str) -> Dict[str, Any]:
+        return {
+            "main_goal": question,
+            "sub_questions": [
+                "Main Query",
+                " follow up ",
+                "",
+                None,
+                {"query": "follow up"},
+                "Deep dive",
+            ],
+            "search_queries": [],
+            "analysis_prompt": None,
+        }
+
+    def fake_perform_websearch(**kwargs: Any) -> Dict[str, Any]:
+        captured_queries.append(str(kwargs.get("search_query")))
+        return {"results": [], "total_results_found": 0, "search_time": 0.0}
+
+    monkeypatch.setattr(web_search, "analyze_question", fake_analyze_question)
+    monkeypatch.setattr(web_search, "perform_websearch", fake_perform_websearch)
+    monkeypatch.setattr(web_search.time, "sleep", lambda _seconds: None)
+
+    result = web_search.generate_and_search(
+        "Main Query",
+        {
+            "engine": "google",
+            "content_country": "US",
+            "search_lang": "en",
+            "output_lang": "en",
+            "result_count": 5,
+            "subquery_generation": True,
+            "subquery_generation_llm": "openai",
+        },
+    )
+
+    assert captured_queries == ["Main Query", "follow up", "Deep dive"]
+    assert result["sub_query_dict"]["sub_questions"] == ["follow up", "Deep dive"]
+    assert result["sub_query_dict"]["search_queries"] == ["follow up", "Deep dive"]
+
+
+def test_generate_and_search_surfaces_processing_errors_when_no_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        web_search,
+        "perform_websearch",
+        lambda **_kwargs: {"processing_error": "provider failed"},
+    )
+    monkeypatch.setattr(web_search.time, "sleep", lambda _seconds: None)
+
+    result = web_search.generate_and_search(
+        "Main Query",
+        {
+            "engine": "google",
+            "content_country": "US",
+            "search_lang": "en",
+            "output_lang": "en",
+            "result_count": 5,
+            "subquery_generation": False,
+        },
+    )
+
+    web_results = result["web_search_results_dict"]
+    assert web_results["results"] == []
+    assert web_results.get("error") == "provider failed"
+    assert web_results.get("warnings")
+
+
 def test_perform_websearch_tavily_forwards_site_whitelist(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: Dict[str, Any] = {}
 
@@ -234,6 +342,101 @@ def test_perform_websearch_tavily_forwards_site_whitelist(monkeypatch: pytest.Mo
     assert captured.get("site_whitelist") == ["allowed.example"]
     assert captured.get("site_blacklist") == ["blocked.example"]
     assert result.get("search_engine") == "tavily"
+
+
+def test_perform_websearch_google_forwards_google_domain(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_search_web_google(**kwargs: Any) -> Dict[str, Any]:
+        captured.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(web_search, "search_web_google", fake_search_web_google)
+    monkeypatch.setattr(web_search, "process_web_search_results", lambda *_args, **_kwargs: {"search_engine": "google"})
+    monkeypatch.setattr(
+        web_search,
+        "get_loaded_config",
+        lambda: {
+            "search_engines": {
+                "google_search_api_key": "key",
+                "google_search_engine_id": "engine-id",
+            }
+        },
+    )
+
+    result = web_search.perform_websearch(
+        search_engine="google",
+        search_query="capital of france",
+        content_country="US",
+        search_lang="en",
+        output_lang="en",
+        result_count=3,
+        google_domain="google.de",
+    )
+
+    assert captured.get("google_domain") == "google.de"
+    assert result.get("search_engine") == "google"
+
+
+def test_perform_websearch_google_multi_blacklist_does_not_set_site_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_search_web_google(**kwargs: Any) -> Dict[str, Any]:
+        captured.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(web_search, "search_web_google", fake_search_web_google)
+    monkeypatch.setattr(web_search, "process_web_search_results", lambda *_args, **_kwargs: {"search_engine": "google"})
+    monkeypatch.setattr(
+        web_search,
+        "get_loaded_config",
+        lambda: {
+            "search_engines": {
+                "google_search_api_key": "key",
+                "google_search_engine_id": "engine-id",
+            }
+        },
+    )
+
+    result = web_search.perform_websearch(
+        search_engine="google",
+        search_query="capital of france",
+        content_country="US",
+        search_lang="en",
+        output_lang="en",
+        result_count=3,
+        site_blacklist="foo.example, bar.example",
+    )
+
+    assert captured.get("site_blacklist") == "foo.example, bar.example"
+    assert "siteSearch" not in captured
+    assert "siteSearchFilter" not in captured
+    assert result.get("search_engine") == "google"
+
+
+def test_perform_websearch_searx_maps_safesearch(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_search_web_searx(search_query: str, **kwargs: Any) -> Dict[str, Any]:
+        captured["search_query"] = search_query
+        captured.update(kwargs)
+        return {"results": []}
+
+    monkeypatch.setattr(web_search, "search_web_searx", fake_search_web_searx)
+    monkeypatch.setattr(web_search, "process_web_search_results", lambda *_args, **_kwargs: {"search_engine": "searx"})
+
+    result = web_search.perform_websearch(
+        search_engine="searx",
+        search_query="capital of france",
+        content_country="US",
+        search_lang="en",
+        output_lang="en",
+        result_count=3,
+        safesearch="strict",
+    )
+
+    assert captured.get("safesearch") == 2
+    assert result.get("search_engine") == "searx"
 
 
 def test_perform_websearch_serper_forwards_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -272,6 +475,21 @@ def test_perform_websearch_serper_forwards_arguments(monkeypatch: pytest.MonkeyP
     assert captured.get("exactTerms") == "exact phrase"
     assert captured.get("excludeTerms") == "omit this"
     assert result.get("search_engine") == "serper"
+
+
+def test_perform_websearch_invalid_engine_returns_structured_error() -> None:
+    result = web_search.perform_websearch(
+        search_engine="notarealengine",
+        search_query="test query",
+        content_country="US",
+        search_lang="en",
+        output_lang="en",
+        result_count=1,
+    )
+
+    assert isinstance(result, dict)
+    assert "processing_error" in result
+    assert "Invalid Search Engine Name notarealengine" in str(result["processing_error"])
 
 
 def test_search_web_serper_builds_expected_request(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -333,6 +551,112 @@ def test_search_web_serper_builds_expected_request(monkeypatch: pytest.MonkeyPat
     assert "\"exact phrase\"" in payload["q"]
     assert " -omit " in payload["q"]
     assert " -this" in payload["q"]
+
+
+def test_search_web_google_forwards_google_domain_to_googlehost(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_fetch_json(*, method: str, url: str, params: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+        captured["method"] = method
+        captured["url"] = url
+        captured["params"] = params
+        captured["timeout"] = timeout
+        return {"items": []}
+
+    from tldw_Server_API.app.core import http_client
+    from tldw_Server_API.app.core.Security import egress as egress_module
+
+    monkeypatch.setattr(http_client, "fetch_json", fake_fetch_json)
+    monkeypatch.setattr(egress_module, "evaluate_url_policy", lambda _url: SimpleNamespace(allowed=True))
+    monkeypatch.setattr(
+        web_search,
+        "get_loaded_config",
+        lambda: {"search_engines": {"google_search_api_url": "https://example.com/customsearch/v1"}},
+    )
+
+    result = web_search.search_web_google(
+        search_query="capital of france",
+        google_search_api_key="google-key",
+        google_search_engine_id="engine-id",
+        c2coff="1",
+        results_origin_country="countryUS",
+        safesearch="off",
+        google_domain="google.de",
+    )
+
+    assert result == {"items": []}
+    assert captured["method"] == "GET"
+    assert captured["url"] == "https://example.com/customsearch/v1"
+    assert captured["timeout"] == 15.0
+    assert captured["params"]["googlehost"] == "google.de"
+
+
+def test_search_web_google_applies_multi_domain_blacklist_to_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_fetch_json(*, method: str, url: str, params: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+        captured["method"] = method
+        captured["url"] = url
+        captured["params"] = params
+        captured["timeout"] = timeout
+        return {"items": []}
+
+    from tldw_Server_API.app.core import http_client
+    from tldw_Server_API.app.core.Security import egress as egress_module
+
+    monkeypatch.setattr(http_client, "fetch_json", fake_fetch_json)
+    monkeypatch.setattr(egress_module, "evaluate_url_policy", lambda _url: SimpleNamespace(allowed=True))
+    monkeypatch.setattr(
+        web_search,
+        "get_loaded_config",
+        lambda: {"search_engines": {"google_search_api_url": "https://example.com/customsearch/v1"}},
+    )
+
+    result = web_search.search_web_google(
+        search_query="capital of france",
+        google_search_api_key="google-key",
+        google_search_engine_id="engine-id",
+        c2coff="1",
+        results_origin_country="countryUS",
+        safesearch="off",
+        site_blacklist="foo.example, bar.example",
+    )
+
+    assert result == {"items": []}
+    assert "-site:foo.example" in captured["params"]["q"]
+    assert "-site:bar.example" in captured["params"]["q"]
+
+
+def test_search_web_kagi_uses_correct_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_fetch_json(*, method: str, url: str, headers: Dict[str, Any], params: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+        captured["method"] = method
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["params"] = params
+        captured["timeout"] = timeout
+        return {"data": []}
+
+    from tldw_Server_API.app.core import http_client
+    from tldw_Server_API.app.core.Security import egress as egress_module
+
+    monkeypatch.setattr(http_client, "fetch_json", fake_fetch_json)
+    monkeypatch.setattr(egress_module, "evaluate_url_policy", lambda _url: SimpleNamespace(allowed=True))
+    monkeypatch.setattr(
+        web_search,
+        "get_loaded_config",
+        lambda: {"search_engines": {"kagi_search_api_key": "kagi-key"}},
+    )
+
+    result = web_search.search_web_kagi(query="capital of france", limit=4)
+
+    assert result == {"data": []}
+    assert captured["method"] == "GET"
+    assert captured["url"] == "https://kagi.com/api/v0/search"
+    assert "/search/search" not in captured["url"]
+    assert captured["params"]["q"] == "capital of france"
+    assert captured["params"]["limit"] == 4
 
 
 def test_search_web_serper_uses_env_key_when_config_missing(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1649,7 +1649,7 @@ async def fetch_rss_feed(
                 rel = (node.get("rel") or "").lower()
                 if rel == "alternate" and not preferred_link:
                     preferred_link = candidate
-                elif rel not in {"self"} and not fallback_link or not fallback_link:
+                elif rel not in {"self"} and not fallback_link:
                     fallback_link = candidate
             link = preferred_link or fallback_link or _find_text(it, ["link", atom_link_tag]) or ""
 

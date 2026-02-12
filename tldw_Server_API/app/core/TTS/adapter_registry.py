@@ -238,7 +238,8 @@ class TTSAdapterRegistry:
 
         This preserves existing precedence:
         - Unified config manager uses `is_provider_enabled(...)`.
-        - Direct dict config honors explicit `{provider}_enabled` flags.
+        - Direct dict config honors explicit `providers.<name>.enabled`, then
+          legacy `{provider}_enabled` flags.
         - No explicit flag => no opinion (`None`) so wrapper logic is unchanged.
         """
         provider = self.resolve_provider(provider_key)
@@ -251,8 +252,32 @@ class TTSAdapterRegistry:
             except _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS:
                 return None
 
+        explicit_enabled = self._get_dict_provider_enabled_flag(provider)
+        if explicit_enabled is not None:
+            return explicit_enabled
+        return None
+
+    def _get_dict_provider_enabled_flag(self, provider: TTSProvider) -> Optional[bool]:
+        """
+        Resolve explicit provider enablement from dict-style config.
+
+        Precedence:
+        1. providers.<provider>.enabled
+        2. legacy <provider>_enabled
+        """
+        if not isinstance(self.config, dict):
+            return None
+
+        providers_cfg = self.config.get("providers")
+        if isinstance(providers_cfg, dict):
+            provider_cfg = providers_cfg.get(provider.value)
+            if provider_cfg is not None and not isinstance(provider_cfg, dict):
+                provider_cfg = model_dump_compat(provider_cfg)
+            if isinstance(provider_cfg, dict) and "enabled" in provider_cfg:
+                return parse_bool(provider_cfg.get("enabled"), default=True)
+
         enabled_key = f"{provider.value}_enabled"
-        if isinstance(self.config, dict) and enabled_key in self.config:
+        if enabled_key in self.config:
             return parse_bool(self.config.get(enabled_key), default=True)
         return None
 
@@ -384,12 +409,10 @@ class TTSAdapterRegistry:
             except _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS:
                 pass
         else:
-            enabled_key = f"{resolved_provider.value}_enabled"
-            if enabled_key in self.config:
-                enabled = parse_bool(self.config.get(enabled_key), default=True)
-                if not enabled:
-                    logger.info(f"Provider {resolved_provider.value} is disabled in configuration")
-                    return None
+            explicit_enabled = self._get_dict_provider_enabled_flag(resolved_provider)
+            if explicit_enabled is False:
+                logger.info(f"Provider {resolved_provider.value} is disabled in configuration")
+                return None
 
         adapter_class = self._resolve_adapter_class(self._adapter_specs[resolved_provider])
 
@@ -453,18 +476,14 @@ class TTSAdapterRegistry:
                     return False
             else:
                 # Heuristic for direct dict configs used in tests:
-                # - If an explicit "{provider}_enabled" flag is present, honor it.
+                # - If an explicit provider enable flag is present, honor it.
                 # - Otherwise, enable lightweight/remote providers when credentials are present
                 #   (e.g., OPENAI/ELEVENLABS) and keep heavy local providers disabled by default.
-                enabled_key = f"{provider.value}_enabled"
-                if enabled_key in self.config:
-                    raw_enabled = self.config.get(enabled_key)
-                    # Treat unknown non-empty string tokens as enabled by default
-                    enabled = parse_bool(raw_enabled, default=True)
-                    if not enabled:
-                        logger.info(f"Provider {provider.value} is disabled in configuration")
-                        return False
-                else:
+                explicit_enabled = self._get_dict_provider_enabled_flag(provider)
+                if explicit_enabled is False:
+                    logger.info(f"Provider {provider.value} is disabled in configuration")
+                    return False
+                if explicit_enabled is None:
                     remote_providers = {TTSProvider.OPENAI, TTSProvider.ELEVENLABS}
                     if provider in remote_providers:
                         # Consider provider enabled if API key is supplied via config or env
@@ -683,14 +702,7 @@ class TTSAdapterRegistry:
                     return provider_cfg.enabled
                 return None
             if isinstance(self.config, dict):
-                providers_cfg = self.config.get("providers")
-                if isinstance(providers_cfg, dict):
-                    provider_cfg = providers_cfg.get(provider.value)
-                    if isinstance(provider_cfg, dict) and "enabled" in provider_cfg:
-                        return parse_bool(provider_cfg.get("enabled"), default=None)
-                enabled_key = f"{provider.value}_enabled"
-                if enabled_key in self.config:
-                    return parse_bool(self.config.get(enabled_key), default=None)
+                return self._get_dict_provider_enabled_flag(provider)
             return None
 
         for provider in TTSProvider:

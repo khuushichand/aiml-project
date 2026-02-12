@@ -107,4 +107,6 @@ export type TabBadgeState = {
   optionsModified: boolean
   /** Whether processing is currently running (for Results tab) */
   isProcessing: boolean
+  /** Whether the latest run failed and needs attention (for Results tab) */
+  hasFailure?: boolean
 }

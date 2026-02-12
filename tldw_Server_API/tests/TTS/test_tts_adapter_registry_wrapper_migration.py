@@ -92,6 +92,23 @@ async def test_registry_config_callback_marks_explicitly_disabled_provider() -> 
 
 
 @pytest.mark.asyncio
+async def test_registry_config_callback_honors_nested_provider_enabled_flag() -> None:
+    registry = TTSAdapterRegistry(
+        config={
+            "providers": {"mock": {"enabled": False}},
+            "mock_enabled": True,  # nested config must take precedence
+        },
+        include_defaults=False,
+    )
+    registry.register_adapter(TTSProvider.MOCK, _MockAdapterV1)
+
+    adapter = await registry.get_adapter(TTSProvider.MOCK)
+
+    assert adapter is None
+    assert registry._base.get_status(TTSProvider.MOCK.value).value == "disabled"
+
+
+@pytest.mark.asyncio
 async def test_registry_list_capabilities_returns_standard_envelope() -> None:
     registry = TTSAdapterRegistry(config={"mock_enabled": True}, include_defaults=False)
     registry.register_adapter(TTSProvider.MOCK, _MockAdapterV1)

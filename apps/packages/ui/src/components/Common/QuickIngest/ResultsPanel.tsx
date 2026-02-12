@@ -21,6 +21,8 @@ type ResultsPanelProps = {
       done: number
       pct: number
       elapsedLabel?: string | null
+      state?: "running" | "failed" | "complete" | "ready"
+      error?: string | null
     }
     filters: {
       value: ResultsFilter
@@ -150,6 +152,20 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
 
   const hasResults = results.length > 0
   const hasProgress = progressMeta.total > 0
+  const progressState =
+    progressMeta.state || (running ? "running" : "ready")
+  const progressTitle =
+    progressState === "running"
+      ? qi("ingestProgressTitle", "Current ingest progress")
+      : progressState === "failed"
+        ? qi("ingestFailedTitle", "Last ingest run failed")
+        : progressState === "complete"
+          ? qi("ingestCompleteTitle", "Ingest run completed")
+          : qi("itemsReadyTitle", "Items ready to ingest")
+  const progressContainerClassName =
+    progressState === "failed"
+      ? "mb-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+      : "mb-3 rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text"
 
   if (!hasResults && !hasProgress) return null
 
@@ -168,13 +184,9 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
         </div>
       ) : null}
       {hasProgress && (
-        <div className="mb-3 rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text">
+        <div className={progressContainerClassName}>
           <div className="flex items-center justify-between">
-            <span className="font-medium">
-              {running
-                ? qi("ingestProgressTitle", "Current ingest progress")
-                : qi("itemsReadyTitle", "Items ready to ingest")}
-            </span>
+            <span className="font-medium">{progressTitle}</span>
             {progressMeta.elapsedLabel ? (
               <span>
                 {qi("elapsedLabel", "Elapsed {{time}}", {
@@ -183,6 +195,9 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
               </span>
             ) : null}
           </div>
+          {progressState === "failed" && progressMeta.error ? (
+            <div className="mt-1">{progressMeta.error}</div>
+          ) : null}
           <Progress percent={progressMeta.pct} showInfo={false} size="small" />
           <div className="flex justify-between text-xs text-text-muted mt-1">
             <span>

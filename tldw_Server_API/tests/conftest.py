@@ -614,6 +614,13 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
         except Exception:
             pass
         try:
+            from tldw_Server_API.app.api.v1.endpoints.research import (
+                shutdown_websearch_executor,
+            )
+            shutdown_websearch_executor(wait=True, cancel_futures=True)
+        except Exception:
+            pass
+        try:
             loop = asyncio.get_event_loop_policy().get_event_loop()
         except Exception:
             loop = None
@@ -627,6 +634,29 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
                 loop.close()
             except Exception:
                 pass
+        # Best-effort cleanup for lingering ThreadPoolExecutor workers (e.g., asyncio.to_thread)
+        try:
+            import concurrent.futures.thread as _cf_thread
+            lock = getattr(_cf_thread, "_global_shutdown_lock", None)
+            if lock is not None:
+                with lock:
+                    setattr(_cf_thread, "_shutdown", True)
+            worker_items = list(getattr(_cf_thread, "_threads_queues", {}).items())
+            for _worker_thread, queue in worker_items:
+                try:
+                    queue.put_nowait(None)
+                except Exception:
+                    try:
+                        queue.put(None)
+                    except Exception:
+                        pass
+            for worker_thread, _queue in worker_items:
+                try:
+                    worker_thread.join(timeout=2.0)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         current = threading.current_thread()
         threads = [t for t in threading.enumerate() if t is not current and not t.daemon]
         if threads:

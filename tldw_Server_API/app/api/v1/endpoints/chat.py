@@ -266,6 +266,24 @@ conversations_alias_router = APIRouter()
 router.include_router(chat_dictionaries.router)
 router.include_router(chat_documents.router)
 
+# Backward-compatible endpoint re-exports for unit tests and legacy imports
+# that still reference dictionary handlers from this module.
+create_chat_dictionary = chat_dictionaries.create_chat_dictionary
+list_chat_dictionaries = chat_dictionaries.list_chat_dictionaries
+get_chat_dictionary = chat_dictionaries.get_chat_dictionary
+update_chat_dictionary = chat_dictionaries.update_chat_dictionary
+delete_chat_dictionary = chat_dictionaries.delete_chat_dictionary
+add_dictionary_entry = chat_dictionaries.add_dictionary_entry
+list_dictionary_entries = chat_dictionaries.list_dictionary_entries
+update_dictionary_entry = chat_dictionaries.update_dictionary_entry
+delete_dictionary_entry = chat_dictionaries.delete_dictionary_entry
+process_text_with_dictionaries = chat_dictionaries.process_text_with_dictionaries
+import_dictionary = chat_dictionaries.import_dictionary
+export_dictionary = chat_dictionaries.export_dictionary
+export_dictionary_json = chat_dictionaries.export_dictionary_json
+import_dictionary_json = chat_dictionaries.import_dictionary_json
+get_dictionary_statistics = chat_dictionaries.get_dictionary_statistics
+
 def _chat_connectors_enabled() -> bool:
     """Feature flag for chat connectors v2 (email/issue/wiki exports)."""
     return _shared_env_flag_enabled("CHAT_CONNECTORS_V2_ENABLED")

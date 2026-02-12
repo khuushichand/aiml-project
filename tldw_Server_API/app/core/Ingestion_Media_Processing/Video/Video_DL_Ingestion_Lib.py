@@ -309,7 +309,7 @@ def _store_video_file(source_path: Path, user_id: Optional[int]) -> Optional[Pat
         shutil.copy2(source_path, destination)
         logging.info(f"Stored kept video copy at {destination}")
     except _VIDEO_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
-        logging.error(f"Failed to copy video '{source_path}' into kept storage: {exc}", exc_info=True)
+        logging.exception(f"Failed to copy video '{source_path}' into kept storage: {exc}")
         return None
 
     _enforce_storage_limits(storage_dir, max_files, effective_max_bytes)
@@ -573,7 +573,7 @@ def download_video(
         return str(downloaded_path)
 
     except _VIDEO_NONCRITICAL_EXCEPTIONS as exc:
-        logging.error(f"Failed to download media from {video_url}: {exc}", exc_info=True)
+        logging.exception(f"Failed to download media from {video_url}: {exc}")
         raise
 
 def extract_video_info(url):
@@ -591,7 +591,7 @@ def extract_video_info(url):
 
             return info
     except _VIDEO_NONCRITICAL_EXCEPTIONS as e:
-        logging.error(f"Error extracting video info for {url}: {str(e)}", exc_info=True)
+        logging.exception(f"Error extracting video info for {url}: {str(e)}")
         return None
 
 
@@ -686,7 +686,7 @@ def parse_and_expand_urls(urls):
                 expanded_urls.append(url)
 
         except _VIDEO_NONCRITICAL_EXCEPTIONS as e:
-            logging.error(f"Error processing URL {url}: {str(e)}", exc_info=True)
+            logging.exception(f"Error processing URL {url}: {str(e)}")
             expanded_urls.append(url)
 
     logging.info(f"Final expanded URLs: {expanded_urls}")
@@ -792,7 +792,7 @@ def extract_metadata(url, use_cookies=False, cookies=None):
             logging.info(f"Successfully extracted metadata for {url}: {safe_metadata}")
             return metadata
         except _VIDEO_NONCRITICAL_EXCEPTIONS as e:
-            logging.error(f"Error extracting metadata for {url}: {str(e)}", exc_info=True)
+            logging.exception(f"Error extracting metadata for {url}: {str(e)}")
             return None
 
 
@@ -1110,7 +1110,7 @@ def process_videos(
             break
         except _VIDEO_NONCRITICAL_EXCEPTIONS as exc:
             msg = f"Exception processing '{video_input}': {exc}"
-            logging.error(msg, exc_info=True)
+            logging.exception(msg)
             errors.append(msg)
             # Append an error result structure
             results.append({
@@ -1172,7 +1172,7 @@ def process_videos(
                         )
                         confab_results.append(f"URL: {url} - {pair_result}")
                     except _VIDEO_NONCRITICAL_EXCEPTIONS as confab_err:
-                        logging.error(f"Confabulation check failed for {url}: {confab_err}", exc_info=True)
+                        logging.exception(f"Confabulation check failed for {url}: {confab_err}")
                         confab_results.append(f"URL: {url} - Confabulation error: {confab_err}")
 
                 if confab_results:
@@ -1564,14 +1564,14 @@ def process_single_video(
 
                 except _VIDEO_NONCRITICAL_EXCEPTIONS as chunk_err:
                     warn_msg = f"Chunking process failed: {chunk_err}. Analysis will use full text."
-                    logging.warning(warn_msg, exc_info=True)
+                    logging.opt(exception=True).warning(warn_msg)
                     processing_result["warnings"].append(warn_msg)
                     # Fallback: Summarize original text if chunking fails
                     try:
                         analysis_text = analyze(api_name, text_to_analyze, custom_prompt, None, system_message=system_prompt)  # Pass None for api_key
                     except _VIDEO_NONCRITICAL_EXCEPTIONS as summ_err:
                          warn_msg = f"Summarization failed after chunking error: {summ_err}"
-                         logging.error(warn_msg, exc_info=True)
+                         logging.exception(warn_msg)
                          processing_result["warnings"].append(warn_msg)
 
             else: # No chunking requested
@@ -1580,7 +1580,7 @@ def process_single_video(
                      analysis_text = analyze(api_name, text_to_analyze, custom_prompt, None, system_message=system_prompt)  # Pass None for api_key
                  except _VIDEO_NONCRITICAL_EXCEPTIONS as summ_err:
                      warn_msg = f"Summarization failed: {summ_err}"
-                     logging.error(warn_msg, exc_info=True)
+                     logging.exception(warn_msg)
                      processing_result["warnings"].append(warn_msg)
 
             processing_result["analysis"] = analysis_text # Store final analysis/summary
@@ -1619,14 +1619,14 @@ def process_single_video(
         processing_result["input_ref"] = video_input
         return processing_result
     except FileNotFoundError as e:
-        logger.error(f"File not found error processing {video_input}: {e}", exc_info=True)
+        logger.exception(f"File not found error processing {video_input}: {e}")
         processing_result["status"] = "Error"
         processing_result["error"] = str(e)
         # *** Ensure input_ref is original on error ***
         processing_result["input_ref"] = video_input
         return processing_result
     except ValueError as e: # Catch metadata or other value errors
-        logger.error(f"Value error processing {video_input}: {e}", exc_info=True)
+        logger.exception(f"Value error processing {video_input}: {e}")
         processing_result["status"] = "Error"
         processing_result["error"] = str(e)
         # *** Ensure input_ref is original on error ***
@@ -1634,7 +1634,7 @@ def process_single_video(
         return processing_result
     except _VIDEO_NONCRITICAL_EXCEPTIONS as e:
         # Catch-all for unexpected errors during the process
-        logger.error(f"Unexpected exception processing {video_input}: {e}", exc_info=True)
+        logger.exception(f"Unexpected exception processing {video_input}: {e}")
         processing_result["status"] = "Error"
         processing_result["error"] = f"Unexpected error: {type(e).__name__}: {str(e)}"
         # *** Ensure input_ref is original on error ***

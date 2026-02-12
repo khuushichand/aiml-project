@@ -58,6 +58,7 @@ async def test_websearch_cancelled_via_request_disconnect(monkeypatch):
             json={
                 "query": "q",
                 "aggregate": True,
+                "final_answer_llm": "openai",
                 "engine": "google",
                 "content_country": "US",
                 "search_lang": "en",

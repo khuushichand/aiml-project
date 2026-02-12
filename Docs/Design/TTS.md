@@ -15,6 +15,9 @@ https://www.reddit.com/r/LocalLLaMA/comments/1n8flne/how_can_i_reduce_the_first_
 ```
 
 https://github.com/resemble-ai/chatterbox
+https://github.com/liampetti/fulloch
+https://huggingface.co/OpenMOSS-Team/models?sort=created
+https://github.com/gokhaneraslan/chatterbox-finetuning
 
 https://github.com/ekwek1/soprano?tab=readme-ov-file#installation
 https://huggingface.co/kyutai

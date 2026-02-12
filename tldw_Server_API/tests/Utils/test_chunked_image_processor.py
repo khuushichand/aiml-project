@@ -35,3 +35,41 @@ async def test_streaming_image_processor_preserves_bytes_without_pil(monkeypatch
     assert image_data == data
     assert mime_type == "image/png"
     assert error == ""
+
+
+@pytest.mark.asyncio
+async def test_streaming_image_processor_rejects_non_image_mime_type():
+    data = b"plain text payload"
+    b64 = base64.b64encode(data).decode("ascii")
+    data_url = f"data:text/plain;base64,{b64}"
+
+    processor = cip.StreamingImageProcessor(max_memory_mb=1)
+    ok, image_data, mime_type, error = await processor.process_image_url(
+        data_url,
+        max_size_bytes=len(data) + 10,
+    )
+
+    assert ok is False
+    assert image_data is None
+    assert mime_type == "text/plain"
+    assert "Unsupported image MIME type" in error
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not cip.PIL_AVAILABLE, reason="PIL not available")
+async def test_streaming_image_processor_rejects_invalid_image_payload():
+    # Valid base64, but not a parseable image payload.
+    data = b"not-an-image" * 1000
+    b64 = base64.b64encode(data).decode("ascii")
+    data_url = f"data:image/png;base64,{b64}"
+
+    processor = cip.StreamingImageProcessor(max_memory_mb=2)
+    ok, image_data, mime_type, error = await processor.process_image_url(
+        data_url,
+        max_size_bytes=len(data) + 100,
+    )
+
+    assert ok is False
+    assert image_data is None
+    assert mime_type == "image/png"
+    assert "Invalid image format" in error

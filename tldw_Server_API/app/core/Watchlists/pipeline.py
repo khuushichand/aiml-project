@@ -1501,4 +1501,10 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Audio briefing trigger failed for job {job_id}: {exc}")
 
+    # Persist post-run augmentation fields (e.g., auto_output_id, audio_briefing_task_id).
+    try:
+        db.update_run(run.id, stats_json=json.dumps(stats))
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(f"post-run stats persistence failed for run {run.id}: {exc}")
+
     return {"run_id": run.id, **stats}

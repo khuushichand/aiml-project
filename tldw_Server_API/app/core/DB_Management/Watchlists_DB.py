@@ -40,7 +40,7 @@ from tldw_Server_API.app.core.DB_Management.content_backend import (
     load_content_db_settings,
 )
 
-from .backends.base import BackendType, DatabaseBackend, DatabaseConfig
+from .backends.base import BackendType, DatabaseBackend, DatabaseConfig, DatabaseError as _DatabaseError
 from .backends.factory import DatabaseBackendFactory
 from .backends.query_utils import prepare_backend_statement
 from .db_path_utils import DatabasePaths
@@ -701,7 +701,7 @@ class WatchlistsDatabase:
                 (self.user_id, name, url, source_type, 1 if active else 0, settings_json, now, now),
             )
             sid = self._extract_lastrowid(res)
-        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+        except (*_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS, _DatabaseError):
             # Look up existing source for idempotency
             try:
                 row = self.backend.execute(
@@ -712,7 +712,7 @@ class WatchlistsDatabase:
                     sid = int(row.get("id"))
                 else:
                     raise
-            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+            except (*_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS, _DatabaseError):
                 raise
         if sid is None:
             raise RuntimeError("failed_to_create_or_lookup_source")
@@ -1240,6 +1240,8 @@ class WatchlistsDatabase:
         )
 
     def create_run(self, job_id: int, status: str = "queued") -> RunRow:
+        # Enforce ownership even in shared-backend deployments.
+        self.get_job(job_id)
         res = self._execute_insert(
             "INSERT INTO scrape_runs (job_id, status, started_at) VALUES (?, ?, ?)",
             (job_id, status, _utcnow_iso()),
@@ -1251,18 +1253,41 @@ class WatchlistsDatabase:
 
     def get_run(self, run_id: int) -> RunRow:
         row = self.backend.execute(
-            "SELECT id, job_id, status, started_at, finished_at, stats_json, error_msg, log_path FROM scrape_runs WHERE id = ?",
-            (run_id,),
+            """
+            SELECT sr.id, sr.job_id, sr.status, sr.started_at, sr.finished_at, sr.stats_json, sr.error_msg, sr.log_path
+            FROM scrape_runs sr
+            JOIN scrape_jobs sj ON sj.id = sr.job_id
+            WHERE sr.id = ? AND sj.user_id = ?
+            """,
+            (run_id, self.user_id),
         ).first
         if not row:
             raise KeyError("run_not_found")
         return RunRow(**row)
 
     def list_runs_for_job(self, job_id: int, limit: int, offset: int) -> tuple[list[RunRow], int]:
-        total = int(self.backend.execute("SELECT COUNT(*) AS cnt FROM scrape_runs WHERE job_id = ?", (job_id,)).scalar or 0)
+        total = int(
+            self.backend.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM scrape_runs sr
+                JOIN scrape_jobs sj ON sj.id = sr.job_id
+                WHERE sr.job_id = ? AND sj.user_id = ?
+                """,
+                (job_id, self.user_id),
+            ).scalar
+            or 0
+        )
         rows = self.backend.execute(
-            "SELECT id, job_id, status, started_at, finished_at, stats_json, error_msg, log_path FROM scrape_runs WHERE job_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
-            (job_id, limit, offset),
+            """
+            SELECT sr.id, sr.job_id, sr.status, sr.started_at, sr.finished_at, sr.stats_json, sr.error_msg, sr.log_path
+            FROM scrape_runs sr
+            JOIN scrape_jobs sj ON sj.id = sr.job_id
+            WHERE sr.job_id = ? AND sj.user_id = ?
+            ORDER BY sr.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (job_id, self.user_id, limit, offset),
         ).rows
         return [RunRow(**r) for r in rows], total
 
@@ -1298,6 +1323,8 @@ class WatchlistsDatabase:
         return [RunRow(**r) for r in rows], total
 
     def append_run_item(self, run_id: int, media_id: int, source_id: int | None = None) -> None:
+        # Ensure the run belongs to this user in shared-backend deployments.
+        self.get_run(run_id)
         stmt = (
             "INSERT INTO scrape_run_items (run_id, media_id, source_id) "
             "VALUES (?, ?, ?) ON CONFLICT(run_id, media_id) DO NOTHING"
@@ -1312,6 +1339,8 @@ class WatchlistsDatabase:
             )
 
     def list_run_media_ids(self, run_id: int, limit: int = 1000) -> list[int]:
+        # Ensure run ownership before returning media links.
+        self.get_run(run_id)
         rows = self.backend.execute(
             "SELECT media_id FROM scrape_run_items WHERE run_id = ? ORDER BY media_id LIMIT ?",
             (run_id, limit),
@@ -1375,12 +1404,13 @@ class WatchlistsDatabase:
     def get_item(self, item_id: int) -> ScrapedItemRow:
         row = self.backend.execute(
             """
-            SELECT id, run_id, job_id, source_id, media_id, media_uuid, url, title,
-                   summary, published_at, tags_json, status, reviewed, created_at
-            FROM scraped_items
-            WHERE id = ?
+            SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
+                   si.summary, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
+            FROM scraped_items si
+            JOIN scrape_jobs sj ON sj.id = si.job_id
+            WHERE si.id = ? AND sj.user_id = ?
             """,
-            (item_id,),
+            (item_id, self.user_id),
         ).first
         if not row:
             raise KeyError("item_not_found")
@@ -1400,48 +1430,49 @@ class WatchlistsDatabase:
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[ScrapedItemRow], int]:
-        where = ["1=1"]
-        params: list[Any] = []
+        where = ["sj.user_id = ?"]
+        params: list[Any] = [self.user_id]
         if run_id is not None:
-            where.append("run_id = ?")
+            where.append("si.run_id = ?")
             params.append(run_id)
         if job_id is not None:
-            where.append("job_id = ?")
+            where.append("si.job_id = ?")
             params.append(job_id)
         if source_id is not None:
-            where.append("source_id = ?")
+            where.append("si.source_id = ?")
             params.append(source_id)
         if status:
-            where.append("status = ?")
+            where.append("si.status = ?")
             params.append(status)
         if reviewed is not None:
-            where.append("reviewed = ?")
+            where.append("si.reviewed = ?")
             params.append(1 if reviewed else 0)
         if since:
-            where.append("created_at >= ?")
+            where.append("si.created_at >= ?")
             params.append(since)
         if until:
-            where.append("created_at <= ?")
+            where.append("si.created_at <= ?")
             params.append(until)
         if search:
             like = f"%{search}%"
-            where.append("(title LIKE ? OR summary LIKE ?)")
+            where.append("(si.title LIKE ? OR si.summary LIKE ?)")
             params.extend([like, like])
         where_sql = " AND ".join(where)
         total = int(
             self.backend.execute(
-                f"SELECT COUNT(*) AS cnt FROM scraped_items WHERE {where_sql}",
+                f"SELECT COUNT(*) AS cnt FROM scraped_items si JOIN scrape_jobs sj ON sj.id = si.job_id WHERE {where_sql}",
                 tuple(params),
             ).scalar
             or 0
         )
         rows = self.backend.execute(
             f"""
-            SELECT id, run_id, job_id, source_id, media_id, media_uuid, url, title,
-                   summary, published_at, tags_json, status, reviewed, created_at
-            FROM scraped_items
+            SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
+                   si.summary, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
+            FROM scraped_items si
+            JOIN scrape_jobs sj ON sj.id = si.job_id
             WHERE {where_sql}
-            ORDER BY created_at DESC
+            ORDER BY si.created_at DESC
             LIMIT ? OFFSET ?
             """,
             tuple(params + [limit, offset]),
@@ -1454,12 +1485,13 @@ class WatchlistsDatabase:
         placeholders = ",".join("?" for _ in item_ids)
         rows = self.backend.execute(
             f"""
-            SELECT id, run_id, job_id, source_id, media_id, media_uuid, url, title,
-                   summary, published_at, tags_json, status, reviewed, created_at
-            FROM scraped_items
-            WHERE id IN ({placeholders})
+            SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
+                   si.summary, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
+            FROM scraped_items si
+            JOIN scrape_jobs sj ON sj.id = si.job_id
+            WHERE si.id IN ({placeholders}) AND sj.user_id = ?
             """,
-            tuple(item_ids),
+            tuple(item_ids + [self.user_id]),
         ).rows
         return [ScrapedItemRow(**r) for r in rows]
 
@@ -1480,9 +1512,12 @@ class WatchlistsDatabase:
             params.append(status)
         if not fields:
             return self.get_item(item_id)
-        params.append(item_id)
+        params.extend([item_id, self.user_id])
         self.backend.execute(
-            f"UPDATE scraped_items SET {', '.join(fields)} WHERE id = ?",
+            (
+                f"UPDATE scraped_items SET {', '.join(fields)} "
+                "WHERE id = ? AND job_id IN (SELECT id FROM scrape_jobs WHERE user_id = ?)"
+            ),
             tuple(params),
         )
         return self.get_item(item_id)
@@ -1517,8 +1552,11 @@ class WatchlistsDatabase:
         if not fields:
             return self.get_run(run_id)
         self.backend.execute(
-            f"UPDATE scrape_runs SET {', '.join(fields)} WHERE id = ?",
-            tuple(params + [run_id]),
+            (
+                f"UPDATE scrape_runs SET {', '.join(fields)} "
+                "WHERE id = ? AND job_id IN (SELECT id FROM scrape_jobs WHERE user_id = ?)"
+            ),
+            tuple(params + [run_id, self.user_id]),
         )
         return self.get_run(run_id)
 
@@ -1634,6 +1672,8 @@ class WatchlistsDatabase:
     # Claim cluster subscriptions
     # ------------------------
     def add_watchlist_cluster(self, job_id: int, cluster_id: int) -> None:
+        # Guard against cross-user subscription writes in shared-backend modes.
+        self.get_job(int(job_id))
         ts = _utcnow_iso()
         self.backend.execute(
             "INSERT INTO watchlist_clusters (job_id, cluster_id, created_at) "
@@ -1643,8 +1683,12 @@ class WatchlistsDatabase:
 
     def remove_watchlist_cluster(self, job_id: int, cluster_id: int) -> bool:
         result = self.backend.execute(
-            "DELETE FROM watchlist_clusters WHERE job_id = ? AND cluster_id = ?",
-            (int(job_id), int(cluster_id)),
+            (
+                "DELETE FROM watchlist_clusters "
+                "WHERE job_id = ? AND cluster_id = ? "
+                "AND job_id IN (SELECT id FROM scrape_jobs WHERE user_id = ?)"
+            ),
+            (int(job_id), int(cluster_id), self.user_id),
         )
         try:
             return int(getattr(result, "rowcount", 0) or 0) > 0
@@ -1653,9 +1697,14 @@ class WatchlistsDatabase:
 
     def list_watchlist_clusters(self, job_id: int) -> list[dict[str, Any]]:
         rows = self.backend.execute(
-            "SELECT cluster_id, created_at FROM watchlist_clusters WHERE job_id = ? "
-            "ORDER BY created_at DESC",
-            (int(job_id),),
+            """
+            SELECT wc.cluster_id, wc.created_at
+            FROM watchlist_clusters wc
+            JOIN scrape_jobs sj ON sj.id = wc.job_id
+            WHERE wc.job_id = ? AND sj.user_id = ?
+            ORDER BY wc.created_at DESC
+            """,
+            (int(job_id), self.user_id),
         ).rows
         return [dict(r) for r in rows or []]
 
@@ -1664,13 +1713,18 @@ class WatchlistsDatabase:
         *,
         cluster_ids: list[int] | None = None,
     ) -> list[dict[str, Any]]:
-        sql = "SELECT job_id, cluster_id, created_at FROM watchlist_clusters"
-        params: list[Any] = []
+        sql = (
+            "SELECT wc.job_id, wc.cluster_id, wc.created_at "
+            "FROM watchlist_clusters wc "
+            "JOIN scrape_jobs sj ON sj.id = wc.job_id "
+            "WHERE sj.user_id = ?"
+        )
+        params: list[Any] = [self.user_id]
         if cluster_ids:
             placeholders = ",".join("?" * len(cluster_ids))
-            sql += f" WHERE cluster_id IN ({placeholders})"
+            sql += f" AND wc.cluster_id IN ({placeholders})"
             params.extend(int(cid) for cid in cluster_ids)
-        sql += " ORDER BY created_at DESC"
+        sql += " ORDER BY wc.created_at DESC"
         rows = self.backend.execute(sql, tuple(params)).rows
         return [dict(r) for r in rows or []]
 
@@ -1679,13 +1733,18 @@ class WatchlistsDatabase:
         *,
         cluster_ids: list[int] | None = None,
     ) -> dict[int, int]:
-        sql = "SELECT cluster_id, COUNT(*) AS cnt FROM watchlist_clusters"
-        params: list[Any] = []
+        sql = (
+            "SELECT wc.cluster_id, COUNT(*) AS cnt "
+            "FROM watchlist_clusters wc "
+            "JOIN scrape_jobs sj ON sj.id = wc.job_id "
+            "WHERE sj.user_id = ?"
+        )
+        params: list[Any] = [self.user_id]
         if cluster_ids:
             placeholders = ",".join("?" * len(cluster_ids))
-            sql += f" WHERE cluster_id IN ({placeholders})"
+            sql += f" AND wc.cluster_id IN ({placeholders})"
             params.extend(int(cid) for cid in cluster_ids)
-        sql += " GROUP BY cluster_id"
+        sql += " GROUP BY wc.cluster_id"
         rows = self.backend.execute(sql, tuple(params)).rows
         counts: dict[int, int] = {}
         for row in rows or []:

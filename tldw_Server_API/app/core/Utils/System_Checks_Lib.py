@@ -60,7 +60,7 @@ def cuda_check():
         logging.info("CUDA_VISIBLE_DEVICES not set.")
     try:
         # Run nvidia-smi to capture its output
-        nvidia_smi_output = subprocess.check_output("nvidia-smi", shell=True).decode()
+        nvidia_smi_output = subprocess.check_output(["nvidia-smi"], text=True)
 
         # Look for CUDA version in the output
         if "CUDA Version" in nvidia_smi_output:

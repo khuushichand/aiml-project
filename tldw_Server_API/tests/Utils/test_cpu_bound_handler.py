@@ -7,6 +7,7 @@ from tldw_Server_API.app.core.Utils.cpu_bound_handler import (
     decode_large_base64_async,
     json_encode_heavy,
     process_large_json_async,
+    run_cpu_bound_thread,
 )
 
 
@@ -28,6 +29,16 @@ async def test_decode_large_base64_async_strips_whitespace():
     decoded = await decode_large_base64_async(spaced)
 
     assert decoded == data
+
+
+@pytest.mark.asyncio
+async def test_run_cpu_bound_thread_accepts_kwargs():
+    def combine(prefix: str, *, suffix: str) -> str:
+        return f"{prefix}-{suffix}"
+
+    result = await run_cpu_bound_thread(combine, "left", suffix="right")
+
+    assert result == "left-right"
 
 
 def test_process_pool_disabled_accepts_testing_y(monkeypatch):

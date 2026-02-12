@@ -57,7 +57,14 @@ def parse_opml(opml_bytes: bytes) -> list[OPMLSource]:
 def generate_opml(sources: Iterable[dict[str, Any]]) -> str:
     """Generate a minimal OPML string from iterable of {'name','url','html_url'} dicts."""
     def _escape(text: str | None) -> str:
-        return (text or "").replace("\"", "&quot;")
+        return (
+            (text or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;")
+        )
 
     items: list[str] = []
     for s in sources:

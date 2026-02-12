@@ -122,8 +122,8 @@ async def trigger_audio_briefing(
 
     # Gather scraped items for this run
     try:
-        scraped_items = db.list_scraped_items(
-            run_id=run_id, status="ingested", limit=100
+        scraped_items, _ = db.list_items(
+            run_id=run_id, status="ingested", limit=100, offset=0
         )
     except Exception as exc:
         logger.warning(f"Audio briefing: could not load scraped items for run {run_id}: {exc}")
@@ -136,7 +136,18 @@ async def trigger_audio_briefing(
     # Build items context (title, summary, url)
     items: list[dict[str, Any]] = []
     for item in scraped_items:
-        row = item if isinstance(item, dict) else (item._asdict() if hasattr(item, "_asdict") else {})
+        if isinstance(item, dict):
+            row = item
+        elif hasattr(item, "_asdict"):
+            row = item._asdict()
+        else:
+            row = {
+                "title": getattr(item, "title", ""),
+                "summary": getattr(item, "summary", ""),
+                "url": getattr(item, "url", ""),
+                "snippet": getattr(item, "snippet", ""),
+                "source_url": getattr(item, "source_url", ""),
+            }
         items.append({
             "title": row.get("title", ""),
             "summary": row.get("summary", row.get("snippet", "")),

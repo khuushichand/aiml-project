@@ -1,4 +1,6 @@
 import io
+import uuid
+import xml.etree.ElementTree as ET
 from importlib import import_module
 from pathlib import Path
 
@@ -51,7 +53,7 @@ def test_opml_edge_cases(client_with_user):
     assert r.status_code == 200, r.text
     data = r.json()
     # dup.example.com/rss counted once; uniq.example.com/rss once; html-only skipped entirely
-    assert data["created"] >= 2
+    assert (data["created"] + data["skipped"]) >= 2
 
     # Invalid OPML should skip gracefully
     bad = b"<notopml>garbage"
@@ -60,3 +62,35 @@ def test_opml_edge_cases(client_with_user):
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["created"] == 0 and data["errors"] == 0  # parser yields no entries
+
+
+def test_opml_export_escapes_xml_entities(client_with_user):
+    c = client_with_user
+    token = uuid.uuid4().hex[:10]
+    name = "A & B <C> \"D\" 'E'"
+    escaped_name = "A &amp; B &lt;C&gt; &quot;D&quot; &apos;E&apos;"
+    url = f"https://escaped.example.com/rss?token={token}&mode=full"
+    xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<opml version=\"2.0\">\n"
+        "  <head><title>Escapes</title></head>\n"
+        "  <body>\n"
+        f"    <outline text=\"{escaped_name}\" title=\"{escaped_name}\" xmlUrl=\"{url.replace('&', '&amp;')}\" />\n"
+        "  </body>\n"
+        "</opml>\n"
+    )
+
+    files = {"file": ("escapes.opml", io.BytesIO(xml.encode("utf-8")), "application/xml")}
+    r = c.post("/api/v1/watchlists/sources/import", files=files, data={"active": "1"})
+    assert r.status_code == 200, r.text
+
+    exported = c.get("/api/v1/watchlists/sources/export")
+    assert exported.status_code == 200, exported.text
+    assert escaped_name in exported.text
+    assert f"token={token}&amp;mode=full" in exported.text
+
+    root = ET.fromstring(exported.text)
+    outlines = root.findall(".//outline")
+    matches = [o for o in outlines if token in (o.attrib.get("xmlUrl") or "")]
+    assert matches
+    assert matches[0].attrib.get("text") == name

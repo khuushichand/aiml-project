@@ -182,6 +182,72 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
         if normalized in {"0", "false", "no", "off", "n"}:
             return False
     return default
+
+
+def _map_searx_safesearch(value: Any) -> int:
+    """Normalize safesearch values to Searx levels (0=off, 1=moderate, 2=strict)."""
+    if value is None:
+        return 1
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, (int, float)):
+        try:
+            return max(0, min(2, int(value)))
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+            return 1
+
+    normalized = str(value).strip().lower()
+    mapping = {
+        "off": 0,
+        "false": 0,
+        "none": 0,
+        "disabled": 0,
+        "0": 0,
+        "moderate": 1,
+        "medium": 1,
+        "active": 1,
+        "on": 1,
+        "true": 1,
+        "1": 1,
+        "strict": 2,
+        "high": 2,
+        "2": 2,
+    }
+    return mapping.get(normalized, 1)
+
+
+def _sanitize_sub_questions(raw_values: Any) -> list[str]:
+    """Normalize model-generated sub-questions into a deduplicated list of non-empty strings."""
+    if isinstance(raw_values, str):
+        candidates = [raw_values]
+    elif isinstance(raw_values, (list, tuple, set)):
+        candidates = list(raw_values)
+    else:
+        return []
+
+    sanitized: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        text = ""
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            query_value = item.get("query")
+            if not isinstance(query_value, str):
+                query_value = item.get("text")
+            if isinstance(query_value, str):
+                text = query_value.strip()
+        else:
+            continue
+
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        sanitized.append(text)
+    return sanitized
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 
 
@@ -322,6 +388,7 @@ def initialize_web_search_results_dict(search_params: dict) -> dict:
         "geolocation": search_params.get('geolocation'),
         "search_result_language": search_params.get('search_result_language'),
         "sort_results_by": search_params.get('sort_results_by'),
+        "google_domain": search_params.get('google_domain'),
         "results": [],
         "total_results_found": 0,
         "search_time": 0.0,
@@ -375,9 +442,17 @@ def generate_and_search(question: str, search_params: dict) -> dict:
         sub_query_dict = analyze_question(question, api_endpoint)
 
     # Merge original question with sub-queries
-    sub_queries = sub_query_dict.get("sub_questions", [])
+    sub_queries = _sanitize_sub_questions(sub_query_dict.get("sub_questions", []))
+    question_key = question.strip().casefold()
+    sub_queries = [
+        sub_query
+        for sub_query in sub_queries
+        if sub_query.strip().casefold() != question_key
+    ]
+    sub_query_dict["sub_questions"] = sub_queries
+    sub_query_dict["search_queries"] = sub_queries
     logging.info(f"Sub-queries generated: {sub_queries}")
-    all_queries = [question] + sub_queries
+    all_queries = [question, *sub_queries]
 
     # 2. Initialize a single web_search_results_dict
     web_search_results_dict = initialize_web_search_results_dict(search_params)
@@ -410,6 +485,7 @@ def generate_and_search(question: str, search_params: dict) -> dict:
             geolocation=search_params.get('geolocation'),
             search_result_language=search_params.get('search_result_language'),
             sort_results_by=search_params.get('sort_results_by'),
+            google_domain=search_params.get('google_domain'),
             search_params=search_params,
         )
 
@@ -417,8 +493,21 @@ def generate_and_search(question: str, search_params: dict) -> dict:
         logging.debug(f"Raw results for query '{q}': {raw_results}")
 
         # Check for errors or invalid data
-        if not isinstance(raw_results, dict) or raw_results.get("processing_error"):
+        if not isinstance(raw_results, dict):
             logging.error(f"Error or invalid data returned for query '{q}': {raw_results}")
+            continue
+        if raw_results.get("processing_error"):
+            processing_error = str(raw_results.get("processing_error")).strip()
+            if processing_error:
+                observed_provider_errors.append(processing_error)
+                deferred_provider_error_warnings.append(
+                    {
+                        "query": q,
+                        "phase": "provider",
+                        "message": processing_error,
+                    }
+                )
+            logging.error(f"Provider processing error for query '{q}': {raw_results}")
             continue
 
         raw_warnings = raw_results.get("warnings")
@@ -452,9 +541,10 @@ def generate_and_search(question: str, search_params: dict) -> dict:
         web_search_results_dict["search_time"] += raw_results.get("search_time", 0.0)
         logging.info(f"Total results found so far: {len(web_search_results_dict['results'])}")
 
+    if deferred_provider_error_warnings:
+        web_search_results_dict["warnings"].extend(deferred_provider_error_warnings)
+
     if web_search_results_dict["results"]:
-        if deferred_provider_error_warnings:
-            web_search_results_dict["warnings"].extend(deferred_provider_error_warnings)
         web_search_results_dict["error"] = None
     elif observed_provider_errors:
         web_search_results_dict["error"] = observed_provider_errors[0]
@@ -580,7 +670,14 @@ def analyze_question(question: str, api_endpoint) -> dict:
                 try:
                     # Try to parse as JSON first
                     parsed_response = json.loads(response)
-                    sub_questions = parsed_response.get("sub_questions", [])
+                    if isinstance(parsed_response, list):
+                        sub_questions = _sanitize_sub_questions(parsed_response)
+                    elif isinstance(parsed_response, dict):
+                        sub_questions = _sanitize_sub_questions(
+                            parsed_response.get("sub_questions", parsed_response.get("search_queries", []))
+                        )
+                    else:
+                        sub_questions = []
                     if sub_questions:
                         logging.info("Successfully generated sub-questions from JSON")
                         break
@@ -588,7 +685,7 @@ def analyze_question(question: str, api_endpoint) -> dict:
                     # If JSON parsing fails, attempt a regex-based fallback
                     logging.warning("Failed to parse as JSON. Attempting regex extraction.")
                     matches = re.findall(r'"([^"]*)"', response)
-                    sub_questions = matches if matches else []
+                    sub_questions = _sanitize_sub_questions(matches)
                     if sub_questions:
                         logging.info("Successfully extracted sub-questions using regex")
                         break
@@ -598,7 +695,7 @@ def analyze_question(question: str, api_endpoint) -> dict:
 
     if not sub_questions:
         logging.error("Failed to extract sub-questions from API response after all attempts.")
-        sub_questions = [original_query]  # Fallback to the original query
+        sub_questions = []
 
     # Construct and return the result dictionary
     logging.info("Sub-questions generated successfully")
@@ -1266,7 +1363,7 @@ async def search_discussions(
 
 # FIXME
 def perform_websearch(search_engine, search_query, content_country, search_lang, output_lang, result_count, date_range=None,
-                      safesearch=None, site_blacklist=None, exactTerms=None, excludeTerms=None, filter=None, geolocation=None, search_result_language=None, sort_results_by=None, search_params=None, site_whitelist=None):
+                      safesearch=None, site_blacklist=None, exactTerms=None, excludeTerms=None, filter=None, geolocation=None, search_result_language=None, sort_results_by=None, search_params=None, site_whitelist=None, google_domain=None):
     try:
         if search_engine.lower() == "baidu":
             web_search_results = search_web_baidu(search_query, None, None)
@@ -1306,6 +1403,16 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
         elif search_engine.lower() == "google":
             site_whitelist_list = site_whitelist if isinstance(site_whitelist, list) else None
             site_blacklist_list = site_blacklist if isinstance(site_blacklist, list) else None
+            site_whitelist_domains = (
+                [domain.strip() for domain in site_whitelist.split(",") if domain.strip()]
+                if isinstance(site_whitelist, str)
+                else None
+            )
+            site_blacklist_domains = (
+                [domain.strip() for domain in site_blacklist.split(",") if domain.strip()]
+                if isinstance(site_blacklist, str)
+                else None
+            )
             site_blacklist_value: str | None
             if site_blacklist_list:
                 site_blacklist_value = ",".join(site_blacklist_list)
@@ -1326,20 +1433,21 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 "search_result_language": search_result_language or "lang_en",  # Default value
                 "geolocation": geolocation or "us",  # Default value
                 "safesearch": safesearch or "off",  # Default value,
+                "google_domain": google_domain,
             }
 
             # Prefer include-domain filter when present; otherwise apply exclude-domain filter.
             if site_whitelist_list and len(site_whitelist_list) == 1:
                 google_args["siteSearch"] = site_whitelist_list[0]
                 google_args["siteSearchFilter"] = "i"
-            elif isinstance(site_whitelist, str) and site_whitelist:
-                google_args["siteSearch"] = site_whitelist
+            elif site_whitelist_domains and len(site_whitelist_domains) == 1:
+                google_args["siteSearch"] = site_whitelist_domains[0]
                 google_args["siteSearchFilter"] = "i"
             elif site_blacklist_list and len(site_blacklist_list) == 1:
                 google_args["siteSearch"] = site_blacklist_list[0]
                 google_args["siteSearchFilter"] = "e"
-            elif isinstance(site_blacklist, str) and site_blacklist:
-                google_args["siteSearch"] = site_blacklist
+            elif site_blacklist_domains and len(site_blacklist_domains) == 1:
+                google_args["siteSearch"] = site_blacklist_domains[0]
                 google_args["siteSearchFilter"] = "e"
 
             # Add optional parameters only if they are provided
@@ -1417,7 +1525,7 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 search_query,
                 language='auto',
                 time_range=date_range or '',
-                safesearch=0,
+                safesearch=_map_searx_safesearch(safesearch),
                 pageno=1,
                 categories='general',
                 searx_url=(search_params or {}).get('searx_url'),
@@ -1431,7 +1539,7 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             raise ValueError(f"{search_engine} provider not implemented")
 
         else:
-            return f"Error: Invalid Search Engine Name {search_engine}"
+            return {"processing_error": f"Error: Invalid Search Engine Name {search_engine}"}
 
         # Process the raw search results
         web_search_results_dict = process_web_search_results(web_search_results, search_engine)
@@ -1605,6 +1713,7 @@ def process_web_search_results(search_results: dict, search_engine: str) -> dict
         "geolocation": search_results.get("geolocation"),
         "search_result_language": search_results.get("search_result_language"),
         "sort_results_by": search_results.get("sort_results_by"),
+        "google_domain": search_results.get("google_domain"),
         "results": [],
         "total_results_found": search_results.get("total_results_found", 0),
         "search_time": search_results.get("search_time", 0.0),
@@ -2101,6 +2210,7 @@ def search_web_google(
     ui_language: str | None = None,
     search_result_language: str | None = None,
     safesearch: str | None = None,
+    google_domain: str | None = None,
     site_blacklist: str | None = None,
     siteSearch: str | None = None,
     siteSearchFilter: str | None = None,
@@ -2123,6 +2233,7 @@ def search_web_google(
     :param ui_language: Language of the user interface
     :param search_result_language: Language of search results
     :param safesearch: Safe search setting
+    :param google_domain: Google host/domain hint (e.g. "google.de")
     :param site_blacklist: Single Site to exclude from search
     :param siteSearch: Google CSE siteSearch parameter
     :param siteSearchFilter: Google CSE siteSearchFilter parameter (e=exclude, i=include)
@@ -2135,7 +2246,25 @@ def search_web_google(
         logging.info(f"Using search URL: {search_url}")
 
         # Initialize params dictionary
-        params: dict[str, Any] = {"q": search_query}
+        query_value = search_query
+        if site_blacklist:
+            raw_domains = [domain.strip() for domain in str(site_blacklist).split(",") if domain.strip()]
+            if len(raw_domains) > 1:
+                cleaned_domains: list[str] = []
+                for domain in raw_domains:
+                    normalized_domain = domain
+                    if normalized_domain.startswith("-site:"):
+                        normalized_domain = normalized_domain[len("-site:"):]
+                    elif normalized_domain.startswith("site:"):
+                        normalized_domain = normalized_domain[len("site:"):]
+                    normalized_domain = normalized_domain.strip()
+                    if normalized_domain:
+                        cleaned_domains.append(normalized_domain)
+                if cleaned_domains:
+                    query_value = " ".join(
+                        [search_query, *[f"-site:{domain}" for domain in cleaned_domains]]
+                    )
+        params: dict[str, Any] = {"q": query_value}
 
         # Handle c2coff
         if c2coff is None:
@@ -2186,6 +2315,8 @@ def search_web_google(
             safesearch = get_loaded_config()['search_engines']['google_safe_search']
         if safesearch:
             params["safe"] = safesearch
+        if google_domain:
+            params["googlehost"] = google_domain
         if siteSearch:
             params["siteSearch"] = siteSearch
         if siteSearchFilter:
@@ -2242,23 +2373,24 @@ def test_search_google():
     safesearch = "off"
     site_blacklist = None
     sort_results_by = None
-    result = search_web_google(search_query,
-                               google_search_api_key,
-                               google_search_engine_id,
-                               result_count,
-                               c2coff,
-                               results_origin_country,
-                               date_range,
-                               exactTerms,
-                               excludeTerms,
-                               filter,
-                               geolocation,
-                               ui_language,
-                               search_result_language,
-                               safesearch,
-                               site_blacklist,
-                               sort_results_by
-                               )
+    result = search_web_google(
+        search_query=search_query,
+        google_search_api_key=google_search_api_key,
+        google_search_engine_id=google_search_engine_id,
+        result_count=result_count,
+        c2coff=c2coff,
+        results_origin_country=results_origin_country,
+        date_range=date_range,
+        exactTerms=exactTerms,
+        excludeTerms=excludeTerms,
+        filter=filter,
+        geolocation=geolocation,
+        ui_language=ui_language,
+        search_result_language=search_result_language,
+        safesearch=safesearch,
+        site_blacklist=site_blacklist,
+        sort_results_by=sort_results_by,
+    )
     print(result)
     return result
 
@@ -2300,9 +2432,13 @@ def parse_google_results(raw_results: dict, output_dict: dict) -> None:
                 "excludeTerms": request.get("excludeTerms", None),
                 "filter": request.get("filter", None),
                 "geolocation": request.get("gl", None),
-                "search_result_language": request.get("hl", None),
+                # Google CSE uses "lr" for result language; retain "hl" as fallback.
+                "search_result_language": request.get("lr", request.get("hl", None)),
                 "sort_results_by": request.get("sort", None)
             })
+            google_host = request.get("googleHost") or request.get("googlehost")
+            if google_host:
+                output_dict["google_domain"] = google_host
 
         # Process search results
         if "items" in raw_results:
@@ -2385,7 +2521,7 @@ def search_web_kagi(query: str, limit: int = 10) -> dict:
         raise ValueError("API key is required.")
 
     headers = {"Authorization": f"Bot {kagi_api_key}"}
-    endpoint = f"{search_url}/search"
+    endpoint = search_url
     params = {"q": query, "limit": limit}
 
     # Enforce SSRF/egress policy

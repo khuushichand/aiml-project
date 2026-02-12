@@ -67,3 +67,28 @@ async def test_schedule_audit_background_task_cancelled_is_silent(monkeypatch):
     await asyncio.sleep(0)
 
     assert not any("chat.endpoint.cancel" in str(args) and "failed" in msg for msg, args in captured)
+
+
+@pytest.mark.asyncio
+async def test_process_content_for_db_sync_large_image_path_handles_processor_rejection(monkeypatch):
+    class _RejectingProcessor:
+        async def process_image_url(self, _url: str, _max_size_bytes: int):
+            return False, None, "text/plain", "Unsupported image MIME type: text/plain"
+
+    monkeypatch.setattr(chat_endpoint, "get_image_processor", lambda: _RejectingProcessor())
+
+    large_payload = "A" * 100001
+    content = [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:text/plain;base64,{large_payload}"},
+        }
+    ]
+
+    text_parts, images = await chat_endpoint._process_content_for_db_sync(content, "conv_test")
+
+    assert images == []
+    assert any(
+        part.startswith("<Image failed: Unsupported image MIME type: text/plain>")
+        for part in text_parts
+    )

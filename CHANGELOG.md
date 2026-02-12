@@ -98,6 +98,14 @@ and this project adheres to Some kind of Versioning
 - Security hardening (Scheduler): fixed symlink-path validation bypass so base_path now rejects symlink ancestors (including symlink/child) instead of only direct symlink paths.
 - Regression coverage (Scheduler): updated test_security_fixes.py to match current backend detection (pool-based Postgres detection) and async DB mocks (AsyncMock + awaited call assertions).
 - Deprecation headers: replaced hardcoded fallback sunset dates with a shared UTC helper (build_deprecation_headers) used by auth, users, and legacy character-chat endpoints, with DEPRECATION_SUNSET_DAYS support and dynamic fallback computation.
+- WebSearch Module: improved reliability and diagnostics across aggregation, provider dispatch, and parsing. Aggregate mode now validates LLM configuration (returns `422` when missing and reuses `final_answer_llm` for relevance analysis when provided), Google now correctly handles `google_domain`/`googlehost`, result-language parsing (`lr` with `hl` fallback), and multi-domain blacklist behavior, Kagi endpoint construction and Searx safesearch mapping were corrected, subquery generation/parsing now sanitizes and deduplicates model output, and provider `processing_error` values are surfaced in response `error`/`warnings` instead of being silently dropped. Added regression coverage across unit and integration WebSearch paths.
+- Hardened chunked image handling to reject unsupported MIME types and invalid image payloads in large `data:` image paths.
+- Changed chunked image processing failure behavior from fail-open to fail-closed, preventing invalid bytes from being treated as valid images.
+- Fixed `run_cpu_bound_thread()` so keyword arguments are supported correctly via `functools.partial`.
+- Corrected `load_prompt()` semantics for markdown prompts: missing keys now return `None` instead of falling back to the first fenced block.
+- Removed `shell=True` usage in CUDA detection (`nvidia-smi` now called with direct subprocess args).
+- Added backward-compatible chat dictionary endpoint re-exports for legacy imports/tests.
+- Updated telemetry dummy span compatibility (`set_attributes`, broader `record_exception` signature).
 
 
 ## [0.1.20] 2026-02-07

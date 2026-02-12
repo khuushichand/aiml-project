@@ -57,6 +57,7 @@ export default async function globalSetup() {
     const buildMtime = getFileMtime(buildStamp)
     const latestSourceMtime = Math.max(
       getLatestMtime(path.resolve(projectRoot, 'src')),
+      getLatestMtime(path.resolve(projectRoot, '../packages/ui/src')),
       getFileMtime(path.resolve(projectRoot, 'wxt.config.ts')),
       getFileMtime(path.resolve(projectRoot, 'package.json')),
       getFileMtime(path.resolve(projectRoot, 'tailwind.config.js')),

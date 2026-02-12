@@ -566,7 +566,13 @@ class ContentDeduplicator:
 class ScrapingJobQueue:
     """Priority job queue for scraping tasks"""
 
-    def __init__(self, max_concurrent: int = 5, parent_scraper=None):
+    def __init__(
+        self,
+        max_concurrent: int = 5,
+        parent_scraper=None,
+        *,
+        completed_retention: int = 1000,
+    ):
         self.max_concurrent = max_concurrent
         self.parent_scraper = parent_scraper  # Store reference to parent scraper
         self._queues: dict[JobPriority, asyncio.Queue] = {
@@ -579,6 +585,20 @@ class ScrapingJobQueue:
         self._workers: list[asyncio.Task] = []
         self._shutdown = False
         self._lock = asyncio.Lock()
+        self._completed_retention = max(0, int(completed_retention))
+
+    def _trim_completed_jobs(self) -> None:
+        """Bound completed-job memory by retaining only the most recent entries."""
+        if self._completed_retention <= 0:
+            self._completed_jobs.clear()
+            return
+        while len(self._completed_jobs) > self._completed_retention:
+            oldest_job_id = next(iter(self._completed_jobs))
+            self._completed_jobs.pop(oldest_job_id, None)
+
+    def _record_completed_job(self, job: ScrapingJob) -> None:
+        self._completed_jobs[job.job_id] = job
+        self._trim_completed_jobs()
 
     async def start(self):
         """Start worker tasks"""
@@ -600,7 +620,7 @@ class ScrapingJobQueue:
                     job.cancel_requested = True
                     job.completed_at = datetime.now()
                     self._pending_jobs.pop(job.job_id, None)
-                    self._completed_jobs[job.job_id] = job
+                    self._record_completed_job(job)
                     future = self._job_futures.pop(job.job_id, None)
                     if future and not future.done():
                         future.set_exception(Exception("Job cancelled due to shutdown"))
@@ -652,7 +672,7 @@ class ScrapingJobQueue:
                         job.status = JobStatus.CANCELLED
                         job.completed_at = datetime.now()
                         self._pending_jobs.pop(job.job_id, None)
-                        self._completed_jobs[job.job_id] = job
+                        self._record_completed_job(job)
                         future = self._job_futures.pop(job.job_id, None)
                         if future and not future.done():
                             future.set_exception(Exception("Job cancelled"))
@@ -696,7 +716,7 @@ class ScrapingJobQueue:
 
                     # Move to completed
                     self._active_jobs.pop(job.job_id, None)
-                    self._completed_jobs[job.job_id] = job
+                    self._record_completed_job(job)
 
                     # Resolve future
                     if job.job_id in self._job_futures:
@@ -723,7 +743,7 @@ class ScrapingJobQueue:
                             job.error = str(e)
                         if job.job_id in self._active_jobs:
                             del self._active_jobs[job.job_id]
-                        self._completed_jobs[job.job_id] = job
+                        self._record_completed_job(job)
                         future = self._job_futures.pop(job.job_id, None)
                     if future and not future.done():
                         if job.cancel_requested:
@@ -791,7 +811,7 @@ class ScrapingJobQueue:
                 job.cancel_requested = True
                 job.completed_at = datetime.now()
                 self._pending_jobs.pop(job_id, None)
-                self._completed_jobs[job_id] = job
+                self._record_completed_job(job)
                 future = self._job_futures.pop(job_id, None)
                 if future and not future.done():
                     future.set_exception(Exception("Job cancelled"))
@@ -831,9 +851,11 @@ class EnhancedWebScraper:
         per_host_limit = _as_int(self.config.get('connector_limit_per_host', 2), 2)
         self.cookie_manager = CookieManager(connector_limit=connector_limit, per_host_limit=per_host_limit)
         self.deduplicator = ContentDeduplicator()
+        max_completed_jobs = _as_int(self.config.get('max_completed_jobs', 1000), 1000)
         self.job_queue = ScrapingJobQueue(
             max_concurrent=_as_int(self.config.get('max_concurrent', 5), 5),
-            parent_scraper=self  # Pass self reference to job queue
+            parent_scraper=self,  # Pass self reference to job queue
+            completed_retention=max_completed_jobs,
         )
 
         # Playwright browser

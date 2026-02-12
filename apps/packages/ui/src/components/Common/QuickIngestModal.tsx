@@ -301,6 +301,41 @@ const normalizeStatusLabel = (value: unknown) =>
 const isSkippedStatus = (status: string) =>
   SKIPPED_STATUS_TOKENS.some((token) => status.includes(token))
 
+const RESULT_SUCCESS_STATUS_TOKENS = [
+  "ok",
+  "success",
+  "succeeded",
+  "completed",
+  "complete",
+  "done",
+  "ingested",
+  "processed",
+  "ready"
+]
+
+const RESULT_FAILURE_STATUS_TOKENS = [
+  "error",
+  "failed",
+  "failure",
+  "cancelled",
+  "canceled",
+  "timeout",
+  "auth_required",
+  "quarantined"
+]
+
+const normalizeResultStatus = (status: unknown): ResultItem["status"] => {
+  const normalized = normalizeStatusLabel(status)
+  if (normalized && RESULT_SUCCESS_STATUS_TOKENS.includes(normalized)) {
+    return "ok"
+  }
+  if (normalized && RESULT_FAILURE_STATUS_TOKENS.includes(normalized)) {
+    return "error"
+  }
+  // Default unknown statuses to error so UI does not stay in a false "valid/running" state.
+  return "error"
+}
+
 function mediaIdFromPayload(
   data: ProcessingResultPayload,
   visited?: WeakSet<object>
@@ -484,6 +519,24 @@ const cloneObject = <T extends Record<string, any>>(value: T): T | null => {
       console.warn("[cloneObject] Failed to clone object, returning null", value)
       return null
     }
+  }
+}
+
+const normalizeResultItem = (
+  item: Partial<ResultItem> | null | undefined
+): ResultItem | null => {
+  if (!item) return null
+  if (item.id === undefined || item.id === null) return null
+  const id = String(item.id).trim()
+  if (!id) return null
+  return {
+    id,
+    status: normalizeResultStatus(item.status),
+    url: item.url,
+    fileName: item.fileName,
+    type: String(item.type || "item"),
+    data: item.data as ProcessingResultPayload,
+    error: item.error
   }
 }
 
@@ -1639,13 +1692,15 @@ export const QuickIngestModal: React.FC<Props> = ({
     return {
       queueCount: plannedCount,
       optionsModified,
-      isProcessing: running
+      isProcessing: running,
+      hasFailure: !running && Boolean(lastRunError)
     }
   }, [
     plannedCount,
     common,
     advancedValues,
     hasTypeDefaultChanges,
+    lastRunError,
     reviewBeforeStorage,
     running,
     storeRemote
@@ -1767,6 +1822,16 @@ export const QuickIngestModal: React.FC<Props> = ({
       messageApi.error('Please add at least one URL or file')
       return
     }
+    const plannedUrlEntries = valid.map((row) => ({
+      id: row.id,
+      url: row.url,
+      type:
+        row.type === "auto" ? inferIngestTypeFromUrl(row.url) : row.type
+    }))
+    const plannedFiles = attachedFiles.map((file) => ({
+      file,
+      type: fileTypeFromName(file)
+    }))
     const oversizedFiles = attachedFiles.filter(
       (f) => f.size && f.size > MAX_LOCAL_FILE_BYTES
     )
@@ -1792,6 +1857,62 @@ export const QuickIngestModal: React.FC<Props> = ({
     setRunning(true)
     setResults([])
     setReviewBatchId(null)
+    const fileLookup = new Map<string, File>()
+    const fileIdByInstanceId = new Map<string, string>()
+    for (const file of attachedFiles) {
+      const instanceId = getFileInstanceId(file)
+      if (!fileIdByInstanceId.has(instanceId)) {
+        fileIdByInstanceId.set(instanceId, crypto.randomUUID())
+      }
+      const fileId = fileIdByInstanceId.get(instanceId)
+      if (fileId) {
+        fileLookup.set(fileId, file)
+      }
+    }
+    lastFileLookupRef.current = fileLookup
+    lastFileIdByInstanceIdRef.current = fileIdByInstanceId
+
+    const appendMissingFailureResults = (
+      existingResults: ResultItem[],
+      errorMessage: string
+    ): ResultItem[] => {
+      const message = String(errorMessage || "").trim() || qi("statusFailed", "Failed")
+      const byId = new Map<string, ResultItem>()
+      for (const existing of existingResults) {
+        const normalized = normalizeResultItem(existing)
+        if (normalized) {
+          byId.set(normalized.id, normalized)
+        }
+      }
+      for (const row of plannedUrlEntries) {
+        if (byId.has(row.id)) continue
+        byId.set(row.id, {
+          id: row.id,
+          status: "error",
+          url: row.url,
+          type: row.type,
+          error: message
+        })
+      }
+      for (const planned of plannedFiles) {
+        const fileId = fileIdByInstanceId.get(getFileInstanceId(planned.file))
+        if (!fileId || byId.has(fileId)) continue
+        byId.set(fileId, {
+          id: fileId,
+          status: "error",
+          fileName: planned.file.name,
+          type: planned.type,
+          error: message
+        })
+      }
+      return Array.from(byId.values())
+    }
+
+    const markPendingItemsAsFailed = (errorMessage: string) => {
+      setResults((prev) => {
+        return appendMissingFailureResults(prev, errorMessage)
+      })
+    }
     try {
       // Ensure tldwConfig is hydrated for background requests
       try {
@@ -1841,12 +1962,11 @@ export const QuickIngestModal: React.FC<Props> = ({
       }
 
       // Convert local files to transferable payloads (ArrayBuffer)
-      const fileLookup = new Map<string, File>()
-      const fileIdByInstanceId = new Map<string, string>()
       const filesPayload = await Promise.all(
         attachedFiles.map(async (f) => {
+          const instanceId = getFileInstanceId(f)
           const defaultsForFile =
-            fileDefaultsByInstanceId.get(getFileInstanceId(f)) || normalizedTypeDefaults
+            fileDefaultsByInstanceId.get(instanceId) || normalizedTypeDefaults
           if (f.size && f.size > INLINE_FILE_WARN_BYTES) {
             const msg = `File "${f.name}" is too large for inline transfer (over ${formatBytes(INLINE_FILE_WARN_BYTES)}). Please upload a smaller file or process directly on the server.`
             messageApi.error(msg)
@@ -1858,9 +1978,10 @@ export const QuickIngestModal: React.FC<Props> = ({
               `File "${f.name}" is too large to ingest (over ${formatBytes(MAX_LOCAL_FILE_BYTES)}).`
             )
           }
-          const id = crypto.randomUUID()
+          const id =
+            fileIdByInstanceId.get(instanceId) || crypto.randomUUID()
+          fileIdByInstanceId.set(instanceId, id)
           fileLookup.set(id, f)
-          fileIdByInstanceId.set(getFileInstanceId(f), id)
           // Use a plain array so runtime message cloning (MV3 SW) preserves bytes
           const data = Array.from(new Uint8Array(await f.arrayBuffer()))
           return {
@@ -1872,8 +1993,6 @@ export const QuickIngestModal: React.FC<Props> = ({
           }
         })
       )
-      lastFileLookupRef.current = fileLookup
-      lastFileIdByInstanceIdRef.current = fileIdByInstanceId
 
       console.log('[QI_MODAL] About to send tldw:quick-ingest-batch', {
         entriesCount: entries.length,
@@ -1882,7 +2001,13 @@ export const QuickIngestModal: React.FC<Props> = ({
         processOnly
       })
 
-      let resp: { ok: boolean; error?: string; results?: ResultItem[] } | undefined
+      let resp:
+        | {
+            ok: boolean
+            error?: string
+            results?: Array<Partial<ResultItem>>
+          }
+        | undefined
 
       // Try extension messaging with timeout, then fall back to direct HTTP if it fails
       // This handles cases where extension messaging doesn't work (e.g., in Playwright tests)
@@ -1911,7 +2036,13 @@ export const QuickIngestModal: React.FC<Props> = ({
           console.warn('[QI_MODAL] Extension messaging timed out, cannot fall back for file uploads')
           throw new Error('Extension messaging timed out. Please try again or reload the page.')
         }
-        resp = result as { ok: boolean; error?: string; results?: ResultItem[] } | undefined
+        resp = result as
+          | {
+              ok: boolean
+              error?: string
+              results?: Array<Partial<ResultItem>>
+            }
+          | undefined
         console.log('[QI_MODAL] sendMessage returned', { ok: resp?.ok, error: resp?.error })
       } catch (sendErr: any) {
         console.error('[QI_MODAL] sendMessage error', sendErr?.message)
@@ -1928,6 +2059,7 @@ export const QuickIngestModal: React.FC<Props> = ({
         if (unmountedRef.current) {
           return
         }
+        markPendingItemsAsFailed(msg)
         setLastRunError(msg)
         markFailure()
         setRunning(false)
@@ -1935,7 +2067,25 @@ export const QuickIngestModal: React.FC<Props> = ({
         return
       }
 
-      const out = resp.results || []
+      const normalizedResults = (resp.results || [])
+        .map((item) => normalizeResultItem(item))
+        .filter((item): item is ResultItem => Boolean(item))
+      if (total > 0 && normalizedResults.length === 0) {
+        const msg = qi(
+          "noResultItemsReturned",
+          "Ingest request finished without item results."
+        )
+        markPendingItemsAsFailed(msg)
+        setLastRunError(msg)
+        markFailure()
+        setRunning(false)
+        setRunStartedAt(null)
+        return
+      }
+      const out = appendMissingFailureResults(
+        normalizedResults,
+        qi("missingResultItems", "No result was returned for this item.")
+      )
       if (unmountedRef.current) {
         return
       }
@@ -1999,6 +2149,7 @@ export const QuickIngestModal: React.FC<Props> = ({
       if (unmountedRef.current) {
         return
       }
+      markPendingItemsAsFailed(msg)
       setRunning(false)
       setRunStartedAt(null)
       setLastRunError(msg)
@@ -2023,6 +2174,7 @@ export const QuickIngestModal: React.FC<Props> = ({
     mergeDefaults,
     processOnly,
     qi,
+    fileTypeFromName,
     reviewBeforeStorage,
     rows,
     storeRemote,
@@ -2788,6 +2940,44 @@ export const QuickIngestModal: React.FC<Props> = ({
     requestFileReattach(selectedFileStub.id)
   }, [requestFileReattach, selectedFileStub])
 
+  const statusForUrlRowWithRunState = React.useCallback(
+    (row: Entry) => {
+      const base = statusForUrlRow(row)
+      const result = resultById.get(row.id)
+      if (result?.status === "error") {
+        return {
+          label: qi("statusFailed", "Failed"),
+          color: "red",
+          reason: result.error || base.reason
+        }
+      }
+      return base
+    },
+    [qi, resultById, statusForUrlRow]
+  )
+
+  const statusForFileWithRunState = React.useCallback(
+    (fileLike: { size: number }, attached: boolean) => {
+      const base = statusForFile(fileLike, attached)
+      if (
+        attached &&
+        typeof (fileLike as File).name === "string" &&
+        typeof (fileLike as File).lastModified === "number"
+      ) {
+        const match = getResultForFile(fileLike as File)
+        if (match?.status === "error") {
+          return {
+            label: qi("statusFailed", "Failed"),
+            color: "red",
+            reason: match.error || base.reason
+          }
+        }
+      }
+      return base
+    },
+    [getResultForFile, qi, statusForFile]
+  )
+
   // Keep intro hidden if user dismissed previously
   React.useEffect(() => {
     if (inspectorIntroDismissed) {
@@ -2836,8 +3026,25 @@ export const QuickIngestModal: React.FC<Props> = ({
       elapsedMs > 0
         ? `${Math.floor(elapsedMs / 60000)}:${String(Math.floor((elapsedMs % 60000) / 1000)).padStart(2, '0')}`
         : null
-    return { total, done, pct, elapsedLabel }
-  }, [liveTotalCount, processedCount, progressTick, results.length, runStartedAt, totalPlanned])
+    const state: "running" | "failed" | "complete" | "ready" =
+      running
+        ? "running"
+        : lastRunError
+          ? "failed"
+          : total > 0 && done >= total
+            ? "complete"
+            : "ready"
+    return { total, done, pct, elapsedLabel, state, error: lastRunError }
+  }, [
+    lastRunError,
+    liveTotalCount,
+    processedCount,
+    progressTick,
+    results.length,
+    runStartedAt,
+    running,
+    totalPlanned
+  ])
 
   const doneCount = processedCount || results.length || 0
   const totalCount = liveTotalCount || totalPlanned || 0
@@ -3428,7 +3635,7 @@ export const QuickIngestModal: React.FC<Props> = ({
     const handler = (message: any) => {
       if (!message || message.type !== "tldw:quick-ingest-progress") return
       const payload = message.payload || {}
-      const result = payload.result as ResultItem | undefined
+      const result = normalizeResultItem(payload.result as Partial<ResultItem> | undefined)
       if (typeof payload.processedCount === "number") {
         setProcessedCount(payload.processedCount)
         if (
@@ -3451,7 +3658,11 @@ export const QuickIngestModal: React.FC<Props> = ({
           if (r.id) map.set(r.id, r)
         }
         const existing = map.get(result.id)
-        map.set(result.id, { ...(existing || {}), ...result })
+        map.set(result.id, {
+          ...(existing || {}),
+          ...result,
+          status: normalizeResultStatus(result.status)
+        })
         return Array.from(map.values())
       })
     }
@@ -3908,13 +4119,21 @@ export const QuickIngestModal: React.FC<Props> = ({
             <div className="max-h-[360px] space-y-2 overflow-auto pr-1">
               <React.Suspense fallback={null}>
                 {rows.map((row) => {
-                  const status = statusForUrlRow(row)
+                  const baseStatus = statusForUrlRow(row)
                   const isSelected = selectedRowId === row.id
                   const detected =
                     row.type === "auto"
                       ? inferIngestTypeFromUrl(row.url)
                       : row.type
                   const res = resultById.get(row.id)
+                  const status =
+                    res?.status === "error"
+                      ? {
+                          label: qi("statusFailed", "Failed"),
+                          color: "red",
+                          reason: res.error || baseStatus.reason
+                        }
+                      : baseStatus
                   const isProcessing = running && !res?.status
                   let runTag: React.ReactNode = null
                   if (res?.status === "ok") {
@@ -3985,7 +4204,7 @@ export const QuickIngestModal: React.FC<Props> = ({
 
                 {queuedFileStubs.map((stub) => {
                   const attachedFile = fileForStubId.get(stub.id)
-                  const status = statusForFile(
+                  const baseStatus = statusForFile(
                     attachedFile || stub,
                     Boolean(attachedFile)
                   )
@@ -3995,6 +4214,14 @@ export const QuickIngestModal: React.FC<Props> = ({
                     ? getResultForFile(attachedFile)
                     : null
                   const runStatus = match?.status
+                  const status =
+                    runStatus === "error"
+                      ? {
+                          label: qi("statusFailed", "Failed"),
+                          color: "red",
+                          reason: match?.error || baseStatus.reason
+                        }
+                      : baseStatus
                   const isProcessing = !!attachedFile && running && !runStatus
                   let runTag: React.ReactNode = null
                   if (runStatus === "ok") {
@@ -4147,6 +4374,7 @@ export const QuickIngestModal: React.FC<Props> = ({
           totalCount={totalCount}
           plannedCount={plannedCount}
           progressMeta={progressMeta}
+          lastRunError={lastRunError}
           run={run}
           hasMissingFiles={hasMissingFiles}
           missingFileCount={missingFileCount}
@@ -4181,8 +4409,8 @@ export const QuickIngestModal: React.FC<Props> = ({
           typeIcon={typeIcon}
           inferIngestTypeFromUrl={inferIngestTypeFromUrl}
           fileTypeFromName={fileTypeFromName}
-          statusForUrlRow={statusForUrlRow}
-          statusForFile={statusForFile}
+          statusForUrlRow={statusForUrlRowWithRunState}
+          statusForFile={statusForFileWithRunState}
           formatBytes={formatBytes}
           onReattachFile={handleReattachSelectedFile}
         />

@@ -3060,16 +3060,55 @@ async def get_run_audio(
             raise HTTPException(status_code=404, detail="no_workflow_db")
 
         wf_db = WorkflowsDatabase(db_path=wf_db_path)
-        # List runs and find one whose metadata matches
-        runs = wf_db.list_runs(limit=50)
+        tenant_id = str(getattr(current_user, "tenant_id", "default"))
+        wf_user_id = str(resolved_user_id)
+        scan_page_size = 50
+        scan_max_pages = 20
         matching_run = None
-        for wf_run in runs:
+
+        def _load_metadata(value: Any) -> dict[str, Any]:
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+                    return {}
+                return parsed if isinstance(parsed, dict) else {}
+            return {}
+
+        def _run_metadata(run_obj: Any) -> dict[str, Any]:
+            if isinstance(run_obj, dict):
+                return _load_metadata(run_obj.get("metadata_json"))
+            return _load_metadata(getattr(run_obj, "metadata_json", None))
+
+        # Paginated scan to avoid false negatives when target run is beyond first page.
+        for page_idx in range(scan_max_pages):
+            offset = page_idx * scan_page_size
+            runs: list[Any] = []
             try:
-                meta = json.loads(wf_run.metadata_json or "{}") if hasattr(wf_run, "metadata_json") else {}
-            except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-                meta = {}
-            if meta.get("watchlist_run_id") == run_id:
-                matching_run = wf_run
+                runs = wf_db.list_runs(
+                    tenant_id=tenant_id,
+                    user_id=wf_user_id,
+                    limit=scan_page_size,
+                    offset=offset,
+                )
+            except TypeError:
+                # Compatibility fallback for older list_runs signatures.
+                runs = wf_db.list_runs(limit=scan_page_size, offset=offset)
+
+            if not runs:
+                break
+
+            for wf_run in runs:
+                meta = _run_metadata(wf_run)
+                if str(meta.get("watchlist_run_id")) == str(run_id):
+                    matching_run = wf_run
+                    break
+
+            if matching_run:
+                break
+            if len(runs) < scan_page_size:
                 break
 
         if not matching_run:
@@ -3082,34 +3121,68 @@ async def get_run_audio(
             }
 
         # Check for artifacts
-        artifacts = wf_db.list_artifacts(run_id=matching_run.id)
+        matching_run_id = None
+        if isinstance(matching_run, dict):
+            matching_run_id = matching_run.get("run_id") or matching_run.get("id")
+        else:
+            matching_run_id = getattr(matching_run, "run_id", None) or getattr(matching_run, "id", None)
+        if not matching_run_id:
+            return {
+                "run_id": run_id,
+                "task_id": task_id,
+                "status": "pending",
+                "audio_uri": None,
+                "download_url": None,
+            }
+
+        artifacts: list[Any] = []
+        used_legacy_artifacts_api = False
+        try:
+            artifacts_candidate = wf_db.list_artifacts(run_id=matching_run_id)
+            if isinstance(artifacts_candidate, list):
+                artifacts = artifacts_candidate
+                used_legacy_artifacts_api = True
+        except AttributeError:
+            used_legacy_artifacts_api = False
+        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+            used_legacy_artifacts_api = False
+
+        if not used_legacy_artifacts_api:
+            artifacts = wf_db.list_artifacts_for_run(str(matching_run_id))
         audio_artifact = None
-        for art in artifacts:
-            art_meta = {}
-            try:
-                art_meta = json.loads(art.metadata_json or "{}") if hasattr(art, "metadata_json") else {}
-            except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-                art_meta = {}
-            if art.type == "tts_audio" or art_meta.get("multi_voice"):
-                audio_artifact = art
+        for art in artifacts or []:
+            if isinstance(art, dict):
+                art_meta = _load_metadata(art.get("metadata_json"))
+                art_type = art.get("type")
+            else:
+                art_meta = _load_metadata(getattr(art, "metadata_json", None))
+                art_type = getattr(art, "type", None)
+            if art_type == "tts_audio" or art_meta.get("multi_voice"):
+                audio_artifact = {
+                    "artifact_id": (art.get("artifact_id") or art.get("id")) if isinstance(art, dict) else getattr(art, "artifact_id", None) or getattr(art, "id", None),
+                    "uri": art.get("uri") if isinstance(art, dict) else getattr(art, "uri", None),
+                    "size_bytes": art.get("size_bytes") if isinstance(art, dict) else getattr(art, "size_bytes", None),
+                    "mime_type": (art.get("mime_type") if isinstance(art, dict) else getattr(art, "mime_type", None)) or "audio/mpeg",
+                }
                 break
 
+        matching_run_status = matching_run.get("status") if isinstance(matching_run, dict) else getattr(matching_run, "status", "pending")
         if audio_artifact:
             return {
                 "run_id": run_id,
                 "task_id": task_id,
-                "status": matching_run.status,
-                "audio_uri": audio_artifact.uri,
-                "artifact_id": audio_artifact.id,
-                "download_url": f"/api/v1/workflows/artifacts/{audio_artifact.id}/download",
-                "size_bytes": audio_artifact.size_bytes,
-                "mime_type": getattr(audio_artifact, "mime_type", "audio/mpeg"),
+                "status": matching_run_status,
+                "audio_uri": audio_artifact["uri"],
+                "artifact_id": audio_artifact["artifact_id"],
+                "download_url": f"/api/v1/workflows/artifacts/{audio_artifact['artifact_id']}/download",
+                "size_bytes": audio_artifact["size_bytes"],
+                "mime_type": audio_artifact["mime_type"],
             }
 
         return {
             "run_id": run_id,
             "task_id": task_id,
-            "status": matching_run.status,
+            "status": matching_run_status,
             "audio_uri": None,
             "download_url": None,
         }
@@ -3865,7 +3938,13 @@ async def list_outputs(
     limit = size
     offset = (page - 1) * limit
     collections_db.purge_expired_outputs()
-    rows, _total = collections_db.list_output_artifacts(run_id=run_id, job_id=job_id, limit=limit, offset=offset)
+    rows, total = collections_db.list_output_artifacts(
+        run_id=run_id,
+        job_id=job_id,
+        limit=limit,
+        offset=offset,
+        metadata_origin="watchlists",
+    )
     user_id = resolve_user_id_for_request(
         current_user,
         as_int=True,
@@ -3878,7 +3957,7 @@ async def list_outputs(
         if metadata.get("origin") != "watchlists":
             continue
         items.append(_row_to_output(row, user_id=user_id))
-    return WatchlistOutputsListResponse(items=items, total=len(items))
+    return WatchlistOutputsListResponse(items=items, total=total)
 
 
 @router.get("/outputs/{output_id}", response_model=WatchlistOutput, summary="Get output metadata")

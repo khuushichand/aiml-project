@@ -1,14 +1,22 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+const cacheState = vi.hoisted(() => ({
+  value: undefined as unknown
+}))
 
 const mocks = vi.hoisted(() => ({
-  healthCheck: vi.fn(),
+  getConfig: vi.fn(),
   getOpenAPISpec: vi.fn(),
-  bgRequest: vi.fn()
+  bgRequest: vi.fn(),
+  storageGet: vi.fn(async () => cacheState.value),
+  storageSet: vi.fn(async (_key: string, value: unknown) => {
+    cacheState.value = value
+  })
 }))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
-    healthCheck: (...args: unknown[]) => mocks.healthCheck(...args),
+    getConfig: (...args: unknown[]) => mocks.getConfig(...args),
     getOpenAPISpec: (...args: unknown[]) => mocks.getOpenAPISpec(...args)
   }
 }))
@@ -17,19 +25,41 @@ vi.mock("@/services/background-proxy", () => ({
   bgRequest: (...args: unknown[]) => mocks.bgRequest(...args)
 }))
 
+vi.mock("@/utils/safe-storage", () => ({
+  createSafeStorage: () => ({
+    get: (...args: unknown[]) => mocks.storageGet(...args),
+    set: (...args: unknown[]) => mocks.storageSet(...args)
+  })
+}))
+
 const importCapabilitiesModule = async () =>
   import("@/services/tldw/server-capabilities")
 
 describe("server capabilities docs-info merge", () => {
   beforeEach(() => {
     vi.resetModules()
-    mocks.healthCheck.mockReset()
+    vi.useRealTimers()
+    cacheState.value = undefined
+    mocks.getConfig.mockReset()
     mocks.getOpenAPISpec.mockReset()
     mocks.bgRequest.mockReset()
+    mocks.storageGet.mockReset()
+    mocks.storageSet.mockReset()
+    mocks.storageGet.mockImplementation(async () => cacheState.value)
+    mocks.storageSet.mockImplementation(async (_key: string, value: unknown) => {
+      cacheState.value = value
+    })
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user"
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it("requires both persona route support and docs-info persona feature flag", async () => {
-    mocks.healthCheck.mockResolvedValue(true)
     mocks.getOpenAPISpec.mockResolvedValue({
       info: { version: "test-version" },
       paths: {
@@ -61,7 +91,6 @@ describe("server capabilities docs-info merge", () => {
   })
 
   it("does not enable persona when docs-info says true but persona routes are missing", async () => {
-    mocks.healthCheck.mockResolvedValue(true)
     mocks.getOpenAPISpec.mockResolvedValue({
       info: { version: "test-version" },
       paths: {
@@ -81,7 +110,6 @@ describe("server capabilities docs-info merge", () => {
   })
 
   it("falls back to openapi-only capability detection when docs-info fetch fails", async () => {
-    mocks.healthCheck.mockResolvedValue(true)
     mocks.getOpenAPISpec.mockResolvedValue({
       info: { version: "test-version" },
       paths: {
@@ -95,5 +123,118 @@ describe("server capabilities docs-info merge", () => {
 
     expect(capabilities.hasPersona).toBe(true)
   })
-})
 
+  it("reuses a fresh cached capability payload for repeated calls", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "cached-version" },
+      paths: {
+        "/api/v1/chat/completions": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const first = await getServerCapabilities()
+    const second = await getServerCapabilities()
+
+    expect(first.specVersion).toBe("cached-version")
+    expect(second.specVersion).toBe("cached-version")
+    expect(mocks.getOpenAPISpec).toHaveBeenCalledTimes(1)
+    expect(mocks.bgRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it("refreshes capabilities after cache TTL expires", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-02-11T10:50:00.000Z"))
+
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "ttl-version" },
+      paths: {
+        "/api/v1/chat/completions": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    await getServerCapabilities()
+    vi.setSystemTime(new Date("2026-02-11T10:56:01.000Z"))
+    await getServerCapabilities()
+
+    expect(mocks.getOpenAPISpec).toHaveBeenCalledTimes(2)
+    expect(mocks.bgRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps cache entries isolated by server URL", async () => {
+    mocks.getConfig
+      .mockResolvedValueOnce({
+        serverUrl: "http://127.0.0.1:8000",
+        authMode: "single-user"
+      })
+      .mockResolvedValueOnce({
+        serverUrl: "http://127.0.0.1:8100",
+        authMode: "single-user"
+      })
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "multi-server-version" },
+      paths: {
+        "/api/v1/chat/completions": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    await getServerCapabilities()
+    await getServerCapabilities()
+
+    expect(mocks.getOpenAPISpec).toHaveBeenCalledTimes(2)
+    expect(mocks.bgRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it("tracks cache hit diagnostics across miss -> network -> memory hit", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "diag-version" },
+      paths: {
+        "/api/v1/chat/completions": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities, getServerCapabilitiesCacheDiagnostics } =
+      await importCapabilitiesModule()
+
+    await getServerCapabilities()
+    await getServerCapabilities()
+
+    const diagnostics = getServerCapabilitiesCacheDiagnostics()
+    expect(diagnostics.calls).toBe(2)
+    expect(diagnostics.networkFetches).toBe(1)
+    expect(diagnostics.inMemoryHits).toBe(1)
+    expect(diagnostics.persistedHits).toBe(0)
+    expect(diagnostics.lastSource).toBe("in-memory")
+  })
+
+  it("records in-flight dedupe hits for concurrent requests", async () => {
+    let resolveSpec: ((value: unknown) => void) | null = null
+    const openApiDeferred = new Promise((resolve) => {
+      resolveSpec = resolve
+    })
+    mocks.getOpenAPISpec.mockReturnValue(openApiDeferred)
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities, getServerCapabilitiesCacheDiagnostics } =
+      await importCapabilitiesModule()
+
+    const p1 = getServerCapabilities()
+    const p2 = getServerCapabilities()
+    resolveSpec?.({
+      info: { version: "dedupe-version" },
+      paths: { "/api/v1/chat/completions": {} }
+    })
+
+    await Promise.all([p1, p2])
+    const diagnostics = getServerCapabilitiesCacheDiagnostics()
+    expect(diagnostics.calls).toBe(2)
+    expect(diagnostics.networkFetches).toBe(1)
+    expect(diagnostics.inFlightHits).toBe(1)
+  })
+})
