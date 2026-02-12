@@ -254,7 +254,7 @@ Sharing policy is controlled by `WATCHLIST_SHARING_MODE`:
 
 ## Outputs
 
-Create a report from a run:
+Create a base report from a run:
 ```json
 {
   "run_id": 456,
@@ -265,6 +265,50 @@ Create a report from a run:
 ```
 
 Outputs can render templates (Markdown or HTML). Set `template_name` to use a named template.
+
+Create a report plus TTS variant output (`type=tts_audio`, `format=mp3`):
+```json
+{
+  "run_id": 456,
+  "title": "Docs digest",
+  "format": "md",
+  "generate_tts": true,
+  "tts_model": "kokoro",
+  "tts_voice": "af_heart",
+  "tts_speed": 1.0
+}
+```
+
+Create a report and enqueue multi-voice audio briefing workflow:
+```json
+{
+  "run_id": 456,
+  "title": "Docs digest",
+  "generate_audio": true,
+  "target_audio_minutes": 8,
+  "audio_model": "kokoro",
+  "audio_voice": "af_heart",
+  "audio_speed": 1.0,
+  "llm_provider": "openai",
+  "llm_model": "gpt-4o-mini",
+  "voice_map": {"HOST": "af_bella", "REPORTER": "am_adam"}
+}
+```
+
+When `generate_audio=true`, output metadata includes:
+- `audio_briefing_requested`
+- `audio_briefing_task_id`
+- `audio_briefing_status` (`pending`, `skipped`, or `enqueue_failed`)
+
+Poll audio briefing status/artifact for the run:
+```bash
+curl "$BASE/api/v1/watchlists/runs/456/audio" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+`GET /runs/{run_id}/audio` typically returns:
+- `status: pending` while workflow/artifact is not ready
+- `status: completed` with `download_url` when audio artifact is available
 
 ## Scrape rules quick notes
 

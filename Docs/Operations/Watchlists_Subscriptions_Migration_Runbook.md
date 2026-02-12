@@ -2,7 +2,7 @@
 
 Audience: Backend + Ops
 Status: Draft (v0.2.x codebase)
-Updated: 2025-10-28
+Updated: 2026-02-12
 
 Related
 - Primary PRD: `Docs/Product/Watchlist_PRD.md`
@@ -14,14 +14,14 @@ Related
 
 ## 1) Scope & Context
 
-This runbook guides migration from legacy “SUBS” (Subscriptions) planning/assets to the current Watchlists module. It covers source import (RSS incl. YouTube-as-RSS), job creation, initial runs, optional outputs, and a plan for migrating Import Rules to job-level filters.
+This runbook guides migration from legacy “SUBS” (Subscriptions) planning/assets to the current Watchlists module. It covers source import (RSS incl. YouTube-as-RSS), job creation, initial runs, optional outputs, and migration of Import Rules to job-level filters.
 
 Key decisions (from Bridge PRD):
 - Model YouTube channels/playlists as RSS feeds (`source_type=rss`).
-- Carry SUBS Import Rules forward as job-level filters (API shipping next increment).
+- Carry SUBS Import Rules forward as job-level filters.
 - Keep OPML import/export in scope for Watchlists sources.
 
-Note: The current API fully supports sources, groups/tags, jobs, runs, items, outputs, and templates. OPML endpoints and explicit job-filters endpoints are slated next; use bulk create for sources now and manual review or saved scopes until filters land.
+Note: The current API supports sources, groups/tags, jobs, runs, items, outputs, templates, OPML import/export, and explicit job-filters endpoints.
 
 ## 2) Preconditions
 
@@ -33,7 +33,7 @@ Note: The current API fully supports sources, groups/tags, jobs, runs, items, ou
 
 ## 3) Inventory SUBS Sources
 
-Gather source URLs (RSS feeds; YouTube as RSS if possible) and any grouping/tags. If you have OPML already, you can reuse it in Step 5B once the OPML endpoint ships; otherwise prepare a JSON mapping for bulk import.
+Gather source URLs (RSS feeds; YouTube as RSS if possible) and any grouping/tags. If you have OPML already, you can import it directly in Step 5B; otherwise prepare a JSON mapping for bulk import.
 
 Example minimal CSV (for your reference):
 ```
@@ -54,7 +54,7 @@ JSON for bulk sources (usable now):
 }
 ```
 
-OPML (usable when OPML endpoints ship):
+OPML (usable now):
 ```
 <?xml version="1.0" encoding="UTF-8"?>
 <opml version="2.0">
@@ -127,9 +127,9 @@ curl -sS -X PATCH \
   http://127.0.0.1:8000/api/v1/watchlists/sources/123
 ```
 
-### 5B. Import sources (OPML) - When Shipped
+### 5B. Import sources (OPML) - Available Now
 
-Endpoints: `POST /api/v1/watchlists/sources/import`, `GET /api/v1/watchlists/sources/export` (per Bridge PRD)
+Endpoints: `POST /api/v1/watchlists/sources/import`, `GET /api/v1/watchlists/sources/export`
 
 ```
 curl -sS -X POST \
@@ -160,13 +160,13 @@ curl -sS -X POST \
   http://127.0.0.1:8000/api/v1/watchlists/jobs
 ```
 
-### 5D. Migrate Import Rules → Job Filters
+### 5D. Migrate Import Rules → Job Filters (Available Now)
 
-Decision: carry forward as job-level filters. Dedicated endpoints will ship. Until then:
-- Prefer manual review of items and saved scopes.
-- Optionally store provisional filters in `output_prefs.filters` on the job (for future compatibility); they are not applied by the current pipeline.
+Decision: carry forward as job-level filters using the job filters endpoints:
+- `PATCH /api/v1/watchlists/jobs/{job_id}/filters` (replace entire filter set)
+- `POST /api/v1/watchlists/jobs/{job_id}/filters:add` (append filters)
 
-Example filter payload (to use once filters endpoints ship):
+Example filter payload:
 ```
 {
   "filters": [
@@ -175,6 +175,24 @@ Example filter payload (to use once filters endpoints ship):
     {"type":"regex","value":{"field":"title","pattern":"(?i)breaking"},"action":"exclude","priority":110,"is_active":true}
   ]
 }
+```
+
+Replace job filters:
+```
+curl -sS -X PATCH \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d @job_filters.json \
+  http://127.0.0.1:8000/api/v1/watchlists/jobs/1/filters
+```
+
+Append filters:
+```
+curl -sS -X POST \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d @job_filters_delta.json \
+  http://127.0.0.1:8000/api/v1/watchlists/jobs/1/filters:add
 ```
 
 ### 5E. Trigger First Run and Verify Items
@@ -206,6 +224,29 @@ curl -sS -X POST \
     "deliveries": {"email": {"enabled": true, "recipients": ["me@example.com"], "attach_file": true}}
   }' \
   http://127.0.0.1:8000/api/v1/watchlists/outputs
+```
+
+Create output + enqueue audio briefing workflow:
+```
+curl -sS -X POST \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -d '{
+    "run_id": 10,
+    "title": "Daily AI Digest Audio",
+    "generate_audio": true,
+    "target_audio_minutes": 8,
+    "audio_model": "kokoro",
+    "audio_voice": "af_heart",
+    "audio_speed": 1.0
+  }' \
+  http://127.0.0.1:8000/api/v1/watchlists/outputs
+```
+
+Check run-level audio status/download metadata:
+```
+curl -sS -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  http://127.0.0.1:8000/api/v1/watchlists/runs/10/audio
 ```
 
 Download: `GET /api/v1/watchlists/outputs/{id}/download` (`watchlists.py:1375`)
@@ -251,36 +292,30 @@ Known unrelated: `tests/sandbox/test_ws_heartbeat_seq.py` can hang in some local
 - Restore DB backups of affected user(s): `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`.
 - Re-run sanity checks.
 
-## 8) Scripts Plan (for Engineering)
+## 8) Scripts (Current + Optional Additions)
 
-To streamline ops, add the following helper scripts (CLI entry points under `Helper_Scripts/watchlists/`):
+Current helper scripts:
 
-1) `opml_import.py` - Import OPML into Watchlists sources
-   - Args: `--file`, `--active`, `--tags`, `--group-id`, `--api-key`, `--base-url`
-   - Behavior: POST multipart to `/watchlists/sources/import`; print summary.
+1) `Helper_Scripts/watchlists/watchlists_audio_smoke.py`
+   - Purpose: end-to-end smoke flow (create source/job/run/output, enqueue audio, poll `/runs/{run_id}/audio`).
+   - Typical usage:
+   ```
+   make watchlists-audio-smoke WATCHLISTS_API_KEY="$SINGLE_USER_API_KEY"
+   ```
 
-2) `bulk_sources_load.py` - Bulk import from CSV/JSON
-   - Args: `--input {csv|json}`, `--api-key`, `--base-url`; `--dry-run`
-   - Behavior: Convert to bulk JSON; POST to `/watchlists/sources/bulk`.
+Optional additions (future ergonomics):
 
-3) `subs_rules_to_job_filters.py` - Translate SUBS Import Rules → job filters (when filters API ships)
-   - Args: `--rules-file`, `--job-id`, `--api-key`, `--base-url`; `--dry-run`
-   - Behavior: POST to `/watchlists/jobs/{id}/filters`.
-
-4) `seed_job_and_run.py` - Create a job from tag list and trigger one run
-   - Args: `--name`, `--tags`, `--cron`, `--tz`, `--api-key`, `--base-url`
-   - Behavior: POST job → POST run → print run id.
-
-All scripts should:
-- Respect `X-API-KEY` or `Authorization: Bearer` based on env.
-- Support `--dry-run` and structured logging.
-- Validate inputs and print per-entry errors for partial failures.
+1) `opml_import.py` - Import OPML into Watchlists sources.
+2) `bulk_sources_load.py` - Bulk import from CSV/JSON.
+3) `subs_rules_to_job_filters.py` - Translate SUBS Import Rules to job filters.
+4) `seed_job_and_run.py` - Create a job and trigger one run.
 
 ## 9) Notes
 
 - YouTube-as-RSS: prefer canonical feed URLs. Where user pastes a channel/playlist URL, a helper may normalize to RSS feed in a future iteration.
-- Filters: team will ship dedicated endpoints per Bridge PRD; until then, encourage item review and scoped jobs.
+- Filters: use `PATCH /jobs/{id}/filters` and `POST /jobs/{id}/filters:add` for operational migrations.
 - Robots & politeness: abide by defaults; override with caution per job settings.
+- PersonaPod transfer policy: copy high-level operator patterns only; do not transplant PersonaPod internals directly into `tldw_server2` services.
 
 ---
-This runbook will be updated as OPML and filters endpoints ship. Coordinate with WebUI to surface OPML import and filter management UX.
+Coordinate with WebUI to surface OPML import and filter management UX.

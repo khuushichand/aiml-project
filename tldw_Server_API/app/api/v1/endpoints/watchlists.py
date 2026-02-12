@@ -3421,6 +3421,53 @@ async def create_output(
     if effective_tts_speed is None:
         effective_tts_speed = _safe_float(configured_tts_speed, None, minimum=0.25, maximum=4.0)
 
+    effective_generate_audio = bool(payload.generate_audio)
+    effective_target_audio_minutes = payload.target_audio_minutes
+    if "target_audio_minutes" not in payload.model_fields_set:
+        effective_target_audio_minutes = _safe_int(
+            job_prefs.get("target_audio_minutes"),
+            payload.target_audio_minutes,
+        )
+
+    effective_audio_model = payload.audio_model
+    if not effective_audio_model and isinstance(job_prefs.get("audio_model"), str):
+        effective_audio_model = job_prefs.get("audio_model").strip() or None
+
+    effective_audio_voice = payload.audio_voice
+    if not effective_audio_voice and isinstance(job_prefs.get("audio_voice"), str):
+        effective_audio_voice = job_prefs.get("audio_voice").strip() or None
+
+    effective_audio_speed = payload.audio_speed
+    if effective_audio_speed is None:
+        effective_audio_speed = _safe_float(
+            job_prefs.get("audio_speed"),
+            None,
+            minimum=0.25,
+            maximum=4.0,
+        )
+
+    effective_audio_llm_provider = payload.llm_provider
+    if not effective_audio_llm_provider and isinstance(job_prefs.get("llm_provider"), str):
+        effective_audio_llm_provider = job_prefs.get("llm_provider").strip() or None
+    if not effective_audio_llm_provider:
+        llm_cfg = job_prefs.get("llm") if isinstance(job_prefs.get("llm"), dict) else {}
+        configured_provider = llm_cfg.get("provider") or llm_cfg.get("api_name")
+        if isinstance(configured_provider, str):
+            effective_audio_llm_provider = configured_provider.strip() or None
+
+    effective_audio_llm_model = payload.llm_model
+    if not effective_audio_llm_model and isinstance(job_prefs.get("llm_model"), str):
+        effective_audio_llm_model = job_prefs.get("llm_model").strip() or None
+    if not effective_audio_llm_model:
+        llm_cfg = job_prefs.get("llm") if isinstance(job_prefs.get("llm"), dict) else {}
+        configured_model = llm_cfg.get("model")
+        if isinstance(configured_model, str):
+            effective_audio_llm_model = configured_model.strip() or None
+
+    effective_voice_map = payload.voice_map
+    if effective_voice_map is None and isinstance(job_prefs.get("voice_map"), dict):
+        effective_voice_map = job_prefs.get("voice_map")
+
     version = _next_output_version_for_run(collections_db, payload.run_id)
     job_name = getattr(job, "name", None) or f"Job-{job.id}"
     default_title = f"{job_name}-Output-{version}"
@@ -3834,6 +3881,46 @@ async def create_output(
     delivery_results: list[dict[str, Any]] = []
     chatbook_path_update: str | None = None
     metadata_update_needed = False
+
+    if effective_generate_audio:
+        metadata["audio_briefing_requested"] = True
+        try:
+            from tldw_Server_API.app.core.Watchlists.audio_briefing_workflow import (
+                trigger_audio_briefing,
+            )
+
+            audio_task_id = await trigger_audio_briefing(
+                user_id=user_id,
+                job_id=job_id,
+                run_id=payload.run_id,
+                output_prefs={
+                    "generate_audio": True,
+                    "target_audio_minutes": effective_target_audio_minutes,
+                    "audio_model": effective_audio_model,
+                    "audio_voice": effective_audio_voice,
+                    "audio_speed": effective_audio_speed,
+                    "llm_provider": effective_audio_llm_provider,
+                    "llm_model": effective_audio_llm_model,
+                    "voice_map": effective_voice_map,
+                },
+                db=db,
+            )
+            if audio_task_id:
+                metadata["audio_briefing_task_id"] = audio_task_id
+                metadata["audio_briefing_status"] = "pending"
+                with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
+                    run_stats = json.loads(run.stats_json or "{}") if getattr(run, "stats_json", None) else {}
+                    if not isinstance(run_stats, dict):
+                        run_stats = {}
+                    run_stats["audio_briefing_task_id"] = audio_task_id
+                    db.update_run(run.id, stats_json=json.dumps(run_stats))
+            else:
+                metadata["audio_briefing_status"] = "skipped"
+        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"Watchlists output audio briefing enqueue failed for run {payload.run_id}: {exc}")
+            metadata["audio_briefing_status"] = "enqueue_failed"
+            metadata["audio_briefing_error"] = str(exc)
+        metadata_update_needed = True
 
     if isinstance(delivery_plan, dict):
         email_cfg = delivery_plan.get("email") if isinstance(delivery_plan.get("email"), dict) else None

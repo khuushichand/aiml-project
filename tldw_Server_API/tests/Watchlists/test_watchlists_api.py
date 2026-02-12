@@ -3,6 +3,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -794,3 +795,129 @@ def test_output_deliveries_email_and_chatbook(client_with_user, monkeypatch, tmp
             assert stored_meta.get("job_id") == job_id
             assert stored_meta.get("run_id") == run_id
             assert stored_meta.get("origin") == "test"
+
+
+def test_outputs_generate_audio_payload_triggers_workflow_and_updates_run_stats(client_with_user, monkeypatch):
+
+
+    c = client_with_user
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    src_body = {
+        "name": "Audio Feed",
+        "url": "https://example.com/audio.xml",
+        "source_type": "rss",
+        "tags": ["audio"],
+    }
+    r = c.post("/api/v1/watchlists/sources", json=src_body)
+    assert r.status_code == 200, r.text
+
+    job_body = {
+        "name": "Audio Digest",
+        "scope": {"tags": ["audio"]},
+        "schedule_expr": None,
+        "timezone": "UTC",
+        "active": True,
+    }
+    r = c.post("/api/v1/watchlists/jobs", json=job_body)
+    assert r.status_code == 200, r.text
+    job_id = r.json()["id"]
+
+    r = c.post(f"/api/v1/watchlists/jobs/{job_id}/run")
+    assert r.status_code == 200, r.text
+    run_id = r.json()["id"]
+
+    with patch(
+        "tldw_Server_API.app.core.Watchlists.audio_briefing_workflow.trigger_audio_briefing",
+        new=AsyncMock(return_value="task_output_audio"),
+    ) as mock_trigger:
+        r = c.post(
+            "/api/v1/watchlists/outputs",
+            json={
+                "run_id": run_id,
+                "title": "Audio Briefing Output",
+                "generate_audio": True,
+                "target_audio_minutes": 5,
+                "audio_model": "tts-1",
+                "audio_voice": "nova",
+                "audio_speed": 1.2,
+                "llm_provider": "openai",
+                "llm_model": "gpt-4o-mini",
+                "voice_map": {"HOST": "af_bella"},
+            },
+        )
+    assert r.status_code == 200, r.text
+    output = r.json()
+    metadata = output.get("metadata", {})
+    assert metadata.get("audio_briefing_requested") is True
+    assert metadata.get("audio_briefing_task_id") == "task_output_audio"
+    assert metadata.get("audio_briefing_status") == "pending"
+
+    assert mock_trigger.await_count == 1
+    kwargs = mock_trigger.await_args.kwargs
+    assert kwargs["user_id"] == 555
+    assert kwargs["job_id"] == job_id
+    assert kwargs["run_id"] == run_id
+    assert kwargs["output_prefs"]["generate_audio"] is True
+    assert kwargs["output_prefs"]["target_audio_minutes"] == 5
+    assert kwargs["output_prefs"]["audio_model"] == "tts-1"
+    assert kwargs["output_prefs"]["audio_voice"] == "nova"
+    assert kwargs["output_prefs"]["audio_speed"] == 1.2
+    assert kwargs["output_prefs"]["llm_provider"] == "openai"
+    assert kwargs["output_prefs"]["llm_model"] == "gpt-4o-mini"
+    assert kwargs["output_prefs"]["voice_map"] == {"HOST": "af_bella"}
+
+    r = c.get(f"/api/v1/watchlists/runs/{run_id}")
+    assert r.status_code == 200, r.text
+    run_payload = r.json()
+    assert run_payload.get("stats", {}).get("audio_briefing_task_id") == "task_output_audio"
+
+
+def test_outputs_generate_audio_false_does_not_trigger_workflow(client_with_user, monkeypatch):
+
+
+    c = client_with_user
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    src_body = {
+        "name": "No Audio Feed",
+        "url": "https://example.com/no-audio.xml",
+        "source_type": "rss",
+        "tags": ["silent"],
+    }
+    r = c.post("/api/v1/watchlists/sources", json=src_body)
+    assert r.status_code == 200, r.text
+
+    job_body = {
+        "name": "No Audio Digest",
+        "scope": {"tags": ["silent"]},
+        "schedule_expr": None,
+        "timezone": "UTC",
+        "active": True,
+    }
+    r = c.post("/api/v1/watchlists/jobs", json=job_body)
+    assert r.status_code == 200, r.text
+    job_id = r.json()["id"]
+
+    r = c.post(f"/api/v1/watchlists/jobs/{job_id}/run")
+    assert r.status_code == 200, r.text
+    run_id = r.json()["id"]
+
+    with patch(
+        "tldw_Server_API.app.core.Watchlists.audio_briefing_workflow.trigger_audio_briefing",
+        new=AsyncMock(return_value="task_should_not_exist"),
+    ) as mock_trigger:
+        r = c.post(
+            "/api/v1/watchlists/outputs",
+            json={
+                "run_id": run_id,
+                "title": "No Audio Output",
+                "generate_audio": False,
+            },
+        )
+    assert r.status_code == 200, r.text
+    output = r.json()
+    metadata = output.get("metadata", {})
+    assert "audio_briefing_requested" not in metadata
+    assert "audio_briefing_task_id" not in metadata
+    assert mock_trigger.await_count == 0

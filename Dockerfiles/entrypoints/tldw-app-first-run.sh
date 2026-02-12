@@ -32,7 +32,8 @@ upsert_env() {
   key="$1"
   value="$2"
   mkdir -p "$(dirname "$ENV_FILE")"
-  tmp_file="${ENV_FILE}.tmp"
+  tmp_file="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+  chmod 600 "$tmp_file"
   if [ -f "$ENV_FILE" ]; then
     awk -v k="$key" -v v="$value" '
       BEGIN { updated = 0 }
@@ -40,14 +41,15 @@ upsert_env() {
       { print }
       END { if (!updated) print k "=" v }
     ' "$ENV_FILE" > "$tmp_file"
-    mv "$tmp_file" "$ENV_FILE"
   else
     {
       echo "AUTH_MODE=single_user"
       echo "SINGLE_USER_API_KEY=$value"
       echo "DATABASE_URL=sqlite:///./Databases/users.db"
-    } > "$ENV_FILE"
+    } > "$tmp_file"
   fi
+  mv "$tmp_file" "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
 }
 
 ensure_env_file() {
@@ -56,11 +58,15 @@ ensure_env_file() {
   fi
   mkdir -p "$(dirname "$ENV_FILE")"
   generated_key="$(generate_key)"
-  cat > "$ENV_FILE" <<EOF
+  tmp_file="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+  chmod 600 "$tmp_file"
+  cat > "$tmp_file" <<EOF
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=$generated_key
 DATABASE_URL=sqlite:///./Databases/users.db
 EOF
+  mv "$tmp_file" "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
   echo "[entrypoint] Created $ENV_FILE with generated SINGLE_USER_API_KEY."
 }
 

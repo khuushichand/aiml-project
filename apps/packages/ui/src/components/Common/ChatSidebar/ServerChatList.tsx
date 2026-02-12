@@ -35,6 +35,8 @@ const BulkTagPickerModal = React.lazy(
   () => import("@/components/Sidepanel/Chat/BulkTagPickerModal")
 )
 
+const CHAT_HISTORY_PAGE_SIZE = 25
+
 interface ServerChatListProps {
   searchQuery: string
   className?: string
@@ -106,6 +108,8 @@ export function ServerChatList({
   const [topicValue, setTopicValue] = React.useState("")
   const selectionMode = selectionModeProp ?? false
   const [selectedChatIds, setSelectedChatIds] = React.useState<string[]>([])
+  const [currentPage, setCurrentPage] = React.useState(1)
+  const [pageJumpValue, setPageJumpValue] = React.useState("1")
   const selectedChatIdSet = React.useMemo(
     () => new Set(selectedChatIds),
     [selectedChatIds]
@@ -235,6 +239,35 @@ export function ServerChatList({
   const unpinnedChats = serverChats.filter(
     (chat) => !pinnedChatSet.has(chat.id)
   )
+  const orderedChats = React.useMemo(
+    () => [...pinnedChats, ...unpinnedChats],
+    [pinnedChats, unpinnedChats]
+  )
+  const totalPages = Math.max(
+    1,
+    Math.ceil(orderedChats.length / CHAT_HISTORY_PAGE_SIZE)
+  )
+  const currentPageSafe = Math.min(currentPage, totalPages)
+  const pageStartIndex = (currentPageSafe - 1) * CHAT_HISTORY_PAGE_SIZE
+  const pagedChats = React.useMemo(
+    () =>
+      orderedChats.slice(
+        pageStartIndex,
+        pageStartIndex + CHAT_HISTORY_PAGE_SIZE
+      ),
+    [orderedChats, pageStartIndex]
+  )
+  const pagedPinnedChats = React.useMemo(
+    () => pagedChats.filter((chat) => pinnedChatSet.has(chat.id)),
+    [pagedChats, pinnedChatSet]
+  )
+  const pagedUnpinnedChats = React.useMemo(
+    () => pagedChats.filter((chat) => !pinnedChatSet.has(chat.id)),
+    [pagedChats, pinnedChatSet]
+  )
+  const pageStartNumber = orderedChats.length === 0 ? 0 : pageStartIndex + 1
+  const pageEndNumber = pageStartIndex + pagedChats.length
+  const hasMultiplePages = totalPages > 1
   const visibleChatIds = React.useMemo(
     () => Array.from(new Set(serverChats.map((chat) => chat.id))),
     [serverChats]
@@ -268,6 +301,20 @@ export function ServerChatList({
       setBulkFolderPickerOpen,
       setBulkTagPickerOpen
     })
+
+  React.useEffect(() => {
+    setCurrentPage(1)
+  }, [searchQuery])
+
+  React.useEffect(() => {
+    if (currentPage !== currentPageSafe) {
+      setCurrentPage(currentPageSafe)
+    }
+  }, [currentPage, currentPageSafe])
+
+  React.useEffect(() => {
+    setPageJumpValue(String(currentPageSafe))
+  }, [currentPageSafe])
 
   const togglePinned = React.useCallback(
     (chatId: string) => {
@@ -372,6 +419,24 @@ export function ServerChatList({
   const clearSelection = React.useCallback(() => {
     setSelectedChatIds([])
   }, [])
+
+  const handlePreviousPage = React.useCallback(() => {
+    setCurrentPage((prev) => Math.max(1, prev - 1))
+  }, [])
+
+  const handleNextPage = React.useCallback(() => {
+    setCurrentPage((prev) => Math.min(totalPages, prev + 1))
+  }, [totalPages])
+
+  const handleJumpToPage = React.useCallback(() => {
+    const nextPage = Number.parseInt(pageJumpValue, 10)
+    if (!Number.isFinite(nextPage)) {
+      setPageJumpValue(String(currentPageSafe))
+      return
+    }
+    const clamped = Math.min(totalPages, Math.max(1, nextPage))
+    setCurrentPage(clamped)
+  }, [currentPageSafe, pageJumpValue, totalPages])
 
   const handleRenameSubmit = () => {
     if (renameLoading) return
@@ -813,12 +878,12 @@ export function ServerChatList({
           </div>
         </div>
       )}
-      {pinnedChats.length > 0 && (
+      {pagedPinnedChats.length > 0 && (
         <div className="flex flex-col gap-2">
           <div className="px-2 text-[11px] font-medium text-text-subtle uppercase tracking-wide">
             {t("common:pinned", { defaultValue: "Pinned" })}
           </div>
-          {pinnedChats.map((chat) => (
+          {pagedPinnedChats.map((chat) => (
             <ServerChatRow
               key={chat.id}
               chat={chat}
@@ -840,9 +905,11 @@ export function ServerChatList({
           ))}
         </div>
       )}
-      {unpinnedChats.length > 0 && (
-        <div className={cn("flex flex-col gap-2", pinnedChats.length > 0 && "mt-3")}>
-          {unpinnedChats.map((chat) => (
+      {pagedUnpinnedChats.length > 0 && (
+        <div
+          className={cn("flex flex-col gap-2", pagedPinnedChats.length > 0 && "mt-3")}
+        >
+          {pagedUnpinnedChats.map((chat) => (
             <ServerChatRow
               key={chat.id}
               chat={chat}
@@ -862,6 +929,61 @@ export function ServerChatList({
               t={t}
             />
           ))}
+        </div>
+      )}
+      {hasMultiplePages && (
+        <div className="mt-3 border-t border-border px-2 pt-3">
+          <div className="mb-2 text-xs text-text-subtle">
+            {t("common:chatSidebar.paginationRange", {
+              defaultValue: "Showing {{start}}-{{end}} of {{total}} chats",
+              start: pageStartNumber,
+              end: pageEndNumber,
+              total: orderedChats.length
+            })}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handlePreviousPage}
+              disabled={currentPageSafe <= 1}
+              className="rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t("common:previous", { defaultValue: "Previous" })}
+            </button>
+            <button
+              type="button"
+              onClick={handleNextPage}
+              disabled={currentPageSafe >= totalPages}
+              className="rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t("common:next", { defaultValue: "Next" })}
+            </button>
+            <span className="text-xs text-text-subtle">
+              {t("common:pageOf", {
+                defaultValue: "Page {{page}} of {{pages}}",
+                page: currentPageSafe,
+                pages: totalPages
+              })}
+            </span>
+            <Input
+              value={pageJumpValue}
+              onChange={(event) => setPageJumpValue(event.target.value)}
+              onPressEnter={handleJumpToPage}
+              size="small"
+              className="w-16"
+              inputMode="numeric"
+              aria-label={t("common:chatSidebar.pageNumber", {
+                defaultValue: "Page number"
+              })}
+            />
+            <button
+              type="button"
+              onClick={handleJumpToPage}
+              className="rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface2"
+            >
+              {t("common:go", { defaultValue: "Go" })}
+            </button>
+          </div>
         </div>
       )}
       <React.Suspense fallback={null}>

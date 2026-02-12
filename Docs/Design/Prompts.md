@@ -15,7 +15,7 @@ https://leebutterman.com/2025/11/01/prompt-optimization-on-a-raspberry-pi.html
 https://ai.google.dev/gemini-api/docs/prompting-strategies
 https://github.com/serenakeyitan/awesome-notebookLM-prompts
 https://www.reddit.com/r/notebooklm/comments/1qfd9yr/8_incredible_notebooklm_infographic_styles/
-
+https://arxiv.org/html/2512.14982v1
 
 https://github.com/qixucen/atom
 https://gist.githubusercontent.com/transitive-bullshit/487c9cb52c75a9701d312334ed53b20c/raw/d50ae033bbb0bea41026e338e70d7435f651ae5d/claude-code-prompts.js

@@ -158,6 +158,22 @@ server-up-dev:
 	uvicorn tldw_Server_API.app.main:app --host $(HOST) --port $(PORT) --reload
 
 # -----------------------------------------------------------------------------
+# Watchlists smoke
+# -----------------------------------------------------------------------------
+.PHONY: watchlists-audio-smoke
+
+WATCHLISTS_BASE_URL ?= http://127.0.0.1:8000
+WATCHLISTS_API_KEY ?= $(SINGLE_USER_API_KEY)
+WATCHLISTS_AUDIO_SMOKE_ARGS ?=
+
+watchlists-audio-smoke:
+	@echo "[watchlists-audio-smoke] Running watchlists audio smoke against $(WATCHLISTS_BASE_URL)"
+	$(PYTHON) Helper_Scripts/watchlists/watchlists_audio_smoke.py \
+		--base-url "$(WATCHLISTS_BASE_URL)" \
+		--api-key "$(WATCHLISTS_API_KEY)" \
+		$(WATCHLISTS_AUDIO_SMOKE_ARGS)
+
+# -----------------------------------------------------------------------------
 # Prompt Studio tests
 # -----------------------------------------------------------------------------
 .PHONY: prompt-studio-test prompt-studio-test-sqlite prompt-studio-test-postgres

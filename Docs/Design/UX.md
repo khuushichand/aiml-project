@@ -120,6 +120,15 @@ https://sakofchit.github.io/system.css/
 https://medium.com/@ryan.almeida86/10-ux-secrets-behind-great-design-7487ac7dd5d2
 https://uxmastery.com/10-secrets-behind-a-stunning-user-experience/
 https://medium.com/design-bootcamp/10-ui-ux-mistakes-developers-make-without-realizing-it-c7e521beab3a
+https://medium.com/@punitweb/ux-ui-design-trends-for-2026-from-ai-to-xr-to-vibe-creation-7c5f8e35dc1d
+https://darasoba.com/ai-design/
+https://uxdesign.cc/error-messages-a-guide-for-people-who-never-write-28206fcbdf4d
+https://uxdesign.cc/brands-that-are-totally-killing-it-with-voice-tone-style-and-how-you-can-too-47792613b267
+https://designerup.co/blog/i-stopped-using-figma-for-70-of-my-product-design-work-and-my-output-doubled/
+https://luisladino.github.io/adversarial-design-thinking/
+
+
+
 www.aiuxplayground.com/pattern/chat-artifact
 https://www.8bitcn.com/?ref=sidebar
 https://github.com/kagisearch/smallweb

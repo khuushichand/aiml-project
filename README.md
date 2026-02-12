@@ -444,6 +444,9 @@ docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.p
 
 Notes
 - Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
+- For `Dockerfiles/docker-compose.webui.yml`, `NEXT_PUBLIC_API_URL` is injected at WebUI build time and must be externally reachable by browsers (Docker host IP/name, reverse-proxy URL, or public domain), not an internal `localhost` default.
+- `NEXT_PUBLIC_API_VERSION` and `NEXT_PUBLIC_X_API_KEY` are also build-time public values in the client bundle; set them explicitly for your target deployment/auth mode.
+- If you need per-environment API URLs without rebuilding the WebUI image, switch to a runtime env-substitution strategy instead of compile-time `NEXT_PUBLIC_*` build args.
 - The primary UI is the Next.js WebUI in `apps/tldw-frontend/`.
   - Run it separately for development, or use `Dockerfiles/docker-compose.webui.yml` for a containerized WebUI.
   - For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.

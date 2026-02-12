@@ -34,8 +34,14 @@ groups:
             model:
               type: threshold
               expression: A
-              params:
-                - 1
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 1
+                  reducer:
+                    type: last
+                    params: []
               refId: B
 
       # LLM reranker budget exhaustions rate exceeds threshold

@@ -8,7 +8,8 @@ This folder contains the base Compose stack for tldw_server, optional overlays, 
 - Services: `app` (FastAPI), `postgres`, `redis`
 - Start (single-user, SQLite users DB):
   - `docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml up -d --build`
-  - First start in `single_user` mode auto-generates a secure API key if missing/placeholder and runs `AuthNZ.initialize --non-interactive` once per persisted Docker volume.
+  - First start in `single_user` mode auto-generates a secure `SINGLE_USER_API_KEY` if missing/placeholder and runs `AuthNZ.initialize --non-interactive` only when `/app/Databases/.authnz_initialized_single_user` is absent in the attached Docker volume.
+  - If that marker exists in the volume, AuthNZ initialization is skipped on container restart; it runs again only if the volume is replaced or the marker is removed.
 - Start (multi-user, Postgres users DB):
   - `export AUTH_MODE=multi_user`
   - `export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users`
@@ -74,6 +75,7 @@ This folder contains the base Compose stack for tldw_server, optional overlays, 
 
 - Health checks: `app` responds on `/ready`; `postgres`/`redis` include health checks.
 - If the app fails waiting for DB, verify `DATABASE_URL` and Postgres readiness.
-- `single_user` quickstart now bootstraps a strong `SINGLE_USER_API_KEY` and runs one-time auth init automatically on first start.
+- `single_user` quickstart bootstraps a strong `SINGLE_USER_API_KEY` (when missing/placeholder) and performs one-time AuthNZ initialization based on the marker file `/app/Databases/.authnz_initialized_single_user` stored in the attached volume.
+- Initialization is skipped when that marker already exists, and will re-run only after volume replacement or marker removal (force re-init by deleting the marker, or by reinitializing the auth DB and clearing the marker).
 - For `multi_user`, run AuthNZ initialization manually to create your admin account.
 - View full logs: `docker compose ... logs -f`

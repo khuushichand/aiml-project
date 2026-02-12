@@ -176,25 +176,31 @@ CREATE POLICY ps_iter_tenant_isolation ON prompt_studio_optimization_iterations
     )
   );
 
--- Job queue (scope via project or client_id)
+-- Job queue (independent scope checks for client_id and project_id)
 ALTER TABLE IF EXISTS prompt_studio_job_queue ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS prompt_studio_job_queue FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ps_jobq_tenant_isolation ON prompt_studio_job_queue;
 CREATE POLICY ps_jobq_tenant_isolation ON prompt_studio_job_queue
   USING (
-    (client_id = current_setting('app.current_user_id', true)::text)
-    OR EXISTS (
-      SELECT 1 FROM prompt_studio_projects p
-      WHERE p.id = prompt_studio_job_queue.project_id
-        AND p.user_id = current_setting('app.current_user_id', true)::text
+    (client_id IS NULL OR client_id = current_setting('app.current_user_id', true)::text)
+    AND (
+      project_id IS NULL
+      OR EXISTS (
+        SELECT 1 FROM prompt_studio_projects p
+        WHERE p.id = prompt_studio_job_queue.project_id
+          AND p.user_id = current_setting('app.current_user_id', true)::text
+      )
     )
   )
   WITH CHECK (
-    (client_id = current_setting('app.current_user_id', true)::text)
-    OR EXISTS (
-      SELECT 1 FROM prompt_studio_projects p
-      WHERE p.id = prompt_studio_job_queue.project_id
-        AND p.user_id = current_setting('app.current_user_id', true)::text
+    (client_id IS NULL OR client_id = current_setting('app.current_user_id', true)::text)
+    AND (
+      project_id IS NULL
+      OR EXISTS (
+        SELECT 1 FROM prompt_studio_projects p
+        WHERE p.id = prompt_studio_job_queue.project_id
+          AND p.user_id = current_setting('app.current_user_id', true)::text
+      )
     )
   );
 
