@@ -131,7 +131,7 @@ def migrate_workflows_sqlite_to_postgres(
     if not sqlite_path.exists():
         raise FileNotFoundError(f'Workflows SQLite database not found: {sqlite_path}')
 
-    logger.info('Starting migration of workflows database from {}', sqlite_path)
+    logger.info('Starting migration of workflows database')
     sqlite_conn = sqlite3.connect(str(sqlite_path))
     sqlite_conn.row_factory = sqlite3.Row
 
