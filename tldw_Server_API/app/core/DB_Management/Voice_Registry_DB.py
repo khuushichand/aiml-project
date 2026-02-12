@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 _SCHEMA_VERSION = 1
 
@@ -70,7 +71,19 @@ class VoiceRegistryDB:
     """SQLite-backed registry for user voice records."""
 
     def __init__(self, db_path: str | Path):
-        self.db_path = Path(db_path).resolve()
+        # Resolve the database path and ensure it is contained within the configured
+        # user database base directory to avoid writing outside the intended root.
+        resolved_db_path = Path(db_path).resolve()
+        # DatabasePaths.get_user_db_base_dir() already normalizes and validates the base.
+        user_db_base = DatabasePaths.get_user_db_base_dir().resolve()
+        try:
+            resolved_db_path.relative_to(user_db_base)
+        except ValueError as exc:
+            raise ValueError(
+                f"Voice registry DB path {resolved_db_path!r} escapes user DB base directory {user_db_base!r}"
+            ) from exc
+
+        self.db_path = resolved_db_path
         self._lock = threading.RLock()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_schema()
