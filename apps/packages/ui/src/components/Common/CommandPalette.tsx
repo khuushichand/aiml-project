@@ -6,8 +6,10 @@ import {
   Search,
   MessageSquare,
   Settings,
+  CombineIcon,
   BookText,
   BookOpen,
+  NotebookPen,
   StickyNote,
   Layers,
   UploadCloud,
@@ -92,7 +94,7 @@ export function CommandPalette({
     modifiers: ["meta"],
     action: () => setOpen(true),
     description: "Open command palette",
-    allowInInput: true,
+    allowInInput: false,
   })
 
   // Also allow Escape to close
@@ -126,6 +128,14 @@ export function CommandPalette({
       },
       ...(!isSidepanel ? ([
         {
+          id: "nav-knowledge",
+          label: t("common:commandPalette.goToKnowledge", "Go to Knowledge QA"),
+          icon: <CombineIcon className="size-4" />,
+          action: () => { navigate("/knowledge"); setOpen(false) },
+          category: "navigation" as const,
+          keywords: ["knowledge", "qa", "rag", "search"],
+        },
+        {
           id: "nav-media",
           label: t("common:commandPalette.goToMedia", "Go to Media"),
           icon: <BookText className="size-4" />,
@@ -141,6 +151,14 @@ export function CommandPalette({
           action: () => { navigate("/notes"); setOpen(false) },
           category: "navigation" as const,
           keywords: ["notes", "notebook"],
+        },
+        {
+          id: "nav-prompts",
+          label: t("common:commandPalette.goToPrompts", "Go to Prompts"),
+          icon: <NotebookPen className="size-4" />,
+          action: () => { navigate("/prompts"); setOpen(false) },
+          category: "navigation" as const,
+          keywords: ["prompts", "template", "studio"],
         },
         {
           id: "nav-flashcards",

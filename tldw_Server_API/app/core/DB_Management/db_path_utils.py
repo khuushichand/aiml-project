@@ -34,7 +34,7 @@ def _normalize_user_id(user_id: Optional[UserId]) -> str:
         return "anonymous"
 
     # Convert numeric IDs directly to string – these are inherently safe
-   _id = str(user_id)
+    _id = str(user_id)
     candidate = _id.strip()
 
     # Fast path: already a simple, safe identifier

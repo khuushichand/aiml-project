@@ -1811,6 +1811,61 @@ class TestAudioBriefingComposeAdapter:
         assert "1200" in call_kwargs["system_message"]
 
     @pytest.mark.asyncio
+    async def test_compose_system_prompt_includes_language_rule(self, sample_items, base_context):
+        """Test system prompt includes configured output language rule."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        mock_response = {"choices": [{"message": {"content": "[HOST]: Test script."}}]}
+        config = {"items": sample_items, "output_language": "es"}
+
+        with patch(
+            "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_llm:
+            await run_audio_briefing_compose_adapter(config, base_context)
+
+        call_kwargs = mock_llm.call_args[1]
+        assert "Reply only in es." in call_kwargs["system_message"]
+
+    @pytest.mark.asyncio
+    async def test_compose_strips_reasoning_blocks(self, sample_items, base_context):
+        """Test reasoning blocks are stripped from final spoken script."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        mock_response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "<think>internal chain of thought</think>\n"
+                            "[HOST]: Good morning.\n"
+                            "<reasoning>hidden notes</reasoning>\n"
+                            "[REPORTER]: Story details."
+                        )
+                    }
+                }
+            ]
+        }
+        config = {"items": sample_items, "multi_voice": True}
+
+        with patch(
+            "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            result = await run_audio_briefing_compose_adapter(config, base_context)
+
+        assert result.get("error") is None
+        assert "<think>" not in result["text"].lower()
+        assert "<reasoning>" not in result["text"].lower()
+        assert len(result["sections"]) >= 2
+
+    @pytest.mark.asyncio
     async def test_compose_llm_error_handled(self, sample_items, base_context):
         """Test LLM errors are caught and returned gracefully."""
         from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (

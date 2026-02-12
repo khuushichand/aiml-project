@@ -14,6 +14,12 @@ from typing import Any
 
 from loguru import logger
 
+try:
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+except ImportError:
+    async def perform_chat_api_call_async(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise ImportError("chat_service_unavailable")
+
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import (
@@ -296,8 +302,6 @@ async def run_image_describe_adapter(config: dict[str, Any], context: dict[str, 
         return {"description": "", "error": "missing_image"}
 
     try:
-        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
-
         # Build message with image
         content = [{"type": "text", "text": prompt}]
         if image_url:

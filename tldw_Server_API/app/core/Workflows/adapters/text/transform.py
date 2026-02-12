@@ -19,6 +19,7 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.TTS.utils import clean_text_for_tts
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_workflow_file_path
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.text._config import (
@@ -67,9 +68,18 @@ async def run_json_transform_adapter(config: dict[str, Any], context: dict[str, 
         # Fallback: simple path extraction
         if expression == ".":
             return {"result": data, "expression": expression}
-        parts = expression.strip(".").split(".")
+        parts = re.findall(r"[^\.\[\]]+|\[\d+\]", expression.strip("."))
         result = data
         for part in parts:
+            if part.startswith("[") and part.endswith("]"):
+                idx_str = part[1:-1]
+                if isinstance(result, list) and idx_str.isdigit():
+                    idx = int(idx_str)
+                    result = result[idx] if 0 <= idx < len(result) else None
+                else:
+                    result = None
+                    break
+                continue
             if isinstance(result, dict):
                 result = result.get(part)
             elif isinstance(result, list) and part.isdigit():
@@ -364,6 +374,18 @@ async def run_text_clean_adapter(config: dict[str, Any], context: dict[str, Any]
         # Blockquotes and horizontal rules
         text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)
         text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)
+
+    if "strip_reasoning_blocks" in operations:
+        text = re.sub(
+            r"<(?:think|thinking|reasoning)>[\s\S]*?</(?:think|thinking|reasoning)>\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"</?(?:think|thinking|reasoning)>", "", text, flags=re.IGNORECASE)
+
+    if "tts_normalize" in operations:
+        text = clean_text_for_tts(text)
 
     if "normalize_whitespace" in operations:
         text = re.sub(r'\s+', ' ', text)

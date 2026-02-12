@@ -4,6 +4,10 @@ import { Link, useLocation, useNavigate } from "react-router-dom"
 import { BetaTag } from "../Common/Beta"
 import { XIcon } from "lucide-react"
 import { getSettingsNavGroups, type SettingsNavItem } from "./settings-nav"
+import {
+  isSettingsNavItemActive,
+  resolveCurrentSettingsNavItem
+} from "./settings-active-route"
 import { isChromeTarget } from "@/config/platform"
 import { isSidepanelSupported, openSidepanel } from "@/utils/sidepanel"
 import { setSetting } from "@/services/settings/registry"
@@ -34,14 +38,7 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
     [capabilities, capabilitiesLoading]
   )
   const currentNavItem = React.useMemo(() => {
-    for (const group of settingsNavGroups) {
-      for (const item of group.items) {
-        if (item.to === location.pathname) {
-          return item
-        }
-      }
-    }
-    return null
+    return resolveCurrentSettingsNavItem(location.pathname, settingsNavGroups)
   }, [location.pathname, settingsNavGroups])
 
   const currentBreadcrumbLabel = currentNavItem
@@ -54,7 +51,11 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
         <div className="mx-auto w-full h-full custom-scrollbar overflow-y-auto">
           <div className="flex flex-col lg:flex-row lg:gap-x-16 lg:px-24">
             <aside className="lg:sticky lg:mt-0 mt-14 lg:top-0 z-20 bg-surface border-b border-border lg:border-0 lg:bg-transparent">
-              <nav className="w-full overflow-x-auto px-4 py-4 sm:px-6 lg:px-0 lg:py-0 lg:mt-20">
+              <nav
+                className="w-full overflow-x-auto px-4 py-4 sm:px-6 lg:px-0 lg:py-0 lg:mt-20"
+                aria-label={t("settings:navigation.ariaLabel", "Settings navigation")}
+                data-testid="settings-navigation"
+              >
                 <div className="flex items-center justify-between mb-3">
                   <button
                     className="text-xs border rounded px-2 py-1 text-text  disabled:opacity-50 disabled:cursor-not-allowed"
@@ -89,38 +90,48 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
                         <ul
                           role="list"
                           className="flex flex-row flex-wrap gap-2 lg:flex-col">
-                          {items.map((item) => (
-                            <li
-                              key={item.to}
-                              className="inline-flex items-center">
-                              <Link
-                                to={item.to}
-                                className={classNames(
-                                  location.pathname === item.to
-                                    ? "bg-surface2 text-text"
-                                    : "text-text-muted hover:text-text hover:bg-surface2",
-                                  "group flex gap-x-3 rounded-md py-2 pl-2 pr-3 text-sm font-semibold"
-                                )}
-                                aria-current={
-                                  location.pathname === item.to
-                                    ? "page"
-                                    : undefined
-                                }>
-                                <item.icon
+                          {items.map((item) => {
+                            const isActive = isSettingsNavItemActive(
+                              location.pathname,
+                              item.to
+                            )
+                            return (
+                              <li key={item.to} className="inline-flex items-center">
+                                <Link
+                                  to={item.to}
                                   className={classNames(
-                                    location.pathname === item.to
-                                      ? "text-text"
-                                      : "text-text-subtle group-hover:text-text",
-                                    "h-6 w-6 shrink-0"
+                                    isActive
+                                      ? "border border-border bg-surface2 text-text"
+                                      : "border border-transparent text-text-muted hover:text-text hover:bg-surface2",
+                                    "group flex items-center gap-x-3 rounded-md py-2 pl-2 pr-3 text-sm font-semibold"
                                   )}
-                                />
-                                <span className="truncate">
-                                  {t(item.labelToken)}
-                                </span>
-                              </Link>
-                              {item.beta && <BetaTag />}
-                            </li>
-                          ))}
+                                  aria-current={isActive ? "page" : undefined}
+                                  data-testid={`settings-nav-link-${item.to.replace(
+                                    /[^a-z0-9]+/gi,
+                                    "-"
+                                  )}`}>
+                                  <item.icon
+                                    className={classNames(
+                                      isActive
+                                        ? "text-text"
+                                        : "text-text-subtle group-hover:text-text",
+                                      "h-6 w-6 shrink-0"
+                                    )}
+                                  />
+                                  <span className="truncate">
+                                    {t(item.labelToken)}
+                                  </span>
+                                  {isActive ? (
+                                    <span
+                                      className="h-1.5 w-1.5 rounded-full bg-primary"
+                                      aria-hidden="true"
+                                    />
+                                  ) : null}
+                                </Link>
+                                {item.beta && <BetaTag />}
+                              </li>
+                            )
+                          })}
                         </ul>
                       </div>
                     )
@@ -148,19 +159,25 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
                 </button>
               </div>
               <div className="mx-auto max-w-4xl space-y-8 sm:space-y-10">
-                {currentBreadcrumbLabel &&
-                  location.pathname !== "/settings" && (
+                {currentBreadcrumbLabel ? (
+                  <div
+                    className="rounded-md border border-border bg-surface2 px-3 py-2"
+                    data-testid="settings-current-section"
+                  >
                     <p
-                      className="text-xs text-text-muted "
+                      className="text-xs text-text-muted"
                       aria-label={t(
                         "settings:breadcrumb.ariaLabel",
                         "Current settings location"
                       )}>
-                      <span>{t("settings", "Settings")}</span>
-                      <span className="mx-1">/</span>
+                      <span className="font-semibold text-text">
+                        {t("settings:currentSectionLabel", "Current section")}
+                      </span>
+                      <span className="mx-1 text-text-muted">:</span>
                       <span>{currentBreadcrumbLabel}</span>
                     </p>
-                  )}
+                  </div>
+                ) : null}
                 {children}
               </div>
             </main>

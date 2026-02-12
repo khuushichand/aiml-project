@@ -655,7 +655,9 @@ export const MlxAdminPage: React.FC = () => {
               description={t("settings:admin.mlxProviderDesc", `${providerModels.length} model(s) configured`)}
             >
               {loadingProvider ? (
-                <Text type="secondary">{t("common:loading", "Loading...")}</Text>
+                <Text type="secondary">
+                  {t("common:loading.title", "Loading...")}
+                </Text>
               ) : providerModels.length > 0 ? (
                 <List
                   size="small"

@@ -1379,7 +1379,7 @@ export const CharacterSelect: React.FC<Props> = ({
       key: "__loading__",
       label: (
         <div className="w-56 px-2 py-2 text-xs text-text-muted">
-          {t("common:loading", "Loading…") as string}
+          {t("common:loading.title", "Loading…") as string}
         </div>
       )
     })

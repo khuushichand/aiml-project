@@ -17,7 +17,8 @@ import {
   Expand,
   Minimize2,
   Loader2,
-  Trash2
+  Trash2,
+  UploadCloud
 } from 'lucide-react'
 import React, { useState, useEffect, Suspense, useMemo, useRef, useCallback } from 'react'
 import { Select, Dropdown, Tooltip, message, Spin } from 'antd'
@@ -1130,11 +1131,27 @@ export function ContentViewer({
                 })}
           </p>
           {!isAwaitingSelectionUpdate && (
-            <p className="mt-4 text-xs text-text-subtle">
-              {t('review:mediaPage.keyboardHint', {
-                defaultValue: 'Tip: Use j/k to navigate items, arrow keys to change pages'
-              })}
-            </p>
+            <>
+              <p className="mt-4 text-xs text-text-subtle">
+                {t('review:mediaPage.keyboardHint', {
+                  defaultValue: 'Tip: Use j/k to navigate items, arrow keys to change pages'
+                })}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('tldw:open-quick-ingest'))
+                  }
+                }}
+                className="mt-4 inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
+              >
+                <UploadCloud className="h-4 w-4" />
+                {t('review:mediaPage.openQuickIngest', {
+                  defaultValue: 'Open Quick Ingest'
+                })}
+              </button>
+            </>
           )}
         </div>
       </div>

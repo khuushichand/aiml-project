@@ -3446,6 +3446,12 @@ async def create_output(
             maximum=4.0,
         )
 
+    effective_audio_language = payload.audio_language
+    if not effective_audio_language and isinstance(job_prefs.get("audio_language"), str):
+        effective_audio_language = job_prefs.get("audio_language").strip() or None
+    if not effective_audio_language:
+        effective_audio_language = "en"
+
     effective_audio_llm_provider = payload.llm_provider
     if not effective_audio_llm_provider and isinstance(job_prefs.get("llm_provider"), str):
         effective_audio_llm_provider = job_prefs.get("llm_provider").strip() or None
@@ -3899,6 +3905,7 @@ async def create_output(
                     "audio_model": effective_audio_model,
                     "audio_voice": effective_audio_voice,
                     "audio_speed": effective_audio_speed,
+                    "audio_language": effective_audio_language,
                     "llm_provider": effective_audio_llm_provider,
                     "llm_model": effective_audio_llm_model,
                     "voice_map": effective_voice_map,

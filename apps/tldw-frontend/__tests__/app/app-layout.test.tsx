@@ -12,6 +12,7 @@ const mockRouter = {
 }
 
 const mockGetConfig = vi.fn()
+const mockGetCurrentUser = vi.fn()
 let currentConfig: Record<string, unknown> | null = null
 
 vi.mock("next/router", () => ({
@@ -48,6 +49,12 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   }
 }))
 
+vi.mock("@/services/tldw/TldwAuth", () => ({
+  tldwAuth: {
+    getCurrentUser: (...args: unknown[]) => mockGetCurrentUser(...args)
+  }
+}))
+
 const DummyPage = () => <div data-testid="page-content">Page</div>
 
 const renderApp = (pathname: string) => {
@@ -63,6 +70,8 @@ beforeEach(() => {
   mockRouter.push.mockClear()
   mockRouter.replace.mockClear()
   mockGetConfig.mockReset()
+  mockGetCurrentUser.mockReset()
+  mockGetCurrentUser.mockResolvedValue({ username: "test-user" })
   currentConfig = null
   mockGetConfig.mockImplementation(async () => currentConfig)
   delete process.env.NEXT_PUBLIC_X_API_KEY
@@ -138,5 +147,23 @@ describe("App layout routing", () => {
       expect(layout).toHaveAttribute("data-hide-header", "false")
     })
     expect(layout).toHaveAttribute("data-hide-sidebar", "false")
+  })
+
+  it("keeps header and sidebar hidden when multi-user token validation fails", async () => {
+    currentConfig = {
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "multi-user",
+      accessToken: "stale-token"
+    }
+    mockGetCurrentUser.mockRejectedValueOnce(new Error("Unauthorized"))
+
+    renderApp("/media")
+    const layout = await screen.findByTestId("option-layout")
+
+    await waitFor(() => {
+      expect(mockGetCurrentUser).toHaveBeenCalled()
+    })
+    expect(layout).toHaveAttribute("data-hide-header", "true")
+    expect(layout).toHaveAttribute("data-hide-sidebar", "true")
   })
 })

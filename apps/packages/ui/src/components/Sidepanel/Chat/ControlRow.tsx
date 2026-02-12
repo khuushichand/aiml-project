@@ -518,10 +518,10 @@ export const ControlRow: React.FC<ControlRowProps> = ({
         onClick={openQuickIngest}
         data-testid="chat-quick-ingest"
         className="w-full text-left text-sm px-3 py-2 rounded flex items-center gap-2 hover:bg-surface2"
-        title={t("sidepanel:controlRow.quickIngest", "Quick ingest")}
+        title={t("sidepanel:controlRow.quickIngest", "Quick Ingest")}
       >
         <UploadCloud className="size-4 text-text-subtle" />
-        {t("sidepanel:controlRow.quickIngest", "Quick ingest")}
+        {t("sidepanel:controlRow.quickIngest", "Quick Ingest")}
       </button>
       <button
         type="button"

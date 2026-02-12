@@ -161,22 +161,26 @@ class AdapterRegistry:
         """
         return list({spec.category for spec in self._adapters.values()})
 
-    def get_catalog(self) -> dict[str, dict[str, Any]]:
-        """Get full catalog for API documentation.
+    def get_catalog(self) -> dict[str, list[dict[str, Any]]]:
+        """Get full catalog grouped by category.
 
         Returns:
-            Dict mapping adapter names to their metadata
+            Dict mapping category names to adapter metadata entries
         """
-        return {
-            name: {
-                "category": spec.category,
-                "description": spec.description,
-                "parallelizable": spec.parallelizable,
-                "config_schema": spec.config_model.model_json_schema() if spec.config_model else None,
-                "tags": spec.tags,
-            }
-            for name, spec in self._adapters.items()
-        }
+        catalog: dict[str, list[dict[str, Any]]] = {}
+        for name, spec in self._adapters.items():
+            catalog.setdefault(spec.category, []).append(
+                {
+                    "name": name,
+                    "description": spec.description,
+                    "parallelizable": spec.parallelizable,
+                    "config_schema": spec.config_model.model_json_schema() if spec.config_model else None,
+                    "tags": spec.tags,
+                }
+            )
+        for entries in catalog.values():
+            entries.sort(key=lambda item: str(item.get("name") or ""))
+        return catalog
 
     def __len__(self) -> int:
         return len(self._adapters)

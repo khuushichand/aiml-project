@@ -22,19 +22,63 @@ const hasEnvAuth = () => {
   return envApiKey.length > 0 || envBearer.length > 0
 }
 
-const hasConfiguredAuth = async () => {
+type ConfiguredAuthState = {
+  hasConfig: boolean
+  authMode?: "single-user" | "multi-user"
+  isAuthenticated: boolean
+}
+
+const getConfiguredAuthState = async (): Promise<ConfiguredAuthState> => {
   try {
     const { tldwClient } = await import("@/services/tldw/TldwApiClient")
     const config = await tldwClient.getConfig()
-    if (!config) return false
-
-    if (config.authMode === "multi-user") {
-      return typeof config.accessToken === "string" && config.accessToken.trim().length > 0
+    if (!config) {
+      return {
+        hasConfig: false,
+        isAuthenticated: false
+      }
     }
 
-    return typeof config.apiKey === "string" && config.apiKey.trim().length > 0
+    if (config.authMode === "multi-user") {
+      const hasAccessToken =
+        typeof config.accessToken === "string" &&
+        config.accessToken.trim().length > 0
+      if (!hasAccessToken) {
+        return {
+          hasConfig: true,
+          authMode: "multi-user",
+          isAuthenticated: false
+        }
+      }
+
+      try {
+        const { tldwAuth } = await import("@/services/tldw/TldwAuth")
+        await tldwAuth.getCurrentUser()
+        return {
+          hasConfig: true,
+          authMode: "multi-user",
+          isAuthenticated: true
+        }
+      } catch {
+        return {
+          hasConfig: true,
+          authMode: "multi-user",
+          isAuthenticated: false
+        }
+      }
+    }
+
+    return {
+      hasConfig: true,
+      authMode: "single-user",
+      isAuthenticated:
+        typeof config.apiKey === "string" && config.apiKey.trim().length > 0
+    }
   } catch {
-    return false
+    return {
+      hasConfig: false,
+      isAuthenticated: false
+    }
   }
 }
 
@@ -49,18 +93,25 @@ export default function App({ Component, pageProps }: AppProps) {
   const isLoginRoute = routePath === "/login"
   const isSettingsRoute =
     routePath === "/settings" || routePath.startsWith("/settings/")
-  const [isAuthenticated, setIsAuthenticated] = React.useState(() =>
-    hasEnvAuth()
-  )
+  const [isAuthenticated, setIsAuthenticated] = React.useState(false)
+  const [authResolved, setAuthResolved] = React.useState(false)
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
 
     let cancelled = false
     const refreshAuthState = async () => {
-      const authed = hasEnvAuth() || (await hasConfiguredAuth())
+      const envAuthed = hasEnvAuth()
+      const configuredAuth = await getConfiguredAuthState()
+      const authed = configuredAuth.hasConfig
+        ? configuredAuth.authMode === "multi-user"
+          ? configuredAuth.isAuthenticated
+          : configuredAuth.isAuthenticated || envAuthed
+        : envAuthed
+
       if (!cancelled) {
         setIsAuthenticated(authed)
+        setAuthResolved(true)
       }
     }
 
@@ -87,7 +138,7 @@ export default function App({ Component, pageProps }: AppProps) {
     }
   }, [router.asPath])
 
-  const hideShellNav = !isAuthenticated
+  const hideShellNav = !authResolved || !isAuthenticated
 
   return (
     <AppProviders>

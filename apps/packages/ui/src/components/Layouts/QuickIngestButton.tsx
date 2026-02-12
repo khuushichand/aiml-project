@@ -132,7 +132,7 @@ export function QuickIngestButton({ className }: QuickIngestButtonProps) {
   const hasQueuedQuickIngest = queuedQuickIngestCount > 0
 
   const quickIngestAriaLabel = React.useMemo(() => {
-    const base = t("option:header.quickIngest", "Quick ingest")
+    const base = t("option:header.quickIngest", "Quick Ingest")
     if (!hasQueuedQuickIngest) {
       return base
     }

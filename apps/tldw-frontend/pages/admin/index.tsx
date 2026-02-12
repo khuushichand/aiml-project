@@ -1,14 +1,5 @@
-import dynamic from "next/dynamic"
+import { RouteRedirect } from "@web/components/navigation/RouteRedirect"
 
-export default dynamic(async () => {
-  const { useRouter } = await import("next/router")
-  const { useEffect } = await import("react")
-  const Page = () => {
-    const router = useRouter()
-    useEffect(() => {
-      void router.replace("/admin/server")
-    }, [router])
-    return null
-  }
-  return { default: Page }
-}, { ssr: false })
+export default function AdminRedirectPage() {
+  return <RouteRedirect to="/admin/server" />
+}

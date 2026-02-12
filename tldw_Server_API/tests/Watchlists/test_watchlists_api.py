@@ -841,6 +841,7 @@ def test_outputs_generate_audio_payload_triggers_workflow_and_updates_run_stats(
                 "audio_model": "tts-1",
                 "audio_voice": "nova",
                 "audio_speed": 1.2,
+                "audio_language": "fr",
                 "llm_provider": "openai",
                 "llm_model": "gpt-4o-mini",
                 "voice_map": {"HOST": "af_bella"},
@@ -863,6 +864,7 @@ def test_outputs_generate_audio_payload_triggers_workflow_and_updates_run_stats(
     assert kwargs["output_prefs"]["audio_model"] == "tts-1"
     assert kwargs["output_prefs"]["audio_voice"] == "nova"
     assert kwargs["output_prefs"]["audio_speed"] == 1.2
+    assert kwargs["output_prefs"]["audio_language"] == "fr"
     assert kwargs["output_prefs"]["llm_provider"] == "openai"
     assert kwargs["output_prefs"]["llm_model"] == "gpt-4o-mini"
     assert kwargs["output_prefs"]["voice_map"] == {"HOST": "af_bella"}

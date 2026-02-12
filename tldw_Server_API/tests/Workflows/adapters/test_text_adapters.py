@@ -1107,6 +1107,46 @@ class TestTextCleanAdapter:
         assert "text" in result
         assert result["text"] == ""
 
+    @pytest.mark.asyncio
+    async def test_text_clean_strip_reasoning_blocks(self):
+        """Test strip_reasoning_blocks removes hidden reasoning segments."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {
+            "text": "Visible <think>hidden</think> text <reasoning>internal</reasoning> done",
+            "operations": ["strip_reasoning_blocks", "normalize_whitespace"],
+        }
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "<think>" not in result["text"].lower()
+        assert "<reasoning>" not in result["text"].lower()
+        assert "hidden" not in result["text"].lower()
+        assert "internal" not in result["text"].lower()
+        assert "Visible" in result["text"]
+        assert "done" in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_clean_tts_normalize(self):
+        """Test tts_normalize applies speech-friendly symbol cleanup."""
+        from tldw_Server_API.app.core.Workflows.adapters.text import run_text_clean_adapter
+
+        config = {
+            "text": "Line 1\nLine 2 + A&B \u2014 done",
+            "operations": ["tts_normalize"],
+        }
+        context = {}
+
+        result = await run_text_clean_adapter(config, context)
+
+        assert "text" in result
+        assert "\n" not in result["text"]
+        assert "plus" in result["text"]
+        assert " and " in result["text"]
+        assert "\u2014" not in result["text"]
+
 
 # =============================================================================
 # NLP Adapters Tests

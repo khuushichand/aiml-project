@@ -5,7 +5,7 @@
     "workspace": "Workspace",
     "about": "About"
   },
-  "healthNav": "Health",
+  "healthNav": "Health & Diagnostics",
   "worldBooksNav": "World Books",
   "chatDictionariesNav": "Chat Dictionaries",
   "chatbooksNav": "Chatbooks",
@@ -19,6 +19,8 @@
   "speechSettingsNav": "Speech",
   "imageGenerationSettingsNav": "Image Generation",
   "uiCustomizationNav": "UI customization",
+  "researchStudioNav": "Research Studio",
+  "modelPlaygroundNav": "Model Playground",
   "acpPlaygroundNav": "ACP Playground",
   "skillsNav": "Skills",
   "splashSettingsNav": "Splash screens",

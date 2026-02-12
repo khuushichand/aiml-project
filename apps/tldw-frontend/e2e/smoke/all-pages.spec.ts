@@ -17,6 +17,19 @@ import { PAGES, PageEntry, getActivePages, PAGE_COUNT, ACTIVE_PAGE_COUNT } from 
 const LOAD_TIMEOUT = 30_000 // 30s max for page load
 const ELEMENT_TIMEOUT = 15_000 // 15s max for element visibility
 const VERBOSE_CONSOLE = process.env.TLDW_SMOKE_VERBOSE_CONSOLE === "1"
+const KEY_NAV_TARGETS = [
+  "/chat",
+  "/media",
+  "/knowledge",
+  "/notes",
+  "/prompts",
+  "/settings/tldw"
+]
+const WAYFINDING_404_PATH = "/__wayfinding-missing-route__"
+
+const keyNavEntries: PageEntry[] = KEY_NAV_TARGETS.map(
+  (targetPath) => PAGES.find((entry) => entry.path === targetPath)
+).filter((entry): entry is PageEntry => Boolean(entry))
 
 /**
  * Format diagnostics for console output
@@ -244,4 +257,143 @@ test.describe("Smoke Tests - Audio", () => {
       expect(issues.pageErrors).toHaveLength(0)
     })
   }
+})
+
+test.describe("Smoke Tests - Key Navigation Targets", () => {
+  test.beforeEach(async ({ page }) => {
+    await seedAuth(page)
+  })
+
+  test("inventory contains all key nav routes", () => {
+    expect(keyNavEntries).toHaveLength(KEY_NAV_TARGETS.length)
+  })
+
+  for (const entry of keyNavEntries) {
+    test(`${entry.name} (${entry.path})`, async ({ page, diagnostics }) => {
+      const response = await page.goto(entry.path, {
+        waitUntil: "domcontentloaded",
+        timeout: LOAD_TIMEOUT
+      })
+      await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+
+      const issues = getCriticalIssues(diagnostics)
+      const status = response?.status() ?? 0
+
+      expect(
+        status === 0 || status < 400,
+        `Expected key target ${entry.path} to load successfully (status: ${status})`
+      ).toBeTruthy()
+      expect(
+        issues.pageErrors,
+        `Uncaught page errors on key nav target ${entry.path}`
+      ).toHaveLength(0)
+    })
+  }
+})
+
+test.describe("Smoke Tests - Wayfinding", () => {
+  test.beforeEach(async ({ page }) => {
+    await seedAuth(page)
+  })
+
+  test("settings route shows active location context", async ({ page, diagnostics }) => {
+    const response = await page.goto("/settings/tldw", {
+      waitUntil: "domcontentloaded",
+      timeout: LOAD_TIMEOUT
+    })
+    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+
+    const status = response?.status() ?? 0
+    test.skip(
+      status >= 400,
+      `Settings wayfinding markers unavailable in this runtime (status: ${status})`
+    )
+
+    await expect(page.getByTestId("settings-navigation")).toBeVisible()
+    await expect(page.getByTestId("settings-current-section")).toBeVisible()
+
+    const activeSettingsLink = page.locator(
+      '[data-testid^="settings-nav-link-"][aria-current="page"]'
+    )
+    await expect(activeSettingsLink.first()).toBeVisible()
+
+    const issues = getCriticalIssues(diagnostics)
+    expect(
+      issues.pageErrors,
+      "Uncaught page errors while validating settings wayfinding"
+    ).toHaveLength(0)
+  })
+
+  test("legacy alias redirects to canonical destination with params preserved", async ({
+    page,
+    diagnostics
+  }) => {
+    const response = await page.goto("/search?q=wayfinding-smoke", {
+      waitUntil: "domcontentloaded",
+      timeout: LOAD_TIMEOUT
+    })
+    const status = response?.status() ?? 0
+    test.skip(
+      status >= 400,
+      `Alias redirect path unavailable in this runtime (status: ${status})`
+    )
+
+    await page.waitForURL(/\/knowledge\?q=wayfinding-smoke/, {
+      timeout: LOAD_TIMEOUT
+    })
+    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+
+    const issues = getCriticalIssues(diagnostics)
+    expect(
+      issues.pageErrors,
+      "Uncaught page errors while validating alias redirect wayfinding"
+    ).toHaveLength(0)
+  })
+
+  test("404 recovery controls keep predictable keyboard order", async ({
+    page,
+    diagnostics
+  }) => {
+    await page.goto(WAYFINDING_404_PATH, {
+      waitUntil: "domcontentloaded",
+      timeout: LOAD_TIMEOUT
+    })
+    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+
+    const hasWayfindingPanel =
+      (await page.getByTestId("not-found-recovery-panel").count()) > 0
+    test.skip(
+      !hasWayfindingPanel,
+      "Wayfinding-specific 404 recovery panel not available in this runtime target"
+    )
+
+    await expect(page.getByRole("heading", { name: "We could not find that route" })).toBeVisible()
+    await expect(page.getByTestId("not-found-recovery-panel")).toBeVisible()
+
+    const controlOrder = await page
+      .locator("[data-testid='not-found-recovery-panel'] [data-testid]")
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute("data-testid"))
+      )
+
+    expect(controlOrder).toEqual([
+      "not-found-go-chat",
+      "not-found-open-knowledge",
+      "not-found-open-media",
+      "not-found-open-settings",
+      "not-found-go-back"
+    ])
+
+    const goChatButton = page.getByTestId("not-found-go-chat")
+    await goChatButton.focus()
+    await expect(goChatButton).toBeFocused()
+    await page.keyboard.press("Tab")
+    await expect(page.getByTestId("not-found-open-knowledge")).toBeFocused()
+
+    const issues = getCriticalIssues(diagnostics)
+    expect(
+      issues.pageErrors,
+      "Uncaught page errors while validating 404 recovery wayfinding"
+    ).toHaveLength(0)
+  })
 })

@@ -128,6 +128,21 @@ https://designerup.co/blog/i-stopped-using-figma-for-70-of-my-product-design-wor
 https://luisladino.github.io/adversarial-design-thinking/
 
 
+Dashboards
+    https://medium.com/@Santhanalakshmip/how-to-structure-your-dashboard-so-users-find-what-they-need-without-thinking-b971e9dc6c45
+    https://www.pencilandpaper.io/articles/ux-pattern-analysis-data-dashboards
+    https://www.linkedin.com/posts/vitalyfriedman_how-to-design-effective-dashboard-ux-activity-7292816975980875778-KETT
+    https://www.reddit.com/r/PowerBI/comments/w5liwk/how_to_plan_a_dashboard_for_a_company_who_doesnt/
+    https://www.datacamp.com/tutorial/dashboard-design-tutorial
+    https://observablehq.com/blog/seven-ways-design-better-dashboards
+    https://www.qualtrics.com/articles/customer-experience/action-centric-dashboard-design/
+    https://bricxlabs.com/blogs/tips-for-dashboard-design
+    https://www.uxpin.com/studio/blog/dashboard-design-principles/
+    https://julius.ai/articles/business-intelligence-dashboard-design-best-practices
+    https://liora.io/en/all-about-building-dashboard
+    https://www.uxstudioteam.com/ux-blog/dashboard-design
+    https://www.gooddata.com/blog/six-principles-of-dashboard-information-architecture/
+
 
 www.aiuxplayground.com/pattern/chat-artifact
 https://www.8bitcn.com/?ref=sidebar

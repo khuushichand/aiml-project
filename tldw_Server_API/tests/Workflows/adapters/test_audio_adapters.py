@@ -69,6 +69,46 @@ async def test_tts_adapter_valid_config(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_tts_adapter_cleans_input_text_before_synthesis(monkeypatch, tmp_path):
+    """Test TTS adapter normalizes text before building request."""
+    from tldw_Server_API.app.core.Workflows.adapters.audio import run_tts_adapter
+
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("WORKFLOWS_FILE_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("WORKFLOWS_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+
+    observed_inputs: list[str] = []
+    mock_tts_service = AsyncMock()
+
+    async def mock_generate_speech(req, provider=None):
+        observed_inputs.append(req.input)
+        yield b"fake_audio_bytes"
+
+    mock_tts_service.generate_speech = mock_generate_speech
+
+    async def mock_get_tts_service():
+        return mock_tts_service
+
+    with patch(
+        "tldw_Server_API.app.core.Workflows.adapters.audio.tts.get_tts_service_v2",
+        mock_get_tts_service,
+    ):
+        config = {
+            "input": "Line 1\\nLine 2 + R&D <think>hidden</think>",
+            "voice": "af_heart",
+            "model": "kokoro",
+        }
+        context = {"user_id": "test", "step_run_id": "step_tts_clean"}
+
+        result = await run_tts_adapter(config, context)
+
+    assert "error" not in result or result.get("error") == "tts_unavailable"
+    if "error" not in result:
+        assert observed_inputs
+        assert observed_inputs[0] == "Line 1 Line 2 plus R and D"
+
+
+@pytest.mark.asyncio
 async def test_tts_adapter_missing_input_text(monkeypatch, tmp_path):
     """Test TTS adapter with missing input text returns error."""
     from tldw_Server_API.app.core.Workflows.adapters.audio import run_tts_adapter
@@ -1745,3 +1785,45 @@ class TestMultiVoiceTTSAdapter:
             await run_multi_voice_tts_adapter(config, base_context)
 
         assert calls[0] == "bm_george"
+
+    @pytest.mark.asyncio
+    async def test_multi_voice_tts_cleans_text_before_synthesis(
+        self, base_context, tmp_path, monkeypatch
+    ):
+        """Test section text is normalized before synthesis."""
+        from tldw_Server_API.app.core.Workflows.adapters.audio.multi_voice_tts import (
+            run_multi_voice_tts_adapter,
+        )
+
+        monkeypatch.setenv("WORKFLOWS_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+
+        observed_texts = []
+
+        async def mock_synthesize(text, model, voice, fmt, speed, output_path):
+            observed_texts.append(text)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"audio")
+            return 5
+
+        config = {
+            "sections": [
+                {
+                    "voice": "HOST",
+                    "text": "[pause]\\nCost + tax & fees — pending <thinking>internal</thinking>",
+                }
+            ],
+            "voice_assignments": {"HOST": "af_bella"},
+            "normalize": False,
+        }
+
+        with patch(
+            "tldw_Server_API.app.core.Workflows.adapters.audio.multi_voice_tts._synthesize_section",
+            side_effect=mock_synthesize,
+        ):
+            result = await run_multi_voice_tts_adapter(config, base_context)
+
+        assert "error" not in result
+        assert observed_texts
+        assert "<thinking>" not in observed_texts[0].lower()
+        assert "plus" in observed_texts[0]
+        assert " and " in observed_texts[0]

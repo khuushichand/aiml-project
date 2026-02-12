@@ -20,6 +20,11 @@ from tldw_Server_API.app.core.testing import is_truthy
 
 FALSY_STRINGS = {"0", "false", "no", "n", "off", "none", "null", ""}
 _TTS_TEXT_WS_RE = re.compile(r"\s+", flags=re.UNICODE)
+_REASONING_BLOCK_RE = re.compile(
+    r"<(?:think|thinking|reasoning)>[\s\S]*?</(?:think|thinking|reasoning)>\s*",
+    flags=re.IGNORECASE,
+)
+_REASONING_TAG_RE = re.compile(r"</?(?:think|thinking|reasoning)>", flags=re.IGNORECASE)
 
 
 def parse_bool(value: Any, default: bool | None = False) -> bool:
@@ -83,6 +88,34 @@ def estimate_max_new_tokens(
     if min_tokens < 0:
         min_tokens = 0
     return max(min_tokens, min(est, max_cap))
+
+
+def clean_text_for_tts(text: str | None) -> str:
+    """Normalize text for more natural TTS output.
+
+    This helper applies conservative speech-focused cleanup:
+    - remove common reasoning blocks/tags
+    - flatten line breaks
+    - replace symbols that are often read awkwardly
+    - collapse excess whitespace
+    """
+    if text is None:
+        text = ""
+    if not isinstance(text, str):
+        text = str(text)
+
+    cleaned = _REASONING_BLOCK_RE.sub("", text)
+    cleaned = _REASONING_TAG_RE.sub("", cleaned)
+    # Some upstream adapters may pass escaped newlines as literal "\\n".
+    cleaned = cleaned.replace("\\r\\n", " ").replace("\\r", " ").replace("\\n", " ")
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = cleaned.replace("\n", " ")
+    cleaned = cleaned.replace("+", " plus ")
+    cleaned = cleaned.replace("&", " and ")
+    cleaned = cleaned.replace("\u2014", ", ")
+    cleaned = cleaned.replace("\u2013", ", ")
+    cleaned = _TTS_TEXT_WS_RE.sub(" ", cleaned).strip()
+    return cleaned
 
 
 def normalize_tts_history_text(text: str | None) -> str:

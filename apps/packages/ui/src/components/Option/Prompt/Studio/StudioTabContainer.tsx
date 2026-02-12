@@ -116,7 +116,7 @@ export const StudioTabContainer: React.FC = () => {
     return (
       <div className="flex items-center justify-center py-12">
         <div className="animate-pulse text-text-muted">
-          {t("common:loading", { defaultValue: "Loading..." })}
+          {t("common:loading.title", { defaultValue: "Loading..." })}
         </div>
       </div>
     )

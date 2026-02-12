@@ -97,6 +97,14 @@ class TextCleanConfig(BaseAdapterConfig):
     """Config for text cleaning adapter."""
 
     text: str = Field(..., description="Text to clean (templated)")
+    operations: list[str] | None = Field(
+        None,
+        description=(
+            "Ordered clean operations. Common values: strip_html, fix_encoding, strip_markdown, "
+            "strip_reasoning_blocks, tts_normalize, normalize_whitespace, strip, lowercase, "
+            "remove_urls, remove_emails, normalize_unicode"
+        ),
+    )
     remove_html: bool = Field(True, description="Remove HTML tags")
     remove_urls: bool = Field(False, description="Remove URLs")
     remove_emails: bool = Field(False, description="Remove email addresses")

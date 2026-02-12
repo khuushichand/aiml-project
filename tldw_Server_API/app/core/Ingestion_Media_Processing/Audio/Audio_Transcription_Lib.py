@@ -3271,6 +3271,49 @@ def speech_to_text(
             raise RuntimeError(f"speech-to-text: Error during transcription of {file_path.name}") from e
         raise RuntimeError("speech-to-text: Error during transcription of in-memory audio") from e
 
+
+def transcribe_audio_with_whisper(
+    audio_file_path: str,
+    diarize: bool = False,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """
+    Backward-compatible helper expected by older workflow adapters/tests.
+
+    Returns a dict with ``segments`` and ``duration`` using the same shape
+    consumed by the diarization workflow fallback.
+    """
+    result = speech_to_text(audio_file_path, diarize=diarize, **kwargs)
+    if isinstance(result, tuple):
+        result = result[0]
+
+    if isinstance(result, dict):
+        return result
+
+    if not isinstance(result, list):
+        return {"segments": [], "duration": 0.0}
+
+    segments: list[dict[str, Any]] = []
+    max_end = 0.0
+    for seg in result:
+        if not isinstance(seg, dict):
+            continue
+        start = float(seg.get("start", seg.get("start_seconds", seg.get("Time_Start", 0.0))) or 0.0)
+        end = float(seg.get("end", seg.get("end_seconds", seg.get("Time_End", start))) or start)
+        text = str(seg.get("text") or seg.get("Text") or "")
+        speaker = str(seg.get("speaker") or "SPEAKER_0")
+        max_end = max(max_end, end)
+        segments.append(
+            {
+                "start": start,
+                "end": end,
+                "speaker": speaker,
+                "text": text,
+            }
+        )
+
+    return {"segments": segments, "duration": max_end}
+
 #
 # End of Faster Whisper related functions
 ##########################################################

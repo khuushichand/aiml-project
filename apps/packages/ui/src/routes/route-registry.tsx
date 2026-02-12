@@ -449,7 +449,11 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       order: 1
     }
   },
-  { kind: "options", path: "/review", element: <OptionMediaMulti /> },
+  {
+    kind: "options",
+    path: "/review",
+    element: <Navigate to="/media-multi" replace />
+  },
   {
     kind: "options",
     path: "/flashcards",
@@ -492,7 +496,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     element: <OptionModelPlayground />,
     nav: {
       group: "workspace",
-      labelToken: "option:header.workspacePlayground",
+      labelToken: "settings:modelPlaygroundNav",
       icon: FlaskConical,
       order: 5,
       beta: true
@@ -645,7 +649,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     element: <OptionWorkspacePlayground />,
     nav: {
       group: "workspace",
-      labelToken: "option:header.modelPlayground",
+      labelToken: "settings:researchStudioNav",
       icon: FlaskConical,
       order: 0,
       beta: true

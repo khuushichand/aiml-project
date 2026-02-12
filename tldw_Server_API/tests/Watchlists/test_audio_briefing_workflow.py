@@ -61,6 +61,7 @@ class TestBuildWorkflowInputs:
 
         assert inputs["items"] == items
         assert inputs["target_audio_minutes"] == 10
+        assert inputs["audio_language"] == "en"
         assert inputs["tts_model"] == "kokoro"
         assert inputs["tts_voice"] == "af_heart"
         assert inputs["tts_speed"] == 1.0
@@ -80,6 +81,7 @@ class TestBuildWorkflowInputs:
             "audio_model": "tts-1",
             "audio_voice": "nova",
             "audio_speed": 1.2,
+            "audio_language": "es",
             "llm_provider": "openai",
             "llm_model": "gpt-4o",
             "voice_map": {"HOST": "af_bella"},
@@ -88,6 +90,7 @@ class TestBuildWorkflowInputs:
         inputs = _build_workflow_inputs(items, output_prefs)
 
         assert inputs["target_audio_minutes"] == 5
+        assert inputs["audio_language"] == "es"
         assert inputs["tts_model"] == "tts-1"
         assert inputs["tts_voice"] == "nova"
         assert inputs["tts_speed"] == 1.2

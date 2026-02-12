@@ -25,6 +25,7 @@ AUDIO_BRIEFING_WORKFLOW_DEF: dict[str, Any] = {
             "config": {
                 "items": "{{ inputs.items }}",
                 "target_audio_minutes": "{{ inputs.target_audio_minutes }}",
+                "output_language": "{{ inputs.audio_language }}",
                 "provider": "{{ inputs.llm_provider }}",
                 "model": "{{ inputs.llm_model }}",
                 "multi_voice": True,
@@ -88,6 +89,7 @@ def _build_workflow_inputs(
     return {
         "items": items,
         "target_audio_minutes": output_prefs.get("target_audio_minutes", 10),
+        "audio_language": output_prefs.get("audio_language") or "en",
         "tts_model": output_prefs.get("audio_model") or "kokoro",
         "tts_voice": output_prefs.get("audio_voice") or "af_heart",
         "tts_speed": output_prefs.get("audio_speed") or 1.0,

@@ -16,6 +16,7 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.TTS.utils import clean_text_for_tts
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     AsyncFileWriter,
     resolve_artifacts_dir,
@@ -263,8 +264,9 @@ async def run_multi_voice_tts_adapter(
         kokoro_voice = voice_assignments.get(voice_marker, default_voice)
         section_path = out_dir / f"section_{idx:03d}.{ext}"
 
-        # Strip [pause] markers from text; we'll insert silence between sections
-        clean_text = text.replace("[pause]", "").strip()
+        # Strip [pause] markers from text; we'll insert silence between sections.
+        # Then apply speech-focused text cleanup.
+        clean_text = clean_text_for_tts(text.replace("[pause]", " "))
         if not clean_text:
             continue
 

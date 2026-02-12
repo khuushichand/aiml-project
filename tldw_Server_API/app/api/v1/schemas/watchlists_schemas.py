@@ -356,6 +356,10 @@ class WatchlistOutputCreateRequest(BaseModel):
     audio_model: str | None = Field(default=None, description="TTS model for audio briefing, e.g., 'kokoro'")
     audio_voice: str | None = Field(default=None, description="Default voice for audio briefing, e.g., 'af_heart'")
     audio_speed: float | None = Field(default=None, ge=0.25, le=4.0, description="Audio briefing speed override")
+    audio_language: str | None = Field(
+        default=None,
+        description="Language for audio briefing script generation, e.g., 'en', 'es', 'fr'",
+    )
     llm_provider: str | None = Field(default=None, description="LLM provider for summarization and script composition")
     llm_model: str | None = Field(default=None, description="LLM model for summarization and script composition")
     voice_map: dict[str, str] | None = Field(

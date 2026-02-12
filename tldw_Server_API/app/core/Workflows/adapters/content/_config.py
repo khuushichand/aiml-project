@@ -199,6 +199,7 @@ class AudioBriefingComposeConfig(BaseAdapterConfig):
 
     items: list[dict[str, Any]] | None = Field(None, description="Article summaries [{title, summary, url}]")
     target_audio_minutes: int = Field(10, ge=1, le=60, description="Target audio duration in minutes")
+    output_language: str = Field("en", description="Language for generated spoken script (e.g., 'en', 'es')")
     provider: str | None = Field(None, description="LLM provider")
     model: str | None = Field(None, description="LLM model")
     temperature: float = Field(0.5, ge=0.0, le=2.0, description="LLM temperature")

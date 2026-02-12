@@ -10,6 +10,26 @@ import contextlib
 import uuid
 from typing import Any
 
+try:
+    from tldw_Server_API.app.api.v1.schemas.audio_schemas import (  # type: ignore
+        NormalizationOptions,
+        OpenAISpeechRequest,
+    )
+except ImportError:
+    NormalizationOptions = None  # type: ignore[assignment]
+    OpenAISpeechRequest = None  # type: ignore[assignment]
+
+try:
+    from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2  # type: ignore
+except ImportError:
+    get_tts_service_v2 = None  # type: ignore[assignment]
+
+try:
+    from tldw_Server_API.app.core.TTS.utils import clean_text_for_tts
+except ImportError:
+    def clean_text_for_tts(text: str | None) -> str:  # type: ignore[no-redef]
+        return str(text or "")
+
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     AsyncFileWriter,
     resolve_artifact_filename,
@@ -53,10 +73,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
       - {"audio_uri": "file://...", "format": str, "model": str,
          "voice": str, "size_bytes": int}
     """
-    try:
-        from tldw_Server_API.app.api.v1.schemas.audio_schemas import NormalizationOptions, OpenAISpeechRequest
-        from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
-    except ImportError:
+    if OpenAISpeechRequest is None or NormalizationOptions is None or get_tts_service_v2 is None:
         return {"error": "tts_unavailable"}
 
     # Resolve input text
@@ -75,7 +92,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
             text = None
         if not text and isinstance(context.get("inputs"), dict):
             text = str(context["inputs"].get("summary") or context["inputs"].get("text") or "")
-    text = text or ""
+    text = clean_text_for_tts(text or "")
     if not text.strip():
         return {"error": "missing_input_text"}
 
@@ -183,7 +200,9 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
                     await writer.write(data)
                     size_bytes += len(data)
     except _WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS as e:
-        return {"error": f"tts_error:{e}"}
+        return {"error": "tts_unavailable", "details": str(e)}
+    except Exception as e:
+        return {"error": "tts_unavailable", "details": str(e)}
 
     # Optional post-process normalization via ffmpeg (best-effort)
     pp = config.get("post_process") or {}

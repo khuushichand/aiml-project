@@ -34,9 +34,38 @@ _DEFAULT_VOICE_MAP: dict[str, str] = {
 }
 
 _VOICE_MARKER_RE = re.compile(r'^\[([A-Z_]+)\]:\s*', re.MULTILINE)
+_REASONING_BLOCK_RE = re.compile(
+    r"<(?:think|thinking|reasoning)>[\s\S]*?</(?:think|thinking|reasoning)>\s*",
+    flags=re.IGNORECASE,
+)
+_REASONING_TAG_RE = re.compile(r"</?(?:think|thinking|reasoning)>", flags=re.IGNORECASE)
 
 
-def _build_system_prompt(target_words: int, multi_voice: bool) -> str:
+def _normalize_output_language(value: Any) -> str:
+    """Normalize output language hint to a compact non-empty token."""
+    if value is None:
+        return "en"
+    lang = str(value).strip()
+    if not lang:
+        return "en"
+    return lang
+
+
+def _build_language_rule(output_language: str) -> str:
+    normalized = output_language.lower().replace("_", "-").strip()
+    if normalized in {"en", "en-us", "en-gb", "english"}:
+        return "Reply in English only."
+    return f"Reply only in {output_language}. Do not switch languages."
+
+
+def _strip_reasoning_blocks(text: str) -> str:
+    """Strip hidden reasoning tags/blocks that should never be spoken."""
+    stripped = _REASONING_BLOCK_RE.sub("", text or "")
+    stripped = _REASONING_TAG_RE.sub("", stripped)
+    return stripped
+
+
+def _build_system_prompt(target_words: int, multi_voice: bool, output_language: str) -> str:
     """Build the system prompt for LLM script composition."""
     voice_instructions = ""
     if multi_voice:
@@ -60,6 +89,10 @@ Rules:
 - Write for the ear, not the eye. Use short, clear sentences.
 - NO markdown formatting (no headers, bold, italic, links, code blocks).
 - NO URLs in the script.
+- {_build_language_rule(output_language)}
+- Do NOT use emoji, decorative symbols, or ornamental punctuation.
+- Do NOT include side notes, production notes, or counters like "(200 chars)".
+- Do NOT include section labels, signatures, or prose headers.
 - Expand abbreviations on first use (e.g., "AI, or Artificial Intelligence").
 - Use [pause] between major topic transitions.
 - Start with a greeting that includes the current date context.
@@ -153,8 +186,13 @@ async def run_audio_briefing_compose_adapter(
     if isinstance(voice_map_cfg, str):
         voice_map_cfg = apply_template_to_string(voice_map_cfg, context) or voice_map_cfg
 
+    output_language_cfg = config.get("output_language", "en")
+    if isinstance(output_language_cfg, str):
+        output_language_cfg = apply_template_to_string(output_language_cfg, context) or output_language_cfg
+    output_language = _normalize_output_language(output_language_cfg)
+
     system_prompt = config.get("system_prompt_override") or _build_system_prompt(
-        target_words, multi_voice
+        target_words, multi_voice, output_language
     )
 
     # Build items text for LLM
@@ -189,7 +227,7 @@ Write the complete script now."""
             temperature=config.get("temperature", 0.5),
         )
 
-        full_script = extract_openai_content(response) or ""
+        full_script = _strip_reasoning_blocks(extract_openai_content(response) or "").strip()
 
         if not full_script:
             return {"text": "", "script": "", "sections": [], "error": "empty_llm_response"}

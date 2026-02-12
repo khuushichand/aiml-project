@@ -124,7 +124,7 @@ export function ModeSelector({ currentMode, onModeChange }: ModeSelectorProps) {
       },
       {
         key: "dictionaries",
-        label: t("option:header.modeDictionaries", "Chat dictionaries"),
+        label: t("option:header.modeDictionaries", "Chat Dictionaries"),
         shortcut: shortcutConfig.modeDictionaries,
       },
       {

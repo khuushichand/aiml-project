@@ -83,7 +83,7 @@ export const PlaygroundEmpty = () => {
           defaultValue: "Start chatting"
         })}
         onPrimaryAction={handleStartChat}
-        secondaryActionLabel={t("option:header.quickIngest", "Quick ingest")}
+        secondaryActionLabel={t("option:header.quickIngest", "Quick Ingest")}
         onSecondaryAction={handleOpenQuickIngest}
         secondaryDisabled={false}
       />
