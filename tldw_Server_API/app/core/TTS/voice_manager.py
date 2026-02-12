@@ -654,6 +654,11 @@ class VoiceManager:
 
         Uses DatabasePaths to resolve `<USER_DB_BASE_DIR>/<user_id>/voices`.
         """
+        # Normalize user_id to a safe, canonical string to avoid unsafe path components.
+        # This will raise ValueError if user_id cannot be interpreted as an integer,
+        # preventing unexpected directory traversal via crafted IDs.
+        safe_user_id_str = str(int(user_id))
+
         sample_root = DEFAULT_NEUTTS_VOICE_PATH.parent.resolve()
         env_user_db_base = os.getenv("USER_DB_BASE_DIR")
         settings_user_db_base = settings.get("USER_DB_BASE_DIR")
@@ -669,18 +674,18 @@ class VoiceManager:
                 base_dir = (Path.cwd() / "Databases" / "user_databases").resolve()
             else:
                 base_dir = (_REPO_ROOT / "Databases" / "user_databases").resolve()
-        candidate_dir = (base_dir / str(user_id) / DatabasePaths.VOICES_SUBDIR).resolve()
+        candidate_dir = (base_dir / safe_user_id_str / DatabasePaths.VOICES_SUBDIR).resolve()
         try:
             candidate_dir.relative_to(sample_root)
         except ValueError:
-            return DatabasePaths.get_user_voices_dir(user_id)
+            return DatabasePaths.get_user_voices_dir(safe_user_id_str)
         fallback_base = (_REPO_ROOT / "Databases" / "user_databases").resolve()
         logger.warning(
             "Voices directory resolved under Sample_Voices; falling back to {}",
             fallback_base,
         )
         return DatabasePaths.get_user_voices_dir(
-            user_id,
+            safe_user_id_str,
             base_dir_override=fallback_base,
         )
 

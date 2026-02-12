@@ -68,7 +68,24 @@ def _copy_sqlite_database_via_backup(
 
     source_is_uri = source_path.lower().startswith("file:")
     target_is_uri = target_path.lower().startswith("file:")
+
+    # When the target is a regular file path (not a SQLite URI), enforce that it
+    # resides within the configured backup base directory before creating any
+    # parent directories or opening it with SQLite. This guards against
+    # unexpected path traversal or writes outside the backup root even if an
+    # upstream caller misconfigures the target path.
     if not target_is_uri:
+        backup_base_dir = os.path.abspath(_get_backup_base_dir())
+        normalized_target_path = os.path.realpath(os.path.abspath(target_path))
+        try:
+            common = os.path.commonpath([backup_base_dir, normalized_target_path])
+        except ValueError:
+            raise sqlite3.OperationalError("invalid target database path") from None
+        if common != backup_base_dir:
+            raise sqlite3.OperationalError("target database path is outside backup directory")
+        # Use the vetted, normalized target path from this point forward.
+        target_path = normalized_target_path
+
         target_parent = os.path.dirname(target_path)
         if target_parent:
             os.makedirs(target_parent, exist_ok=True)

@@ -19,6 +19,37 @@ from tldw_Server_API.app.core.Utils.Utils import get_project_root
 
 UserId = Union[int, str]
 _SAFE_TEST_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _normalize_user_id(user_id: Optional[UserId]) -> str:
+    """
+    Normalize a user ID into a filesystem-safe directory component.
+
+    - Integers become their string representation.
+    - None becomes a fixed "anonymous" directory.
+    - Strings are stripped and validated against a safe pattern. If they
+      do not match, we fall back to a stable hash to avoid unsafe characters.
+    """
+    if user_id is None:
+        return "anonymous"
+
+    # Convert numeric IDs directly to string – these are inherently safe
+   _id = str(user_id)
+    candidate = _id.strip()
+
+    # Fast path: already a simple, safe identifier
+    if _SAFE_TEST_USER_ID_RE.fullmatch(candidate):
+        return candidate
+
+    # Fall back to a deterministic hash to ensure filesystem safety
+    digest = hashlib.sha256(candidate.encode("utf-8", errors="replace")).hexdigest()
+    safe_id = f"user_{digest}"
+    logger.warning(
+        "Normalizing potentially unsafe user_id %r to hashed directory name %r",
+        user_id,
+        safe_id,
+    )
+    return safe_id
 _SAFE_OUTPUT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -310,7 +341,8 @@ class DatabasePaths:
             _ensure_dir(base_path, label="user database base")
         else:
             base_path = DatabasePaths.get_user_db_base_dir(allow_legacy_alias=allow_legacy_alias)
-        user_dir = _build_user_dir(base_path, user_id)
+        safe_user_id = _normalize_user_id(user_id)
+        user_dir = _build_user_dir(base_path, safe_user_id)
         logger.debug(f"Ensured user directory exists: {user_dir}")
         return user_dir
 
