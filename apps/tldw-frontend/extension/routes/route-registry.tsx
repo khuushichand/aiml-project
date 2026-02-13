@@ -492,7 +492,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     element: <OptionMediaMulti />,
     nav: {
       group: "workspace",
-      labelToken: "option:header.review",
+      labelToken: "option:header.libraryView",
       icon: Microscope,
       order: 1
     }

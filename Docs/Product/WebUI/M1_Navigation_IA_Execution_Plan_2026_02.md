@@ -1,6 +1,6 @@
 # M1 Execution Plan: Navigation and IA Consolidation
 
-Status: In Progress  
+Status: Complete  
 Owner: WebUI + Product  
 Contributors: QA, Accessibility  
 Roadmap Parent: `Docs/Product/WebUI/WebUI_UX_Strategic_Roadmap_2026_02.md`  
@@ -29,9 +29,9 @@ Out of scope:
 | Milestone | Window | Focus | Owner | Status | Exit Criteria |
 |---|---|---|---|---|---|
 | M1.1 | Feb 13-Feb 17, 2026 | Canonical route inventory + alias matrix | WebUI | Complete | Canonical map and deprecation states documented and reviewed |
-| M1.2 | Feb 18-Feb 24, 2026 | Label normalization across nav surfaces | WebUI + Product | In Progress | Destination labels consistent across major entry points |
-| M1.3 | Feb 25-Mar 2, 2026 | Wayfinding + recovery UX alignment | WebUI | In Progress | Users can identify location and recover from off-path states |
-| M1.4 | Mar 3-Mar 6, 2026 | Telemetry + verification + cutover readiness | WebUI + QA | In Progress | Alias usage measurable and smoke checks passing |
+| M1.2 | Feb 18-Feb 24, 2026 | Label normalization across nav surfaces | WebUI + Product | Complete (Engineering) | Destination labels consistent across major entry points |
+| M1.3 | Feb 25-Mar 2, 2026 | Wayfinding + recovery UX alignment | WebUI | Complete | Users can identify location and recover from off-path states |
+| M1.4 | Mar 3-Mar 6, 2026 | Telemetry + verification + cutover readiness | WebUI + QA | Complete | Alias usage measurable and smoke checks passing |
 
 ## Baseline Route Alias Inventory (Current)
 
@@ -94,13 +94,20 @@ Deliverables:
 
 Tracking checklist:
 - [x] Build cross-surface label matrix for sidebar/header/command/settings (`Docs/Product/WebUI/M1_2_Navigation_Terminology_Triage_2026_02.md`).
-- [ ] Resolve conflicting labels for identical routes.
-- [ ] Standardize one preferred term per destination and update components.
-- [ ] Validate keyboard shortcut hints match actual behavior.
-- [ ] Capture before/after screenshots for unchanged semantics with clearer labeling.
+- [x] Resolve conflicting labels for identical routes.
+- [x] Standardize one preferred term per destination and update components.
+- [x] Validate keyboard shortcut hints match actual behavior (`apps/packages/ui/src/components/Common/__tests__/CommandPalette.shortcuts.test.tsx`).
+- [x] Capture before/after screenshots for unchanged semantics with clearer labeling (`Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/`).
 
 Progress update (February 12, 2026):
 - Implemented a first pass in tracked files: command palette entries for Knowledge QA and Prompts, Health label normalization, Quick Ingest capitalization cleanup, Chat Dictionaries casing fallback, and explicit settings labels for Research Studio and Model Playground.
+
+Progress update (February 13, 2026):
+- Completed terminology closeout in route/header/locale mappings, including Research Studio vs Model Playground label-token alignment and Multi-Item Review route label normalization.
+- Added command palette shortcut-hint alignment so pills derive from actual configured/bound shortcuts.
+- Verified closeout via focused smoke (`10 passed`, key-nav + wayfinding), full smoke (`150 passed`), and command palette shortcut unit test (`1 passed`).
+- Captured post-change desktop/mobile evidence screenshots under `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/`.
+- Product sign-off recorded for canonical vocabulary in `Docs/Product/WebUI/M1_2_Navigation_Terminology_Triage_2026_02.md`.
 
 Acceptance criteria:
 - Same destination has same primary label across all major nav entry points.
@@ -211,9 +218,33 @@ Acceptance criteria:
 | Week | Date | Milestone | Planned Outcome | Actual Outcome | Status |
 |---|---|---|---|---|---|
 | Week 1 | Feb 13, 2026 | M1.1 | Canonical route/alias inventory draft | Canonical route inventory and alias matrix published | Complete |
-| Week 2 | Feb 20, 2026 | M1.2 | Label matrix and first normalization pass | Label triage published and first normalization pass implemented | In Progress |
-| Week 3 | Feb 27, 2026 | M1.3 | Wayfinding and recovery pattern alignment | Active-route clarity + redirect/404 copy alignment + keyboard/focus validation + shell-level unknown-route fallback + sidebar active-route affordances added | In Progress |
-| Week 4 | Mar 6, 2026 | M1.4 | Telemetry + verification + closeout report | Telemetry helper + redirect instrumentation + runtime-overlay smoke guard landed; focused key-nav/wayfinding reruns passing (10/10), full smoke reruns passing (150/150), and controlled Week 2 alias capture recorded (raw 28, normalized 14) | In Progress |
+| Week 2 | Feb 20, 2026 | M1.2 | Label matrix and first normalization pass | Label triage published, terminology normalization completed, and verification/evidence captured | Complete (Engineering) |
+| Week 3 | Feb 27, 2026 | M1.3 | Wayfinding and recovery pattern alignment | Active-route clarity + redirect/404 copy alignment + keyboard/focus validation + shell-level unknown-route fallback + sidebar active-route affordances added | Complete |
+| Week 4 | Mar 6, 2026 | M1.4 | Telemetry + verification + closeout report | Telemetry helper + redirect instrumentation + runtime-overlay smoke guard landed; focused key-nav/wayfinding reruns passing (10/10), full smoke reruns passing (150/150), controlled Week 2 alias capture recorded (raw 28, normalized 14), and deprecation candidates prioritized for M2+ backlog | Complete |
+
+## M1.4 Deprecation Candidates (Prioritized for M2+)
+
+Prioritization inputs:
+- Alias inventory: `Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md`
+- Alias rollups: `Docs/Product/WebUI/M1_4_Route_Health_Snapshot_2026_02_12.md`
+- Consolidation leverage (families that can be reduced together)
+
+Threshold policy for safe alias retirement:
+1. Alias/family normalized usage `< 1` estimated hit/week for two consecutive weekly rollups.
+2. No documented external dependency (docs/bookmarks/shared links) requiring preservation.
+3. Canonical route has stable smoke coverage and recovery UX.
+
+Backlog priority:
+
+| Priority | Alias Candidate | Canonical Target | Rationale | Proposed M2+ Action |
+|---|---|---|---|---|
+| P1 | `/connectors/browse`, `/connectors/jobs`, `/connectors/sources` | `/settings` | Redundant sub-route aliases to same destination; high simplification payoff | Consolidate to single `/connectors` alias first, then evaluate full family retirement |
+| P1 | `/admin/orgs`, `/admin/data-ops`, `/admin/watchlists-items`, `/admin/watchlists-runs`, `/admin/maintenance` | `/admin/server` | Redundant admin family aliases to one canonical page | Keep `/admin` alias, retire long-tail admin family when threshold met |
+| P2 | `/profile`, `/privileges` | `/settings` | Legacy naming drift with overlapping settings intent | Soft deprecate with release notes and in-app redirect notice |
+| P2 | `/claims-review` | `/content-review` | Terminology drift after workflow consolidation | Keep during one release cycle, then retire when usage threshold is met |
+| P3 | `/reading` | `/collections` | Legacy IA term; canonical workspace established | Retire after two low-usage weekly rollups |
+| P3 | `/audio` | `/speech` | Legacy naming retained for compatibility | Retire after two low-usage weekly rollups |
+| P3 | `/media/:id/view` | `/media` | Parameterized legacy deep-link shim | Keep until deep-link usage is below threshold, then replace with canonical query-based deep link |
 
 ## Dependencies and Risks
 
@@ -234,7 +265,7 @@ Mitigations:
 
 ## Done Criteria for M1 Close
 
-- [ ] M1.1-M1.4 exit criteria all met.
-- [ ] Route/alias inventory approved and linked from strategic roadmap.
-- [ ] Core navigation smoke checks passing on latest mainline.
-- [ ] Deprecation candidates prioritized for M2+ backlog.
+- [x] M1.1-M1.4 exit criteria all met.
+- [x] Route/alias inventory approved and linked from strategic roadmap.
+- [x] Core navigation smoke checks passing on latest mainline.
+- [x] Deprecation candidates prioritized for M2+ backlog.

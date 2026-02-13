@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter, useLocation } from "react-router-dom"
-import { RouteErrorBoundary } from "../RouteErrorBoundary"
+import { ROUTE_ERROR_FIXTURE_QUERY_KEY, RouteErrorBoundary } from "../RouteErrorBoundary"
 
 const LocationProbe = () => {
   const location = useLocation()
@@ -112,5 +112,19 @@ describe("RouteErrorBoundary", () => {
     await waitFor(() => {
       expect(screen.getByTestId("route-path")).toHaveTextContent("/")
     })
+  })
+
+  it("supports forced-error fixture via query param in non-production mode", () => {
+    render(
+      <MemoryRouter initialEntries={[`/admin/server?${ROUTE_ERROR_FIXTURE_QUERY_KEY}=admin-server`]}>
+        <RouteErrorBoundary routeId="admin-server" routeLabel="Server Admin">
+          <StableChild />
+        </RouteErrorBoundary>
+      </MemoryRouter>
+    )
+
+    expect(screen.getByTestId("error-boundary")).toBeInTheDocument()
+    expect(screen.getByTestId("route-error-boundary-admin-server")).toBeInTheDocument()
+    expect(screen.getByTestId("route-error-route-label")).toHaveTextContent("Server Admin")
   })
 })

@@ -1,14 +1,17 @@
 import OptionLayout from "@web/components/layout/WebLayout"
 import { PageShell } from "@/components/Common/PageShell"
 import { KanbanPlayground } from "@/components/Option/KanbanPlayground"
+import { RouteErrorBoundary } from "@/components/Common/RouteErrorBoundary"
 
 const OptionKanbanPlayground = () => {
   return (
-    <OptionLayout>
-      <PageShell className="py-6" maxWidthClassName="max-w-7xl">
-        <KanbanPlayground />
-      </PageShell>
-    </OptionLayout>
+    <RouteErrorBoundary routeId="kanban-playground" routeLabel="Kanban Playground">
+      <OptionLayout>
+        <PageShell className="py-6" maxWidthClassName="max-w-7xl">
+          <KanbanPlayground />
+        </PageShell>
+      </OptionLayout>
+    </RouteErrorBoundary>
   )
 }
 

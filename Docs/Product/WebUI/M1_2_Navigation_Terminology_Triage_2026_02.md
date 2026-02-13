@@ -1,9 +1,9 @@
 # M1.2 Navigation Terminology Matrix and Triage
 
-Status: Complete (Triage Draft)  
+Status: Complete (Engineering Closeout)  
 Owner: WebUI + Product  
 Milestone: M1.2 (February 18-February 24, 2026)  
-Last Updated: February 12, 2026  
+Last Updated: February 13, 2026  
 Related: `Docs/Product/WebUI/M1_Navigation_IA_Execution_Plan_2026_02.md`  
 Related: `Docs/Product/WebUI/M1_1_Canonical_Route_Inventory_2026_02.md`
 
@@ -62,14 +62,14 @@ This document is the triage baseline before string and UI updates.
 
 | Priority | Issue | Impact | Owner | Target | File Targets | Status |
 |---|---|---|---|---|---|---|
-| P1 | `/workspace-playground` and `/model-playground` naming is inverted across labels/tokens | High route confusion | WebUI + Product | M1.2 | `apps/packages/ui/src/assets/locale/en/settings.json`, `apps/packages/ui/src/routes/route-registry.tsx`, `apps/packages/ui/src/components/Layouts/header-shortcut-items.ts` | In Progress |
-| P1 | `/review` label ambiguity vs `/media-multi` (`Review` vs `Multi-Item Review`) | Wrong-route landings | Product + WebUI | M1.2 | `apps/packages/ui/src/routes/route-registry.tsx`, `apps/tldw-frontend/pages/review.tsx` | Implemented (Pending QA) |
-| P1 | Health naming mismatch (`Health` vs `Health & Diagnostics`) | Diagnostic discoverability gap | WebUI | M1.2 | `apps/packages/ui/src/assets/locale/en/settings.json`, `apps/packages/ui/src/components/Common/CommandPalette.tsx` | Implemented (Pending QA) |
-| P2 | `Chat dictionaries` style/case mismatch across surfaces | Taxonomy inconsistency | WebUI | M1.2 | `apps/packages/ui/src/components/Layouts/ModeSelector.tsx`, `apps/packages/ui/src/assets/locale/en/settings.json` | Implemented (Pending QA) |
-| P2 | Missing command palette entry for `Knowledge QA` | Slower expert navigation | WebUI | M1.2 | `apps/packages/ui/src/components/Common/CommandPalette.tsx` | Implemented (Pending QA) |
-| P2 | Missing command palette entry for `Prompts` | Slower workflow switching | WebUI | M1.2 | `apps/packages/ui/src/components/Common/CommandPalette.tsx` | Implemented (Pending QA) |
+| P1 | `/workspace-playground` and `/model-playground` naming is inverted across labels/tokens | High route confusion | WebUI + Product | M1.2 | `apps/packages/ui/src/assets/locale/en/settings.json`, `apps/packages/ui/src/routes/route-registry.tsx`, `apps/packages/ui/src/components/Layouts/header-shortcut-items.ts` | Implemented (QA Verified) |
+| P1 | `/review` label ambiguity vs `/media-multi` (`Review` vs `Multi-Item Review`) | Wrong-route landings | Product + WebUI | M1.2 | `apps/packages/ui/src/routes/route-registry.tsx`, `apps/tldw-frontend/pages/review.tsx` | Implemented (QA Verified) |
+| P1 | Health naming mismatch (`Health` vs `Health & Diagnostics`) | Diagnostic discoverability gap | WebUI | M1.2 | `apps/packages/ui/src/assets/locale/en/settings.json`, `apps/packages/ui/src/components/Common/CommandPalette.tsx` | Implemented (QA Verified) |
+| P2 | `Chat dictionaries` style/case mismatch across surfaces | Taxonomy inconsistency | WebUI | M1.2 | `apps/packages/ui/src/components/Layouts/ModeSelector.tsx`, `apps/packages/ui/src/assets/locale/en/settings.json` | Implemented (QA Verified) |
+| P2 | Missing command palette entry for `Knowledge QA` | Slower expert navigation | WebUI | M1.2 | `apps/packages/ui/src/components/Common/CommandPalette.tsx` | Implemented (QA Verified) |
+| P2 | Missing command palette entry for `Prompts` | Slower workflow switching | WebUI | M1.2 | `apps/packages/ui/src/components/Common/CommandPalette.tsx` | Implemented (QA Verified) |
 | P2 | Prompt Studio label appears as destination despite alias status | IA drift after unification | Product + WebUI | M1.2 | `apps/packages/ui/src/routes/route-registry.tsx`, `apps/packages/ui/src/assets/locale/en/settings.json` | Triaged |
-| P3 | Quick Ingest capitalization (`Quick ingest` vs `Quick Ingest`) | Minor polish issue | WebUI | M1.2 | `apps/packages/ui/src/assets/locale/en/sidepanel.json`, `apps/packages/ui/src/components/Layouts/QuickIngestButton.tsx`, `apps/packages/ui/src/components/Option/Playground/PlaygroundEmpty.tsx`, `apps/packages/ui/src/components/Sidepanel/Chat/ControlRow.tsx` | Implemented (Pending QA) |
+| P3 | Quick Ingest capitalization (`Quick ingest` vs `Quick Ingest`) | Minor polish issue | WebUI | M1.2 | `apps/packages/ui/src/assets/locale/en/sidepanel.json`, `apps/packages/ui/src/components/Layouts/QuickIngestButton.tsx`, `apps/packages/ui/src/components/Option/Playground/PlaygroundEmpty.tsx`, `apps/packages/ui/src/components/Sidepanel/Chat/ControlRow.tsx` | Implemented (QA Verified) |
 
 ## Recommended Canonical Vocabulary (Approved Pending Product Sign-off)
 
@@ -88,9 +88,9 @@ This document is the triage baseline before string and UI updates.
 
 - [x] Cross-surface label matrix created.
 - [x] Navigation terminology inconsistencies triaged and assigned.
-- [ ] Product sign-off on canonical vocabulary.
-- [ ] String/token updates implemented.
-- [ ] Smoke verification confirms no route-label regressions.
+- [x] Product sign-off on canonical vocabulary.
+- [x] String/token updates implemented.
+- [x] Smoke verification confirms no route-label regressions.
 
 ## Implementation Progress (February 12, 2026)
 
@@ -102,7 +102,25 @@ Implemented in tracked files:
 - Added explicit settings-nav labels for `Research Studio` and `Model Playground` and mapped routes to those labels.
 - Converted `/review` into an explicit alias redirect to `/media-multi` in both registry and Next page wrapper.
 
+## Verification Evidence (February 13, 2026)
+
+Automated verification:
+- `bunx vitest run src/components/Common/__tests__/CommandPalette.shortcuts.test.tsx` (1 passed).
+- `bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Smoke Tests - (Key Navigation Targets|Wayfinding)" --reporter=line` (10 passed, 13.4s).
+- `bunx playwright test e2e/smoke/all-pages.spec.ts --reporter=line` (150 passed, 1.8m).
+- `bunx playwright test e2e/smoke/m1-2-label-evidence.spec.ts --reporter=line` (2 passed, desktop/mobile evidence capture).
+
+Screenshot evidence:
+- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/desktop-chat.png`
+- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/desktop-prompts.png`
+- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/desktop-settings-tldw.png`
+- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/mobile-chat.png`
+- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/mobile-prompts.png`
+- `Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13/mobile-settings-tldw.png`
+
 ## Change Log
 
 - February 12, 2026: Initial matrix and triage assignments published.
 - February 12, 2026: Implemented first-pass label consistency updates in tracked UI/settings files (pending QA smoke).
+- February 13, 2026: Completed engineering closeout verification (unit + focused smoke + full smoke) and captured desktop/mobile evidence screenshots.
+- February 13, 2026: Product approved canonical vocabulary and M1.2 sign-off checkbox was closed.

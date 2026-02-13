@@ -20,6 +20,69 @@ const ELEMENT_TIMEOUT = 15_000; // 15s max for element visibility
 const VERBOSE_CONSOLE = process.env.TLDW_SMOKE_VERBOSE_CONSOLE === '1';
 const KEY_NAV_TARGETS = ['/chat', '/media', '/knowledge', '/notes', '/prompts', '/settings/tldw'];
 const WAYFINDING_404_PATH = '/__wayfinding-missing-route__';
+const ROUTE_ERROR_FIXTURE_QUERY_KEY = '__forceRouteError';
+const NON_CORE_ROUTE_BOUNDARY_TARGETS = [
+  { name: 'Server Admin', path: '/admin/server', routeId: 'admin-server', routeLabel: 'Server Admin' },
+  {
+    name: 'Llama.cpp Admin',
+    path: '/admin/llamacpp',
+    routeId: 'admin-llamacpp',
+    routeLabel: 'Llama.cpp Admin',
+  },
+  { name: 'MLX Admin', path: '/admin/mlx', routeId: 'admin-mlx', routeLabel: 'MLX Admin' },
+  {
+    name: 'Content Review',
+    path: '/content-review',
+    routeId: 'content-review',
+    routeLabel: 'Content Review',
+  },
+  { name: 'Data Tables', path: '/data-tables', routeId: 'data-tables', routeLabel: 'Data Tables' },
+  {
+    name: 'Kanban Playground',
+    path: '/kanban',
+    routeId: 'kanban-playground',
+    routeLabel: 'Kanban Playground',
+  },
+  {
+    name: 'Chunking Playground',
+    path: '/chunking-playground',
+    routeId: 'chunking-playground',
+    routeLabel: 'Chunking Playground',
+  },
+  {
+    name: 'Moderation Playground',
+    path: '/moderation-playground',
+    routeId: 'moderation-playground',
+    routeLabel: 'Moderation Playground',
+  },
+  { name: 'Collections', path: '/collections', routeId: 'collections', routeLabel: 'Collections' },
+  {
+    name: 'World Books',
+    path: '/world-books',
+    routeId: 'world-books',
+    routeLabel: 'World Books',
+  },
+  {
+    name: 'Dictionaries',
+    path: '/dictionaries',
+    routeId: 'dictionaries',
+    routeLabel: 'Dictionaries',
+  },
+  { name: 'Characters', path: '/characters', routeId: 'characters', routeLabel: 'Characters' },
+  { name: 'Items', path: '/items', routeId: 'items', routeLabel: 'Items' },
+  {
+    name: 'Document Workspace',
+    path: '/document-workspace',
+    routeId: 'document-workspace',
+    routeLabel: 'Document Workspace',
+  },
+  {
+    name: 'Speech Playground',
+    path: '/speech',
+    routeId: 'speech',
+    routeLabel: 'Speech Playground',
+  },
+] as const;
 const RUNTIME_OVERLAY_PATTERNS = [
   /Runtime(?:\s+\w+)?\s+Error/i,
   /Runtime SyntaxError/i,
@@ -424,4 +487,40 @@ test.describe('Smoke Tests - Wayfinding', () => {
       'Uncaught page errors while validating 404 recovery wayfinding'
     ).toHaveLength(0);
   });
+});
+
+test.describe('Smoke Tests - Route Error Boundaries', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedAuth(page);
+  });
+
+  for (const target of NON_CORE_ROUTE_BOUNDARY_TARGETS) {
+    test(`${target.name} forced-error fixture renders recovery contract`, async ({
+      page,
+      diagnostics,
+    }) => {
+      const fixturePath = `${target.path}?${ROUTE_ERROR_FIXTURE_QUERY_KEY}=${target.routeId}`;
+      const response = await page.goto(fixturePath, {
+        waitUntil: 'domcontentloaded',
+        timeout: LOAD_TIMEOUT,
+      });
+      const status = response?.status() ?? 0;
+      test.skip(
+        status >= 400,
+        `Route boundary fixture unavailable for ${target.path} in this runtime (status: ${status})`
+      );
+
+      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+      await expect(page.getByTestId('error-boundary')).toBeVisible();
+      await expect(page.getByTestId(`route-error-boundary-${target.routeId}`)).toBeVisible();
+      await expect(page.getByTestId('route-error-retry')).toBeVisible();
+      await expect(page.getByTestId('route-error-go-chat')).toBeVisible();
+      await expect(page.getByTestId('route-error-open-settings')).toBeVisible();
+      await expect(page.getByTestId('route-error-reload')).toBeVisible();
+      await expect(page.getByTestId('route-error-route-label')).toHaveText(target.routeLabel);
+
+      const issues = getCriticalIssues(diagnostics);
+      await assertNoRuntimeOverlay(page, issues, `route-boundary:${fixturePath}`);
+    });
+  }
 });

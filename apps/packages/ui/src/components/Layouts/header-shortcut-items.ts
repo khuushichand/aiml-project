@@ -81,7 +81,7 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         to: "/dictionaries",
         icon: BookMarked,
         labelKey: "option:header.modeDictionaries",
-        labelDefault: "Chat dictionaries"
+        labelDefault: "Chat Dictionaries"
       },
       {
         id: "world-books",
@@ -94,7 +94,7 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         id: "workspace-playground",
         to: "/workspace-playground",
         icon: GitCompare,
-        labelKey: "option:header.modelPlayground",
+        labelKey: "settings:researchStudioNav",
         labelDefault: "Research Studio"
       }
     ]
@@ -262,7 +262,7 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         id: "model-playground",
         to: "/model-playground",
         icon: FlaskConical,
-        labelKey: "option:header.workspacePlayground",
+        labelKey: "settings:modelPlaygroundNav",
         labelDefault: "Model Playground"
       },
       {

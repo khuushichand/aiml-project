@@ -1,5 +1,5 @@
 import React, { type ErrorInfo, type ReactNode } from "react"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 
 type RouteErrorBoundaryProps = {
   children: ReactNode
@@ -22,6 +22,31 @@ type RouteErrorBoundaryState = {
 
 const DEFAULT_CHAT_PATH = "/"
 const DEFAULT_SETTINGS_PATH = "/settings"
+export const ROUTE_ERROR_FIXTURE_QUERY_KEY = "__forceRouteError"
+
+const ForcedRouteErrorProbe: React.FC<{ routeId: string }> = ({ routeId }) => {
+  throw new Error(`Forced route boundary error for ${routeId}`)
+}
+
+function shouldForceRouteError(search: string, routeId: string): boolean {
+  if (process.env.NODE_ENV === "production") {
+    return false
+  }
+
+  if (!search) {
+    return false
+  }
+
+  const params = new URLSearchParams(search)
+  const forceValue = params.get(ROUTE_ERROR_FIXTURE_QUERY_KEY)?.trim().toLowerCase()
+
+  if (!forceValue) {
+    return false
+  }
+
+  const normalizedRouteId = routeId.trim().toLowerCase()
+  return forceValue === "1" || forceValue === "all" || forceValue === normalizedRouteId
+}
 
 class RouteErrorBoundaryInner extends React.Component<
   RouteErrorBoundaryInnerProps,
@@ -144,6 +169,11 @@ export const RouteErrorBoundary: React.FC<RouteErrorBoundaryProps> = ({
   ...props
 }) => {
   const navigate = useNavigate()
+  const location = useLocation()
+  const forceError = React.useMemo(
+    () => shouldForceRouteError(location.search, props.routeId),
+    [location.search, props.routeId]
+  )
   const onNavigate = React.useCallback(
     (path: string) => {
       try {
@@ -163,7 +193,9 @@ export const RouteErrorBoundary: React.FC<RouteErrorBoundaryProps> = ({
       chatPath={chatPath}
       settingsPath={settingsPath}
       onNavigate={onNavigate}
-    />
+    >
+      {forceError ? <ForcedRouteErrorProbe routeId={props.routeId} /> : props.children}
+    </RouteErrorBoundaryInner>
   )
 }
 

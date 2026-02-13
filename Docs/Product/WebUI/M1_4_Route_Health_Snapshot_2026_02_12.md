@@ -1,13 +1,13 @@
 # M1.4 Route Health Snapshot - 2026-02-12
 
-Status: Updated Baseline (Runtime Overlay Guard + Full Smoke Parity + Key-Nav/Wayfinding Stable + Week 2 Controlled Alias Rollup)  
+Status: Updated Baseline (Runtime Overlay Guard + Full Smoke Parity + Key-Nav/Wayfinding Stable + Week 2 Controlled Alias Rollup + Week 3 Passive Natural Sample)  
 Owner: WebUI  
 Roadmap Link: `Docs/Product/WebUI/WebUI_UX_Strategic_Roadmap_2026_02.md`  
 Execution Plan Link: `Docs/Product/WebUI/M1_Navigation_IA_Execution_Plan_2026_02.md`
 
 ## 1) Snapshot Summary
 
-This snapshot now includes the February 13, 2026 stabilization reruns that closed the key-nav/wayfinding validation loop, re-established full-smoke parity after route-shell wayfinding updates, and added a controlled non-zero Week 2 alias-rollup capture.
+This snapshot now includes the February 13, 2026 stabilization reruns that closed the key-nav/wayfinding validation loop, re-established full-smoke parity after route-shell wayfinding updates, added a controlled non-zero Week 2 alias-rollup capture, and added the first passive Week 3 natural-sample capture.
 
 ## 2) Baseline Metrics
 
@@ -64,6 +64,21 @@ Smoke execution (chronological):
 7. Full smoke follow-up rerun after Week 2 capture:
    - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts --reporter=line`
    - Outcome: `150 passed` (1.6m)
+8. M1.2 closeout focused rerun (key-nav + wayfinding):
+   - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Smoke Tests - (Key Navigation Targets|Wayfinding)" --reporter=line`
+   - Outcome: `10 passed` (13.4s)
+9. M1.2 closeout full smoke rerun:
+   - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts --reporter=line`
+   - Outcome: `150 passed` (1.8m)
+10. Week 3 passive natural alias rollup capture:
+   - Command: `bunx playwright test e2e/smoke/alias-rollup-natural-capture.spec.ts --reporter=line`
+   - Outcome: `1 passed` (2.3s), artifact updated at `Docs/Product/WebUI/M1_4_Alias_Rollup_Week3_Natural_2026_02_13.json`
+11. Expanded non-core forced-error route-boundary slice:
+   - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Smoke Tests - Route Error Boundaries" --reporter=line`
+   - Outcome: `15 passed` (22.4s)
+12. Combined key-nav + wayfinding + expanded route-boundary rerun:
+   - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Smoke Tests - (Key Navigation Targets|Wayfinding|Route Error Boundaries)" --reporter=line`
+   - Outcome: `25 passed` (30.5s)
 
 Wayfinding alignment/remediation captured in this iteration:
 
@@ -84,7 +99,7 @@ Wayfinding alignment/remediation captured in this iteration:
 
 ## 4) Known Gaps
 
-- Production-like weekly alias-usage trend data is still not available; Week 2 now has a controlled non-zero sample, but natural traffic is still needed for deprecation decisions.
+- Natural-sample telemetry has now been captured, but it remains zero in passive capture context; non-zero natural traffic is still needed to execute alias retirements with confidence.
 - Full smoke is passing, but high-volume console warnings (not failing assertions) still indicate backend throttling/noise on some pages.
 
 ## 5) Week 1 Alias Rollup Baseline (2026-02-13)
@@ -139,7 +154,57 @@ Interpretation:
 - This is the first non-zero Week 2 telemetry snapshot and confirms alias instrumentation is recording route-source and destination distribution.
 - Dev-mode duplicate redirect recording was observed (`2x` multiplier), so normalized estimates should be used for apples-to-apples trend comparisons until capture environment is stabilized.
 
-## 7) Next Snapshot Inputs
+## 7) Week 3 Passive Natural Alias Rollup Capture (2026-02-13)
+
+Capture command:
+
+- `bunx playwright test e2e/smoke/alias-rollup-natural-capture.spec.ts --reporter=line` (executed from `apps/tldw-frontend`)
+
+Artifact:
+
+- `Docs/Product/WebUI/M1_4_Alias_Rollup_Week3_Natural_2026_02_13.json`
+
+Capture timestamp:
+
+- `2026-02-13T06:34:29.436Z` (UTC)
+
+Rollup result:
+
+| Field | Value |
+|---|---|
+| `total_redirects` | `0` |
+| `last_event_at` | `null` |
+| `top_alias_sources` | `[]` |
+| `top_destinations` | `[]` |
+
+Interpretation:
+
+- This is the first passive natural-sample capture and it confirms no observable alias traffic in this isolated capture context.
+- Controlled-sample telemetry remains the primary signal for deprecation prioritization until passive captures produce non-zero traffic.
+
+## 8) Week-over-Week Alias Comparison (Baseline -> Controlled -> Passive Natural)
+
+| Sample | Type | Total Redirects (raw) | Normalized Estimate | Top Alias Source | Top Destination |
+|---|---|---|---|---|---|
+| Week 1 (2026-02-13) | Baseline | `0` | `0` | N/A | N/A |
+| Week 2 (2026-02-13) | Controlled synthetic flows | `28` | `14` (`2x` multiplier) | `/search` (`est: 3`) | `/settings` (`est: 4`) |
+| Week 3 (2026-02-13) | Passive natural sample | `0` | `0` | N/A | N/A |
+
+## 9) Deprecation Candidate Backlog Input (M2+)
+
+Based on Week 1 baseline plus Week 2 controlled telemetry, the following alias families were prioritized for M2+ deprecation workstream planning:
+
+1. Connectors alias family (`/connectors/*` -> `/settings`) for consolidation and retirement sequencing.
+2. Long-tail admin alias family (`/admin/*` except `/admin`) -> `/admin/server`.
+3. Legacy naming aliases (`/profile`, `/privileges`, `/claims-review`, `/reading`, `/audio`) pending threshold confirmation.
+
+Threshold policy used for prioritization:
+
+- Normalized alias usage `< 1` estimated hit/week for two consecutive weekly rollups.
+- No external dependency requiring preservation.
+- Canonical route smoke and recovery UX remain stable.
+
+## 10) Next Snapshot Inputs
 
 For the next weekly snapshot, include:
 
