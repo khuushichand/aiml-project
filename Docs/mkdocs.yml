@@ -248,6 +248,7 @@ nav:
       - RAG & Evaluations:
           - RAG Deployment Guide: User_Guides/RAG_Deployment_Guide.md
           - RAG Production Configuration: User_Guides/RAG_Production_Configuration_Guide.md
+          - RAG Evals Playbook: User_Guides/RAG_Evals_Playbook.md
           - Evaluations User Guide: User_Guides/Evaluations_User_Guide.md
           - Evaluations Deployment Guide: User_Guides/Evaluations_Deployment_Guide.md
           - Evaluations End User Guide: User_Guides/Evaluations_End_User_Guide.md

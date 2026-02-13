@@ -1126,7 +1126,7 @@ export const TldwSettings = () => {
             <Link to="/settings/health">
               <Button>{t('settings:tldw.buttons.health', 'Health')}</Button>
             </Link>
-            <Button type="primary" onClick={testConnection} loading={testingConnection}>{t('settings:tldw.buttons.recheck', 'Recheck')}</Button>
+            <Button type="primary" onClick={() => { void testConnection() }} loading={testingConnection}>{t('settings:tldw.buttons.recheck', 'Recheck')}</Button>
           </Space>
         </div>
         <h2 className="text-base font-semibold mb-4 text-text">{t('settings:tldw.serverConfigTitle', 'tldw Server Configuration')}</h2>
@@ -1324,7 +1324,9 @@ export const TldwSettings = () => {
               </Button>
 
               <Button
-                onClick={testConnection}
+                onClick={() => {
+                  void testConnection()
+                }}
                 loading={testingConnection}
                 icon={
                   connectionStatus === 'success' ? (

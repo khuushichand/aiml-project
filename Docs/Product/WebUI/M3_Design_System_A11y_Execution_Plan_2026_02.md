@@ -14,8 +14,8 @@ Establish enforceable design-token and accessibility baselines for core WebUI jo
 | Milestone | Window | Focus | Status | Exit Criteria |
 |---|---|---|---|---|
 | M3.1 | Feb 13-Feb 20, 2026 | Token inventory + contrast guardrails | Complete | Core token map published, automated contrast guardrail test passing |
-| M3.2 | Feb 20-Mar 3, 2026 | Keyboard/focus path normalization | In Progress | Core workflows pass keyboard/focus QA script and targeted tests |
-| M3.3 | Mar 3-Mar 10, 2026 | Component baseline and release gates | Not Started | Button/input/alert/empty-state baseline published and referenced in release checklist |
+| M3.2 | Feb 20-Mar 3, 2026 | Keyboard/focus path normalization | Complete | Core workflows pass keyboard/focus QA script and targeted tests |
+| M3.3 | Mar 3-Mar 10, 2026 | Component baseline and release gates | In Progress | Button/input/alert/empty-state baseline published and referenced in release checklist |
 
 ## 3) Deliverables
 
@@ -36,17 +36,31 @@ Establish enforceable design-token and accessibility baselines for core WebUI jo
 - Normalized focus-visible classes in high-frequency shell controls:
   - `apps/packages/ui/src/components/Layouts/ChatHeader.tsx`
   - `apps/packages/ui/src/components/Common/ChatSidebar.tsx`
+- Captured full M3.2 desktop/mobile route-matrix evidence set:
+  - `Docs/Product/WebUI/evidence/m3_2_a11y_focus_2026_02_13/`
+- Added focus-visible regression assertions for high-frequency non-shell modal controls:
+  - `apps/packages/ui/src/components/Common/CommandPalette.tsx`
+  - `apps/packages/ui/src/components/Common/__tests__/CommandPalette.shortcuts.test.tsx`
+  - `apps/packages/ui/src/components/Common/__tests__/KeyboardShortcutsModal.focus.test.tsx`
+- Finalized M3.3/M4 non-core theme hard-gate cut-line memo:
+  - `Docs/Product/WebUI/M3_3_NonCore_Theme_Contrast_HardGate_Decision_2026_02.md`
 
 ## 5) Validation Evidence
 
 - `bunx vitest run ../packages/ui/src/themes/__tests__/contrast-baseline.test.ts ../packages/ui/src/components/Layouts/__tests__/ChatHeader.test.tsx ../packages/ui/src/components/Common/ChatSidebar/__tests__/shortcut-active.test.ts`
-  - Outcome: `10 passed`
+  - Outcome: `11 passed`
+- `bunx vitest run ../packages/ui/src/components/Common/__tests__/CommandPalette.shortcuts.test.tsx ../packages/ui/src/components/Common/__tests__/KeyboardShortcutsModal.focus.test.tsx ../packages/ui/src/components/Layouts/__tests__/ChatHeader.test.tsx ../packages/ui/src/themes/__tests__/contrast-baseline.test.ts`
+  - Outcome: `9 passed`
+- `TLDW_E2E_SERVER_URL=127.0.0.1:8000 TLDW_E2E_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Key Navigation|Wayfinding|Route Error Boundaries" --reporter=line`
+  - Outcome: `25 passed` (post-M3 modal-focus regression gate)
+- `TLDW_SERVER_URL=http://127.0.0.1:8000 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/smoke/m3-2-a11y-focus-evidence.spec.ts --reporter=line`
+  - Outcome: `2 passed` (desktop + mobile route-matrix capture)
 
-## 6) Remaining Work for Current Milestone (M3.2)
+## 6) Remaining Work for Current Milestone (M3.3)
 
-1. Execute keyboard/focus walkthrough evidence capture across the full core route matrix (desktop + mobile).
-2. Add targeted focus-visible assertions for remaining high-frequency modal/toolbar entry points.
-3. Draft M3.3 hard-gating recommendation for non-core decorative theme contrast.
+1. Publish component-level token baseline for alerts and empty-state variants.
+2. Expand non-shell focus assertions to selected workspace toolbars beyond modal controls.
+3. Implement non-core decorative theme token remediations required for M4 hard-gate promotion.
 
 ## 7) Risks
 
@@ -55,6 +69,6 @@ Establish enforceable design-token and accessibility baselines for core WebUI jo
 
 ## 8) Next Action Queue
 
-1. Run and archive M3.2 route-matrix evidence set under `Docs/Product/WebUI/evidence/`.
-2. Expand focus-visible assertions for non-shell controls most used in chat and settings workflows.
-3. Finalize M3.3 gating recommendation and backlog cut line.
+1. Draft and publish M3.3 component baseline doc (buttons/inputs/alerts/empty states).
+2. Convert non-core theme advisory failures into an owned remediation checklist by theme/token pair.
+3. Wire M4 all-theme hard-gate promotion tasks into release checklist language.

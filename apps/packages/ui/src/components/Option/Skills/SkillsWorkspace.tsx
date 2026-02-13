@@ -34,7 +34,7 @@ export const SkillsWorkspace: React.FC = () => {
 
   if (capsLoading) {
     return (
-      <PageShell title={t("option:header.skills", { defaultValue: "Skills" })}>
+      <PageShell>
         <Skeleton active />
       </PageShell>
     )
@@ -42,7 +42,7 @@ export const SkillsWorkspace: React.FC = () => {
 
   if (!hasSkills) {
     return (
-      <PageShell title={t("option:header.skills", { defaultValue: "Skills" })}>
+      <PageShell>
         <ConnectFeatureBanner
           title={t("option:skillsEmpty.unavailableTitle", {
             defaultValue: "Skills not available"
@@ -58,7 +58,7 @@ export const SkillsWorkspace: React.FC = () => {
   }
 
   return (
-    <PageShell title={t("option:header.skills", { defaultValue: "Skills" })}>
+    <PageShell>
       <SkillsManager />
     </PageShell>
   )

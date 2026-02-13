@@ -330,7 +330,7 @@ export const LlamacppAdminPage: React.FC = () => {
   )
 
   const numaValue: NumaSelectValue =
-    settings.numa === undefined
+    settings.numa === undefined || settings.numa === false
       ? "off"
       : settings.numa === true
         ? "on"

@@ -216,7 +216,7 @@ eval_data = {{
 }}
 
 req = Request(
-    f"{{BASE_URL}}/api/v1/evals",
+    f"{{BASE_URL}}/api/v1/evaluations",
     data=json.dumps(eval_data).encode("utf-8"),
     headers={{
         "Authorization": f"Bearer {{API_KEY}}",
@@ -232,7 +232,7 @@ print(f"Created evaluation: {{payload['id']}}")"""
 
 def generate_curl_example(api_key: str, base_url: str) -> str:
     """Generate a cURL example with the provided configuration."""
-    return f"""curl -X POST {base_url}/api/v1/evals \\
+    return f"""curl -X POST {base_url}/api/v1/evaluations \\
   -H "Authorization: Bearer {api_key}" \\
   -H "Content-Type: application/json" \\
   -d '{{
@@ -259,7 +259,7 @@ const evalData = {{
     ]
 }};
 
-const response = await fetch(`${{BASE_URL}}/api/v1/evals`, {{
+const response = await fetch(`${{BASE_URL}}/api/v1/evaluations`, {{
     method: 'POST',
     headers: {{
         'Authorization': `Bearer ${{API_KEY}}`,

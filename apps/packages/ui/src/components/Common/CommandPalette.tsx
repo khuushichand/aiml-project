@@ -552,6 +552,8 @@ export function CommandPalette({
   if (typeof document === "undefined") return null
 
   const categories = ["recent", "action", "navigation", "setting"] as const
+  const focusRingClasses =
+    "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
   const categoryLabels: Record<string, string> = {
     action: t("common:commandPalette.categoryActions", "Actions"),
@@ -585,7 +587,10 @@ export function CommandPalette({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t("common:commandPalette.placeholder", "Type a command or search...")}
-            className="flex-1 bg-transparent text-base text-text outline-none placeholder:text-text-subtle"
+            className={cn(
+              "flex-1 rounded-md bg-transparent text-base text-text placeholder:text-text-subtle",
+              focusRingClasses
+            )}
             autoComplete="off"
             autoCorrect="off"
             spellCheck={false}
@@ -632,6 +637,7 @@ export function CommandPalette({
                           data-selected={isSelected}
                           className={cn(
                             "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
+                            focusRingClasses,
                             isSelected
                               ? "bg-primary/10 text-text"
                               : "text-text hover:bg-surface2"

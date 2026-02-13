@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { useMemo } from "react"
 import { useConnectionState } from "@/hooks/useConnectionState"
+import { useConnectionStore } from "@/store/connection"
 import { tldwClient, type ServerChatSummary } from "@/services/tldw/TldwApiClient"
 
 export type ServerChatHistoryItem = ServerChatSummary & {
@@ -18,6 +19,38 @@ type FetchServerChatsPage = (params: {
   chats: ServerChatSummary[]
   total: number
 }>
+
+const getErrorStatusCode = (error: unknown): number | null => {
+  const status = (error as { status?: unknown } | null)?.status
+  if (typeof status === "number" && Number.isFinite(status)) {
+    return status
+  }
+
+  const message = String((error as { message?: unknown } | null)?.message || "")
+  const match = message.match(/\b([45]\d{2})\b/)
+  if (!match) return null
+
+  const parsed = Number(match[1])
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+export const isRecoverableServerChatHistoryError = (error: unknown): boolean => {
+  const status = getErrorStatusCode(error)
+  if (status === 401 || status === 403) {
+    return true
+  }
+
+  const message = String((error as { message?: unknown } | null)?.message || "")
+    .toLowerCase()
+  if (!message) return false
+
+  return (
+    message.includes("invalid api key") ||
+    message.includes("unauthorized") ||
+    message.includes("forbidden") ||
+    message.includes("server not configured")
+  )
+}
 
 export const mapServerChatHistoryItems = (
   chats: ServerChatSummary[]
@@ -88,6 +121,7 @@ export const useServerChatHistory = (
   options?: { enabled?: boolean }
 ) => {
   const { isConnected } = useConnectionState()
+  const checkConnection = useConnectionStore((state) => state.checkOnce)
   const normalizedQuery = searchQuery.trim().toLowerCase()
   const isEnabled = isConnected && (options?.enabled ?? true)
 
@@ -107,6 +141,11 @@ export const useServerChatHistory = (
 
         return mapServerChatHistoryItems(chats)
       } catch (e) {
+        if (isRecoverableServerChatHistoryError(e)) {
+          // Keep sidebar/chat shell usable while connection state catches up.
+          void checkConnection().catch(() => null)
+          return []
+        }
         // eslint-disable-next-line no-console
         console.error(
           "[serverChatHistory] Failed to fetch server chats",
@@ -118,7 +157,8 @@ export const useServerChatHistory = (
     staleTime: 60_000,
     gcTime: 5 * 60_000,
     refetchOnMount: false,
-    retry: 1
+    retry: (failureCount, error) =>
+      !isRecoverableServerChatHistoryError(error) && failureCount < 1
   })
 
   const filteredData = useMemo(

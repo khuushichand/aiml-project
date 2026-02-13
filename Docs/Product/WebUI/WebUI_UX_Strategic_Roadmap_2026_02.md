@@ -124,15 +124,20 @@ Tracking Checklist:
 - [x] Core token baseline and WCAG contrast guardrails published (`Docs/Product/WebUI/M3_1_Design_Token_A11y_Baseline_2026_02.md`, `apps/packages/ui/src/themes/contrast.ts`, `apps/packages/ui/src/themes/__tests__/contrast-baseline.test.ts`).
 - [x] Initial shell control focus-visible normalization completed for header/sidebar controls (`apps/packages/ui/src/components/Layouts/ChatHeader.tsx`, `apps/packages/ui/src/components/Common/ChatSidebar.tsx`).
 - [x] Core-flow keyboard/focus manual QA script published (`Docs/Product/WebUI/M3_2_Core_Flow_A11y_QA_Script_2026_02.md`).
+- [x] Keyboard/focus evidence capture completed for route matrix under `Docs/Product/WebUI/evidence/m3_2_a11y_focus_2026_02_13/`.
+- [x] Non-shell modal focus-visible assertions added for command palette + keyboard shortcuts modal (`apps/packages/ui/src/components/Common/__tests__/CommandPalette.shortcuts.test.tsx`, `apps/packages/ui/src/components/Common/__tests__/KeyboardShortcutsModal.focus.test.tsx`).
+- [x] Non-core decorative themes remediation decision finalized for hard-gate expansion (`Docs/Product/WebUI/M3_3_NonCore_Theme_Contrast_HardGate_Decision_2026_02.md`).
 - [ ] Component-level token coverage expanded for alerts and empty-state variants.
-- [ ] Keyboard/focus evidence capture completed for route matrix under `Docs/Product/WebUI/evidence/`.
-- [ ] Non-core decorative themes remediation decision finalized for hard-gate expansion.
 
 Progress update (February 13, 2026):
 - Added reusable contrast utility and WCAG helpers for semantic tokens (`apps/packages/ui/src/themes/contrast.ts`).
 - Added core-theme contrast baseline tests with AA/non-text checks (`apps/packages/ui/src/themes/__tests__/contrast-baseline.test.ts`).
 - Raised default light theme focus token contrast and propagated to shared CSS variables (`apps/packages/ui/src/themes/presets.ts`, `apps/packages/ui/src/assets/tailwind-shared.css`).
-- Revalidated targeted suites: `10 passed` (`contrast-baseline`, `ChatHeader`, `ChatSidebar` tests).
+- Revalidated targeted suites: `11 passed` (`contrast-baseline`, `ChatHeader`, `ChatSidebar` tests).
+- Added non-shell modal focus contract checks and validation: `9 passed` (`CommandPalette`, `KeyboardShortcutsModal`, `ChatHeader`, `contrast-baseline`).
+- Captured full M3.2 route-matrix keyboard/focus evidence for desktop and mobile: `2 passed` (`e2e/smoke/m3-2-a11y-focus-evidence.spec.ts`), artifacts in `Docs/Product/WebUI/evidence/m3_2_a11y_focus_2026_02_13/`.
+- Finalized non-core theme contrast hard-gate cut line in `Docs/Product/WebUI/M3_3_NonCore_Theme_Contrast_HardGate_Decision_2026_02.md`.
+- Revalidated M1/M2 regression gate after M3 updates: key-nav + wayfinding + route-boundary smoke slice `25 passed`.
 
 Success Metrics:
 - AA issues in core flows reduced sprint-over-sprint.
@@ -197,6 +202,6 @@ Success Metrics:
 
 ## 8) Immediate Next Actions (Week of Feb 16, 2026)
 
-1. Capture M3.2 keyboard/focus evidence for the full route matrix (desktop + mobile) under `Docs/Product/WebUI/evidence/m3_2_a11y_focus_<date>/`.
-2. Extend focus-visible test coverage to additional high-frequency controls and modal entry points.
-3. Propose M3.3 decision memo on non-core theme contrast hard-gating (M3 vs M4 cutoff).
+1. Publish M3.3 component token baseline for alerts and empty-state variants.
+2. Expand focus-visible assertions to selected workspace toolbar controls beyond modal surfaces.
+3. Convert non-core decorative theme advisory findings into M4 remediation tickets aligned to the hard-gate memo.

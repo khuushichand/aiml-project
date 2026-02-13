@@ -1,6 +1,6 @@
 # M3.1 Design Token + Accessibility Baseline (Core Flows)
 
-Status: In Progress  
+Status: Complete  
 Owner: WebUI + Accessibility  
 Date: February 13, 2026  
 Execution Plan: `Docs/Product/WebUI/M3_Design_System_A11y_Execution_Plan_2026_02.md`
@@ -79,7 +79,7 @@ Command:
 Outcome:
 
 - `3 files passed`
-- `10 tests passed`
+- `11 tests passed`
 
 ## 6) Advisory Findings (Non-Core Built-in Themes)
 
@@ -93,10 +93,11 @@ During baseline calibration, additional built-in themes were observed with contr
 Disposition:
 
 - Tracked as M3.3 remediation backlog; core themes are hard-gated now.
+- M3.3/M4 hard-gate cut line finalized in `Docs/Product/WebUI/M3_3_NonCore_Theme_Contrast_HardGate_Decision_2026_02.md`.
 
 ## 7) Exit Criteria for M3.1
 
 - [x] Core token inventory documented.
 - [x] Contrast guardrail utility and tests added.
 - [x] Default theme focus contrast remediated.
-- [ ] Advisory theme remediation plan approved for hard-gating expansion.
+- [x] Advisory theme remediation plan approved for hard-gating expansion.

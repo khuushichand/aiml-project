@@ -624,7 +624,7 @@ export const DigestSchedulesPanel: React.FC = () => {
                       rules={[
                         {
                           validator: async (_, value: number | null | undefined) => {
-                            if (value === null || typeof value === "undefined" || value === "") return
+                            if (value === null || typeof value === "undefined") return
                             const asNumber = Number(value)
                             if (!Number.isFinite(asNumber) || asNumber < 1 || asNumber > 3650) {
                               throw new Error(

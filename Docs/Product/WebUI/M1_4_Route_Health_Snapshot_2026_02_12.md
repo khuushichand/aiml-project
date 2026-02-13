@@ -1,13 +1,13 @@
 # M1.4 Route Health Snapshot - 2026-02-12
 
-Status: Updated Baseline (Runtime Overlay Guard + Full Smoke Parity + Key-Nav/Wayfinding Stable + Week 2 Controlled Alias Rollup + Week 3 Passive Natural Sample)  
+Status: Updated Baseline (Runtime Overlay Guard + Full Smoke Parity + Key-Nav/Wayfinding Stable + Route-Boundary Slice Stable + Week 2 Controlled Alias Rollup + Week 3 Passive Natural Sample)  
 Owner: WebUI  
 Roadmap Link: `Docs/Product/WebUI/WebUI_UX_Strategic_Roadmap_2026_02.md`  
 Execution Plan Link: `Docs/Product/WebUI/M1_Navigation_IA_Execution_Plan_2026_02.md`
 
 ## 1) Snapshot Summary
 
-This snapshot now includes the February 13, 2026 stabilization reruns that closed the key-nav/wayfinding validation loop, re-established full-smoke parity after route-shell wayfinding updates, added a controlled non-zero Week 2 alias-rollup capture, and added the first passive Week 3 natural-sample capture.
+This snapshot now includes the February 13, 2026 stabilization reruns that closed the key-nav/wayfinding validation loop, re-established full-smoke parity after route-shell wayfinding updates, added a controlled non-zero Week 2 alias-rollup capture, added the first passive Week 3 natural-sample capture, and reconfirmed the combined key-nav/wayfinding/route-boundary smoke slice after M3 baseline updates.
 
 ## 2) Baseline Metrics
 
@@ -22,6 +22,7 @@ This snapshot now includes the February 13, 2026 stabilization reruns that close
 | Wayfinding smoke suite section | Added | `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts` |
 | Runtime overlay guard in smoke | Added | `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts` |
 | Key-nav + wayfinding focused smoke status | Passing (10/10) | `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts` |
+| Key-nav + wayfinding + route-boundary smoke status | Passing (25/25) | `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts` |
 | Full smoke status (latest rerun) | Passing (150/150) | `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts` |
 
 ## 3) Verification Evidence (This Iteration)
@@ -79,6 +80,12 @@ Smoke execution (chronological):
 12. Combined key-nav + wayfinding + expanded route-boundary rerun:
    - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Smoke Tests - (Key Navigation Targets|Wayfinding|Route Error Boundaries)" --reporter=line`
    - Outcome: `25 passed` (30.5s)
+13. Post-M3 baseline reconfirmation rerun (same targeted smoke slice):
+   - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Key Navigation|Wayfinding|Route Error Boundaries" --reporter=line`
+   - Outcome: `25 passed` (31.2s)
+14. Post-modal focus-contract update rerun (same targeted smoke slice):
+   - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Key Navigation|Wayfinding|Route Error Boundaries" --reporter=line`
+   - Outcome: `25 passed` (29.5s)
 
 Wayfinding alignment/remediation captured in this iteration:
 

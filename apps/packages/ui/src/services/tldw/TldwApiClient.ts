@@ -4875,11 +4875,16 @@ export class TldwApiClient {
   }
 
   async importSkillFile(file: File): Promise<any> {
-    return await bgUpload<any>({
+    const data = await file.arrayBuffer()
+    return await this.upload<any>({
       path: "/api/v1/skills/import/file" as AllowedPath,
-      fieldName: "file",
-      file,
-      fileName: file.name
+      method: "POST",
+      fileFieldName: "file",
+      file: {
+        name: file.name || "skill-import",
+        type: file.type || "application/octet-stream",
+        data
+      }
     })
   }
 

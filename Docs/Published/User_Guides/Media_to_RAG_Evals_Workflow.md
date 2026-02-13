@@ -278,6 +278,7 @@ print(r.json())
 ---
 
 See also:
-- RAG API Guide: `Docs/Published/API-related/RAG-API-Guide.md`
-- Evaluations API (Unified): `Docs/Published/API-related/Evaluations_API_Unified_Reference.md`
+- RAG Evals Playbook: `Docs/User_Guides/RAG_Evals_Playbook.md`
+- RAG API Guide: `Docs/API-related/RAG-API-Guide.md`
+- Evaluations API (Unified): `Docs/API-related/Evaluations_API_Unified_Reference.md`
 - RAG Deployment/Production guides under User Guides

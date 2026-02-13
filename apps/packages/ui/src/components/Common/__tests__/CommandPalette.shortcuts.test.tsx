@@ -131,4 +131,35 @@ describe("CommandPalette shortcut hints", () => {
     const switchModel = screen.getByRole("option", { name: /Switch Model/i })
     expect(switchModel.querySelector("kbd")).toBeNull()
   })
+
+  it("applies focus-visible ring classes to modal input and command options", async () => {
+    render(
+      <MemoryRouter>
+        <CommandPalette
+          onNewChat={vi.fn()}
+          onToggleRag={vi.fn()}
+          onToggleWebSearch={vi.fn()}
+          onIngestPage={vi.fn()}
+          onSwitchModel={vi.fn()}
+          onToggleSidebar={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    window.dispatchEvent(new CustomEvent("tldw:open-command-palette"))
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument()
+
+    const searchInput = screen.getByPlaceholderText(/Type a command or search/i)
+    expect(searchInput.className).toContain("focus-visible:ring-2")
+    expect(searchInput.className).toContain("focus-visible:ring-focus")
+    expect(searchInput.className).toContain("focus-visible:ring-offset-2")
+    expect(searchInput.className).toContain("focus-visible:ring-offset-bg")
+
+    const newChat = screen.getByRole("option", { name: /New Chat/i })
+    expect(newChat.className).toContain("focus-visible:ring-2")
+    expect(newChat.className).toContain("focus-visible:ring-focus")
+    expect(newChat.className).toContain("focus-visible:ring-offset-2")
+    expect(newChat.className).toContain("focus-visible:ring-offset-bg")
+  })
 })

@@ -82,4 +82,24 @@ describe("ChatHeader shortcut toggle", () => {
       "true"
     )
   })
+
+  it("applies focus-visible ring classes to key header controls", () => {
+    const props = createProps()
+    render(<ChatHeader {...props} />)
+
+    const controls = [
+      screen.getByRole("button", { name: "Collapse sidebar" }),
+      screen.getByRole("button", { name: "Show shortcuts" }),
+      screen.getByRole("button", { name: "New chat" }),
+      screen.getByRole("button", { name: "Open settings" }),
+      screen.getByRole("button", { name: "Show keyboard shortcuts" })
+    ]
+
+    for (const control of controls) {
+      expect(control.className).toContain("focus-visible:ring-2")
+      expect(control.className).toContain("focus-visible:ring-focus")
+      expect(control.className).toContain("focus-visible:ring-offset-2")
+      expect(control.className).toContain("focus-visible:ring-offset-bg")
+    }
+  })
 })

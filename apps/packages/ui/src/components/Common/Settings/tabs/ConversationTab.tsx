@@ -763,11 +763,9 @@ export function ConversationTab({
     const normalized = normalizeDirectedCharacterId(value)
     await updateSettings({
       directedCharacterId:
-        normalized === null
-          ? null
-          : /^\d+$/.test(normalized)
-            ? Number.parseInt(normalized, 10)
-            : normalized
+        normalized !== null && /^\d+$/.test(normalized)
+          ? Number.parseInt(normalized, 10)
+          : null
     })
   }
   const persistCharacterMemoryNote = async (

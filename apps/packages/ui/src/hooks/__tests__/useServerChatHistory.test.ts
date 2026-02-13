@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   fetchAllServerChatPages,
   filterServerChatHistoryItems,
+  isRecoverableServerChatHistoryError,
   mapServerChatHistoryItems
 } from "@/hooks/useServerChatHistory"
 import type { ServerChatSummary } from "@/services/tldw/TldwApiClient"
@@ -77,5 +78,45 @@ describe("filterServerChatHistoryItems", () => {
     expect(filterServerChatHistoryItems(mapped, "in-progress").map((item) => item.id)).toEqual(
       ["chat-2"]
     )
+  })
+})
+
+describe("isRecoverableServerChatHistoryError", () => {
+  it("returns true for auth status errors", () => {
+    expect(
+      isRecoverableServerChatHistoryError({
+        message: "Invalid API key (GET /api/v1/chats/)",
+        status: 401
+      })
+    ).toBe(true)
+
+    expect(
+      isRecoverableServerChatHistoryError({
+        message: "Forbidden (GET /api/v1/chats/)",
+        status: 403
+      })
+    ).toBe(true)
+  })
+
+  it("returns true for auth/config messages without explicit status", () => {
+    expect(
+      isRecoverableServerChatHistoryError(
+        new Error("server not configured (GET /api/v1/chats/)")
+      )
+    ).toBe(true)
+
+    expect(
+      isRecoverableServerChatHistoryError(
+        new Error("Unauthorized (GET /api/v1/chats/)")
+      )
+    ).toBe(true)
+  })
+
+  it("returns false for non-auth server failures", () => {
+    expect(
+      isRecoverableServerChatHistoryError(
+        new Error("Internal server error (GET /api/v1/chats/)")
+      )
+    ).toBe(false)
   })
 })
