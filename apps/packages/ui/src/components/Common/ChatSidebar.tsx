@@ -31,6 +31,7 @@ import {
   normalizeSidebarShortcutSelection,
   type SidebarShortcutAction
 } from "./ChatSidebar/shortcut-actions"
+import { isSidebarShortcutRouteActive } from "./ChatSidebar/shortcut-active"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
 import { NotesDockButton } from "@/components/Common/NotesDock"
 import { ModeToggle } from "@/components/Sidepanel/Chat/ModeToggle"
@@ -104,24 +105,49 @@ export function ChatSidebar({
     navigateWithLoading(item.path)
   }
 
-  const renderShortcutIcon = (item: SidebarShortcutAction) => (
-    <Tooltip title={t(item.labelKey, item.labelDefault)} placement="right">
-      <button
-        aria-label={t(item.labelKey, item.labelDefault)}
-        onClick={() => handleShortcutAction(item)}
-        className="p-2 rounded-lg text-text-muted hover:bg-surface hover:text-text"
-      >
-        <item.icon className="size-4" />
-      </button>
-    </Tooltip>
+  const isShortcutRouteActive = React.useCallback(
+    (item: SidebarShortcutAction) =>
+      item.kind === "route" &&
+      isSidebarShortcutRouteActive(item.path, location.pathname),
+    [location.pathname]
   )
 
+  const renderShortcutIcon = (item: SidebarShortcutAction) => {
+    const isActive = isShortcutRouteActive(item)
+    return (
+      <Tooltip title={t(item.labelKey, item.labelDefault)} placement="right">
+        <button
+          aria-label={t(item.labelKey, item.labelDefault)}
+          aria-current={isActive ? "page" : undefined}
+          onClick={() => handleShortcutAction(item)}
+          data-testid={`chat-sidebar-shortcut-${item.id}`}
+          className={cn(
+            "p-2 rounded-lg",
+            isActive
+              ? "border border-border bg-surface text-text"
+              : "text-text-muted hover:bg-surface hover:text-text"
+          )}
+        >
+          <item.icon className="size-4" />
+        </button>
+      </Tooltip>
+    )
+  }
+
   const renderSidebarShortcut = (item: SidebarShortcutAction) => {
+    const isActive = isShortcutRouteActive(item)
     return (
       <button
         key={item.id}
         onClick={() => handleShortcutAction(item)}
-        className="flex items-center gap-2 w-full px-2 py-2 rounded text-sm text-text-muted hover:bg-surface hover:text-text"
+        aria-current={isActive ? "page" : undefined}
+        data-testid={`chat-sidebar-shortcut-${item.id}`}
+        className={cn(
+          "flex items-center gap-2 w-full px-2 py-2 rounded text-sm",
+          isActive
+            ? "border border-border bg-surface text-text"
+            : "text-text-muted hover:bg-surface hover:text-text"
+        )}
       >
         <item.icon className="size-4" />
         <span>{t(item.labelKey, item.labelDefault)}</span>
@@ -180,6 +206,10 @@ export function ChatSidebar({
       label: `${t("common:chatSidebar.tabs.folders", "Folders")}${folderConversationCount > 0 ? ` (${folderConversationCount})` : ""}`
     }
   ]
+  const settingsShortcutActive = isSidebarShortcutRouteActive(
+    "/settings",
+    location.pathname
+  )
 
   // Collapsed view - just icons
   if (collapsed) {
@@ -254,8 +284,15 @@ export function ChatSidebar({
         >
           <button
             aria-label={t("common:chatSidebar.settings", "Settings")}
+            aria-current={settingsShortcutActive ? "page" : undefined}
+            data-testid="chat-sidebar-settings"
             onClick={() => navigate("/settings")}
-            className="p-2 rounded-lg text-text-muted hover:bg-surface hover:text-text"
+            className={cn(
+              "p-2 rounded-lg",
+              settingsShortcutActive
+                ? "border border-border bg-surface text-text"
+                : "text-text-muted hover:bg-surface hover:text-text"
+            )}
           >
             <Settings className="size-4" />
           </button>
@@ -425,7 +462,14 @@ export function ChatSidebar({
       <div className="border-t border-border px-3 py-2">
         <button
           onClick={() => navigate("/settings")}
-          className="flex items-center gap-2 w-full px-2 py-2 rounded text-sm text-text-muted hover:bg-surface hover:text-text"
+          aria-current={settingsShortcutActive ? "page" : undefined}
+          data-testid="chat-sidebar-settings"
+          className={cn(
+            "flex items-center gap-2 w-full px-2 py-2 rounded text-sm",
+            settingsShortcutActive
+              ? "border border-border bg-surface text-text"
+              : "text-text-muted hover:bg-surface hover:text-text"
+          )}
         >
           <Settings className="size-4" />
           <span>{t("common:chatSidebar.settings", "Settings")}</span>

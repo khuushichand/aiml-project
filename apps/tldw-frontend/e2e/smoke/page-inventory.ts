@@ -34,7 +34,7 @@ export const PAGES: PageEntry[] = [
   // ═══════════════════════════════════════════════════════════════════════════
   // Chat
   // ═══════════════════════════════════════════════════════════════════════════
-  { path: "/chat", name: "Chat", category: "chat", expectedTestId: "chat-header" },
+  { path: "/chat", name: "Chat", category: "chat", expectedTestId: "chat-input" },
   { path: "/chat/agent", name: "Agent Chat", category: "chat" },
   { path: "/persona", name: "Persona Chat", category: "chat" },
   { path: "/chat/settings", name: "Chat Settings (Page)", category: "chat" },

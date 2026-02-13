@@ -1,5 +1,5 @@
-import { RouteRedirect } from "@web/components/navigation/RouteRedirect"
+import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
 
 export default function SearchRedirectPage() {
-  return <RouteRedirect to="/knowledge" />
+  return <RouteRedirect to="/knowledge" />;
 }

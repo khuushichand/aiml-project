@@ -1,5 +1,5 @@
-import { RouteRedirect } from "@web/components/navigation/RouteRedirect"
+import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
 
 export default function ReadingRedirectPage() {
-  return <RouteRedirect to="/collections" />
+  return <RouteRedirect to="/collections" />;
 }

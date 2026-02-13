@@ -1,6 +1,13 @@
 import React from "react"
 import type { ErrorInfo, ReactNode } from "react"
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom"
+import {
+  Link,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate
+} from "react-router-dom"
 import { useTheme } from "~/hooks/useTheme"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { useAutoButtonTitles } from "@/hooks/useAutoButtonTitles"
@@ -39,6 +46,79 @@ const ROUTE_FALLBACKS: Record<
     label: "Loading chat...",
     description: "Preparing your assistant"
   }
+}
+
+const RouteNotFoundState = ({
+  routeLabel,
+  kind
+}: {
+  routeLabel: string
+  kind: RouteKind
+}) => {
+  const navigate = useNavigate()
+
+  return (
+    <div className="flex min-h-[70vh] w-full items-center justify-center px-6 py-12">
+      <div
+        className="w-full max-w-xl rounded-lg border border-border bg-surface p-6 shadow-sm"
+        data-testid="not-found-recovery-panel"
+      >
+        <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">404</p>
+        <h1 className="mt-2 text-2xl font-semibold text-text">
+          We could not find that route
+        </h1>
+        <p className="mt-3 text-sm text-text-muted">
+          The link may be out of date, moved, or typed incorrectly. Choose a route below to
+          continue.
+        </p>
+        <p className="mt-2 text-xs text-text-muted">
+          Route not found: <code className="rounded bg-surface2 px-1 py-0.5">{routeLabel}</code>
+        </p>
+        <div className="mt-5 flex flex-wrap items-center gap-2">
+          <Link
+            to="/"
+            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-white hover:bg-primaryStrong"
+            data-testid="not-found-go-chat"
+          >
+            Go to Chat
+          </Link>
+          {kind === "options" && (
+            <Link
+              to="/knowledge"
+              className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
+              data-testid="not-found-open-knowledge"
+            >
+              Open Knowledge
+            </Link>
+          )}
+          {kind === "options" && (
+            <Link
+              to="/media"
+              className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
+              data-testid="not-found-open-media"
+            >
+              Open Media
+            </Link>
+          )}
+          <Link
+            to="/settings"
+            className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
+            data-testid="not-found-open-settings"
+          >
+            Open Settings
+          </Link>
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="rounded-md border border-border px-3 py-1.5 text-sm text-text-muted hover:bg-surface2"
+            data-testid="not-found-go-back"
+          >
+            Go back
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 type RouteErrorBoundaryProps = {
@@ -250,6 +330,7 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
   const { label, description } = ROUTE_FALLBACKS[kind]
   const routes = kind === "options" ? optionRoutes : sidepanelRoutes
   const visibleRoutes = getRoutesForTarget(routes, platformConfig.target)
+  const attemptedRoute = `${location.pathname}${location.search}${location.hash}` || "/"
   const handleOptionsReset = () => {
     if (typeof window !== "undefined") {
       window.location.reload()
@@ -275,6 +356,10 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
           />
         )
       })}
+      <Route
+        path="*"
+        element={<RouteNotFoundState routeLabel={attemptedRoute} kind={kind} />}
+      />
     </Routes>
   )
 

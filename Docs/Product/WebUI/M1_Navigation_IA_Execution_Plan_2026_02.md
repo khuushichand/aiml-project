@@ -5,7 +5,7 @@ Owner: WebUI + Product
 Contributors: QA, Accessibility  
 Roadmap Parent: `Docs/Product/WebUI/WebUI_UX_Strategic_Roadmap_2026_02.md`  
 Date Window: February 13, 2026-March 6, 2026  
-Last Updated: February 12, 2026
+Last Updated: February 13, 2026
 
 ## Objective
 
@@ -111,7 +111,9 @@ Acceptance criteria:
 
 Primary files:
 - `apps/packages/ui/src/components/Layouts/SettingsOptionLayout.tsx`
+- `apps/packages/ui/src/components/Common/ChatSidebar.tsx`
 - `apps/packages/ui/src/components/Layouts/Header.tsx`
+- `apps/packages/ui/src/routes/app-route.tsx`
 - `apps/tldw-frontend/components/navigation/RouteRedirect.tsx`
 - `apps/tldw-frontend/pages/404.tsx`
 - `apps/packages/ui/src/components/Layouts/Layout.tsx` (shell-level consistency)
@@ -126,15 +128,19 @@ Tracking checklist:
 - [x] Verify active-route indication in settings nav and app shell (`apps/packages/ui/src/components/Layouts/SettingsOptionLayout.tsx` with nested-route matching + section indicator).
 - [x] Ensure redirect interstitial copy is action-oriented and consistent (`apps/tldw-frontend/components/navigation/RouteRedirect.tsx`).
 - [x] Ensure 404 recovery provides primary and secondary pathways (`apps/tldw-frontend/pages/404.tsx`).
+- [x] Add shell-level unknown-route recovery fallback to avoid header-only blank states (`apps/packages/ui/src/routes/app-route.tsx`, `apps/tldw-frontend/extension/routes/app-route.tsx`).
 - [x] Validate focus order and keyboard operation for nav/redirect/recovery controls (`apps/packages/ui/src/components/Layouts/__tests__/settings-layout-focus-order.test.tsx`, `apps/tldw-frontend/__tests__/navigation/route-redirect-component.test.tsx`, `apps/tldw-frontend/__tests__/navigation/not-found-page.test.tsx`).
 - [x] Add route-wayfinding scenarios to smoke and manual QA scripts (`apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`, `Docs/Product/WebUI/M1_3_Wayfinding_Manual_QA_Script_2026_02.md`).
 
-Progress update (February 12, 2026):
+Progress update (February 13, 2026):
 - Added explicit active-route matching for nested settings paths, visible current-section indicator, and stronger active-state affordances in settings navigation.
 - Aligned redirect and 404 recovery copy/actions around consistent "route moved/not found -> continue with Chat/Settings/primary target" language.
 - Normalized alias redirect pages to use a single shared redirect language pattern through `RouteRedirect` defaults.
+- Added shell-level catch-all recovery panel to replace unmatched-route blank content with actionable fallback controls.
+- Added chat-sidebar shortcut active-route affordances (including settings and nested-route handling) for faster orientation outside settings pages.
 - Added keyboard and focus-order tests for settings nav, route redirect controls, and 404 recovery actions.
 - Added dedicated wayfinding smoke scenarios (active settings location, alias redirect destination check, 404 control order) and a manual QA script for evidence collection; scenarios are currently skip-guarded when runtime route parity is unavailable.
+- Resolved direct settings-route parity by fixing a cyclic import initialization hazard (`createSettingsRoute` now exported as a hoisted function), restoring `/settings*` content rendering in focused smoke verification.
 
 Acceptance criteria:
 - Users can identify current location within one interaction on key routes.
@@ -159,8 +165,22 @@ Tracking checklist:
 - [x] Implement local route-alias telemetry store/helper (`apps/packages/ui/src/utils/route-alias-telemetry.ts`).
 - [x] Instrument `RouteRedirect` alias transitions (`apps/tldw-frontend/components/navigation/RouteRedirect.tsx`).
 - [x] Add tests for telemetry recording and route normalization logic (`apps/packages/ui/src/utils/__tests__/route-alias-telemetry.test.ts`, `apps/tldw-frontend/__tests__/navigation/route-redirect-component.test.tsx`).
+- [x] Add weekly rollup helper for alias-source/destination trends (`apps/packages/ui/src/utils/route-alias-telemetry.ts`, `apps/packages/ui/src/utils/__tests__/route-alias-telemetry.test.ts`).
 - [x] Expand smoke checks to assert key nav targets are reachable (`apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`).
+- [x] Add runtime-overlay regression guard to smoke for syntax/runtime crash signatures (`apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`).
+- [x] Capture first weekly alias telemetry rollup (`getRouteAliasTelemetryRollup({ topN: 10 })`) and append to M1.4 snapshot (`Docs/Product/WebUI/M1_4_Route_Health_Snapshot_2026_02_12.md`).
+- [x] Capture controlled non-zero Week 2 alias telemetry sample via Playwright and persist JSON artifact (`apps/tldw-frontend/e2e/smoke/alias-rollup-capture.spec.ts`, `Docs/Product/WebUI/M1_4_Alias_Rollup_Week2_Controlled_2026_02_13.json`).
 - [x] Publish weekly route health snapshot (`Docs/Product/WebUI/M1_4_Route_Health_Snapshot_2026_02_12.md`).
+
+Progress update (February 13, 2026):
+- Added M2-prep route-level boundary contract and applied shared route boundaries across key nav targets (`chat`, `media`, `knowledge`, `notes`, `prompts`, `settings`), then reran focused key-nav + wayfinding smoke (`10 passed`).
+- Updated smoke inventory `/chat` readiness selector from `chat-header` to `chat-input` to match current shell implementation.
+- Reran full smoke suite after wayfinding and selector alignment: `150 passed`.
+- Added runtime-overlay assertions in smoke to fail on Next runtime crash signatures (`Runtime Error`, `Runtime SyntaxError`, `Invalid or unexpected token`, React-child object runtime error), then revalidated focused (`10/10`) and full (`150/150`) suites.
+- Captured first weekly alias rollup (`2026-02-13T03:29:47.844Z`) using `getRouteAliasTelemetryRollup({ topN: 10 })`; baseline currently reports `0` redirects.
+- Added controlled alias-rollup capture smoke spec and executed it (`bunx playwright test e2e/smoke/alias-rollup-capture.spec.ts --reporter=line`): non-zero sample captured with raw `28` redirects and normalized estimate `14` (`2x` dev duplicate multiplier), persisted to `Docs/Product/WebUI/M1_4_Alias_Rollup_Week2_Controlled_2026_02_13.json`.
+- Revalidated focused key-nav + wayfinding smoke after controlled capture setup: `10 passed` (11.3s).
+- Revalidated full smoke after controlled capture setup: `150 passed` (1.6m).
 
 Acceptance criteria:
 - Alias usage is measurable week-over-week.
@@ -174,7 +194,7 @@ Acceptance criteria:
 | Canonical route map | `apps/packages/ui/src/routes/route-registry.tsx`, `apps/tldw-frontend/e2e/smoke/page-inventory.ts` | Single canonical map and coverage parity |
 | Alias route handling | `apps/tldw-frontend/pages/**/*.tsx`, `apps/tldw-frontend/components/navigation/RouteRedirect.tsx` | Explicit alias lifecycle + instrumented redirects |
 | Label harmonization | `apps/packages/ui/src/components/Common/ChatSidebar.tsx`, `apps/packages/ui/src/components/Layouts/header-shortcut-items.ts`, `apps/packages/ui/src/components/Common/CommandPalette.tsx`, `apps/packages/ui/src/components/Layouts/settings-nav.ts` | Unified navigation terminology |
-| Wayfinding | `apps/packages/ui/src/components/Layouts/SettingsOptionLayout.tsx`, `apps/tldw-frontend/pages/404.tsx` | Consistent "location + recovery" behavior |
+| Wayfinding | `apps/packages/ui/src/components/Layouts/SettingsOptionLayout.tsx`, `apps/packages/ui/src/components/Common/ChatSidebar.tsx`, `apps/packages/ui/src/routes/app-route.tsx`, `apps/tldw-frontend/pages/404.tsx` | Consistent "location + recovery" behavior |
 | Validation | `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`, `apps/tldw-frontend/__tests__/navigation/route-redirect.test.ts` | Passing nav regression checks |
 
 ## Metrics and Targets
@@ -192,8 +212,8 @@ Acceptance criteria:
 |---|---|---|---|---|---|
 | Week 1 | Feb 13, 2026 | M1.1 | Canonical route/alias inventory draft | Canonical route inventory and alias matrix published | Complete |
 | Week 2 | Feb 20, 2026 | M1.2 | Label matrix and first normalization pass | Label triage published and first normalization pass implemented | In Progress |
-| Week 3 | Feb 27, 2026 | M1.3 | Wayfinding and recovery pattern alignment | Active-route clarity + redirect/404 copy alignment + keyboard/focus validation + wayfinding smoke/manual QA scenarios added | In Progress |
-| Week 4 | Mar 6, 2026 | M1.4 | Telemetry + verification + closeout report | Telemetry helper + redirect instrumentation + tests + key-nav smoke coverage + first route health snapshot; smoke run baseline 140 passed / 7 failed (key-nav 404s + chat marker) | In Progress |
+| Week 3 | Feb 27, 2026 | M1.3 | Wayfinding and recovery pattern alignment | Active-route clarity + redirect/404 copy alignment + keyboard/focus validation + shell-level unknown-route fallback + sidebar active-route affordances added | In Progress |
+| Week 4 | Mar 6, 2026 | M1.4 | Telemetry + verification + closeout report | Telemetry helper + redirect instrumentation + runtime-overlay smoke guard landed; focused key-nav/wayfinding reruns passing (10/10), full smoke reruns passing (150/150), and controlled Week 2 alias capture recorded (raw 28, normalized 14) | In Progress |
 
 ## Dependencies and Risks
 

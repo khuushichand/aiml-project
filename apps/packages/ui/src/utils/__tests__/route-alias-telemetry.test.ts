@@ -92,4 +92,40 @@ describe("route-alias-telemetry", () => {
     expect(state.alias_hits["/legacy-219"]).toBe(1)
     expect(state.destination_hits["/knowledge"]).toBe(220)
   })
+
+  it("builds weekly rollup rows for top aliases and destinations", async () => {
+    const telemetry = await import("@/utils/route-alias-telemetry")
+
+    await telemetry.trackRouteAliasRedirect({
+      sourcePath: "/search?q=rag",
+      destinationPath: "/knowledge?q=rag",
+      preserveParams: true
+    })
+    await telemetry.trackRouteAliasRedirect({
+      sourcePath: "/search?q=ml",
+      destinationPath: "/knowledge?q=ml",
+      preserveParams: true
+    })
+    await telemetry.trackRouteAliasRedirect({
+      sourcePath: "/profile",
+      destinationPath: "/settings",
+      preserveParams: false
+    })
+    await telemetry.trackRouteAliasRedirect({
+      sourcePath: "/claims-review",
+      destinationPath: "/content-review",
+      preserveParams: false
+    })
+
+    const rollup = await telemetry.getRouteAliasTelemetryRollup({ topN: 2 })
+    expect(rollup.total_redirects).toBe(4)
+    expect(rollup.top_alias_sources).toEqual([
+      { path: "/search", hits: 2, share: 0.5 },
+      { path: "/claims-review", hits: 1, share: 0.25 }
+    ])
+    expect(rollup.top_destinations).toEqual([
+      { path: "/knowledge", hits: 2, share: 0.5 },
+      { path: "/content-review", hits: 1, share: 0.25 }
+    ])
+  })
 })

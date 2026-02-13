@@ -1,91 +1,82 @@
-import React from "react"
-import { render, screen } from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
-import { beforeEach, describe, expect, it, vi } from "vitest"
-import NotFoundPage from "@web/pages/404"
+import React from 'react';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import NotFoundPage from '@web/pages/404';
 
-const mockPush = vi.fn()
-const mockBack = vi.fn()
+const mockPush = vi.fn();
+const mockBack = vi.fn();
 const mockRouter = {
-  asPath: "/missing-route?foo=bar",
+  asPath: '/missing-route?foo=bar',
   push: mockPush,
-  back: mockBack
-}
+  back: mockBack,
+};
 
-vi.mock("next/router", () => ({
-  useRouter: () => mockRouter
-}))
+vi.mock('next/router', () => ({
+  useRouter: () => mockRouter,
+}));
 
-vi.mock("next/link", () => ({
-  default: ({
-    href,
-    children,
-    ...rest
-  }: {
-    href: string
-    children: React.ReactNode
-  }) => (
+vi.mock('next/link', () => ({
+  default: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) => (
     <a href={href} {...rest}>
       {children}
     </a>
-  )
-}))
+  ),
+}));
 
-describe("404 recovery controls", () => {
+describe('404 recovery controls', () => {
   beforeEach(() => {
-    mockPush.mockReset()
-    mockBack.mockReset()
-    mockRouter.asPath = "/missing-route?foo=bar"
-  })
+    mockPush.mockReset();
+    mockBack.mockReset();
+    mockRouter.asPath = '/missing-route?foo=bar';
+  });
 
-  it("shows route context and provides recovery destinations", () => {
-    render(<NotFoundPage />)
+  it('shows route context and provides recovery destinations', () => {
+    render(<NotFoundPage />);
 
-    expect(
-      screen.getByRole("heading", { name: "We could not find that route" })
-    ).toBeVisible()
-    expect(screen.getByText("/missing-route?foo=bar")).toBeVisible()
-    expect(screen.getByTestId("not-found-go-chat")).toBeVisible()
-    expect(screen.getByTestId("not-found-open-knowledge")).toBeVisible()
-    expect(screen.getByTestId("not-found-open-media")).toBeVisible()
-    expect(screen.getByTestId("not-found-open-settings")).toBeVisible()
-    expect(screen.getByTestId("not-found-go-back")).toBeVisible()
-  })
+    expect(screen.getByRole('heading', { name: 'We could not find that route' })).toBeVisible();
+    expect(screen.getByText('/missing-route?foo=bar')).toBeVisible();
+    expect(screen.getByTestId('not-found-go-chat')).toBeVisible();
+    expect(screen.getByTestId('not-found-open-knowledge')).toBeVisible();
+    expect(screen.getByTestId('not-found-open-media')).toBeVisible();
+    expect(screen.getByTestId('not-found-open-settings')).toBeVisible();
+    expect(screen.getByTestId('not-found-go-back')).toBeVisible();
+  });
 
-  it("supports keyboard traversal across recovery actions", async () => {
-    const user = userEvent.setup()
-    render(<NotFoundPage />)
+  it('supports keyboard traversal across recovery actions', async () => {
+    const user = userEvent.setup();
+    render(<NotFoundPage />);
 
-    const goToChat = screen.getByTestId("not-found-go-chat")
-    const openKnowledge = screen.getByTestId("not-found-open-knowledge")
-    const openMedia = screen.getByTestId("not-found-open-media")
-    const openSettings = screen.getByTestId("not-found-open-settings")
-    const goBack = screen.getByTestId("not-found-go-back")
+    const goToChat = screen.getByTestId('not-found-go-chat');
+    const openKnowledge = screen.getByTestId('not-found-open-knowledge');
+    const openMedia = screen.getByTestId('not-found-open-media');
+    const openSettings = screen.getByTestId('not-found-open-settings');
+    const goBack = screen.getByTestId('not-found-go-back');
 
-    await user.tab()
-    expect(goToChat).toHaveFocus()
+    await user.tab();
+    expect(goToChat).toHaveFocus();
 
-    await user.tab()
-    expect(openKnowledge).toHaveFocus()
+    await user.tab();
+    expect(openKnowledge).toHaveFocus();
 
-    await user.tab()
-    expect(openMedia).toHaveFocus()
+    await user.tab();
+    expect(openMedia).toHaveFocus();
 
-    await user.tab()
-    expect(openSettings).toHaveFocus()
+    await user.tab();
+    expect(openSettings).toHaveFocus();
 
-    await user.tab()
-    expect(goBack).toHaveFocus()
-  })
+    await user.tab();
+    expect(goBack).toHaveFocus();
+  });
 
-  it("triggers primary recovery actions", async () => {
-    const user = userEvent.setup()
-    render(<NotFoundPage />)
+  it('triggers primary recovery actions', async () => {
+    const user = userEvent.setup();
+    render(<NotFoundPage />);
 
-    await user.click(screen.getByTestId("not-found-go-chat"))
-    expect(mockPush).toHaveBeenCalledWith("/")
+    await user.click(screen.getByTestId('not-found-go-chat'));
+    expect(mockPush).toHaveBeenCalledWith('/');
 
-    await user.click(screen.getByTestId("not-found-go-back"))
-    expect(mockBack).toHaveBeenCalledTimes(1)
-  })
-})
+    await user.click(screen.getByTestId('not-found-go-back'));
+    expect(mockBack).toHaveBeenCalledTimes(1);
+  });
+});

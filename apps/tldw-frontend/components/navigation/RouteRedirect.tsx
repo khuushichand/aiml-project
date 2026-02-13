@@ -1,79 +1,77 @@
-import React from "react"
-import Link from "next/link"
-import { useRouter } from "next/router"
-import { trackRouteAliasRedirect } from "@/utils/route-alias-telemetry"
+import React from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/router';
+import { trackRouteAliasRedirect } from '@/utils/route-alias-telemetry';
 
 type RouteRedirectProps = {
-  to: string
-  title?: string
-  description?: string
-  preserveParams?: boolean
-}
+  to: string;
+  title?: string;
+  description?: string;
+  preserveParams?: boolean;
+};
 
 export const resolveRedirectTarget = (
   currentPath: string,
   to: string,
   preserveParams: boolean
 ): string => {
-  if (!preserveParams) return to
-  if (to.includes("?") || to.includes("#")) return to
+  if (!preserveParams) return to;
+  if (to.includes('?') || to.includes('#')) return to;
 
-  const queryIndex = currentPath.indexOf("?")
-  const hashIndex = currentPath.indexOf("#")
-  const suffixStartCandidates = [queryIndex, hashIndex].filter(
-    (index) => index >= 0
-  )
+  const queryIndex = currentPath.indexOf('?');
+  const hashIndex = currentPath.indexOf('#');
+  const suffixStartCandidates = [queryIndex, hashIndex].filter((index) => index >= 0);
 
-  if (suffixStartCandidates.length === 0) return to
+  if (suffixStartCandidates.length === 0) return to;
 
-  const suffixStart = Math.min(...suffixStartCandidates)
-  const suffix = currentPath.slice(suffixStart)
-  return suffix ? `${to}${suffix}` : to
-}
+  const suffixStart = Math.min(...suffixStartCandidates);
+  const suffix = currentPath.slice(suffixStart);
+  return suffix ? `${to}${suffix}` : to;
+};
 
 const toPathLabel = (path: string): string => {
-  const input = String(path || "").trim()
-  if (!input) return "/"
+  const input = String(path || '').trim();
+  if (!input) return '/';
 
   try {
-    const parsed = new URL(input)
-    const combined = `${parsed.pathname}${parsed.search}${parsed.hash}`
-    return combined || "/"
+    const parsed = new URL(input);
+    const combined = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    return combined || '/';
   } catch {
-    return input.startsWith("/") ? input : `/${input}`
+    return input.startsWith('/') ? input : `/${input}`;
   }
-}
+};
 
 export const RouteRedirect: React.FC<RouteRedirectProps> = ({
   to,
-  title = "This route has moved",
-  description = "We are sending you to the updated page.",
-  preserveParams = true
+  title = 'This route has moved',
+  description = 'We are sending you to the updated page.',
+  preserveParams = true,
 }) => {
-  const router = useRouter()
-  const redirectedRef = React.useRef(false)
+  const router = useRouter();
+  const redirectedRef = React.useRef(false);
 
   const destination = React.useMemo(
-    () => resolveRedirectTarget(router.asPath || "", to, preserveParams),
+    () => resolveRedirectTarget(router.asPath || '', to, preserveParams),
     [preserveParams, router.asPath, to]
-  )
+  );
   const sourcePath = React.useMemo(
-    () => toPathLabel(router.asPath || router.pathname || ""),
+    () => toPathLabel(router.asPath || router.pathname || ''),
     [router.asPath, router.pathname]
-  )
+  );
 
   React.useEffect(() => {
-    if (redirectedRef.current) return
-    redirectedRef.current = true
+    if (redirectedRef.current) return;
+    redirectedRef.current = true;
 
     void trackRouteAliasRedirect({
-      sourcePath: router.asPath || router.pathname || "",
+      sourcePath: router.asPath || router.pathname || '',
       destinationPath: destination,
-      preserveParams
-    })
+      preserveParams,
+    });
 
-    void router.replace(destination)
-  }, [destination, preserveParams, router])
+    void router.replace(destination);
+  }, [destination, preserveParams, router]);
 
   return (
     <div className="flex min-h-[60vh] w-full items-center justify-center px-6">
@@ -87,7 +85,7 @@ export const RouteRedirect: React.FC<RouteRedirectProps> = ({
         <h1 className="text-lg font-semibold text-text">{title}</h1>
         <p className="mt-2 text-sm text-text-muted">{description}</p>
         <p className="mt-2 text-xs text-text-muted">
-          Redirecting from <code className="rounded bg-surface2 px-1 py-0.5">{sourcePath}</code> to{" "}
+          Redirecting from <code className="rounded bg-surface2 px-1 py-0.5">{sourcePath}</code> to{' '}
           <code className="rounded bg-surface2 px-1 py-0.5">{toPathLabel(destination)}</code>.
         </p>
         <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
@@ -115,7 +113,7 @@ export const RouteRedirect: React.FC<RouteRedirectProps> = ({
         </div>
       </div>
     </div>
-  )
-}
+  );
+};
 
-export default RouteRedirect
+export default RouteRedirect;

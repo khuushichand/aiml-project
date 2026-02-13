@@ -1,49 +1,50 @@
-import React from "react"
-import { useTranslation } from "react-i18next"
-import { Link, useLocation, useNavigate } from "react-router-dom"
-import { BetaTag } from "../Common/Beta"
-import { XIcon } from "lucide-react"
-import { getSettingsNavGroups, type SettingsNavItem } from "./settings-nav"
+import React from "react";
+import { useTranslation } from "react-i18next";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { BetaTag } from "../Common/Beta";
+import { XIcon } from "lucide-react";
+import { getSettingsNavGroups, type SettingsNavItem } from "./settings-nav";
 import {
   isSettingsNavItemActive,
-  resolveCurrentSettingsNavItem
-} from "./settings-active-route"
-import { isChromeTarget } from "@/config/platform"
-import { isSidepanelSupported, openSidepanel } from "@/utils/sidepanel"
-import { setSetting } from "@/services/settings/registry"
-import { UI_MODE_SETTING } from "@/services/settings/ui-settings"
-import { getSettingsReturnTo } from "@/utils/settings-return"
+  resolveCurrentSettingsNavItem,
+} from "./settings-active-route";
+import { isChromeTarget } from "@/config/platform";
+import { isSidepanelSupported, openSidepanel } from "@/utils/sidepanel";
+import { setSetting } from "@/services/settings/registry";
+import { UI_MODE_SETTING } from "@/services/settings/ui-settings";
+import { getSettingsReturnTo } from "@/utils/settings-return";
 import {
   ACTION_ICON_CLICK_SETTING,
-  CONTEXT_MENU_CLICK_SETTING
-} from "@/services/action"
-import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+  CONTEXT_MENU_CLICK_SETTING,
+} from "@/services/action";
+import { useServerCapabilities } from "@/hooks/useServerCapabilities";
 
 function classNames(...classes: string[]) {
-  return classes.filter(Boolean).join(" ")
+  return classes.filter(Boolean).join(" ");
 }
 
 const shouldHideForBrowser = (item: SettingsNavItem) =>
   // Hide Chrome-specific settings on non-Chrome targets
-  !isChromeTarget && item.to === "/settings/chrome"
+  !isChromeTarget && item.to === "/settings/chrome";
 
 export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
-  const location = useLocation()
-  const navigate = useNavigate()
-  const { t } = useTranslation(["settings", "common"])
-  const { capabilities, loading: capabilitiesLoading } = useServerCapabilities()
-  const sidepanelSupported = isSidepanelSupported()
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { t } = useTranslation(["settings", "common"]);
+  const { capabilities, loading: capabilitiesLoading } =
+    useServerCapabilities();
+  const sidepanelSupported = isSidepanelSupported();
   const settingsNavGroups = React.useMemo(
     () => getSettingsNavGroups(capabilitiesLoading ? undefined : capabilities),
-    [capabilities, capabilitiesLoading]
-  )
+    [capabilities, capabilitiesLoading],
+  );
   const currentNavItem = React.useMemo(() => {
-    return resolveCurrentSettingsNavItem(location.pathname, settingsNavGroups)
-  }, [location.pathname, settingsNavGroups])
+    return resolveCurrentSettingsNavItem(location.pathname, settingsNavGroups);
+  }, [location.pathname, settingsNavGroups]);
 
   const currentBreadcrumbLabel = currentNavItem
     ? t(currentNavItem.labelToken)
-    : null
+    : null;
 
   return (
     <div className="flex min-h-screen  w-full flex-col">
@@ -53,7 +54,10 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
             <aside className="lg:sticky lg:mt-0 mt-14 lg:top-0 z-20 bg-surface border-b border-border lg:border-0 lg:bg-transparent">
               <nav
                 className="w-full overflow-x-auto px-4 py-4 sm:px-6 lg:px-0 lg:py-0 lg:mt-20"
-                aria-label={t("settings:navigation.ariaLabel", "Settings navigation")}
+                aria-label={t(
+                  "settings:navigation.ariaLabel",
+                  "Settings navigation",
+                )}
                 data-testid="settings-navigation"
               >
                 <div className="flex items-center justify-between mb-3">
@@ -61,24 +65,25 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
                     className="text-xs border rounded px-2 py-1 text-text  disabled:opacity-50 disabled:cursor-not-allowed"
                     disabled={!sidepanelSupported}
                     onClick={async () => {
-                      await setSetting(UI_MODE_SETTING, "sidePanel")
-                      await setSetting(ACTION_ICON_CLICK_SETTING, "sidePanel")
-                      await setSetting(CONTEXT_MENU_CLICK_SETTING, "sidePanel")
+                      await setSetting(UI_MODE_SETTING, "sidePanel");
+                      await setSetting(ACTION_ICON_CLICK_SETTING, "sidePanel");
+                      await setSetting(CONTEXT_MENU_CLICK_SETTING, "sidePanel");
                       try {
-                        await openSidepanel()
+                        await openSidepanel();
                       } catch {}
                     }}
-                    title={t("settings:switchToSidebar", "Switch to Sidebar")}>
+                    title={t("settings:switchToSidebar", "Switch to Sidebar")}
+                  >
                     {t("settings:switchToSidebar", "Switch to Sidebar")}
                   </button>
                 </div>
                 <div className="flex flex-col gap-6">
                   {settingsNavGroups.map((group) => {
                     const items = group.items.filter(
-                      (item) => !shouldHideForBrowser(item)
-                    )
+                      (item) => !shouldHideForBrowser(item),
+                    );
                     if (items.length === 0) {
-                      return null
+                      return null;
                     }
                     return (
                       <div key={group.key} className="min-w-max lg:min-w-0">
@@ -89,33 +94,38 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
                         </div>
                         <ul
                           role="list"
-                          className="flex flex-row flex-wrap gap-2 lg:flex-col">
+                          className="flex flex-row flex-wrap gap-2 lg:flex-col"
+                        >
                           {items.map((item) => {
                             const isActive = isSettingsNavItemActive(
                               location.pathname,
-                              item.to
-                            )
+                              item.to,
+                            );
                             return (
-                              <li key={item.to} className="inline-flex items-center">
+                              <li
+                                key={item.to}
+                                className="inline-flex items-center"
+                              >
                                 <Link
                                   to={item.to}
                                   className={classNames(
                                     isActive
                                       ? "border border-border bg-surface2 text-text"
                                       : "border border-transparent text-text-muted hover:text-text hover:bg-surface2",
-                                    "group flex items-center gap-x-3 rounded-md py-2 pl-2 pr-3 text-sm font-semibold"
+                                    "group flex items-center gap-x-3 rounded-md py-2 pl-2 pr-3 text-sm font-semibold",
                                   )}
                                   aria-current={isActive ? "page" : undefined}
                                   data-testid={`settings-nav-link-${item.to.replace(
                                     /[^a-z0-9]+/gi,
-                                    "-"
-                                  )}`}>
+                                    "-",
+                                  )}`}
+                                >
                                   <item.icon
                                     className={classNames(
                                       isActive
                                         ? "text-text"
                                         : "text-text-subtle group-hover:text-text",
-                                      "h-6 w-6 shrink-0"
+                                      "h-6 w-6 shrink-0",
                                     )}
                                   />
                                   <span className="truncate">
@@ -130,11 +140,11 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
                                 </Link>
                                 {item.beta && <BetaTag />}
                               </li>
-                            )
+                            );
                           })}
                         </ul>
                       </div>
-                    )
+                    );
                   })}
                 </div>
               </nav>
@@ -146,14 +156,15 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
                   className="inline-flex items-center gap-1 text-xs border rounded px-2 py-1 text-text  hover:bg-surface2 "
                   title={t("common:close", "Close")}
                   onClick={(e) => {
-                    e.preventDefault()
-                    const returnTo = getSettingsReturnTo()
+                    e.preventDefault();
+                    const returnTo = getSettingsReturnTo();
                     if (returnTo) {
-                      navigate(returnTo)
-                      return
+                      navigate(returnTo);
+                      return;
                     }
-                    navigate("/")
-                  }}>
+                    navigate("/");
+                  }}
+                >
                   <XIcon className="h-4 w-4" />
                   <span>{t("common:close", "Close")}</span>
                 </button>
@@ -168,8 +179,9 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
                       className="text-xs text-text-muted"
                       aria-label={t(
                         "settings:breadcrumb.ariaLabel",
-                        "Current settings location"
-                      )}>
+                        "Current settings location",
+                      )}
+                    >
                       <span className="font-semibold text-text">
                         {t("settings:currentSectionLabel", "Current section")}
                       </span>
@@ -185,5 +197,5 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
         </div>
       </main>
     </div>
-  )
-}
+  );
+};

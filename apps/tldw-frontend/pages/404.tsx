@@ -1,9 +1,9 @@
-import Link from "next/link"
-import { useRouter } from "next/router"
+import Link from 'next/link';
+import { useRouter } from 'next/router';
 
 export default function NotFoundPage() {
-  const router = useRouter()
-  const routeLabel = String(router.asPath || "/")
+  const router = useRouter();
+  const routeLabel = String(router.asPath || '/');
 
   return (
     <div className="flex min-h-[70vh] w-full items-center justify-center px-6 py-12">
@@ -12,12 +12,10 @@ export default function NotFoundPage() {
         data-testid="not-found-recovery-panel"
       >
         <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">404</p>
-        <h1 className="mt-2 text-2xl font-semibold text-text">
-          We could not find that route
-        </h1>
+        <h1 className="mt-2 text-2xl font-semibold text-text">We could not find that route</h1>
         <p className="mt-3 text-sm text-text-muted">
-          The link may be out of date, moved, or typed incorrectly. Choose a
-          route below to continue.
+          The link may be out of date, moved, or typed incorrectly. Choose a route below to
+          continue.
         </p>
         <p className="mt-2 text-xs text-text-muted">
           Route not found: <code className="rounded bg-surface2 px-1 py-0.5">{routeLabel}</code>
@@ -27,7 +25,7 @@ export default function NotFoundPage() {
           <button
             type="button"
             className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-white hover:bg-primaryStrong"
-            onClick={() => router.push("/")}
+            onClick={() => router.push('/')}
             data-testid="not-found-go-chat"
           >
             Go to Chat
@@ -64,5 +62,5 @@ export default function NotFoundPage() {
         </div>
       </div>
     </div>
-  )
+  );
 }

@@ -28,6 +28,19 @@ export type RouteAliasTelemetryState = {
   recent_events: RouteAliasTelemetryRecentEvent[]
 }
 
+export type RouteAliasTelemetryRollupRow = {
+  path: string
+  hits: number
+  share: number
+}
+
+export type RouteAliasTelemetryRollup = {
+  total_redirects: number
+  last_event_at: number | null
+  top_alias_sources: RouteAliasTelemetryRollupRow[]
+  top_destinations: RouteAliasTelemetryRollupRow[]
+}
+
 type RouteParts = {
   pathname: string
   hasQuery: boolean
@@ -163,6 +176,25 @@ const writeTelemetryState = async (state: RouteAliasTelemetryState) => {
   await storage.set(ROUTE_ALIAS_TELEMETRY_STORAGE_KEY, state)
 }
 
+const toRollupRows = (
+  map: Record<string, number>,
+  total: number,
+  limit: number
+): RouteAliasTelemetryRollupRow[] => {
+  if (!Number.isFinite(total) || total <= 0) return []
+  return Object.entries(map)
+    .sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1]
+      return a[0].localeCompare(b[0])
+    })
+    .slice(0, limit)
+    .map(([path, hits]) => ({
+      path,
+      hits,
+      share: hits / total
+    }))
+}
+
 export const trackRouteAliasRedirect = async (
   payload: RouteAliasRedirectPayload
 ) => {
@@ -197,5 +229,31 @@ export const trackRouteAliasRedirect = async (
     await writeTelemetryState(state)
   } catch (error) {
     console.warn("[route-alias-telemetry] Failed to record alias redirect", error)
+  }
+}
+
+export const getRouteAliasTelemetryState = async (): Promise<RouteAliasTelemetryState> =>
+  readTelemetryState()
+
+export const getRouteAliasTelemetryRollup = async ({
+  topN = 10
+}: { topN?: number } = {}): Promise<RouteAliasTelemetryRollup> => {
+  const state = await readTelemetryState()
+  const totalRedirects = state.counters.route_alias_redirect || 0
+  const normalizedTopN = Number.isFinite(topN) && topN > 0 ? Math.floor(topN) : 10
+
+  return {
+    total_redirects: totalRedirects,
+    last_event_at: state.last_event_at,
+    top_alias_sources: toRollupRows(
+      state.alias_hits,
+      totalRedirects,
+      normalizedTopN
+    ),
+    top_destinations: toRollupRows(
+      state.destination_hits,
+      totalRedirects,
+      normalizedTopN
+    )
   }
 }

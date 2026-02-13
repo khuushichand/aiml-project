@@ -1,5 +1,5 @@
-import { RouteRedirect } from "@web/components/navigation/RouteRedirect"
+import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
 
 export default function AdminWatchlistsRunsRedirectPage() {
-  return <RouteRedirect to="/admin/server" />
+  return <RouteRedirect to="/admin/server" />;
 }

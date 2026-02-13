@@ -3,7 +3,7 @@
 Status: Active  
 Owner: WebUI + Product  
 Contributors: QA, Accessibility, Core Platform  
-Last Updated: February 12, 2026  
+Last Updated: February 13, 2026  
 Source Inputs: UX audit run on February 12, 2026 (`apps/tldw-frontend/cdp-artifacts/ux-audit-2026-02-12T17-06-10-791Z`)
 
 ## 1) Objective
@@ -24,7 +24,7 @@ Stabilize and align WebUI UX for technical/research users by sequencing immediat
 |---|---|---|---|---|---|
 | M0 | Feb 12, 2026 | Quick-win stabilization pass | WebUI | Complete | Critical runtime crashes addressed, blank redirect routes replaced, 404 recovery actions added |
 | M1 | Feb 13-Mar 6, 2026 | Navigation and IA consolidation | WebUI + Product | In Progress | Canonical route map published, legacy alias behavior standardized, discoverability gaps prioritized |
-| M2 | Mar 9-Mar 20, 2026 | Error-state architecture | WebUI + Platform | Not Started | Route-level recovery UX and shared error contract in core flows |
+| M2 | Mar 9-Mar 20, 2026 | Error-state architecture | WebUI + Platform | In Progress | Route-level recovery UX and shared error contract in core flows |
 | M3 | Mar 23-Apr 10, 2026 | Design system and WCAG baseline | WebUI + Accessibility | Not Started | Baseline tokens/components documented, AA checks defined for core journeys |
 | M4 | Apr 13-Apr 24, 2026 | Ingestion-first onboarding | WebUI + Product | Not Started | Connect -> ingest -> verify -> chat guided journey shipped |
 | M5 | Apr 27-May 15, 2026 | UX governance and release gates | QA + WebUI | Not Started | UX smoke suite and release quality gates active in CI |
@@ -63,6 +63,13 @@ Tracking Checklist:
 - [x] Navigation terminology inconsistencies triaged and assigned (`Docs/Product/WebUI/M1_2_Navigation_Terminology_Triage_2026_02.md`).
 - [x] First key-nav smoke baseline captured (`Docs/Product/WebUI/M1_4_Route_Health_Snapshot_2026_02_12.md`).
 - [x] Wayfinding keyboard/focus checks and manual QA script added (`apps/packages/ui/src/components/Layouts/__tests__/settings-layout-focus-order.test.tsx`, `apps/tldw-frontend/__tests__/navigation/not-found-page.test.tsx`, `Docs/Product/WebUI/M1_3_Wayfinding_Manual_QA_Script_2026_02.md`).
+- [x] Key-nav + wayfinding focused smoke rerun passing after route parity and settings-route cycle fix (`Docs/Product/WebUI/M1_4_Route_Health_Snapshot_2026_02_12.md`).
+- [x] Alias telemetry weekly rollup helper added for source/destination trend snapshots (`apps/packages/ui/src/utils/route-alias-telemetry.ts`).
+- [x] Shell-level unknown-route recovery fallback aligned to wayfinding language (`apps/packages/ui/src/routes/app-route.tsx`, `apps/tldw-frontend/extension/routes/app-route.tsx`).
+- [x] Full smoke parity restored after selector alignment (`apps/tldw-frontend/e2e/smoke/page-inventory.ts`, `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`).
+- [x] Runtime-overlay smoke guard added for crash-signature detection (`apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`).
+- [x] First weekly alias rollup capture recorded via `getRouteAliasTelemetryRollup({ topN: 10 })` and attached to M1.4 snapshot (`Docs/Product/WebUI/M1_4_Route_Health_Snapshot_2026_02_12.md`).
+- [x] Controlled non-zero Week 2 alias rollup capture recorded via Playwright and persisted to snapshot artifact (`apps/tldw-frontend/e2e/smoke/alias-rollup-capture.spec.ts`, `Docs/Product/WebUI/M1_4_Alias_Rollup_Week2_Controlled_2026_02_13.json`).
 
 Success Metrics:
 - Alias route usage trend visible weekly.
@@ -70,7 +77,7 @@ Success Metrics:
 
 ## M2: Resilience and Error-State Architecture
 Planned Date: March 9-March 20, 2026  
-Status: Not Started
+Status: In Progress
 
 Deliverables:
 - Shared frontend error UI contract for empty/loading/error states.
@@ -78,9 +85,14 @@ Deliverables:
 - Actionable recovery CTAs on critical failure states.
 
 Tracking Checklist:
-- [ ] Error boundary pattern agreed and documented.
-- [ ] Core routes covered: chat, knowledge, media, settings.
-- [ ] Retry/recover actions included in failure states.
+- [x] Error boundary pattern agreed and documented (`Docs/Product/WebUI/M2_Route_Error_Boundary_Contract_2026_02.md`).
+- [x] Core routes covered: chat, knowledge, media, notes, prompts, settings (`apps/packages/ui/src/routes/option-chat.tsx`, `apps/packages/ui/src/routes/option-media.tsx`, `apps/packages/ui/src/routes/option-knowledge.tsx`, `apps/packages/ui/src/routes/option-notes.tsx`, `apps/packages/ui/src/routes/option-prompts.tsx`, `apps/packages/ui/src/routes/settings-route.tsx`).
+- [x] Retry/recover actions included in failure states (`apps/packages/ui/src/components/Common/RouteErrorBoundary.tsx`).
+
+Progress update (February 13, 2026):
+- Added shared route-level fallback component with standardized test IDs and recovery actions (`Try again`, `Go to Chat`, `Open Settings`, `Reload page`).
+- Added boundary unit tests (`apps/packages/ui/src/components/Common/__tests__/RouteErrorBoundary.test.tsx`).
+- Revalidated key-nav + wayfinding smoke after rollout (`10 passed`).
 
 Success Metrics:
 - No uncaught runtime errors in core smoke suite.
@@ -163,6 +175,6 @@ Success Metrics:
 
 ## 8) Immediate Next Actions (Week of Feb 16, 2026)
 
-1. Resolve smoke baseline 404s for key navigation targets (`/chat`, `/media`, `/knowledge`, `/notes`, `/prompts`, `/settings/tldw`) and rerun key-nav smoke.
-2. Unskip wayfinding smoke checks by restoring direct-route runtime parity for settings and custom 404 wayfinding markers.
-3. Define route-level error boundary contract and apply to core pages (M2 prep).
+1. Extend route-level boundary adoption to prioritized non-core routes (admin/tools) based on error telemetry.
+2. Add route-boundary specific smoke assertions for core paths (ensure fallback controls appear when forced-error fixtures are triggered).
+3. Collect first natural-traffic weekly alias rollup capture and compare against Week 1 baseline plus Week 2 controlled sample for deprecation-threshold signals.

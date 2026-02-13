@@ -1,5 +1,5 @@
-import { RouteRedirect } from "@web/components/navigation/RouteRedirect"
+import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
 
 export default function ClaimsReviewRedirectPage() {
-  return <RouteRedirect to="/content-review" />
+  return <RouteRedirect to="/content-review" />;
 }

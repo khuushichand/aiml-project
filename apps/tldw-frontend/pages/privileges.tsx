@@ -1,5 +1,5 @@
-import { RouteRedirect } from "@web/components/navigation/RouteRedirect"
+import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
 
 export default function PrivilegesRedirectPage() {
-  return <RouteRedirect to="/settings" />
+  return <RouteRedirect to="/settings" />;
 }
