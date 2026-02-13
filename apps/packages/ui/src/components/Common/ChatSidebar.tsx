@@ -123,6 +123,7 @@ export function ChatSidebar({
           data-testid={`chat-sidebar-shortcut-${item.id}`}
           className={cn(
             "p-2 rounded-lg",
+            focusRingClasses,
             isActive
               ? "border border-border bg-surface text-text"
               : "text-text-muted hover:bg-surface hover:text-text"
@@ -144,6 +145,7 @@ export function ChatSidebar({
         data-testid={`chat-sidebar-shortcut-${item.id}`}
         className={cn(
           "flex items-center gap-2 w-full px-2 py-2 rounded text-sm",
+          focusRingClasses,
           isActive
             ? "border border-border bg-surface text-text"
             : "text-text-muted hover:bg-surface hover:text-text"
@@ -210,6 +212,8 @@ export function ChatSidebar({
     "/settings",
     location.pathname
   )
+  const focusRingClasses =
+    "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
   // Collapsed view - just icons
   if (collapsed) {
@@ -229,7 +233,10 @@ export function ChatSidebar({
             aria-label={t("common:chatSidebar.expand", "Expand sidebar")}
             data-testid="chat-sidebar-toggle"
             onClick={onToggleCollapse}
-            className="p-2 rounded-lg text-text-muted hover:bg-surface hover:text-text"
+            className={cn(
+              "p-2 rounded-lg text-text-muted hover:bg-surface hover:text-text",
+              focusRingClasses
+            )}
           >
             <ChevronRight className="size-4" />
           </button>
@@ -245,7 +252,10 @@ export function ChatSidebar({
             aria-label={t("common:chatSidebar.newChat", "New Chat")}
             data-testid="chat-sidebar-new-chat"
             onClick={handleNewChat}
-            className="p-2 rounded-lg text-text-muted hover:bg-surface hover:text-primary"
+            className={cn(
+              "p-2 rounded-lg text-text-muted hover:bg-surface hover:text-primary",
+              focusRingClasses
+            )}
           >
             <Plus className="size-4" />
           </button>
@@ -289,6 +299,7 @@ export function ChatSidebar({
             onClick={() => navigate("/settings")}
             className={cn(
               "p-2 rounded-lg",
+              focusRingClasses,
               settingsShortcutActive
                 ? "border border-border bg-surface text-text"
                 : "text-text-muted hover:bg-surface hover:text-text"
@@ -321,7 +332,10 @@ export function ChatSidebar({
               aria-label={t("common:chatSidebar.newChat", "New Chat")}
               data-testid="chat-sidebar-new-chat"
               onClick={handleNewChat}
-              className="p-2 rounded text-text-muted hover:bg-surface hover:text-primary"
+              className={cn(
+                "p-2 rounded text-text-muted hover:bg-surface hover:text-primary",
+                focusRingClasses
+              )}
             >
               <Plus className="size-4" />
             </button>
@@ -339,6 +353,7 @@ export function ChatSidebar({
                 onClick={() => setSelectionMode((prev) => !prev)}
                 className={cn(
                   "rounded p-2",
+                  focusRingClasses,
                   selectionMode
                     ? "bg-surface text-text"
                     : "text-text-muted hover:bg-surface hover:text-text"
@@ -361,7 +376,10 @@ export function ChatSidebar({
               aria-label={t("common:chatSidebar.collapse", "Collapse sidebar")}
               data-testid="chat-sidebar-toggle"
               onClick={onToggleCollapse}
-              className="p-2 rounded text-text-muted hover:bg-surface hover:text-text"
+              className={cn(
+                "p-2 rounded text-text-muted hover:bg-surface hover:text-text",
+                focusRingClasses
+              )}
             >
               <ChevronLeft className="size-4" />
             </button>
@@ -409,7 +427,10 @@ export function ChatSidebar({
         onClick={() => {
           void setShortcutsCollapsed(showShortcuts)
         }}
-        className="group flex w-full items-center justify-between px-3 py-2 text-left hover:bg-surface"
+        className={cn(
+          "group flex w-full items-center justify-between px-3 py-2 text-left hover:bg-surface",
+          focusRingClasses
+        )}
         title={t("common:chatSidebar.shortcuts", "Shortcuts")}
       >
         <span className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
@@ -466,6 +487,7 @@ export function ChatSidebar({
           data-testid="chat-sidebar-settings"
           className={cn(
             "flex items-center gap-2 w-full px-2 py-2 rounded text-sm",
+            focusRingClasses,
             settingsShortcutActive
               ? "border border-border bg-surface text-text"
               : "text-text-muted hover:bg-surface hover:text-text"

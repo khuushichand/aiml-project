@@ -25,7 +25,7 @@ Stabilize and align WebUI UX for technical/research users by sequencing immediat
 | M0 | Feb 12, 2026 | Quick-win stabilization pass | WebUI | Complete | Critical runtime crashes addressed, blank redirect routes replaced, 404 recovery actions added |
 | M1 | Feb 13-Mar 6, 2026 | Navigation and IA consolidation | WebUI + Product | Complete | Canonical route map published, legacy alias behavior standardized, discoverability gaps prioritized |
 | M2 | Mar 9-Mar 20, 2026 | Error-state architecture | WebUI + Platform | Complete | Route-level recovery UX and shared error contract in core flows |
-| M3 | Mar 23-Apr 10, 2026 | Design system and WCAG baseline | WebUI + Accessibility | Not Started | Baseline tokens/components documented, AA checks defined for core journeys |
+| M3 | Mar 23-Apr 10, 2026 | Design system and WCAG baseline | WebUI + Accessibility | In Progress | Baseline tokens/components documented, AA checks defined for core journeys |
 | M4 | Apr 13-Apr 24, 2026 | Ingestion-first onboarding | WebUI + Product | Not Started | Connect -> ingest -> verify -> chat guided journey shipped |
 | M5 | Apr 27-May 15, 2026 | UX governance and release gates | QA + WebUI | Not Started | UX smoke suite and release quality gates active in CI |
 
@@ -112,7 +112,8 @@ Success Metrics:
 
 ## M3: Design System and Accessibility Baseline
 Planned Date: March 23-April 10, 2026  
-Status: Not Started
+Status: In Progress
+Execution Plan: `Docs/Product/WebUI/M3_Design_System_A11y_Execution_Plan_2026_02.md`
 
 Deliverables:
 - Core visual/interaction tokens documented for shared components.
@@ -120,9 +121,18 @@ Deliverables:
 - Keyboard and focus behavior normalized across app shell.
 
 Tracking Checklist:
-- [ ] Token coverage reviewed for buttons, inputs, alerts, and empty states.
-- [ ] Focus-visible and keyboard path checks for top workflows.
-- [ ] Contrast audit pass for primary UI palette.
+- [x] Core token baseline and WCAG contrast guardrails published (`Docs/Product/WebUI/M3_1_Design_Token_A11y_Baseline_2026_02.md`, `apps/packages/ui/src/themes/contrast.ts`, `apps/packages/ui/src/themes/__tests__/contrast-baseline.test.ts`).
+- [x] Initial shell control focus-visible normalization completed for header/sidebar controls (`apps/packages/ui/src/components/Layouts/ChatHeader.tsx`, `apps/packages/ui/src/components/Common/ChatSidebar.tsx`).
+- [x] Core-flow keyboard/focus manual QA script published (`Docs/Product/WebUI/M3_2_Core_Flow_A11y_QA_Script_2026_02.md`).
+- [ ] Component-level token coverage expanded for alerts and empty-state variants.
+- [ ] Keyboard/focus evidence capture completed for route matrix under `Docs/Product/WebUI/evidence/`.
+- [ ] Non-core decorative themes remediation decision finalized for hard-gate expansion.
+
+Progress update (February 13, 2026):
+- Added reusable contrast utility and WCAG helpers for semantic tokens (`apps/packages/ui/src/themes/contrast.ts`).
+- Added core-theme contrast baseline tests with AA/non-text checks (`apps/packages/ui/src/themes/__tests__/contrast-baseline.test.ts`).
+- Raised default light theme focus token contrast and propagated to shared CSS variables (`apps/packages/ui/src/themes/presets.ts`, `apps/packages/ui/src/assets/tailwind-shared.css`).
+- Revalidated targeted suites: `10 passed` (`contrast-baseline`, `ChatHeader`, `ChatSidebar` tests).
 
 Success Metrics:
 - AA issues in core flows reduced sprint-over-sprint.
@@ -187,6 +197,6 @@ Success Metrics:
 
 ## 8) Immediate Next Actions (Week of Feb 16, 2026)
 
-1. Completed: Collected first passive natural-traffic alias rollup capture and linked week-over-week comparison input (`Docs/Product/WebUI/M1_4_Alias_Rollup_Week3_Natural_2026_02_13.json`, `Docs/Product/WebUI/M1_4_Route_Health_Snapshot_2026_02_12.md`).
-2. Completed: Added release-note template language for route-boundary recoverability and troubleshooting handoff (`Docs/Product/WebUI/M2_Release_Note_Template_Route_Recoverability_2026_02.md`).
-3. Completed: Expanded forced-error route-boundary smoke coverage to selected remaining non-core routes and revalidated focused suites (`apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`).
+1. Capture M3.2 keyboard/focus evidence for the full route matrix (desktop + mobile) under `Docs/Product/WebUI/evidence/m3_2_a11y_focus_<date>/`.
+2. Extend focus-visible test coverage to additional high-frequency controls and modal entry points.
+3. Propose M3.3 decision memo on non-core theme contrast hard-gating (M3 vs M4 cutoff).

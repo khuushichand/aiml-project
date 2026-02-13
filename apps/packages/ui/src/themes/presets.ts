@@ -27,7 +27,7 @@ const defaultTheme: ThemeDefinition = {
       text: "31 35 40",
       textMuted: "91 100 114",
       textSubtle: "110 120 135",
-      focus: "31 181 159",
+      focus: "13 134 119",
     },
     dark: {
       bg: "15 17 19",

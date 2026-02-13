@@ -56,6 +56,8 @@ export function ChatHeader({
     ? t("option:header.hideShortcuts", "Hide shortcuts")
     : t("option:header.showShortcuts", "Show shortcuts")
   const canEditTitle = !temporaryChat && historyId && historyId !== "temp"
+  const focusRingClasses =
+    "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
   return (
     <header
@@ -71,7 +73,7 @@ export function ChatHeader({
                 type="button"
                 onClick={onToggleSidebar}
                 aria-label={sidebarLabel as string}
-                className="rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text"
+                className={`rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
                 title={sidebarLabel as string}
               >
                 <Menu className="size-4" aria-hidden="true" />
@@ -93,7 +95,7 @@ export function ChatHeader({
                 onClick={() => onToggleShortcuts(!shortcutsExpanded)}
                 aria-label={shortcutsToggleLabel as string}
                 aria-expanded={shortcutsExpanded}
-                className="inline-flex items-center justify-center rounded-md p-1.5 text-text-muted hover:bg-surface2 hover:text-text"
+                className={`inline-flex items-center justify-center rounded-md p-1.5 text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
                 title={shortcutsToggleLabel as string}
                 data-testid="chat-toggle-shortcuts"
               >
@@ -120,7 +122,7 @@ export function ChatHeader({
                 <button
                   type="button"
                   onClick={onTitleEditStart}
-                  className="truncate text-left text-xs text-text-muted hover:text-text"
+                  className={`truncate text-left text-xs text-text-muted hover:text-text ${focusRingClasses}`}
                   title={chatTitle || "Untitled"}
                 >
                   {chatTitle || t("option:header.untitledChat", "Untitled")}
@@ -133,7 +135,7 @@ export function ChatHeader({
           <button
             type="button"
             onClick={onOpenCommandPalette}
-            className="hidden items-center gap-2 rounded-md px-3 py-1.5 text-xs text-text-muted transition hover:bg-surface2 hover:text-text sm:inline-flex"
+            className={`hidden items-center gap-2 rounded-md px-3 py-1.5 text-xs text-text-muted transition hover:bg-surface2 hover:text-text sm:inline-flex ${focusRingClasses}`}
             title={t("common:search", "Search")}
           >
             <Search className="size-4" aria-hidden="true" />
@@ -147,7 +149,7 @@ export function ChatHeader({
               type="button"
               onClick={onClearChat}
               aria-label={t("common:newChat", "New chat") as string}
-              className="inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text"
+              className={`inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
               title={t("common:newChat", "New chat")}
               data-testid="new-chat-button"
             >
@@ -159,7 +161,7 @@ export function ChatHeader({
               type="button"
               onClick={onOpenSettings}
               aria-label={t("sidepanel:header.openSettingsAria", "Open settings") as string}
-              className="inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text"
+              className={`inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
               title={t("sidepanel:header.settingsShortLabel", "Settings")}
             >
               <CogIcon className="size-4" aria-hidden="true" />
@@ -170,7 +172,7 @@ export function ChatHeader({
               type="button"
               onClick={onOpenShortcutsModal}
               aria-label={t("option:header.keyboardShortcutsAria", "Show keyboard shortcuts") as string}
-              className="inline-flex items-center justify-center rounded-md p-1.5 text-text-subtle hover:bg-surface2 hover:text-text"
+              className={`inline-flex items-center justify-center rounded-md p-1.5 text-text-subtle hover:bg-surface2 hover:text-text ${focusRingClasses}`}
               title={t("option:header.keyboardShortcuts", "Keyboard shortcuts")}
             >
               <kbd className="rounded border border-border px-1.5 py-0.5 text-xs font-medium text-text-subtle">?</kbd>
