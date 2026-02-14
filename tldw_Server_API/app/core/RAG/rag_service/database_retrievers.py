@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import sqlite3
+import urllib.parse as _urlparse
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -106,6 +107,37 @@ class RawSqlFallbackDisabledError(RuntimeError):
         super().__init__(
             f"Raw SQL fallback is disabled in production for {retriever_name}. Provide a database adapter."
         )
+
+
+def _normalize_sqlite_memory_path(path: str) -> Optional[str]:
+    """Return a canonical SQLite in-memory spec, or None when path is file-backed."""
+    raw = str(path).strip()
+    if not raw:
+        return None
+
+    lowered = raw.lower()
+    if raw == ":memory:":
+        return ":memory:"
+
+    if lowered.startswith("file::memory:"):
+        return raw
+
+    if lowered.startswith("file:") and "mode=memory" in lowered:
+        return raw
+
+    if raw.startswith("file://"):
+        try:
+            parsed = _urlparse.urlparse(raw)
+        except (TypeError, ValueError):
+            return None
+        extracted_path = _urlparse.unquote(parsed.path or "")
+        query = parsed.query or ""
+        if extracted_path in {":memory:", "/:memory:"}:
+            return f"file::memory:?{query}" if query else ":memory:"
+        if "mode=memory" in query.lower():
+            return f"file::memory:?{query}" if query else ":memory:"
+
+    return None
 
 
 def _sanitize_media_fts_query(query: Optional[str]) -> Optional[str]:
@@ -262,13 +294,16 @@ class BaseRetriever(ABC):
             logger.error(f"Path normalization error for '{path}': {exc}")
             raise PathNormalizationError() from exc
 
+        memory_path = _normalize_sqlite_memory_path(path)
+        if memory_path is not None:
+            return memory_path
+
         # Handle URI schemes - only allow file:// and validate the path component
         if '://' in path:
             if path.startswith('file://'):
-                from urllib.parse import unquote, urlparse
-                parsed = urlparse(path)
+                parsed = _urlparse.urlparse(path)
                 # Extract and decode the path component
-                extracted_path = unquote(parsed.path)
+                extracted_path = _urlparse.unquote(parsed.path)
                 # Recursively validate the extracted path (this will catch traversal, etc.)
                 validated = self._validate_path(extracted_path)
                 if validated is None:

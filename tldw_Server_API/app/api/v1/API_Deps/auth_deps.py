@@ -1208,6 +1208,7 @@ async def get_current_active_user(
 async def get_user_org_policy(
     db: Any = Depends(get_db_transaction),  # noqa: B008
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
+    current_user: dict[str, Any] | None = None,  # compat arg for legacy call sites/tests
 ) -> dict[str, Any]:
     """
     Deprecated compatibility shim for user-dict org policy lookups.
@@ -1216,6 +1217,7 @@ async def get_user_org_policy(
     now delegates to the claim-first resolver so org policy resolution stays
     consistent across all authentication flows.
     """
+    _ = current_user
     return await get_org_policy_from_principal(
         db=db,
         principal=principal,
@@ -1297,7 +1299,7 @@ async def get_org_policy_from_principal(
     return await _load_org_policy(db, org_id)
 
 
-_ADMIN_BYPASS_PERMISSIONS = frozenset({"*"})
+_ADMIN_BYPASS_PERMISSIONS = frozenset({"*", "system.configure"})
 _ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
 
 
@@ -1312,6 +1314,8 @@ def _normalized_claim_values(values: list[Any] | tuple[Any, ...] | None) -> set[
 def _principal_has_admin_bypass_claims(principal: AuthPrincipal | None) -> bool:
     if principal is None:
         return False
+    if bool(getattr(principal, "is_admin", False)):
+        return True
     roles = _normalized_claim_values(principal.roles)
     permissions = _normalized_claim_values(principal.permissions)
     if "admin" in roles:

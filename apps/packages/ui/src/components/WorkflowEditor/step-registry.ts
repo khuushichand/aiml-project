@@ -664,6 +664,55 @@ const DEFAULT_OUTPUT: PortDefinition = {
   dataType: "any"
 }
 
+const clonePorts = (ports: PortDefinition[]): PortDefinition[] =>
+  ports.map((port) => ({ ...port }))
+
+const CATEGORY_PORT_FALLBACKS: Record<
+  StepCategory,
+  { inputs: PortDefinition[]; outputs: PortDefinition[] }
+> = {
+  ai: {
+    inputs: [{ id: "input", label: "Input", dataType: "any", required: true }],
+    outputs: [{ id: "output", label: "Output", dataType: "string" }]
+  },
+  search: {
+    inputs: [{ id: "query", label: "Query", dataType: "string", required: true }],
+    outputs: [{ id: "results", label: "Results", dataType: "array" }]
+  },
+  media: {
+    inputs: [{ id: "source", label: "Source", dataType: "file", required: true }],
+    outputs: [{ id: "content", label: "Content", dataType: "object" }]
+  },
+  text: {
+    inputs: [{ id: "text", label: "Text", dataType: "string", required: true }],
+    outputs: [{ id: "text", label: "Text", dataType: "string" }]
+  },
+  research: {
+    inputs: [{ id: "query", label: "Query", dataType: "string", required: true }],
+    outputs: [{ id: "results", label: "Results", dataType: "array" }]
+  },
+  audio: {
+    inputs: [{ id: "audio", label: "Audio", dataType: "audio", required: true }],
+    outputs: [{ id: "audio", label: "Audio", dataType: "audio" }]
+  },
+  video: {
+    inputs: [{ id: "video", label: "Video", dataType: "file", required: true }],
+    outputs: [{ id: "video", label: "Video", dataType: "file" }]
+  },
+  control: {
+    inputs: [{ id: "input", label: "Input", dataType: "any", required: true }],
+    outputs: [{ id: "output", label: "Output", dataType: "control" }]
+  },
+  io: {
+    inputs: [{ id: "payload", label: "Payload", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }]
+  },
+  utility: {
+    inputs: [{ ...DEFAULT_INPUT }],
+    outputs: [{ ...DEFAULT_OUTPUT }]
+  }
+}
+
 const PORT_OVERRIDES: Record<
   string,
   { inputs: PortDefinition[]; outputs: PortDefinition[] }
@@ -846,7 +895,7 @@ const CATEGORY_COLOR_CLASSES: Record<StepCategory, string> = {
   utility: "bg-gray-500"
 }
 
-const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
+export const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
   // AI & LLM (22 types)
   prompt: "ai",
   llm: "ai",
@@ -970,6 +1019,7 @@ const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
   github_create_issue: "io",
   email_send: "io",
   screenshot_capture: "io",
+  podcast_rss_publish: "io",
   mcp_tool: "io",
   chatbooks: "io",
   character_chat: "io",
@@ -992,7 +1042,7 @@ const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
   eval_readability: "utility"
 }
 
-const ICON_OVERRIDES: Record<string, string> = {
+export const ICON_OVERRIDES: Record<string, string> = {
   // AI & LLM
   prompt: "MessageSquare",
   llm: "MessageSquare",
@@ -1116,6 +1166,7 @@ const ICON_OVERRIDES: Record<string, string> = {
   github_create_issue: "Github",
   email_send: "Mail",
   screenshot_capture: "Camera",
+  podcast_rss_publish: "Rss",
   mcp_tool: "Cpu",
   chatbooks: "BookOpen",
   character_chat: "Bot",
@@ -1172,10 +1223,24 @@ export const resolveStepPorts = (stepType: string): {
   outputs: PortDefinition[]
 } => {
   const override = PORT_OVERRIDES[stepType]
-  if (override) return override
+  if (override) {
+    return {
+      inputs: clonePorts(override.inputs),
+      outputs: clonePorts(override.outputs)
+    }
+  }
+
+  const categoryFallback = CATEGORY_PORT_FALLBACKS[resolveStepCategory(stepType)]
+  if (categoryFallback) {
+    return {
+      inputs: clonePorts(categoryFallback.inputs),
+      outputs: clonePorts(categoryFallback.outputs)
+    }
+  }
+
   return {
-    inputs: [DEFAULT_INPUT],
-    outputs: [DEFAULT_OUTPUT]
+    inputs: [{ ...DEFAULT_INPUT }],
+    outputs: [{ ...DEFAULT_OUTPUT }]
   }
 }
 

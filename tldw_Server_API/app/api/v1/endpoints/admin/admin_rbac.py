@@ -1088,7 +1088,10 @@ async def get_effective_permissions_admin(
 
 
 @router.get("/roles/{role_id}/permissions/effective", response_model=RoleEffectivePermissionsResponse)
-async def get_role_effective_permissions(role_id: int) -> RoleEffectivePermissionsResponse:
+async def get_role_effective_permissions(
+    role_id: int,
+    db=Depends(get_db_transaction),
+) -> RoleEffectivePermissionsResponse:
     """Return a convenience view combining a role's granted permissions and tool permissions.
 
     - permissions: non-tool permission names (e.g., media.read)
@@ -1096,18 +1099,44 @@ async def get_role_effective_permissions(role_id: int) -> RoleEffectivePermissio
     - all_permissions: union of both, sorted
     """
     try:
-        repo = _get_rbac_repo()
-        loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, repo.get_role_effective_permissions, int(role_id))
+        _is_pg = await _get_is_postgres_backend_fn()()
+        if _is_pg:
+            role_row = await db.fetchrow(
+                "SELECT id, name FROM roles WHERE id = $1",
+                int(role_id),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT id, name FROM roles WHERE id = ?",
+                (int(role_id),),
+            )
+            role_row = await cur.fetchone()
+        if not role_row:
+            raise HTTPException(status_code=404, detail="Role not found")
+
+        if _is_pg:
+            role_name = str(role_row["name"])
+        else:
+            role_name = str(role_row[1])
+
+        perm_rows = await svc_list_role_permissions(db, int(role_id))
+        names = sorted(
+            str(row.get("name"))
+            for row in perm_rows
+            if row.get("name")
+        )
+        tool_prefix = "tools.execute:"
+        tool_permissions = [name for name in names if name.startswith(tool_prefix)]
+        permissions = [name for name in names if not name.startswith(tool_prefix)]
+        all_permissions = sorted(set(tool_permissions + permissions))
+
         return RoleEffectivePermissionsResponse(
             role_id=role_id,
-            role_name=data.get("role_name", ""),
-            permissions=data.get("permissions", []),
-            tool_permissions=data.get("tool_permissions", []),
-            all_permissions=data.get("all_permissions", []),
+            role_name=role_name,
+            permissions=permissions,
+            tool_permissions=tool_permissions,
+            all_permissions=all_permissions,
         )
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Role not found") from None
     except HTTPException:
         raise
     except _RBAC_NONCRITICAL_EXCEPTIONS as e:

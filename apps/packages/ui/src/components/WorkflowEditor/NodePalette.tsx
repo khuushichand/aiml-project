@@ -22,8 +22,6 @@ const DEFAULT_ACTIVE_CATEGORY_KEYS = [
   "ai",
   "search",
   "media",
-  "text",
-  "research",
   "control"
 ]
 

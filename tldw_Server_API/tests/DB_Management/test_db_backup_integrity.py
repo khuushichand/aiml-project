@@ -189,6 +189,44 @@ def test_restore_creates_snapshot_when_target_exists(backup_env):
     assert restored_rows == [("new data",)]
 
 
+def test_restore_allows_target_db_outside_backup_root(monkeypatch, tmp_path):
+    backup_root = tmp_path / "backups_root"
+    db_root = tmp_path / "runtime_db_root"
+    backup_root.mkdir()
+    db_root.mkdir()
+
+    monkeypatch.setenv("TLDW_DB_BACKUP_PATH", str(backup_root))
+    monkeypatch.setenv("TLDW_DB_ALLOWED_BASE_DIRS", str(db_root))
+
+    backup_dir = backup_root / "authnz"
+    backup_dir.mkdir()
+    backup_name = "authnz_backup.db"
+    backup_file = backup_dir / backup_name
+    with sqlite3.connect(backup_file) as conn:
+        conn.execute("CREATE TABLE entries (val TEXT)")
+        conn.execute("INSERT INTO entries (val) VALUES ('restored')")
+        conn.commit()
+
+    db_path = db_root / "users.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE entries (val TEXT)")
+        conn.execute("INSERT INTO entries (val) VALUES ('live')")
+        conn.commit()
+
+    result = restore_single_db_backup(str(db_path), str(backup_dir), "authnz", backup_name)
+
+    assert "restored" in result.lower()
+    with sqlite3.connect(db_path) as conn:
+        restored_rows = conn.execute("SELECT val FROM entries").fetchall()
+    assert restored_rows == [("restored",)]
+
+    snapshot_files = list(backup_dir.glob("authnz_pre_restore_*.db"))
+    assert len(snapshot_files) == 1
+    with sqlite3.connect(snapshot_files[0]) as conn:
+        snapshot_rows = conn.execute("SELECT val FROM entries").fetchall()
+    assert snapshot_rows == [("live",)]
+
+
 def test_restore_busy_target_fails_without_overwrite(backup_env):
     db_path = backup_env / "busy.db"
     with sqlite3.connect(db_path) as conn:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 from uuid import uuid4
 
@@ -15,10 +16,27 @@ pytest_plugins = ["tldw_Server_API.tests.AuthNZ.conftest"]
 pytestmark = [pytest.mark.integration, pytest.mark.postgres]
 
 
+def _module_available(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
 def test_abtest_repository_crud_postgres(request: pytest.FixtureRequest) -> None:
     _client, _db_name = request.getfixturevalue("isolated_test_environment")  # noqa: F841
     db_url = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL")
     assert db_url and "postgres" in db_url
+    has_psycopg = _module_available("psycopg")
+    has_psycopg2 = _module_available("psycopg2")
+
+    if not has_psycopg and not has_psycopg2:
+        pytest.skip("No PostgreSQL DBAPI driver installed for SQLAlchemy (psycopg or psycopg2)")
+
+    # SQLAlchemy defaults to psycopg2 for postgresql:// URLs; prefer psycopg3
+    # explicitly when psycopg2 is unavailable in this environment.
+    if has_psycopg and not has_psycopg2:
+        if db_url.startswith("postgresql://"):
+            db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+        elif db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql+psycopg://", 1)
 
     repo = EmbeddingABTestRepository.from_config(RepositoryConfig(db_url=db_url))
     test_id = f"abtest-{uuid4()}"

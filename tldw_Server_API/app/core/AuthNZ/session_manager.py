@@ -32,6 +32,7 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from jose import jwt as jose_jwt
+from jose.exceptions import JWSError, JWTError
 from loguru import logger
 from redis import asyncio as redis_async
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -75,6 +76,8 @@ _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS = (
     ValueError,
     UnicodeDecodeError,
     json.JSONDecodeError,
+    JWTError,
+    JWSError,
     RedisError,
     RedisConnectionError,
     InvalidSessionError,

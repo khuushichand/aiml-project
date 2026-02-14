@@ -298,7 +298,7 @@ export const EmptySidePanel = ({ inputRef }: EmptySidePanelProps) => {
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-success/10">
           <MessageSquare className="size-6 text-success" />
         </div>
-        <div className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-white bg-success dark:border-[#1a1a1a]" />
+        <div className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-bg bg-success" />
       </div>
 
       {/* Status and heading */}

@@ -159,6 +159,26 @@ class WorkerSDK:
             lease_id_str = str(lease_id) if lease_id is not None else None
             # Only start auto-renew after we know we will actually handle the job
             renew_task = None
+
+            def _finalize_failure(exc: Exception) -> None:
+                retryable = self.cfg.retry_on_exception and bool(getattr(exc, "retryable", True))
+                backoff_s = int(getattr(exc, "backoff_seconds", self.cfg.retry_backoff_seconds))
+                try:
+                    self.jm.fail_job(
+                        job_id,
+                        error=str(exc),
+                        retryable=retryable,
+                        backoff_seconds=backoff_s,
+                        worker_id=self.cfg.worker_id,
+                        lease_id=lease_id_str,
+                        completion_token=(lease_id_str if is_truthy(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN")) else None),
+                        enforce=enforce,
+                        error_code="worker_exception",
+                        error_class=type(exc).__name__,
+                    )
+                except _WORKER_SDK_NONCRITICAL_EXCEPTIONS:
+                    logger.debug(f"Fail finalize error for job {job_id}")
+
             try:
                 if acquire_guard is not None:
                     try:
@@ -194,7 +214,14 @@ class WorkerSDK:
                 # Start auto-renew task only if not cancelled
                 renew_task = asyncio.create_task(self._auto_renew(job, progress_cb=progress_cb))
                 # Handle job
-                result = await handler(job)
+                try:
+                    result = await handler(job)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # Handler failures are expected control-flow for retry/fail semantics.
+                    _finalize_failure(exc)
+                    continue
                 if result is None:
                     # No result; treat as success with empty result
                     result = {}
@@ -208,24 +235,10 @@ class WorkerSDK:
                 )
                 if not ok:
                     logger.debug(f"Complete returned False for job {job_id}")
+            except asyncio.CancelledError:
+                raise
             except _WORKER_SDK_NONCRITICAL_EXCEPTIONS as e:
-                # Retryable failure by default; allow exception to override via .retryable attribute
-                retryable = self.cfg.retry_on_exception and bool(getattr(e, "retryable", True))
-                backoff_s = int(getattr(e, "backoff_seconds", self.cfg.retry_backoff_seconds))
-                try:
-                    self.jm.fail_job(
-                        job_id,
-                        error=str(e),
-                        retryable=retryable,
-                        backoff_seconds=backoff_s,
-                        worker_id=self.cfg.worker_id,
-                        lease_id=lease_id_str,
-                        completion_token=(lease_id_str if is_truthy(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN")) else None),
-                        enforce=enforce,
-                        error_code="worker_exception",
-                    )
-                except _WORKER_SDK_NONCRITICAL_EXCEPTIONS:
-                    logger.debug(f"Fail finalize error for job {job_id}")
+                _finalize_failure(e)
             finally:
                 try:
                     if renew_task is not None:

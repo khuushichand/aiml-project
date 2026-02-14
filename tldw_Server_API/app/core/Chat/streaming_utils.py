@@ -20,10 +20,12 @@ from typing import Any, Optional, Union
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.testing import is_truthy
 
 _STREAMING_NONCRITICAL_EXCEPTIONS = (
+    ChatAPIError,
     OSError,
     ValueError,
     TypeError,

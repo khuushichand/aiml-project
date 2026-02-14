@@ -116,15 +116,9 @@ class TestErrorScenarios:
             mock_embed.side_effect = MemoryError("Out of memory")
             evaluator.embedding_available = True
 
-            # Should fall back to LLM
-            with patch(
-                'tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread',
-                new_callable=AsyncMock
-            ) as mock_thread:
-                mock_thread.return_value = "3"
-
-                _, result = await evaluator._evaluate_answer_similarity("response", "ground_truth")
-                assert result["method"] == "llm"  # Should have fallen back
+            # MemoryError is treated as a critical failure and should propagate.
+            with pytest.raises(MemoryError):
+                await evaluator._evaluate_answer_similarity("response", "ground_truth")
 
     @pytest.mark.asyncio
     async def test_concurrent_failure_isolation(self):
@@ -175,7 +169,7 @@ class TestErrorScenarios:
         """Test handling of invalid API credentials."""
         # Test with invalid OpenAI key - mock the initialization to fail
         with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.create_embedding') as mock_create:
-            mock_create.side_effect = Exception("Invalid API key")
+            mock_create.side_effect = RuntimeError("Invalid API key")
 
             evaluator = RAGEvaluator(
                 embedding_provider="openai",

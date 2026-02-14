@@ -156,7 +156,13 @@ export const ACPPermissionModal: React.FC = () => {
           <Progress
             percent={progressPercent}
             showInfo={false}
-            strokeColor={progressPercent < 20 ? "#ef4444" : progressPercent < 50 ? "#f59e0b" : "#22c55e"}
+            strokeColor={
+              progressPercent < 20
+                ? "rgb(var(--color-danger))"
+                : progressPercent < 50
+                  ? "rgb(var(--color-warn))"
+                  : "rgb(var(--color-success))"
+            }
             size="small"
           />
         </div>

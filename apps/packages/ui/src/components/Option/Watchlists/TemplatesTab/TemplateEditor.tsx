@@ -432,13 +432,13 @@ const DEFAULT_HTML_TEMPLATE = `<!DOCTYPE html>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
     .header { border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; }
-    .item { margin-bottom: 24px; padding: 16px; background: #f9f9f9; border-radius: 8px; }
+    .item { margin-bottom: 24px; padding: 16px; background: rgb(249 249 249); border-radius: 8px; }
     .item-title { font-size: 1.1em; font-weight: 600; margin-bottom: 8px; }
-    .item-title a { color: #2563eb; text-decoration: none; }
+    .item-title a { color: rgb(37 99 235); text-decoration: none; }
     .item-meta { font-size: 0.85em; color: #666; margin-bottom: 8px; }
     .item-summary { line-height: 1.6; }
     .filters { display: flex; gap: 8px; margin-top: 8px; }
-    .filter-tag { background: #e0e7ff; color: #3730a3; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }
+    .filter-tag { background: rgb(224 231 255); color: rgb(55 48 163); padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }
   </style>
 </head>
 <body>

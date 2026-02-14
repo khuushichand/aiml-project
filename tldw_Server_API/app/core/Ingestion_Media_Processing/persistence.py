@@ -451,9 +451,43 @@ def _classify_upload_error(file_save_errors: list[dict[str, Any]]) -> tuple[int,
             candidate = (status.HTTP_400_BAD_REQUEST, error_msg or "Uploaded file content is empty.")
         else:
             candidate = (status.HTTP_400_BAD_REQUEST, error_msg or "File upload failed.")
-        if priority.get(candidate[0], 0) > priority.get(chosen_status, 0):
+        candidate_priority = priority.get(candidate[0], 0)
+        chosen_priority = priority.get(chosen_status, 0)
+        if candidate_priority > chosen_priority or (
+            candidate_priority == chosen_priority
+            and chosen_detail in {"", "File upload failed."}
+            and bool(candidate[1])
+        ):
             chosen_status, chosen_detail = candidate
     return chosen_status, chosen_detail
+
+
+def _is_nonfatal_upload_validation_error(error_msg: str) -> bool:
+    """
+    Return True when an upload error is a format/validation mismatch that should
+    surface as item-level errors in a multi-status response, not a request-level
+    hard failure.
+    """
+    lower = str(error_msg or "").strip().lower()
+    if not lower:
+        return False
+    if (
+        "not allowed for security reasons" in lower
+        or "exceeds maximum allowed size" in lower
+        or "too large" in lower
+        or "quota exceeded" in lower
+    ):
+        return False
+    return (
+        "validation failed" in lower
+        or "validation error" in lower
+        or "invalid file type" in lower
+        or "unsupported media type" in lower
+        or "detected mime type" in lower
+        or "unable to determine mime" in lower
+        or "claimed extension" in lower
+        or "could not identify file" in lower
+    )
 
 
 def _coerce_ingestion_label(value: Any, *, default: str = "unknown") -> str:
@@ -1367,7 +1401,9 @@ def sync_media_add_results_to_collections(
             content_val = result.get("content")
             if content_val is None:
                 content_val = result.get("transcript")
-            if isinstance(content_val, str):
+            if content_val is None:
+                content_text = ""
+            elif isinstance(content_val, str):
                 content_text = content_val
             else:
                 try:
@@ -2279,22 +2315,38 @@ async def add_media_orchestrate(
                     logger.warning(
                         "No valid inputs remaining after file handling errors."
                     )
-                    if upload_error_status:
+                    if upload_error_status and upload_error_status[0] == HTTP_413_TOO_LARGE:
                         raise HTTPException(
                             status_code=upload_error_status[0],
                             detail=upload_error_status[1],
                         )
+                    if all(
+                        _is_nonfatal_upload_validation_error(
+                            str(err_info.get("error", "") or "")
+                        )
+                        for err_info in file_save_errors
+                    ):
+                        logger.info(
+                            "Returning multi-status response for upload validation-only failures."
+                        )
+                    elif upload_error_status:
+                        raise HTTPException(
+                            status_code=upload_error_status[0],
+                            detail=upload_error_status[1],
+                        )
+                    else:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="File upload failed; no valid media sources found to process.",
+                        )
+                else:
+                    logger.error(
+                        "No input URLs or successfully saved files found for /media/add."
+                    )
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="File upload failed; no valid media sources found to process.",
+                        detail="No valid media sources found to process.",
                     )
-                logger.error(
-                    "No input URLs or successfully saved files found for /media/add."
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="No valid media sources found to process.",
-                )
 
             # Prepare chunking options and auto-apply templates
             chunking_options_dict = _prepare_chunking_options_dict(form_data)

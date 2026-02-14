@@ -297,7 +297,7 @@ def get_flashcard(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_db_fo
         raise HTTPException(status_code=500, detail="Failed to get flashcard") from e
 
 
-@router.patch("/{card_uuid}")
+@router.patch("/{card_uuid}", response_model=Flashcard)
 def update_flashcard(card_uuid: str, payload: FlashcardUpdate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
         data = payload.model_dump(exclude_unset=True)
@@ -388,7 +388,7 @@ def delete_flashcard(card_uuid: str, expected_version: int = Query(..., ge=1), d
         raise HTTPException(status_code=500, detail="Failed to delete flashcard") from e
 
 
-@router.put("/{card_uuid}/tags")
+@router.put("/{card_uuid}/tags", response_model=Flashcard)
 def set_flashcard_tags(card_uuid: str, payload: FlashcardTagsUpdate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
         db.set_flashcard_tags(card_uuid, payload.tags)

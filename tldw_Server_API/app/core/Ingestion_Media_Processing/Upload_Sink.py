@@ -49,6 +49,13 @@ _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS = (
     ConnectionError,
     TimeoutError,
 )
+if puremagic is not None:
+    _puremagic_error = getattr(puremagic, "PureError", None)
+    if isinstance(_puremagic_error, type) and issubclass(_puremagic_error, Exception):
+        _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS = (
+            *_UPLOAD_SINK_NONCRITICAL_EXCEPTIONS,
+            _puremagic_error,
+        )
 
 
 class FileValidationError(Exception):

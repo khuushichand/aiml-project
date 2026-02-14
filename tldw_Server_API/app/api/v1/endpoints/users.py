@@ -55,7 +55,10 @@ from tldw_Server_API.app.api.v1.utils.profile_errors import (
     classify_profile_update_skips,
 )
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import (
+    get_db_pool,
+    is_postgres_backend as _is_postgres_backend_core,
+)
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
     StorageError,
@@ -198,6 +201,43 @@ def _extract_affected_rows(execute_result: Any) -> int | None:
             except ValueError:
                 return None
     return None
+
+
+async def is_postgres_backend() -> bool:
+    """
+    Compatibility shim for unit tests that monkeypatch backend detection.
+
+    New code should call ``core.AuthNZ.database.is_postgres_backend`` directly.
+    """
+    return await _is_postgres_backend_core()
+
+
+async def _fetch_password_hash_for_user(db: Any, user_id: int) -> str | None:
+    """
+    Compatibility helper retained for backend-selection unit tests.
+    """
+    if await is_postgres_backend():
+        value = await db.fetchval(
+            "SELECT password_hash FROM users WHERE id = $1",
+            user_id,
+        )
+        return str(value) if value else None
+
+    cursor = await db.execute(
+        "SELECT password_hash FROM users WHERE id = ?",
+        (user_id,),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    if isinstance(row, dict):
+        value = row.get("password_hash")
+        return str(value) if value else None
+    try:
+        value = row[0]
+    except (IndexError, KeyError, TypeError):
+        value = None
+    return str(value) if value else None
 
 
 def _require_active_verified_user(user_context: dict[str, Any]) -> None:

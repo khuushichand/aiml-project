@@ -60,6 +60,12 @@ const createWebSocket = (
   }
 }
 
+const resolveTokenColor = (tokenName: string, fallbackRgb: string): string => {
+  if (typeof window === "undefined") return fallbackRgb
+  const tokenValue = getComputedStyle(document.documentElement).getPropertyValue(tokenName).trim()
+  return tokenValue ? `rgb(${tokenValue})` : fallbackRgb
+}
+
 export const ACPWorkspacePanel: React.FC = () => {
   const { t } = useTranslation("playground")
   const containerRef = React.useRef<HTMLDivElement | null>(null)
@@ -88,9 +94,9 @@ export const ACPWorkspacePanel: React.FC = () => {
       fontFamily: "JetBrains Mono, Menlo, Monaco, monospace",
       fontSize: 13,
       theme: {
-        background: "#0b0f1a",
-        foreground: "#dce2f0",
-        cursor: "#6ee7ff",
+        background: resolveTokenColor("--color-bg", "rgb(11 15 26)"),
+        foreground: resolveTokenColor("--color-text", "rgb(220 226 240)"),
+        cursor: resolveTokenColor("--color-focus", "rgb(110 231 255)")
       },
       cursorBlink: true,
     })

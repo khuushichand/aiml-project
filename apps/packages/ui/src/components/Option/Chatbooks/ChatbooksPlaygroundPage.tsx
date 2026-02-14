@@ -586,6 +586,8 @@ type ContentTypePickerProps = {
   manualPlaceholder?: string
   emptyHint?: string
   truncationLimit?: number
+  /** When true, suppress per-section error alerts for auth/connection errors (a consolidated banner is shown above). */
+  suppressAuthErrors?: boolean
 }
 
 const ContentTypePicker: React.FC<ContentTypePickerProps> = ({
@@ -603,7 +605,8 @@ const ContentTypePicker: React.FC<ContentTypePickerProps> = ({
   allowManualEntry = false,
   manualPlaceholder,
   emptyHint,
-  truncationLimit
+  truncationLimit,
+  suppressAuthErrors = false
 }) => {
   const { t } = useTranslation(["settings", "common"])
   const [search, setSearch] = React.useState("")
@@ -853,7 +856,7 @@ const ContentTypePicker: React.FC<ContentTypePickerProps> = ({
           </div>
         )}
 
-        {query.isError && (
+        {query.isError && !suppressAuthErrors && (
           <Alert
             type="warning"
             showIcon
@@ -1549,6 +1552,20 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
       </Card>
 
       <div className="flex flex-col gap-4">
+        {!isOnline && (
+          <Alert
+            type="info"
+            showIcon
+            message={t(
+              "settings:chatbooksPlayground.serverOffline",
+              "Server connection required"
+            )}
+            description={t(
+              "settings:chatbooksPlayground.serverOfflineHint",
+              "Connect to your tldw server in Settings to browse and select content for export."
+            )}
+          />
+        )}
         {exportPickerConfig.map((config) => {
           const generatedDisabled =
             config.key === "generated_document" && !includeGenerated
@@ -1590,6 +1607,7 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
                 "No items found"
               )}
               truncationLimit={getFetchLimitForType(config.key)}
+              suppressAuthErrors={!isOnline}
             />
           )
         })}

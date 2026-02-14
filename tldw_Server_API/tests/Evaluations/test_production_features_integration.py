@@ -216,32 +216,25 @@ class TestUserRateLimiter:
 
     @pytest.mark.asyncio
     async def test_rate_limit_enforcement(self, rate_limiter):
-        """Test rate limits are enforced."""
+        """Test current Phase-2 behavior for CUSTOM tier (legacy cost-only path)."""
         user_id = "test_user"
         endpoint = "/api/v1/evaluations"
 
-        # Set user to free tier with low limits for testing
+        # Configure low minute limits on CUSTOM tier; minute caps are no longer
+        # enforced in the legacy compatibility shim.
         await rate_limiter.upgrade_user_tier(
             user_id,
             UserTier.CUSTOM,
             custom_limits={"evaluations_per_minute": 2}
         )
 
-        # First two requests should succeed
-        for i in range(2):
+        # All requests should be allowed in legacy_cost_only mode.
+        for i in range(3):
             allowed, metadata = await rate_limiter.check_rate_limit(
                 user_id, endpoint
             )
             assert allowed is True
-
-        # Third request should be denied
-        allowed, metadata = await rate_limiter.check_rate_limit(
-            user_id, endpoint
-        )
-        assert allowed is False
-        # Check for rate limit message in metadata (may be in 'error' or 'message' field)
-        error_msg = metadata.get("error", "") or metadata.get("message", "") or str(metadata)
-        assert "rate limit" in error_msg.lower() or "exceeded" in error_msg.lower()
+            assert metadata.get("rate_limit_source") == "legacy_cost_only"
 
     @pytest.mark.asyncio
     async def test_tier_upgrade(self, rate_limiter):
@@ -287,7 +280,7 @@ class TestUserRateLimiter:
 
     @pytest.mark.asyncio
     async def test_burst_allowance(self, rate_limiter):
-        """Test burst traffic handling."""
+        """Test CUSTOM tier remains allow-path regardless of burst settings in Phase-2 shim."""
         user_id = "burst_user"
 
         # Configure with burst allowance
@@ -301,17 +294,12 @@ class TestUserRateLimiter:
         )
 
         # Burst requests within 10 seconds
-        for i in range(3):
-            allowed, _ = await rate_limiter.check_rate_limit(
+        for i in range(4):
+            allowed, metadata = await rate_limiter.check_rate_limit(
                 user_id, "/api/v1/evaluations"
             )
-            assert allowed is True  # All 3 should succeed due to burst
-
-        # Fourth should fail
-        allowed, _ = await rate_limiter.check_rate_limit(
-            user_id, "/api/v1/evaluations"
-        )
-        assert allowed is False
+            assert allowed is True
+            assert metadata.get("rate_limit_source") == "legacy_cost_only"
 
 
 @pytest_asyncio.fixture

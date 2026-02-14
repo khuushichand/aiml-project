@@ -24,10 +24,10 @@ import { getTutorialById, type TutorialDefinition } from "@/tutorials"
  */
 const tutorialStyles = {
   options: {
-    primaryColor: "var(--color-primary, #6366f1)",
-    textColor: "var(--color-text, #1f2937)",
-    backgroundColor: "var(--color-surface, #ffffff)",
-    arrowColor: "var(--color-surface, #ffffff)",
+    primaryColor: "rgb(var(--color-primary, 99 102 241))",
+    textColor: "rgb(var(--color-text, 31 41 55))",
+    backgroundColor: "rgb(var(--color-surface, 255 255 255))",
+    arrowColor: "rgb(var(--color-surface, 255 255 255))",
     overlayColor: "rgba(0, 0, 0, 0.5)",
     zIndex: 10000
   },
@@ -58,7 +58,7 @@ const tutorialStyles = {
     fontSize: 14
   },
   buttonSkip: {
-    color: "var(--color-text-muted, #6b7280)",
+    color: "rgb(var(--color-text-muted, 107 114 128))",
     fontSize: 14
   },
   buttonClose: {

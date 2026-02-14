@@ -1,5 +1,6 @@
 import React from "react"
 
+// theme-exempt: brand and file-type icon colors
 export const LlamaCppLogo = React.forwardRef<
   SVGSVGElement,
   React.SVGProps<SVGSVGElement>

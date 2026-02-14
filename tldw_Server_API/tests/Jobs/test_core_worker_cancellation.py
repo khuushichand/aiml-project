@@ -448,3 +448,29 @@ async def test_core_worker_stops_renew_after_successful_export(monkeypatch, tmp_
 
     ej = FakeChatbookService.jobs["cb-ok-1"]
     assert ej.status == ExportStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_core_worker_propagates_task_cancellation_while_idle(monkeypatch, tmp_path):
+    jobs_db = tmp_path / "jobs.db"
+    ensure_jobs_tables(jobs_db)
+    jm = JobManager(jobs_db)
+
+    import tldw_Server_API.app.services.core_jobs_worker as worker
+
+    class JMProxy:
+        def __init__(self):
+            self._jm = jm
+
+        def __getattr__(self, name):
+            return getattr(self._jm, name)
+
+    monkeypatch.setattr(worker, "JobManager", JMProxy)
+    monkeypatch.setenv("JOBS_POLL_INTERVAL_SECONDS", "30")
+
+    run_task = asyncio.create_task(worker.run_chatbooks_core_jobs_worker())
+    await asyncio.sleep(0.1)
+    run_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(run_task, timeout=1.0)

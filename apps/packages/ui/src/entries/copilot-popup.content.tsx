@@ -116,13 +116,22 @@ const createPopup = (
   const shadow = host.attachShadow({ mode: "open" })
   shadow.innerHTML = `
     <style>
-      :host { all: initial; }
+      :host {
+        all: initial;
+        --popup-bg: 15 23 42;
+        --popup-surface: 30 41 59;
+        --popup-text: 226 232 240;
+        --popup-text-strong: 248 250 252;
+        --popup-text-muted: 148 163 184;
+        --popup-accent: 56 189 248;
+        --popup-danger: 252 165 165;
+      }
       * { box-sizing: border-box; }
       .tldw-popup {
         position: fixed;
         width: ${POPUP_WIDTH}px;
-        background: #0f172a;
-        color: #e2e8f0;
+        background: rgb(var(--popup-bg));
+        color: rgb(var(--popup-text));
         border: 1px solid rgba(148, 163, 184, 0.2);
         border-radius: 14px;
         box-shadow: 0 20px 50px rgba(15, 23, 42, 0.4);
@@ -141,12 +150,12 @@ const createPopup = (
         font-size: 13px;
         font-weight: 600;
         letter-spacing: 0.02em;
-        color: #f8fafc;
+        color: rgb(var(--popup-text-strong));
       }
       .tldw-icon-btn {
         border: none;
         background: transparent;
-        color: #94a3b8;
+        color: rgb(var(--popup-text-muted));
         font-size: 14px;
         cursor: pointer;
         padding: 4px 6px;
@@ -160,7 +169,7 @@ const createPopup = (
       .tldw-label {
         font-size: 11px;
         font-weight: 600;
-        color: #94a3b8;
+        color: rgb(var(--popup-text-muted));
         text-transform: uppercase;
         letter-spacing: 0.08em;
       }
@@ -170,7 +179,7 @@ const createPopup = (
         font-size: 13px;
         line-height: 1.5;
         white-space: pre-wrap;
-        color: #e2e8f0;
+        color: rgb(var(--popup-text));
       }
       .tldw-preview {
         width: 100%;
@@ -180,19 +189,19 @@ const createPopup = (
         border-radius: 10px;
         border: 1px solid rgba(148, 163, 184, 0.2);
         background: rgba(15, 23, 42, 0.7);
-        color: #e2e8f0;
+        color: rgb(var(--popup-text));
         padding: 8px 10px;
         font-size: 13px;
         line-height: 1.5;
       }
       .tldw-status {
         font-size: 12px;
-        color: #94a3b8;
+        color: rgb(var(--popup-text-muted));
         margin-right: auto;
       }
       .tldw-error {
         font-size: 12px;
-        color: #fca5a5;
+        color: rgb(var(--popup-danger));
       }
       .tldw-footer {
         display: flex;
@@ -210,8 +219,8 @@ const createPopup = (
       }
       .tldw-btn {
         border: 1px solid rgba(148, 163, 184, 0.2);
-        background: rgba(15, 23, 42, 0.6);
-        color: #e2e8f0;
+        background: rgb(var(--popup-surface) / 0.6);
+        color: rgb(var(--popup-text));
         font-size: 12px;
         font-weight: 600;
         padding: 6px 10px;
@@ -219,8 +228,8 @@ const createPopup = (
         cursor: pointer;
       }
       .tldw-btn.primary {
-        background: #38bdf8;
-        color: #0f172a;
+        background: rgb(var(--popup-accent));
+        color: rgb(var(--popup-bg));
         border-color: transparent;
       }
       .tldw-btn.ghost {

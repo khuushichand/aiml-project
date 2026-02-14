@@ -68,7 +68,7 @@ class TestNotesInteropService(unittest.TestCase):
         with self.assertRaises(Actual_CharactersRAGDBError) as cm:
             NotesInteropService(base_db_directory=str(self.base_db_dir), api_client_id="fail_client")
         self.assertIn(expected_msg_part, str(cm.exception))
-        self.mock_notes_library_logger.error.assert_called_with(
+        self.mock_notes_library_logger.exception.assert_called_with(
             f"Failed to create base DB directory {self.base_db_dir}: Permission denied"
         )
 

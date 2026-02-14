@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAnimationFrame } from "./engine/useAnimationFrame";
 import { loadEffect } from "./engine/registry";
 import type { SplashEffect } from "./engine/types";
@@ -9,6 +9,12 @@ interface SplashCanvasProps {
   active: boolean;
 }
 
+const resolveTokenColor = (tokenName: string, fallbackRgb: string): string => {
+  if (typeof window === "undefined") return fallbackRgb;
+  const tokenValue = getComputedStyle(document.documentElement).getPropertyValue(tokenName).trim();
+  return tokenValue ? `rgb(${tokenValue})` : fallbackRgb;
+};
+
 /**
  * Canvas element that loads and runs a single splash effect.
  * Fills its parent container and runs a RAF animation loop.
@@ -17,6 +23,10 @@ const SplashCanvas: React.FC<SplashCanvasProps> = ({ effectName, effectConfig, a
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const effectRef = useRef<SplashEffect | null>(null);
   const [ready, setReady] = useState(false);
+  const canvasBackgroundColor = useMemo(
+    () => resolveTokenColor("--color-bg", "rgb(0 0 0)"),
+    []
+  );
 
   // Load the effect module
   useEffect(() => {
@@ -67,7 +77,7 @@ const SplashCanvas: React.FC<SplashCanvasProps> = ({ effectName, effectConfig, a
     if (!ctx) return;
 
     // Clear
-    ctx.fillStyle = "#000000";
+    ctx.fillStyle = canvasBackgroundColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     effect.update(elapsed, dt);

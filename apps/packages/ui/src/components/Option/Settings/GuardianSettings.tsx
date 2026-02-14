@@ -1336,9 +1336,9 @@ function GuardianControlsTab({ online }: { online: boolean }) {
           onClick: () => setSelectedRelationshipId(record.id),
           style: {
             cursor: "pointer",
-            background:
-              selectedRelationshipId === record.id
-                ? "var(--ant-primary-1, #e6f4ff)"
+              background:
+                selectedRelationshipId === record.id
+                ? "var(--ant-primary-1, rgb(230 244 255))"
                 : undefined
           }
         })}

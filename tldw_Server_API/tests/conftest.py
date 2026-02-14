@@ -270,6 +270,15 @@ def _restore_auth_env_and_singletons():
     This fixture restores a small set of high-impact environment keys to their
     baseline values and resets key singletons used by the auth/jobs stacks.
     """
+    # Defensive pre-test reset: avoid stale singleton state inherited from
+    # collection-time imports or prior tests.
+    try:
+        from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service
+
+        reset_jwt_service()
+    except Exception:
+        pass
+
     yield
 
     for key, baseline_value in _AUTH_ENV_BASELINE.items():
@@ -283,6 +292,12 @@ def _restore_auth_env_and_singletons():
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
         reset_settings()
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service
+
+        reset_jwt_service()
     except Exception:
         pass
 
@@ -321,11 +336,16 @@ def _restore_user_db_env_and_chacha_cache():
     except Exception:
         pass
 
-    # Drop cached ChaChaNotes DB instances to avoid stale file handles.
+    # Drain ChaCha background tasks/futures before closing DB handles to avoid
+    # races where sqlite connections are closed during active executor queries.
     try:
-        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import close_all_chacha_db_instances
+        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
+            reset_chacha_shutdown_state,
+            shutdown_chacha_resources,
+        )
 
-        close_all_chacha_db_instances()
+        _run_coro_sync_best_effort(shutdown_chacha_resources(wait_timeout=5.0))
+        reset_chacha_shutdown_state()
     except Exception:
         pass
 

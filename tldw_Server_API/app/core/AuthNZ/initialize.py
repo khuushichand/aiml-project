@@ -473,6 +473,7 @@ async def setup_database():
             from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
                 ensure_api_keys_tables_pg,
                 ensure_authnz_core_tables_pg,
+                ensure_generated_files_table_pg,
                 ensure_org_provider_secrets_pg,
                 ensure_usage_tables_pg,
                 ensure_user_provider_secrets_pg,
@@ -520,6 +521,13 @@ async def setup_database():
                 logger.warning(
                     "AuthNZ initialize: ensure_usage_tables_pg failed for Postgres backend "
                     f"(db={db_url_safe}); usage tables may be missing: {usage_err}"
+                )
+            try:
+                await ensure_generated_files_table_pg(pool)
+            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as files_err:
+                logger.warning(
+                    "AuthNZ initialize: ensure_generated_files_table_pg failed for Postgres backend "
+                    f"(db={db_url_safe}); generated_files table may be missing: {files_err}"
                 )
             try:
                 await ensure_virtual_key_counters_pg(pool)

@@ -748,6 +748,13 @@ class PromptsInteropService:
         if not isinstance(data, dict):
             raise TypeError("import data must be a dict")
         prompts = data.get("prompts") or []
+        def _looks_like_duplicate_error(exc: Exception) -> bool:
+            text = str(exc).lower()
+            return (
+                "unique constraint" in text
+                or "already exists" in text
+                or "duplicate" in text
+            )
         # Build a set of existing names to avoid overwriting, using raw DB names (including deleted) if available
         db = self._ensure_db()
         try:
@@ -811,6 +818,13 @@ class PromptsInteropService:
                     skipped += 1
                 else:
                     raise
+            except Exception as e:
+                logger.warning(f"Failed to import prompt '{p.get('name', '<unknown>')}': {e}")
+                failed += 1
+                if skip_duplicates and _looks_like_duplicate_error(e):
+                    skipped += 1
+                    continue
+                raise
 
         return {"imported": imported, "failed": failed, "skipped": skipped, "prompt_ids": new_ids}
 

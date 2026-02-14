@@ -10,7 +10,7 @@ pytestmark = pytest.mark.unit
 
 
 @given(
-    columns=st.lists(st.text(min_size=1, max_size=8), min_size=1, max_size=6),
+    columns=st.lists(st.text(min_size=1, max_size=8), min_size=1, max_size=6, unique=True),
     rows=st.lists(st.lists(st.text(max_size=12), max_size=6), max_size=10),
 )
 def test_validate_accepts_matching_rows(columns: list[str], rows: list[list[str]]) -> None:

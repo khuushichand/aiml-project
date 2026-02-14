@@ -840,16 +840,17 @@ class AuthnzGeneratedFilesRepo:
         try:
             async with self.db_pool.acquire() as conn:
                 if self._is_postgres():
-                    # Use parameterized query instead of string formatting
+                    # Use interval arithmetic in SQL to avoid timezone-aware Python
+                    # datetime binds against TIMESTAMP (without timezone) columns.
                     rows = await conn.fetch(
                         """
                         SELECT * FROM generated_files
                         WHERE is_deleted = TRUE
-                          AND deleted_at < $1
+                          AND deleted_at < (CURRENT_TIMESTAMP - ($1::int * INTERVAL '1 day'))
                         ORDER BY deleted_at
                         LIMIT $2
                         """,
-                        cutoff,
+                        days_old,
                         limit,
                     )
                     return [self._normalize_record(row) for row in rows]

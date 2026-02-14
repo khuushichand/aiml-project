@@ -25,6 +25,7 @@ const HighlightEditor = React.lazy(() =>
   }))
 )
 
+// theme-exempt: user highlight colors
 const COLOR_OPTIONS: { value: HighlightColor | "all"; label: string; color?: string }[] = [
   { value: "all", label: "All Colors" },
   { value: "yellow", label: "Yellow", color: "#fef08a" },

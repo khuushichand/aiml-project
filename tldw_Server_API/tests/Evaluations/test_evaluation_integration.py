@@ -103,7 +103,7 @@ class TestEvaluationIntegration:
 
         # Mock LLM to fail
         with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.asyncio.to_thread') as mock_thread:
-            mock_thread.side_effect = Exception("LLM error")
+            mock_thread.side_effect = RuntimeError("LLM error")
 
             # Should raise error instead of returning 0.0
             with pytest.raises(ValueError) as exc_info:
@@ -177,7 +177,7 @@ class TestEvaluationIntegration:
         """Test that evaluation falls back to LLM when embeddings unavailable."""
         # Create evaluator without embeddings
         with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.create_embedding') as mock_create:
-            mock_create.side_effect = Exception("No API key")
+            mock_create.side_effect = RuntimeError("No API key")
 
             evaluator = RAGEvaluator()
             assert evaluator.embedding_available is False

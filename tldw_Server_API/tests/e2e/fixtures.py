@@ -899,6 +899,15 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
+    def stream(self, method: str, url: str, **kwargs) -> Any:
+        """Proxy streaming requests to the underlying httpx client.
+
+        Some non-e2e suites request an `authenticated_client` fixture name and
+        then call `client.stream(...)`. Providing this passthrough keeps the
+        wrapper compatible with that usage pattern.
+        """
+        return self.client.stream(method, url, **kwargs)
+
     def get_auth_headers(self) -> Dict[str, str]:
         """Get current authentication headers."""
         headers = {}

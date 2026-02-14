@@ -1,7 +1,14 @@
-import os
-import sqlite3
-
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.RAG.rag_service.connection_pool import MultiDatabasePool
+from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import ClaimsRetriever
+
+
+def _clear_memory_artifacts(base_dir):
+    for name in (":memory:", ":memory:-wal", ":memory:-shm"):
+        p = base_dir / name
+        if p.exists():
+            p.unlink()
+        assert not p.exists()
 
 
 def test_sqlite_in_memory_creates_no_artifacts(tmp_path, monkeypatch):
@@ -11,11 +18,7 @@ def test_sqlite_in_memory_creates_no_artifacts(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     # Sanity: ensure no pre-existing artifacts
-    for name in (":memory:", ":memory:-wal", ":memory:-shm"):
-        p = tmp_path / name
-        if p.exists():
-            p.unlink()
-        assert not p.exists()
+    _clear_memory_artifacts(tmp_path)
 
     db = MediaDatabase(db_path=":memory:", client_id="memtest")
     try:
@@ -31,3 +34,37 @@ def test_sqlite_in_memory_creates_no_artifacts(tmp_path, monkeypatch):
             assert not (tmp_path / name).exists(), f"Unexpected artifact file: {name}"
     finally:
         db.close_connection()
+
+
+def test_claims_retriever_memory_path_creates_no_artifacts(tmp_path, monkeypatch):
+    """ClaimsRetriever ':memory:' should not materialize a file-backed :memory: DB."""
+    monkeypatch.chdir(tmp_path)
+    _clear_memory_artifacts(tmp_path)
+
+    retriever = ClaimsRetriever(":memory:")
+    try:
+        rows = retriever._execute_query("SELECT 1 as n")
+        assert rows and rows[0]["n"] == 1
+        for name in (":memory:", ":memory:-wal", ":memory:-shm"):
+            assert not (tmp_path / name).exists(), f"Unexpected artifact file: {name}"
+    finally:
+        retriever.close()
+
+
+def test_multi_database_pool_memory_path_creates_no_artifacts(tmp_path, monkeypatch):
+    """MultiDatabasePool ':memory:' should remain in-memory without sidecar files."""
+    monkeypatch.chdir(tmp_path)
+    _clear_memory_artifacts(tmp_path)
+
+    pool = MultiDatabasePool(default_config={"min_connections": 1, "max_connections": 2, "enable_wal": True})
+    try:
+        with pool.get_connection(":memory:") as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS t(x INTEGER)")
+            conn.execute("INSERT INTO t(x) VALUES (1)")
+            row = conn.execute("SELECT COUNT(*) as c FROM t").fetchone()
+            assert int(row[0]) == 1
+
+        for name in (":memory:", ":memory:-wal", ":memory:-shm"):
+            assert not (tmp_path / name).exists(), f"Unexpected artifact file: {name}"
+    finally:
+        pool.close_all()

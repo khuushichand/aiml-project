@@ -245,7 +245,17 @@ def _build_principal_from_user(
     raw_role = getattr(user, "role", None)
     if raw_role:
         raw_roles.append(raw_role)
-    roles = [str(role) for role in raw_roles if str(role).strip()]
+    roles: list[str] = []
+    _seen_roles: set[str] = set()
+    for role in raw_roles:
+        role_text = str(role).strip()
+        if not role_text:
+            continue
+        role_key = role_text.lower()
+        if role_key in _seen_roles:
+            continue
+        _seen_roles.add(role_key)
+        roles.append(role_text)
     permissions = [
         str(permission)
         for permission in (getattr(user, "permissions", []) or [])

@@ -65,16 +65,16 @@ const { TextArea } = Input
 
 const HERO_STYLE: React.CSSProperties = {
   background:
-    "linear-gradient(180deg, var(--moderation-hero-start, #fdf7ec) 0%, var(--moderation-hero-end, #f6efdf) 100%)",
-  border: "1px solid var(--moderation-hero-border, #e8dcc8)",
-  boxShadow: "0 24px 70px var(--moderation-hero-shadow, rgba(110, 86, 48, 0.18))"
+    "linear-gradient(180deg, var(--moderation-hero-start) 0%, var(--moderation-hero-end) 100%)",
+  border: "1px solid var(--moderation-hero-border)",
+  boxShadow: "0 24px 70px var(--moderation-hero-shadow)"
 }
 
 const HERO_GRID_STYLE: React.CSSProperties = {
   backgroundImage:
-    "linear-gradient(var(--moderation-hero-grid-1, rgba(73, 55, 36, 0.08)) 1px, transparent 1px), linear-gradient(90deg, var(--moderation-hero-grid-2, rgba(73, 55, 36, 0.06)) 1px, transparent 1px)",
+    "linear-gradient(var(--moderation-hero-grid-1) 1px, transparent 1px), linear-gradient(90deg, var(--moderation-hero-grid-2) 1px, transparent 1px)",
   backgroundSize: "28px 28px",
-  opacity: "var(--moderation-hero-grid-opacity, 0.35)"
+  opacity: "var(--moderation-hero-grid-opacity)"
 }
 
 const normalizeCategories = (value: unknown): string[] => {

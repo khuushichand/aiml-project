@@ -235,3 +235,36 @@ async def test_run_non_retryable_failure_marks_failed(monkeypatch, tmp_path):
     assert any(c.get("retryable") is False for c in calls)
     stored = jm.get_job(int(job["id"]))
     assert stored["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_run_handler_cancelled_error_propagates(monkeypatch, tmp_path):
+    db_path = tmp_path / "jobs_wsdk_cancelled.db"
+    ensure_jobs_tables(db_path)
+    jm = JobManager(db_path)
+    job = jm.create_job(domain="chatbooks", queue="default", job_type="t", payload={}, owner_user_id="u")
+
+    cfg = WorkerConfig(domain="chatbooks", queue="default", worker_id="w-cancelled", lease_seconds=5, renew_threshold_seconds=1, renew_jitter_seconds=0)
+    sdk = WorkerSDK(jm, cfg)
+
+    fail_calls = []
+
+    def spy_fail(job_id, **kwargs):
+        fail_calls.append({"job_id": job_id, **kwargs})
+        return True
+
+    monkeypatch.setattr(jm, "fail_job", spy_fail)
+
+    _orig_sleep = asyncio.sleep
+    sdk._sleep = DummySleep(_orig_sleep)
+
+    async def handler(_job_row):
+        raise asyncio.CancelledError()
+
+    task = asyncio.create_task(sdk.run(handler=handler))
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+
+    assert fail_calls == []
+    stored = jm.get_job(int(job["id"]))
+    assert stored["status"] == "processing"

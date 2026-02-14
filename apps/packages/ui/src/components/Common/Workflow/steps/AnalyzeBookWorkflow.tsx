@@ -892,7 +892,7 @@ const ProcessStep: React.FC = () => {
         percent={progress}
         className="w-64 mt-6"
         status="active"
-        strokeColor={{ from: "#108ee9", to: "#87d068" }}
+        strokeColor={{ from: "rgb(var(--color-primary))", to: "rgb(var(--color-success))" }}
       />
       <p className="mt-4 text-text-muted">
         {config?.scope === "per-chapter"

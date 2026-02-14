@@ -267,7 +267,9 @@ def _create_prompts_db_instance(
     salt: Optional[str],
     client_id: str,
 ) -> tuple[PromptsDatabase, Path]:
-    db_path = _get_prompts_db_path_for_user(user_id, salt=salt)
+    # Pass salt positionally so older test monkeypatches that still accept
+    # (user_id, db_version) remain compatible.
+    db_path = _get_prompts_db_path_for_user(user_id, salt)
     db_instance = PromptsDatabase(db_path=str(db_path), client_id=client_id)
     return db_instance, db_path
 

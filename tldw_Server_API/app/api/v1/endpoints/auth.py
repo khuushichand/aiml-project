@@ -28,6 +28,7 @@ from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_auth_rate_limit,
     get_auth_principal,
+    get_current_active_user,  # compat export used by integration tests
     get_db_transaction,
     get_jwt_service_dep,
     get_password_service_dep,
@@ -57,7 +58,10 @@ from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import (
     global_settings as _csrf_globals,
 )
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import (
+    get_db_pool,
+    is_postgres_backend as _is_postgres_backend_core,
+)
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
     DuplicateOrganizationError,
@@ -159,6 +163,15 @@ def _extract_bearer_token(auth_header: Optional[str]) -> str:
         return credential.strip()
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         return ""
+
+
+async def is_postgres_backend() -> bool:
+    """
+    Compatibility shim for tests that monkeypatch backend detection on auth endpoints.
+
+    Canonical backend routing lives in ``core.AuthNZ.database.is_postgres_backend``.
+    """
+    return await _is_postgres_backend_core()
 
 
 def _legacy_user_me_enabled() -> bool:

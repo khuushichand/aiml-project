@@ -384,8 +384,8 @@ export const GenerateCharacterPanel: React.FC<GenerateCharacterPanelProps> = ({
               showInfo={false}
               size="small"
               strokeColor={{
-                '0%': '#6366f1',
-                '100%': '#8b5cf6'
+                '0%': "rgb(var(--color-primary))",
+                '100%': "rgb(var(--color-accent))"
               }}
               className="flex-1"
             />

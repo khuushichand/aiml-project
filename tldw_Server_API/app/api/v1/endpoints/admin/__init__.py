@@ -10,6 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
+from tldw_Server_API.app.core.AuthNZ.alerting import (
+    get_security_alert_dispatcher as _core_get_security_alert_dispatcher,
+)
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateRoleError
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
@@ -78,6 +81,11 @@ async def _is_postgres_backend() -> bool:
 def _get_rbac_repo() -> AuthnzRbacRepo:
     """Factory for AuthnzRbacRepo used by admin RBAC endpoints."""
     return AuthnzRbacRepo()
+
+
+def get_security_alert_dispatcher():
+    """Compatibility shim re-export used by legacy unit tests."""
+    return _core_get_security_alert_dispatcher()
 
 
 # Best-effort coordination for test-time SQLite migrations

@@ -960,6 +960,56 @@ _CREATE_VK_COUNTERS = [
 ]
 
 
+_CREATE_GENERATED_FILES_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS generated_files (
+            id SERIAL PRIMARY KEY,
+            uuid TEXT UNIQUE NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL,
+            team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+            filename TEXT NOT NULL,
+            original_filename TEXT,
+            storage_path TEXT NOT NULL,
+            mime_type TEXT,
+            file_size_bytes BIGINT NOT NULL DEFAULT 0,
+            checksum TEXT,
+            file_category TEXT NOT NULL,
+            source_feature TEXT NOT NULL,
+            source_ref TEXT,
+            folder_tag TEXT,
+            tags JSONB,
+            is_transient BOOLEAN DEFAULT FALSE,
+            expires_at TIMESTAMP,
+            retention_policy TEXT DEFAULT 'user_default',
+            is_deleted BOOLEAN DEFAULT FALSE,
+            deleted_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            accessed_at TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_user_id ON generated_files(user_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_org_id ON generated_files(org_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_team_id ON generated_files(team_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_uuid ON generated_files(uuid)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_category ON generated_files(file_category)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_source_feature ON generated_files(source_feature)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_folder_tag ON generated_files(folder_tag)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_is_deleted ON generated_files(is_deleted)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_expires_at ON generated_files(expires_at)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_generated_files_created_at ON generated_files(created_at)", ()),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_generated_files_user_category "
+        "ON generated_files(user_id, file_category, is_deleted)",
+        (),
+    ),
+]
+
+
 async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure tool catalogs tables exist on PostgreSQL backends.
 
@@ -1599,6 +1649,28 @@ async def ensure_usage_tables_pg(pool: DatabasePool | None = None) -> bool:
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL usage tables: {exc}")
+        return False
+
+
+async def ensure_generated_files_table_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure generated_files table exists for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"PG ensure authnz core tables before generated_files failed: {exc}")
+        for sql, params in _CREATE_GENERATED_FILES_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure generated_files DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL generated_files table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL generated_files table: {exc}")
         return False
 
 

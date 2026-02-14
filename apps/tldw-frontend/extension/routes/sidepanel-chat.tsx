@@ -1783,7 +1783,7 @@ const SidepanelChat = () => {
 
           {dropState === "dragging" && (
             <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center">
-              <div className="rounded-2xl border border-dashed border-white/70 bg-black/70 px-5 py-3 text-center text-sm font-medium text-white shadow-lg backdrop-blur-sm dark:border-white/40">
+              <div className="rounded-2xl border border-dashed border-border bg-surface/90 px-5 py-3 text-center text-sm font-medium text-text shadow-lg backdrop-blur-sm">
                 {t(
                   "playground:drop.overlayInstruction",
                   "Drop the image to attach it to your next reply"
@@ -1800,7 +1800,7 @@ const SidepanelChat = () => {
                 className={`max-w-lg rounded-full px-4 py-2 text-sm shadow-lg backdrop-blur-sm ${
                   dropFeedback.type === "error"
                     ? "bg-danger text-white"
-                    : "bg-slate-900/80 text-white dark:bg-slate-100/90 dark:text-slate-900"
+                    : "border border-border bg-elevated text-text"
                 }`}
               >
                 {dropFeedback.message}

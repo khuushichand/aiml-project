@@ -43,6 +43,9 @@ from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode, is_
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
 from tldw_Server_API.app.core.exceptions import InactiveUserError
 
 _USER_DB_NONCRITICAL_EXCEPTIONS = (
@@ -62,6 +65,7 @@ _USER_DB_NONCRITICAL_EXCEPTIONS = (
     ValueError,
     UnicodeDecodeError,
     DatabaseError,
+    BackendDatabaseError,
     HTTPException,
     InvalidTokenError,
     TokenExpiredError,
