@@ -37,6 +37,8 @@ interface ViewerToolbarProps {
 }
 
 const ZOOM_PRESETS = [25, 50, 75, 100, 125, 150, 200, 300, 400]
+const TOOLBAR_ICON_BUTTON_CLASS =
+  "rounded p-1.5 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
 export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
   currentPage,
@@ -139,7 +141,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
             <button
               onClick={handleZoomOut}
               disabled={zoomLevel <= MIN_ZOOM_LEVEL}
-              className="rounded p-1.5 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+              className={TOOLBAR_ICON_BUTTON_CLASS}
               aria-label={t("option:documentWorkspace.zoomOut", "Zoom out")}
             >
               <ZoomOut className="h-4 w-4" />
@@ -162,7 +164,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
             <button
               onClick={handleZoomIn}
               disabled={zoomLevel >= MAX_ZOOM_LEVEL}
-              className="rounded p-1.5 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+              className={TOOLBAR_ICON_BUTTON_CLASS}
               aria-label={t("option:documentWorkspace.zoomIn", "Zoom in")}
             >
               <ZoomIn className="h-4 w-4" />
@@ -172,7 +174,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
           <Tooltip title={t("option:documentWorkspace.fitWidth", "Fit width")}>
             <button
               onClick={handleFitWidth}
-              className="rounded p-1.5 hover:bg-hover"
+              className={TOOLBAR_ICON_BUTTON_CLASS}
               aria-label={t("option:documentWorkspace.fitWidth", "Fit width")}
             >
               <Maximize className="h-4 w-4" />
@@ -193,7 +195,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
           <button
             onClick={onPreviousPage}
             disabled={currentPage <= 1}
-            className="rounded p-1.5 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+            className={TOOLBAR_ICON_BUTTON_CLASS}
             aria-label={t("option:documentWorkspace.previousPage", "Previous")}
           >
             <ChevronLeft className="h-4 w-4" />
@@ -236,7 +238,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
           <button
             onClick={onNextPage}
             disabled={currentPage >= totalPages}
-            className="rounded p-1.5 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+            className={TOOLBAR_ICON_BUTTON_CLASS}
             aria-label={t("option:documentWorkspace.nextPage", "Next")}
           >
             <ChevronRight className="h-4 w-4" />

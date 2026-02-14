@@ -75,9 +75,9 @@ const solarizedTheme: ThemeDefinition = {
       border: "210 203 184",
       borderStrong: "192 184 163",
       text: "7 54 66",          // base02
-      textMuted: "88 110 117",  // base01
+      textMuted: "78 98 105",   // darkened for AA on surface/surface2
       textSubtle: "101 123 131",// base00
-      focus: "42 161 152",
+      focus: "34 145 136",      // darkened for >=3:1 focus indicator contrast
     },
     dark: {
       bg: "0 43 54",            // base03
@@ -127,7 +127,7 @@ const nordTheme: ThemeDefinition = {
       text: "46 52 64",         // Polar Night nord0
       textMuted: "67 76 94",    // nord1
       textSubtle: "104 117 140",
-      focus: "136 192 208",
+      focus: "94 129 172",      // align with primary for >=3:1 focus contrast
     },
     dark: {
       bg: "46 52 64",           // Polar Night nord0
@@ -225,9 +225,9 @@ const rosePineTheme: ThemeDefinition = {
       border: "223 218 206",    // Dawn highlight low
       borderStrong: "206 202 205",// Dawn highlight med
       text: "87 82 121",        // Dawn text
-      textMuted: "121 117 147", // Dawn subtle
-      textSubtle: "152 147 165",// Dawn muted
-      focus: "215 130 126",
+      textMuted: "107 102 132", // darkened for AA on surface/surface2
+      textSubtle: "134 128 152",// darkened for >=3:1 subtle floor
+      focus: "168 110 122",     // darkened for >=3:1 focus indicator contrast
     },
     dark: {
       bg: "25 23 36",           // Main base
@@ -245,7 +245,7 @@ const rosePineTheme: ThemeDefinition = {
       borderStrong: "57 53 82", // Main highlight med
       text: "224 222 244",      // Main text
       textMuted: "144 140 170", // Main subtle
-      textSubtle: "110 106 134",// Main muted
+      textSubtle: "112 108 136",// brightened to meet subtle floor on surface2
       focus: "235 188 186",
     },
   },

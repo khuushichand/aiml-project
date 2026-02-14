@@ -1,6 +1,6 @@
 # M3 Execution Plan: Design System and Accessibility Baseline
 
-Status: In Progress  
+Status: Complete (Engineering)  
 Owner: WebUI + Accessibility  
 Date: February 13, 2026  
 Roadmap Link: `Docs/Product/WebUI/WebUI_UX_Strategic_Roadmap_2026_02.md`
@@ -15,7 +15,7 @@ Establish enforceable design-token and accessibility baselines for core WebUI jo
 |---|---|---|---|---|
 | M3.1 | Feb 13-Feb 20, 2026 | Token inventory + contrast guardrails | Complete | Core token map published, automated contrast guardrail test passing |
 | M3.2 | Feb 20-Mar 3, 2026 | Keyboard/focus path normalization | Complete | Core workflows pass keyboard/focus QA script and targeted tests |
-| M3.3 | Mar 3-Mar 10, 2026 | Component baseline and release gates | In Progress | Button/input/alert/empty-state baseline published and referenced in release checklist |
+| M3.3 | Mar 3-Mar 10, 2026 | Component baseline and release gates | Complete (Engineering) | Button/input/alert/empty-state baseline published and referenced in release checklist |
 
 ## 3) Deliverables
 
@@ -44,6 +44,26 @@ Establish enforceable design-token and accessibility baselines for core WebUI jo
   - `apps/packages/ui/src/components/Common/__tests__/KeyboardShortcutsModal.focus.test.tsx`
 - Finalized M3.3/M4 non-core theme hard-gate cut-line memo:
   - `Docs/Product/WebUI/M3_3_NonCore_Theme_Contrast_HardGate_Decision_2026_02.md`
+- Published M3.3 component token baseline for alert/empty-state variants:
+  - `Docs/Product/WebUI/M3_3_Component_Baseline_Alerts_EmptyStates_2026_02.md`
+- Added M3 accessibility release-gate checklist linkage:
+  - `Docs/Product/WebUI/M3_Release_Checklist_A11y_Baseline_2026_02.md`
+- Committed owned M4 non-core theme remediation backlog by theme/token pair:
+  - `Docs/Product/WebUI/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`
+- Remediated non-core decorative theme contrast token pairs (solarized/nord/rose-pine):
+  - `apps/packages/ui/src/themes/presets.ts`
+- Promoted contrast hard-gate coverage to all shipped built-in themes:
+  - `apps/packages/ui/src/themes/__tests__/contrast-baseline.test.ts`
+- Expanded non-shell toolbar focus contracts (folders, timeline, document viewer):
+  - `apps/packages/ui/src/components/Folders/FolderToolbar.tsx`
+  - `apps/packages/ui/src/components/Timeline/TimelineToolbar.tsx`
+  - `apps/packages/ui/src/components/DocumentWorkspace/DocumentViewer/ViewerToolbar.tsx`
+- Added focus-visible regression tests for toolbars and empty/error actions:
+  - `apps/packages/ui/src/components/Folders/__tests__/FolderToolbar.focus.test.tsx`
+  - `apps/packages/ui/src/components/Timeline/__tests__/TimelineToolbar.focus.test.tsx`
+  - `apps/packages/ui/src/components/DocumentWorkspace/DocumentViewer/__tests__/ViewerToolbar.focus.test.tsx`
+  - `apps/packages/ui/src/components/Common/__tests__/FeatureEmptyState.test.tsx`
+  - `apps/packages/ui/src/components/Common/__tests__/RouteErrorBoundary.test.tsx`
 
 ## 5) Validation Evidence
 
@@ -55,20 +75,31 @@ Establish enforceable design-token and accessibility baselines for core WebUI jo
   - Outcome: `25 passed` (post-M3 modal-focus regression gate)
 - `TLDW_SERVER_URL=http://127.0.0.1:8000 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/smoke/m3-2-a11y-focus-evidence.spec.ts --reporter=line`
   - Outcome: `2 passed` (desktop + mobile route-matrix capture)
+- `bunx vitest run ../packages/ui/src/components/Folders/__tests__/FolderToolbar.focus.test.tsx ../packages/ui/src/components/Timeline/__tests__/TimelineToolbar.focus.test.tsx ../packages/ui/src/components/DocumentWorkspace/DocumentViewer/__tests__/ViewerToolbar.focus.test.tsx ../packages/ui/src/components/Common/__tests__/FeatureEmptyState.test.tsx ../packages/ui/src/components/Common/__tests__/RouteErrorBoundary.test.tsx ../packages/ui/src/components/Common/__tests__/CommandPalette.shortcuts.test.tsx ../packages/ui/src/components/Common/__tests__/KeyboardShortcutsModal.focus.test.tsx ../packages/ui/src/themes/__tests__/contrast-baseline.test.ts`
+  - Outcome: `18 passed`
+- `TLDW_SERVER_URL=http://127.0.0.1:8000 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Key Navigation Targets|Wayfinding|Route Error Boundaries" --reporter=line`
+  - Outcome: `25 passed` (post-toolbar + component-baseline regression gate)
+- `TLDW_SERVER_URL=http://127.0.0.1:8000 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/smoke/invalid-api-key.spec.ts --reporter=line`
+  - Outcome: `1 passed` (auth-error degradation gate intact)
+- `bun /tmp/m4_contrast_audit.ts`
+  - Outcome: no failures (all built-in themes satisfy current text/focus thresholds)
+- `bun /tmp/m4_pair_ratios.ts`
+  - Outcome: recorded patched pair ratios for solarized/nord/rose-pine in `Docs/Product/WebUI/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`
+- `TLDW_SERVER_URL=http://127.0.0.1:8000 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Key Navigation Targets|Wayfinding|Route Error Boundaries" --reporter=line`
+  - Outcome: `25 passed` (post all-theme hard-gate promotion)
+- `TLDW_SERVER_URL=http://127.0.0.1:8000 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/smoke/invalid-api-key.spec.ts --reporter=line`
+  - Outcome: `1 passed` (post all-theme hard-gate promotion)
 
 ## 6) Remaining Work for Current Milestone (M3.3)
 
-1. Publish component-level token baseline for alerts and empty-state variants.
-2. Expand non-shell focus assertions to selected workspace toolbars beyond modal controls.
-3. Implement non-core decorative theme token remediations required for M4 hard-gate promotion.
+1. QA + accessibility sign-off against `Docs/Product/WebUI/M3_Release_Checklist_A11y_Baseline_2026_02.md`.
 
 ## 7) Risks
 
-- Non-core decorative themes currently have advisory contrast gaps and are not yet hard-gated.
 - Focus behavior consistency across less-used routes still requires M3.2 audits.
 
 ## 8) Next Action Queue
 
-1. Draft and publish M3.3 component baseline doc (buttons/inputs/alerts/empty states).
-2. Convert non-core theme advisory failures into an owned remediation checklist by theme/token pair.
-3. Wire M4 all-theme hard-gate promotion tasks into release checklist language.
+1. Run QA/accessibility sign-off using M3 release checklist template.
+2. Keep all-theme contrast gate green as part of release-candidate validation.
+3. Transition to M4 onboarding flow implementation workstream.

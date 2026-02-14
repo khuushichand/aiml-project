@@ -17,7 +17,7 @@ eggs/
 lib/
 lib64/
 parts/
-scripts/
+
 sdist/
 var/
 wheels/
@@ -271,11 +271,6 @@ errors.log
 !admin-ui/package.json
 all_summaries.txt
 all_transcriptions.json
-
-# Allow extension token-sync verifier script only.
-!apps/extension/scripts/
-apps/extension/scripts/*
-!apps/extension/scripts/verify-shared-token-sync.mjs
 
 # Temporary files
 temp_*.png

@@ -23,6 +23,8 @@ import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 
 const { Text } = Typography
+const TOOLBAR_FOCUS_RING_CLASS =
+  "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
 // ============================================================================
 // Component
@@ -89,6 +91,8 @@ export const TimelineToolbar: React.FC = () => {
           type="text"
           icon={<CloseOutlined />}
           onClick={closeTimeline}
+          className={TOOLBAR_FOCUS_RING_CLASS}
+          aria-label={translateMessage(t, "common:timeline.close", "Close timeline")}
           style={{ marginRight: 8 }}
         />
         <Text strong style={{ fontSize: 16 }}>
@@ -150,6 +154,8 @@ export const TimelineToolbar: React.FC = () => {
                 icon={<CloseOutlined />}
                 onClick={clearSearch}
                 disabled={!hasSearch}
+                className={TOOLBAR_FOCUS_RING_CLASS}
+                aria-label={translateMessage(t, "common:timeline.clearSearch", "Clear search")}
                 aria-hidden={!hasSearch}
                 tabIndex={hasSearch ? 0 : -1}
                 style={{
@@ -201,6 +207,8 @@ export const TimelineToolbar: React.FC = () => {
               icon={<ReloadOutlined spin={isLoading} />}
               onClick={() => void refreshGraph()}
               disabled={isLoading}
+              className={TOOLBAR_FOCUS_RING_CLASS}
+              aria-label={translateMessage(t, "common:timeline.refreshGraph", "Refresh graph")}
             />
           </Tooltip>
 
@@ -216,6 +224,13 @@ export const TimelineToolbar: React.FC = () => {
             <Button
               icon={<RotateRightOutlined />}
               onClick={toggleLayoutDirection}
+              className={TOOLBAR_FOCUS_RING_CLASS}
+              aria-label={translateMessage(
+                t,
+                "common:timeline.switchLayout",
+                "Switch to {{layout}} layout",
+                { layout: nextLayoutDirectionLabel }
+              )}
             />
           </Tooltip>
 
@@ -230,6 +245,12 @@ export const TimelineToolbar: React.FC = () => {
             <Button
               icon={<ExpandOutlined />}
               onClick={expandAllSwipes}
+              className={TOOLBAR_FOCUS_RING_CLASS}
+              aria-label={translateMessage(
+                t,
+                "common:timeline.expandAllAlternatives",
+                "Expand all alternatives"
+              )}
             />
           </Tooltip>
           <Tooltip
@@ -242,6 +263,12 @@ export const TimelineToolbar: React.FC = () => {
             <Button
               icon={<CompressOutlined />}
               onClick={collapseAllSwipes}
+              className={TOOLBAR_FOCUS_RING_CLASS}
+              aria-label={translateMessage(
+                t,
+                "common:timeline.collapseAllAlternatives",
+                "Collapse all alternatives"
+              )}
             />
           </Tooltip>
 
@@ -265,6 +292,12 @@ export const TimelineToolbar: React.FC = () => {
               icon={<UnorderedListOutlined />}
               type={settings.showLegend ? 'primary' : 'default'}
               onClick={() => updateSettings({ showLegend: !settings.showLegend })}
+              className={TOOLBAR_FOCUS_RING_CLASS}
+              aria-label={
+                settings.showLegend
+                  ? translateMessage(t, "common:timeline.hideLegend", "Hide legend")
+                  : translateMessage(t, "common:timeline.showLegend", "Show legend")
+              }
             />
           </Tooltip>
 
@@ -275,6 +308,8 @@ export const TimelineToolbar: React.FC = () => {
                 icon={<ZoomInOutlined />}
                 disabled={!canZoom}
                 onClick={() => zoomTo(settings.zoomLevel * 1.2)}
+                className={TOOLBAR_FOCUS_RING_CLASS}
+                aria-label={translateMessage(t, "common:timeline.zoomIn", "Zoom in")}
               />
             </Tooltip>
             <Tooltip
@@ -284,6 +319,8 @@ export const TimelineToolbar: React.FC = () => {
                 icon={<ZoomOutOutlined />}
                 disabled={!canZoom}
                 onClick={() => zoomTo(settings.zoomLevel / 1.2)}
+                className={TOOLBAR_FOCUS_RING_CLASS}
+                aria-label={translateMessage(t, "common:timeline.zoomOut", "Zoom out")}
               />
             </Tooltip>
           </Button.Group>

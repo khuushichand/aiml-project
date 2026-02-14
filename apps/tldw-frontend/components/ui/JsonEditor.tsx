@@ -57,7 +57,13 @@ export function JsonEditor({
     );
   }
 
-  const theme = (typeof document !== 'undefined' && document.documentElement.classList.contains('theme-dark')) ? 'vs-dark' : 'light';
+  const theme = (
+    typeof document !== 'undefined' &&
+    (
+      document.documentElement.classList.contains('dark') ||
+      document.documentElement.classList.contains('theme-dark')
+    )
+  ) ? 'vs-dark' : 'light';
   return (
     <Monaco
       defaultLanguage="json"

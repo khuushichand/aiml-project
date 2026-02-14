@@ -759,11 +759,14 @@ export const QuickIngestModal: React.FC<Props> = ({
       queryFn: () => getEmbeddingModels(),
       enabled: open && ingestConnectionStatus === "online"
     })
-  const { markFailure, clearFailure, setQueuedCount } = useQuickIngestStore((s) => ({
-    markFailure: s.markFailure,
-    clearFailure: s.clearFailure,
-    setQueuedCount: s.setQueuedCount
-  }))
+  const { markFailure, clearFailure, setQueuedCount, recordRunSuccess, recordRunFailure } =
+    useQuickIngestStore((s) => ({
+      markFailure: s.markFailure,
+      clearFailure: s.clearFailure,
+      setQueuedCount: s.setQueuedCount,
+      recordRunSuccess: s.recordRunSuccess,
+      recordRunFailure: s.recordRunFailure
+    }))
   const [lastRunError, setLastRunError] = React.useState<string | null>(null)
   const [draftCreationError, setDraftCreationError] = React.useState<string | null>(null)
   const [draftCreationRetrying, setDraftCreationRetrying] = React.useState(false)
@@ -2061,6 +2064,11 @@ export const QuickIngestModal: React.FC<Props> = ({
         }
         markPendingItemsAsFailed(msg)
         setLastRunError(msg)
+        recordRunFailure({
+          totalCount: total,
+          failedCount: total,
+          errorMessage: msg
+        })
         markFailure()
         setRunning(false)
         setRunStartedAt(null)
@@ -2077,6 +2085,11 @@ export const QuickIngestModal: React.FC<Props> = ({
         )
         markPendingItemsAsFailed(msg)
         setLastRunError(msg)
+        recordRunFailure({
+          totalCount: total,
+          failedCount: total,
+          errorMessage: msg
+        })
         markFailure()
         setRunning(false)
         setRunStartedAt(null)
@@ -2093,6 +2106,35 @@ export const QuickIngestModal: React.FC<Props> = ({
       setRunning(false)
       setRunStartedAt(null)
       const hasOkResults = out.some((r) => r.status === "ok")
+      const successCount = out.filter((r) => r.status === "ok").length
+      const failCount = out.length - successCount
+      const firstSuccessfulItem = out.find((r) => r.status === "ok") || null
+      const firstMediaId = firstSuccessfulItem
+        ? mediaIdFromPayload(firstSuccessfulItem.data)
+        : null
+      const primarySourceLabel =
+        firstSuccessfulItem?.url ||
+        firstSuccessfulItem?.fileName ||
+        null
+      if (hasOkResults) {
+        recordRunSuccess({
+          totalCount: out.length,
+          successCount,
+          failedCount: failCount,
+          firstMediaId:
+            firstMediaId === null || typeof firstMediaId === "undefined"
+              ? null
+              : String(firstMediaId),
+          primarySourceLabel
+        })
+      } else {
+        const firstError = out.find((item) => item.status === "error")?.error || null
+        recordRunFailure({
+          totalCount: out.length,
+          failedCount: out.length,
+          errorMessage: firstError
+        })
+      }
       let createdDraftBatch: {
         batchId: string
         draftIds: string[]
@@ -2131,8 +2173,6 @@ export const QuickIngestModal: React.FC<Props> = ({
         )
       }
       if (out.length > 0) {
-        const successCount = out.filter((r) => r.status === 'ok').length
-        const failCount = out.length - successCount
         const summary = `${successCount} succeeded · ${failCount} failed`
         if (failCount > 0) messageApi.warning(summary)
         else messageApi.success(summary)
@@ -2153,6 +2193,11 @@ export const QuickIngestModal: React.FC<Props> = ({
       setRunning(false)
       setRunStartedAt(null)
       setLastRunError(msg)
+      recordRunFailure({
+        totalCount: total,
+        failedCount: total > 0 ? total : undefined,
+        errorMessage: msg
+      })
       markFailure()
     }
   }, [
@@ -2174,6 +2219,8 @@ export const QuickIngestModal: React.FC<Props> = ({
     mergeDefaults,
     processOnly,
     qi,
+    recordRunFailure,
+    recordRunSuccess,
     fileTypeFromName,
     reviewBeforeStorage,
     rows,

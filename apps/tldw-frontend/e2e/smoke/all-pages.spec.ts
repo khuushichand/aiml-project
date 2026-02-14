@@ -11,13 +11,21 @@
  */
 
 import type { Page } from '@playwright/test';
-import { test, expect, seedAuth, getCriticalIssues } from './smoke.setup';
+import {
+  test,
+  expect,
+  seedAuth,
+  getCriticalIssues,
+  classifySmokeIssues,
+} from './smoke.setup';
 import { PAGES, PageEntry, getActivePages, PAGE_COUNT, ACTIVE_PAGE_COUNT } from './page-inventory';
 
 // Test configuration
 const LOAD_TIMEOUT = 30_000; // 30s max for page load
 const ELEMENT_TIMEOUT = 15_000; // 15s max for element visibility
 const VERBOSE_CONSOLE = process.env.TLDW_SMOKE_VERBOSE_CONSOLE === '1';
+const ALLOWLIST_LOG_LIMIT = Number(process.env.TLDW_SMOKE_ALLOWLIST_LOG_LIMIT || 10);
+const SMOKE_HARD_GATE = process.env.TLDW_SMOKE_HARD_GATE !== '0';
 const KEY_NAV_TARGETS = ['/chat', '/media', '/knowledge', '/notes', '/prompts', '/settings/tldw'];
 const WAYFINDING_404_PATH = '/__wayfinding-missing-route__';
 const ROUTE_ERROR_FIXTURE_QUERY_KEY = '__forceRouteError';
@@ -98,7 +106,11 @@ const keyNavEntries: PageEntry[] = KEY_NAV_TARGETS.map((targetPath) =>
 /**
  * Format diagnostics for console output
  */
-function formatDiagnostics(entry: PageEntry, issues: ReturnType<typeof getCriticalIssues>): string {
+function formatDiagnostics(
+  entry: PageEntry,
+  issues: ReturnType<typeof getCriticalIssues>,
+  classifiedIssues: ReturnType<typeof classifySmokeIssues>
+): string {
   const lines: string[] = [];
 
   if (issues.pageErrors.length) {
@@ -112,9 +124,26 @@ function formatDiagnostics(entry: PageEntry, issues: ReturnType<typeof getCritic
     });
   }
 
-  if (issues.consoleErrors.length) {
-    lines.push(`  CONSOLE ERRORS (${issues.consoleErrors.length}):`);
-    issues.consoleErrors.forEach((c) => {
+  if (classifiedIssues.allowlistedConsoleErrors.length) {
+    lines.push(`  ALLOWLISTED CONSOLE WARNINGS (${classifiedIssues.allowlistedConsoleErrors.length}):`);
+    const loggedEntries = classifiedIssues.allowlistedConsoleErrors.slice(0, ALLOWLIST_LOG_LIMIT);
+    loggedEntries.forEach(({ entry: c, rule }) => {
+      const text = VERBOSE_CONSOLE
+        ? c.text
+        : c.text.length > 200
+          ? c.text.slice(0, 200) + '...'
+          : c.text;
+      lines.push(`    - [${rule.id}] ${text}`);
+    });
+    const omitted = classifiedIssues.allowlistedConsoleErrors.length - loggedEntries.length;
+    if (omitted > 0) {
+      lines.push(`    - ... ${omitted} additional allowlisted console warnings omitted`);
+    }
+  }
+
+  if (classifiedIssues.unexpectedConsoleErrors.length) {
+    lines.push(`  UNEXPECTED CONSOLE ERRORS (${classifiedIssues.unexpectedConsoleErrors.length}):`);
+    classifiedIssues.unexpectedConsoleErrors.forEach((c) => {
       const text = VERBOSE_CONSOLE
         ? c.text
         : c.text.length > 200
@@ -124,14 +153,49 @@ function formatDiagnostics(entry: PageEntry, issues: ReturnType<typeof getCritic
     });
   }
 
-  if (issues.requestFailures.length) {
-    lines.push(`  REQUEST FAILURES (${issues.requestFailures.length}):`);
-    issues.requestFailures.forEach((r) => {
+  if (classifiedIssues.allowlistedRequestFailures.length) {
+    lines.push(`  ALLOWLISTED REQUEST FAILURES (${classifiedIssues.allowlistedRequestFailures.length}):`);
+    const loggedEntries = classifiedIssues.allowlistedRequestFailures.slice(0, ALLOWLIST_LOG_LIMIT);
+    loggedEntries.forEach(({ entry: r, rule }) => {
+      lines.push(`    - [${rule.id}] ${r.url} (${r.errorText})`);
+    });
+    const omitted = classifiedIssues.allowlistedRequestFailures.length - loggedEntries.length;
+    if (omitted > 0) {
+      lines.push(`    - ... ${omitted} additional allowlisted request failures omitted`);
+    }
+  }
+
+  if (classifiedIssues.unexpectedRequestFailures.length) {
+    lines.push(`  UNEXPECTED REQUEST FAILURES (${classifiedIssues.unexpectedRequestFailures.length}):`);
+    classifiedIssues.unexpectedRequestFailures.forEach((r) => {
       lines.push(`    - ${r.url} (${r.errorText})`);
     });
   }
 
   return lines.length ? `\n${entry.path}:\n${lines.join('\n')}` : '';
+}
+
+function assertWarningHardGate(
+  routePath: string,
+  classifiedIssues: ReturnType<typeof classifySmokeIssues>
+): void {
+  if (!SMOKE_HARD_GATE) {
+    return;
+  }
+
+  expect(
+    classifiedIssues.unexpectedConsoleErrors,
+    `Unexpected console errors on ${routePath}: ${classifiedIssues.unexpectedConsoleErrors
+      .map((entry) => entry.text)
+      .join(' | ')}`
+  ).toHaveLength(0);
+
+  expect(
+    classifiedIssues.unexpectedRequestFailures,
+    `Unexpected request failures on ${routePath}: ${classifiedIssues.unexpectedRequestFailures
+      .map((entry) => `${entry.url} (${entry.errorText})`)
+      .join(' | ')}`
+  ).toHaveLength(0);
 }
 
 function hasRuntimeOverlaySignal(input: string): boolean {
@@ -226,10 +290,11 @@ test.describe('Smoke Tests - All Pages', () => {
 
       // Get critical issues from diagnostics
       const issues = getCriticalIssues(diagnostics);
+      const classifiedIssues = classifySmokeIssues(entry.path, issues);
       await assertNoRuntimeOverlay(page, issues, entry.path);
 
       // Log any issues found (useful for debugging)
-      const diagnosticOutput = formatDiagnostics(entry, issues);
+      const diagnosticOutput = formatDiagnostics(entry, issues, classifiedIssues);
       if (diagnosticOutput) {
         console.log(diagnosticOutput);
       }
@@ -247,13 +312,7 @@ test.describe('Smoke Tests - All Pages', () => {
         issues.pageErrors,
         `Uncaught page errors on ${entry.path}: ${issues.pageErrors.map((e) => e.message).join(', ')}`
       ).toHaveLength(0);
-
-      // Console errors are soft warnings in development but tracked
-      // Uncomment to make console errors fail the test:
-      // expect(
-      //   issues.consoleErrors,
-      //   `Console errors on ${entry.path}`
-      // ).toHaveLength(0)
+      assertWarningHardGate(entry.path, classifiedIssues);
     });
   }
 });
@@ -270,6 +329,8 @@ test.describe('Smoke Tests - Chat', () => {
       await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
 
       const issues = getCriticalIssues(diagnostics);
+      const classifiedIssues = classifySmokeIssues(entry.path, issues);
+      assertWarningHardGate(entry.path, classifiedIssues);
       expect(issues.pageErrors).toHaveLength(0);
     });
   }
@@ -286,6 +347,8 @@ test.describe('Smoke Tests - Settings', () => {
       await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
 
       const issues = getCriticalIssues(diagnostics);
+      const classifiedIssues = classifySmokeIssues(entry.path, issues);
+      assertWarningHardGate(entry.path, classifiedIssues);
       expect(issues.pageErrors).toHaveLength(0);
     });
   }
@@ -302,6 +365,8 @@ test.describe('Smoke Tests - Admin', () => {
       await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
 
       const issues = getCriticalIssues(diagnostics);
+      const classifiedIssues = classifySmokeIssues(entry.path, issues);
+      assertWarningHardGate(entry.path, classifiedIssues);
       expect(issues.pageErrors).toHaveLength(0);
     });
   }
@@ -318,6 +383,8 @@ test.describe('Smoke Tests - Workspace', () => {
       await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
 
       const issues = getCriticalIssues(diagnostics);
+      const classifiedIssues = classifySmokeIssues(entry.path, issues);
+      assertWarningHardGate(entry.path, classifiedIssues);
       expect(issues.pageErrors).toHaveLength(0);
     });
   }
@@ -334,6 +401,8 @@ test.describe('Smoke Tests - Knowledge', () => {
       await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
 
       const issues = getCriticalIssues(diagnostics);
+      const classifiedIssues = classifySmokeIssues(entry.path, issues);
+      assertWarningHardGate(entry.path, classifiedIssues);
       expect(issues.pageErrors).toHaveLength(0);
     });
   }
@@ -373,6 +442,7 @@ test.describe('Smoke Tests - Key Navigation Targets', () => {
       await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
 
       const issues = getCriticalIssues(diagnostics);
+      const classifiedIssues = classifySmokeIssues(entry.path, issues);
       const status = response?.status() ?? 0;
       await assertNoRuntimeOverlay(page, issues, `key-nav:${entry.path}`);
 
@@ -384,6 +454,7 @@ test.describe('Smoke Tests - Key Navigation Targets', () => {
         issues.pageErrors,
         `Uncaught page errors on key nav target ${entry.path}`
       ).toHaveLength(0);
+      assertWarningHardGate(entry.path, classifiedIssues);
     });
   }
 });
@@ -415,11 +486,13 @@ test.describe('Smoke Tests - Wayfinding', () => {
     await expect(activeSettingsLink.first()).toBeVisible();
 
     const issues = getCriticalIssues(diagnostics);
+    const classifiedIssues = classifySmokeIssues('/settings/tldw', issues);
     await assertNoRuntimeOverlay(page, issues, 'wayfinding:/settings/tldw');
     expect(
       issues.pageErrors,
       'Uncaught page errors while validating settings wayfinding'
     ).toHaveLength(0);
+    assertWarningHardGate('/settings/tldw', classifiedIssues);
   });
 
   test('legacy alias redirects to canonical destination with params preserved', async ({
@@ -439,11 +512,13 @@ test.describe('Smoke Tests - Wayfinding', () => {
     await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
 
     const issues = getCriticalIssues(diagnostics);
+    const classifiedIssues = classifySmokeIssues('/knowledge', issues);
     await assertNoRuntimeOverlay(page, issues, 'wayfinding:/search -> /knowledge');
     expect(
       issues.pageErrors,
       'Uncaught page errors while validating alias redirect wayfinding'
     ).toHaveLength(0);
+    assertWarningHardGate('/knowledge', classifiedIssues);
   });
 
   test('404 recovery controls keep predictable keyboard order', async ({ page, diagnostics }) => {
@@ -481,11 +556,13 @@ test.describe('Smoke Tests - Wayfinding', () => {
     await expect(page.getByTestId('not-found-open-knowledge')).toBeFocused();
 
     const issues = getCriticalIssues(diagnostics);
+    const classifiedIssues = classifySmokeIssues(WAYFINDING_404_PATH, issues);
     await assertNoRuntimeOverlay(page, issues, `wayfinding:${WAYFINDING_404_PATH}`);
     expect(
       issues.pageErrors,
       'Uncaught page errors while validating 404 recovery wayfinding'
     ).toHaveLength(0);
+    assertWarningHardGate(WAYFINDING_404_PATH, classifiedIssues);
   });
 });
 
@@ -520,7 +597,9 @@ test.describe('Smoke Tests - Route Error Boundaries', () => {
       await expect(page.getByTestId('route-error-route-label')).toHaveText(target.routeLabel);
 
       const issues = getCriticalIssues(diagnostics);
+      const classifiedIssues = classifySmokeIssues(target.path, issues);
       await assertNoRuntimeOverlay(page, issues, `route-boundary:${fixturePath}`);
+      assertWarningHardGate(target.path, classifiedIssues);
     });
   }
 });

@@ -103,6 +103,15 @@ const writeLocalStorageValue = (key: string, value: unknown) => {
   }
 }
 
+const removeLocalStorageValue = (key: string) => {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // ignore storage failures
+  }
+}
+
 const getLocalStorageValue = (key: string) => {
   if (typeof window === "undefined") return null
   try {
@@ -120,44 +129,50 @@ const setDefault = (key: string, value: unknown, force = false) => {
 
 const mirrorWebDefaultsFromExtension = () => {
   if (!isWebRuntime()) return
-  const force = getLocalStorageValue(WEB_DEFAULTS_MIRRORED_KEY) !== "true"
+  const shouldMirrorDefaults =
+    getLocalStorageValue(WEB_DEFAULTS_MIRRORED_KEY) !== "true"
+
+  const legacyTheme = getLocalStorageValue("tldw-theme")
+  if (getLocalStorageValue(THEME_SETTING.key) === null && legacyTheme) {
+    writeLocalStorageValue(THEME_SETTING.key, legacyTheme)
+  }
+  if (legacyTheme !== null) {
+    removeLocalStorageValue("tldw-theme")
+  }
+
+  if (!shouldMirrorDefaults) return
 
   // Theme + UI mode defaults
-  setDefault(THEME_SETTING.key, THEME_SETTING.defaultValue, force)
-  setDefault(UI_MODE_SETTING.key, UI_MODE_SETTING.defaultValue, force)
-  setDefault("tldw-ui-mode", "casual", force)
+  setDefault(THEME_SETTING.key, THEME_SETTING.defaultValue)
+  setDefault(UI_MODE_SETTING.key, UI_MODE_SETTING.defaultValue)
+  setDefault("tldw-ui-mode", "casual")
 
   // Feature flags (default true, compare mode default false)
   Object.values(FEATURE_FLAGS).forEach((flag) => {
     const isCompareMode = flag === FEATURE_FLAGS.COMPARE_MODE
-    setDefault(flag, isCompareMode ? false : true, force)
+    setDefault(flag, isCompareMode ? false : true)
   })
 
   // Sidebar + header shortcuts defaults
   setDefault(
     SIDEBAR_ACTIVE_TAB_SETTING.key,
-    SIDEBAR_ACTIVE_TAB_SETTING.defaultValue,
-    force
+    SIDEBAR_ACTIVE_TAB_SETTING.defaultValue
   )
   setDefault(
     SIDEBAR_SHORTCUTS_COLLAPSED_SETTING.key,
-    SIDEBAR_SHORTCUTS_COLLAPSED_SETTING.defaultValue,
-    force
+    SIDEBAR_SHORTCUTS_COLLAPSED_SETTING.defaultValue
   )
   setDefault(
     SIDEBAR_SHORTCUT_SELECTION_SETTING.key,
-    DEFAULT_SIDEBAR_SHORTCUT_SELECTION,
-    force
+    DEFAULT_SIDEBAR_SHORTCUT_SELECTION
   )
   setDefault(
     HEADER_SHORTCUT_SELECTION_SETTING.key,
-    DEFAULT_HEADER_SHORTCUT_SELECTION,
-    force
+    DEFAULT_HEADER_SHORTCUT_SELECTION
   )
   setDefault(
     HEADER_SHORTCUTS_EXPANDED_SETTING.key,
-    HEADER_SHORTCUTS_EXPANDED_SETTING.defaultValue,
-    force
+    HEADER_SHORTCUTS_EXPANDED_SETTING.defaultValue
   )
 
   writeLocalStorageValue(WEB_DEFAULTS_MIRRORED_KEY, "true")

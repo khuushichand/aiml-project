@@ -35,9 +35,16 @@ function computeBaseURL(host: string, version: string) {
 function applyTheme(theme: Theme) {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
-  root.classList.remove('theme-light', 'theme-dark');
-  if (theme === 'light') root.classList.add('theme-light');
-  if (theme === 'dark') root.classList.add('theme-dark');
+  const isDark =
+    theme === 'dark' ||
+    (theme === 'system' &&
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches);
+  root.classList.toggle('dark', isDark);
+  // Keep legacy aliases to avoid breaking existing selectors/readers.
+  root.classList.toggle('theme-dark', isDark);
+  root.classList.toggle('theme-light', !isDark);
+  root.setAttribute('data-theme', isDark ? 'dark' : 'light');
 }
 
 export function ConfigProvider({ children }: { children: React.ReactNode }) {
@@ -48,7 +55,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
         apiVersion: process.env.NEXT_PUBLIC_API_VERSION || 'v1',
         xApiKey: process.env.NEXT_PUBLIC_X_API_KEY,
         apiBearer: process.env.NEXT_PUBLIC_API_BEARER,
-        theme: 'system',
+        theme: 'dark',
         csrfToken: null,
       };
     }
@@ -56,7 +63,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
     const storedVersion = localStorage.getItem('tldw-api-version') || (process.env.NEXT_PUBLIC_API_VERSION || 'v1');
     const storedKey = process.env.NEXT_PUBLIC_X_API_KEY || '';
     const storedBearer = process.env.NEXT_PUBLIC_API_BEARER || '';
-    const storedTheme = (localStorage.getItem('tldw-theme') as Theme) || 'system';
+    const storedTheme = (localStorage.getItem('theme') || localStorage.getItem('tldw-theme') || 'dark') as Theme;
     return { apiBaseHost: storedHost, apiVersion: storedVersion, xApiKey: storedKey || undefined, apiBearer: storedBearer || undefined, theme: storedTheme, csrfToken: null };
   });
 
@@ -79,7 +86,8 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
     try {
       localStorage.setItem('tldw-api-host', config.apiBaseHost);
       localStorage.setItem('tldw-api-version', config.apiVersion);
-      localStorage.setItem('tldw-theme', config.theme);
+      localStorage.setItem('theme', config.theme);
+      localStorage.removeItem('tldw-theme');
     } catch {
       // localStorage may be unavailable in some contexts
     }

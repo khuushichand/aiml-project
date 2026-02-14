@@ -81,19 +81,21 @@ Outcome:
 - `3 files passed`
 - `11 tests passed`
 
-## 6) Advisory Findings (Non-Core Built-in Themes)
+## 6) Historical Advisory Findings and Closure
 
-During baseline calibration, additional built-in themes were observed with contrast gaps that are not yet hard-gated:
+Initial baseline calibration identified non-core built-in theme gaps:
 
 - `solarized/light`: muted text below AA on `surface`/`surface2`
 - `rose-pine/light`: muted + subtle text below target on `surface`/`surface2`
 - `rose-pine/dark`: subtle text below `3:1` on `surface2`
-- Focus ring `3:1` gaps on some light-mode decorative themes (`default` before fix, `solarized`, `nord`, `rose-pine`)
+- Focus ring `3:1` gaps on light-mode decorative themes (`solarized`, `nord`, `rose-pine`)
 
-Disposition:
+Resolution status (February 13, 2026):
 
-- Tracked as M3.3 remediation backlog; core themes are hard-gated now.
-- M3.3/M4 hard-gate cut line finalized in `Docs/Product/WebUI/M3_3_NonCore_Theme_Contrast_HardGate_Decision_2026_02.md`.
+- Non-core theme token remediations implemented in `apps/packages/ui/src/themes/presets.ts`.
+- All built-in themes now enforced in `apps/packages/ui/src/themes/__tests__/contrast-baseline.test.ts`.
+- Measured pair-level ratio evidence documented in:
+  - `Docs/Product/WebUI/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`.
 
 ## 7) Exit Criteria for M3.1
 
@@ -101,3 +103,4 @@ Disposition:
 - [x] Contrast guardrail utility and tests added.
 - [x] Default theme focus contrast remediated.
 - [x] Advisory theme remediation plan approved for hard-gating expansion.
+- [x] Non-core theme remediation completed and all-theme hard-gate activated.

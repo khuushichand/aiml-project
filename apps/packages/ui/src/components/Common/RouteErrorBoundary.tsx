@@ -116,7 +116,7 @@ class RouteErrorBoundaryInner extends React.Component<
           <div className="mt-6 flex flex-wrap gap-2">
             <button
               type="button"
-              className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-white hover:bg-primaryStrong"
+              className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-white hover:bg-primaryStrong focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
               onClick={this.handleRetry}
               data-testid="route-error-retry"
             >
@@ -124,7 +124,7 @@ class RouteErrorBoundaryInner extends React.Component<
             </button>
             <button
               type="button"
-              className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
+              className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
               onClick={() => this.handleNavigate(chatPath)}
               data-testid="route-error-go-chat"
             >
@@ -132,7 +132,7 @@ class RouteErrorBoundaryInner extends React.Component<
             </button>
             <button
               type="button"
-              className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
+              className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
               onClick={() => this.handleNavigate(settingsPath)}
               data-testid="route-error-open-settings"
             >
@@ -140,7 +140,7 @@ class RouteErrorBoundaryInner extends React.Component<
             </button>
             <button
               type="button"
-              className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
+              className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
               onClick={this.handleReload}
               data-testid="route-error-reload"
             >

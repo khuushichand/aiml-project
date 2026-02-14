@@ -1,13 +1,13 @@
 # M1.4 Route Health Snapshot - 2026-02-12
 
-Status: Updated Baseline (Runtime Overlay Guard + Full Smoke Parity + Key-Nav/Wayfinding Stable + Route-Boundary Slice Stable + Week 2 Controlled Alias Rollup + Week 3 Passive Natural Sample)  
+Status: Updated Baseline (Runtime Overlay Guard + Full Smoke Parity + Key-Nav/Wayfinding Stable + Route-Boundary Slice Stable + Invalid-Key Degradation Gate Stable + Post-M3.3 Toolbar/Component Regression Stable + Post-All-Theme-Hard-Gate Regression Stable + Week 2 Controlled Alias Rollup + Week 3 Passive Natural Sample)  
 Owner: WebUI  
 Roadmap Link: `Docs/Product/WebUI/WebUI_UX_Strategic_Roadmap_2026_02.md`  
 Execution Plan Link: `Docs/Product/WebUI/M1_Navigation_IA_Execution_Plan_2026_02.md`
 
 ## 1) Snapshot Summary
 
-This snapshot now includes the February 13, 2026 stabilization reruns that closed the key-nav/wayfinding validation loop, re-established full-smoke parity after route-shell wayfinding updates, added a controlled non-zero Week 2 alias-rollup capture, added the first passive Week 3 natural-sample capture, and reconfirmed the combined key-nav/wayfinding/route-boundary smoke slice after M3 baseline updates.
+This snapshot now includes the February 13, 2026 stabilization reruns that closed the key-nav/wayfinding validation loop, re-established full-smoke parity after route-shell wayfinding updates, added a controlled non-zero Week 2 alias-rollup capture, added the first passive Week 3 natural-sample capture, reconfirmed the combined key-nav/wayfinding/route-boundary smoke slice after M3 baseline updates, revalidated that slice plus invalid-key degradation after M3.3 toolbar/component focus updates, and reconfirmed both slices after all-theme contrast hard-gate promotion.
 
 ## 2) Baseline Metrics
 
@@ -23,6 +23,8 @@ This snapshot now includes the February 13, 2026 stabilization reruns that close
 | Runtime overlay guard in smoke | Added | `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts` |
 | Key-nav + wayfinding focused smoke status | Passing (10/10) | `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts` |
 | Key-nav + wayfinding + route-boundary smoke status | Passing (25/25) | `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts` |
+| Key-nav + route-boundary + invalid-key degradation gate | Passing (23/23) | `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`, `apps/tldw-frontend/e2e/smoke/invalid-api-key.spec.ts` |
+| Invalid-key degradation smoke status (standalone) | Passing (1/1) | `apps/tldw-frontend/e2e/smoke/invalid-api-key.spec.ts` |
 | Full smoke status (latest rerun) | Passing (150/150) | `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts` |
 
 ## 3) Verification Evidence (This Iteration)
@@ -86,6 +88,21 @@ Smoke execution (chronological):
 14. Post-modal focus-contract update rerun (same targeted smoke slice):
    - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Key Navigation|Wayfinding|Route Error Boundaries" --reporter=line`
    - Outcome: `25 passed` (29.5s)
+15. Combined key-nav + route-boundary + invalid-key degradation gate rerun:
+   - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts e2e/smoke/invalid-api-key.spec.ts --grep "Key Navigation Targets|Route Error Boundaries|Auth Error Degradation" --reporter=line`
+   - Outcome: `23 passed` (29.0s)
+16. Post-M3.3 toolbar/component focus rerun (key-nav + wayfinding + route-boundary):
+   - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Key Navigation Targets|Wayfinding|Route Error Boundaries" --reporter=line`
+   - Outcome: `25 passed` (31.5s)
+17. Post-M3.3 auth degradation rerun:
+   - Command: `bunx playwright test e2e/smoke/invalid-api-key.spec.ts --reporter=line`
+   - Outcome: `1 passed` (3.5s)
+18. Post all-theme hard-gate promotion rerun (key-nav + wayfinding + route-boundary):
+   - Command: `bunx playwright test e2e/smoke/all-pages.spec.ts --grep "Key Navigation Targets|Wayfinding|Route Error Boundaries" --reporter=line`
+   - Outcome: `25 passed` (31.8s)
+19. Post all-theme hard-gate promotion auth degradation rerun:
+   - Command: `bunx playwright test e2e/smoke/invalid-api-key.spec.ts --reporter=line`
+   - Outcome: `1 passed` (3.3s)
 
 Wayfinding alignment/remediation captured in this iteration:
 
@@ -221,3 +238,23 @@ For the next weekly snapshot, include:
 4. Deprecation candidate list based on low-use alias thresholds.
 5. Route-shell unknown-path fallback verification samples (desktop + mobile).
 6. Week-over-week comparison across Week 1 baseline, Week 2 controlled sample, and first natural-traffic sample.
+
+## 11) Full-Suite Confirmation Gate (Post-change, 2026-02-13)
+
+Capture command:
+
+- `TLDW_SERVER_URL=http://127.0.0.1:8000 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/smoke/all-pages.spec.ts --reporter=line` (executed from `apps/tldw-frontend`)
+
+Capture outcome:
+
+| Metric | Result |
+|---|---|
+| Total tests | `165` |
+| Passed | `165` |
+| Failed | `0` |
+| Duration | `~2.0m` |
+
+Observed signal:
+
+- Key navigation targets, wayfinding checks, and non-core route-boundary forced-error fixtures all passed in the same run.
+- The all-pages matrix has grown from the prior 150-case baseline to 165 cases; this run supersedes the old case-count gate while preserving expected route-health coverage.

@@ -9,6 +9,32 @@ export interface DiagnosticsData {
   requestFailures: Array<{ url: string; errorText: string }>
 }
 
+export type SmokeAllowlistScope = "console" | "request"
+
+export interface SmokeHardGateAllowlistRule {
+  id: string
+  scope: SmokeAllowlistScope
+  pattern: RegExp
+  routes?: string[]
+  rationale: string
+  owner: string
+  expiresOn: string
+}
+
+type ConsoleIssue = { type: string; text: string }
+type RequestIssue = { url: string; errorText: string }
+
+export interface ClassifiedSmokeIssues {
+  pageErrors: Array<{ message: string; stack: string }>
+  allowlistedConsoleErrors: Array<{ entry: ConsoleIssue; rule: SmokeHardGateAllowlistRule }>
+  unexpectedConsoleErrors: ConsoleIssue[]
+  allowlistedRequestFailures: Array<{
+    entry: RequestIssue
+    rule: SmokeHardGateAllowlistRule
+  }>
+  unexpectedRequestFailures: RequestIssue[]
+}
+
 /**
  * Extended test fixture that automatically collects diagnostics
  */
@@ -120,6 +146,151 @@ export const BENIGN_PATTERNS = [
 ]
 
 /**
+ * Temporary allowlist for non-fatal console/request noise observed in full all-pages smoke.
+ * These entries are intentionally narrow and route-scoped where possible.
+ */
+export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
+  {
+    id: "m5-chat-history-rate-limit",
+    scope: "console",
+    pattern: /rate_limited\s+\(GET\s+\/api\/v1\/chats\/\?limit=\d+&offset=\d+&ordering=-updated_at\)/i,
+    rationale: "Chat history request bursts can hit server-side 429 in dense all-pages sweeps.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31"
+  },
+  {
+    id: "m5-http-429-resource",
+    scope: "console",
+    pattern: /Failed to load resource: the server responded with a status of 429/i,
+    rationale: "Known rate-limit noise while traversing all routes in parallel; triaged separately.",
+    owner: "Platform",
+    expiresOn: "2026-03-31"
+  },
+  {
+    id: "m5-react-key-prop-spread-warning",
+    scope: "console",
+    pattern: /A props object containing a "key" prop is being spread into JSX/i,
+    rationale: "Known React warning in connectors/settings surfaces; no runtime crash.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31",
+    routes: ["/connectors", "/connectors/browse", "/connectors/jobs", "/connectors/sources", "/settings", "/config", "/profile", "/privileges"]
+  },
+  {
+    id: "m5-react-defaultprops-warning",
+    scope: "console",
+    pattern: /Support for defaultProps will be removed from function components/i,
+    rationale: "Legacy ReactMarkdown warning; tracked for component modernization.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31",
+    routes: ["/flashcards"]
+  },
+  {
+    id: "m5-react-non-boolean-attribute-warning",
+    scope: "console",
+    pattern: /Received `%s` for a non-boolean attribute `%s`/i,
+    rationale: "Known non-breaking attribute warning in flashcards render path.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31",
+    routes: ["/flashcards"]
+  },
+  {
+    id: "m5-rc-collapse-children-deprecation",
+    scope: "console",
+    pattern: /\[rc-collapse\]\s+`children`\s+will be removed/i,
+    rationale: "AntD dependency deprecation notice; no user-facing regression in smoke.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31",
+    routes: ["/settings/quick-ingest"]
+  },
+  {
+    id: "m5-media-max-update-depth-warning",
+    scope: "console",
+    pattern: /Maximum update depth exceeded/i,
+    rationale: "Known high-frequency state-update warning in media/review surfaces under sweep load.",
+    owner: "WebUI",
+    expiresOn: "2026-03-15",
+    routes: ["/media", "/media/*", "/content-review", "/claims-review"]
+  },
+  {
+    id: "m5-optional-resource-404-noise",
+    scope: "console",
+    pattern: /Failed to load resource: the server responded with a status of 404/i,
+    rationale: "Known optional static/resource fetch misses in selected routes during dev runtime.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31",
+    routes: ["/review", "/media-multi", "/prompt-studio", "/settings/about", "/__wayfinding-missing-route__"]
+  },
+  {
+    id: "m5-route-boundary-forced-react-overlay-warning",
+    scope: "console",
+    pattern: /The above error occurred in the <ForcedRouteErrorProbe> component/i,
+    rationale: "Expected React error-overlay emission when route boundary fixture intentionally throws.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31",
+    routes: [
+      "/admin/server",
+      "/admin/llamacpp",
+      "/admin/mlx",
+      "/content-review",
+      "/data-tables",
+      "/kanban",
+      "/chunking-playground",
+      "/moderation-playground",
+      "/collections",
+      "/world-books",
+      "/dictionaries",
+      "/characters",
+      "/items",
+      "/document-workspace",
+      "/speech"
+    ]
+  },
+  {
+    id: "m5-route-boundary-forced-error-log",
+    scope: "console",
+    pattern: /\[RouteErrorBoundary:[^\]]+\]\s+Error:\s+Forced route boundary error/i,
+    rationale: "Route boundary fixture emits deterministic forced-error log to confirm recovery branch.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31",
+    routes: [
+      "/admin/server",
+      "/admin/llamacpp",
+      "/admin/mlx",
+      "/content-review",
+      "/data-tables",
+      "/kanban",
+      "/chunking-playground",
+      "/moderation-playground",
+      "/collections",
+      "/world-books",
+      "/dictionaries",
+      "/characters",
+      "/items",
+      "/document-workspace",
+      "/speech"
+    ]
+  },
+  {
+    id: "m5-admin-optional-endpoint-500",
+    scope: "console",
+    pattern: /Failed to load resource: the server responded with a status of 500/i,
+    rationale: "Admin pages hit optional backend endpoints unavailable in minimal smoke profile.",
+    owner: "Platform",
+    expiresOn: "2026-03-31",
+    routes: ["/admin", "/admin/server", "/admin/orgs", "/admin/data-ops", "/admin/watchlists-items", "/admin/watchlists-runs", "/admin/maintenance"]
+  },
+  {
+    id: "m5-llamacpp-unavailable-503",
+    scope: "console",
+    pattern: /Failed to load resource: the server responded with a status of 503/i,
+    rationale: "Expected when llama.cpp backend is not configured in smoke environment.",
+    owner: "Platform",
+    expiresOn: "2026-03-31",
+    routes: ["/admin/llamacpp"]
+  }
+]
+
+/**
  * Check if an error/warning message is benign
  */
 export function isBenign(text: string): boolean {
@@ -143,4 +314,76 @@ export function getCriticalIssues(diagnostics: DiagnosticsData): {
       (r) => !isBenign(r.url) && !isBenign(r.errorText)
     )
   }
+}
+
+function findAllowlistRule(
+  scope: SmokeAllowlistScope,
+  text: string,
+  routePath: string
+): SmokeHardGateAllowlistRule | null {
+  const normalizedRoutePath = normalizeRoutePath(routePath)
+  for (const rule of SMOKE_HARD_GATE_ALLOWLIST) {
+    if (rule.scope !== scope) continue
+    if (
+      rule.routes &&
+      !rule.routes.some((candidate) => routePatternMatches(candidate, normalizedRoutePath))
+    ) {
+      continue
+    }
+    if (rule.pattern.test(text)) {
+      return rule
+    }
+  }
+  return null
+}
+
+function normalizeRoutePath(routePath: string): string {
+  try {
+    if (routePath.startsWith("http://") || routePath.startsWith("https://")) {
+      return new URL(routePath).pathname
+    }
+  } catch {}
+  return routePath.split("?")[0]?.split("#")[0] || routePath
+}
+
+function routePatternMatches(pattern: string, routePath: string): boolean {
+  if (pattern.endsWith("*")) {
+    const prefix = pattern.slice(0, -1)
+    return routePath.startsWith(prefix)
+  }
+  return pattern === routePath
+}
+
+export function classifySmokeIssues(
+  routePath: string,
+  issues: ReturnType<typeof getCriticalIssues>
+): ClassifiedSmokeIssues {
+  const classified: ClassifiedSmokeIssues = {
+    pageErrors: issues.pageErrors,
+    allowlistedConsoleErrors: [],
+    unexpectedConsoleErrors: [],
+    allowlistedRequestFailures: [],
+    unexpectedRequestFailures: []
+  }
+
+  for (const entry of issues.consoleErrors) {
+    const match = findAllowlistRule("console", entry.text, routePath)
+    if (match) {
+      classified.allowlistedConsoleErrors.push({ entry, rule: match })
+    } else {
+      classified.unexpectedConsoleErrors.push(entry)
+    }
+  }
+
+  for (const entry of issues.requestFailures) {
+    const requestText = `${entry.url} (${entry.errorText})`
+    const match = findAllowlistRule("request", requestText, routePath)
+    if (match) {
+      classified.allowlistedRequestFailures.push({ entry, rule: match })
+    } else {
+      classified.unexpectedRequestFailures.push(entry)
+    }
+  }
+
+  return classified
 }

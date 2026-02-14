@@ -6,11 +6,13 @@ import { FolderPlus } from "lucide-react"
 
 import { useConnectionState } from "@/hooks/useConnectionState"
 import { useServerChatHistory } from "@/hooks/useServerChatHistory"
+import { isRecoverableAuthConfigError } from "@/services/auth-errors"
 import { FolderTree } from "@/components/Folders"
 import {
   useFolderStore,
   useFolderActions
 } from "@/store/folder"
+import { useConnectionStore } from "@/store/connection"
 import { useSelectServerChat } from "@/hooks/chat/useSelectServerChat"
 import { tldwClient, type ServerChatSummary } from "@/services/tldw/TldwApiClient"
 import { cn } from "@/libs/utils"
@@ -24,6 +26,7 @@ const MISSING_CHAT_BATCH_SIZE = 5
 export function FolderChatList({ className }: FolderChatListProps) {
   const { t } = useTranslation(["common"])
   const { isConnected } = useConnectionState()
+  const checkConnection = useConnectionStore((state) => state.checkOnce)
   const { refreshFromServer, createFolder } = useFolderActions()
   const folderRefreshInFlightRef = useRef<Promise<void> | null>(null)
   const [newFolderModalOpen, setNewFolderModalOpen] = useState(false)
@@ -80,42 +83,51 @@ export function FolderChatList({ className }: FolderChatListProps) {
     queryFn: async () => {
       try {
         await tldwClient.initialize()
+
+        // No batch chat lookup endpoint yet; fetch missing chats in parallel and cache.
+        const results: ServerChatSummary[] = []
+        for (
+          let index = 0;
+          index < missingFolderConversationIds.length;
+          index += MISSING_CHAT_BATCH_SIZE
+        ) {
+          const batch = missingFolderConversationIds.slice(
+            index,
+            index + MISSING_CHAT_BATCH_SIZE
+          )
+          const batchResults = await Promise.all(
+            batch.map(async (conversationId) => {
+              try {
+                return await tldwClient.getChat(conversationId)
+              } catch (error) {
+                if (isRecoverableAuthConfigError(error)) {
+                  return null
+                }
+                console.error(
+                  "Failed to load server chat info for folder conversation:",
+                  conversationId,
+                  error
+                )
+                return null
+              }
+            })
+          )
+          results.push(...(batchResults.filter(Boolean) as ServerChatSummary[]))
+        }
+        return results
       } catch (error) {
+        if (isRecoverableAuthConfigError(error)) {
+          void checkConnection().catch(() => null)
+          return []
+        }
         console.error("Failed to initialize tldw client for folder chats:", error)
         throw error
       }
-
-      // No batch chat lookup endpoint yet; fetch missing chats in parallel and cache.
-      const results: ServerChatSummary[] = []
-      for (
-        let index = 0;
-        index < missingFolderConversationIds.length;
-        index += MISSING_CHAT_BATCH_SIZE
-      ) {
-        const batch = missingFolderConversationIds.slice(
-          index,
-          index + MISSING_CHAT_BATCH_SIZE
-        )
-        const batchResults = await Promise.all(
-          batch.map(async (conversationId) => {
-            try {
-              return await tldwClient.getChat(conversationId)
-            } catch (error) {
-              console.error(
-                "Failed to load server chat info for folder conversation:",
-                conversationId,
-                error
-              )
-              return null
-            }
-          })
-        )
-        results.push(...(batchResults.filter(Boolean) as ServerChatSummary[]))
-      }
-      return results
     },
     enabled: isConnected && missingFolderConversationIds.length > 0,
-    staleTime: 60_000
+    staleTime: 60_000,
+    retry: (failureCount, error) =>
+      !isRecoverableAuthConfigError(error) && failureCount < 1
   })
 
   const missingFolderChatById = useMemo(

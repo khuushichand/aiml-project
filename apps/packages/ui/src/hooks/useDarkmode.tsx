@@ -9,21 +9,23 @@ type DarkModeState = {
 };
 
 export const useDarkModeStore = createWithEqualityFn<DarkModeState>((set) => ({
-  mode: "system",
+  mode: "dark",
   setMode: (mode) => set({ mode }),
 }));
+
+const SYSTEM_THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
+
+const resolveThemeMode = (
+  mode: DarkModeState["mode"]
+): "dark" | "light" => {
+  if (mode === "dark" || mode === "light") return mode;
+  if (typeof window === "undefined") return "dark";
+  return window.matchMedia(SYSTEM_THEME_MEDIA_QUERY).matches ? "dark" : "light";
+};
 
 export const useDarkMode = () => {
   const { mode, setMode } = useDarkModeStore();
   const [themePreference, setThemePreference] = useSetting(THEME_SETTING);
-
-  const getSystemTheme = React.useCallback(() => {
-    const darkModeMediaQuery = window.matchMedia(
-      "(prefers-color-scheme: dark)"
-    );
-    const isDarkMode = darkModeMediaQuery.matches;
-    return isDarkMode ? "dark" : "light";
-  }, []);
 
   const applyTheme = React.useCallback(
     (nextMode: "dark" | "light") => {
@@ -37,23 +39,23 @@ export const useDarkMode = () => {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-    const resolved =
-      themePreference === "system" ? getSystemTheme() : themePreference;
-    applyTheme(resolved);
-  }, [applyTheme, getSystemTheme, themePreference]);
-
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (themePreference !== "system") return;
-    const darkModeMediaQuery = window.matchMedia(
-      "(prefers-color-scheme: dark)"
-    );
-    const handleDarkModeChange = (e: MediaQueryListEvent) => {
-      applyTheme(e.matches ? "dark" : "light");
+    const mediaQueryList = window.matchMedia(SYSTEM_THEME_MEDIA_QUERY);
+    const applyResolvedTheme = () => {
+      applyTheme(resolveThemeMode(themePreference));
     };
-    darkModeMediaQuery.addEventListener("change", handleDarkModeChange);
-    return () =>
-      darkModeMediaQuery.removeEventListener("change", handleDarkModeChange);
+
+    applyResolvedTheme();
+
+    if (themePreference !== "system") return;
+
+    const onSystemThemeChange = () => applyResolvedTheme();
+    if (typeof mediaQueryList.addEventListener === "function") {
+      mediaQueryList.addEventListener("change", onSystemThemeChange);
+      return () =>
+        mediaQueryList.removeEventListener("change", onSystemThemeChange);
+    }
+    mediaQueryList.addListener(onSystemThemeChange);
+    return () => mediaQueryList.removeListener(onSystemThemeChange);
   }, [applyTheme, themePreference]);
 
   const toggleDarkMode = () => {

@@ -9,12 +9,11 @@ import {
 
 describe("theme contrast baseline", () => {
   const presets = getBuiltinPresets()
-  const coreThemeIds = new Set(["default", "high-contrast"])
 
   it("enforces AA text contrast on primary reading surfaces for all built-in themes", () => {
     const failures: string[] = []
 
-    for (const preset of presets.filter((item) => coreThemeIds.has(item.id))) {
+    for (const preset of presets) {
       for (const [mode, tokens] of Object.entries(preset.palette)) {
         const pairFailures = auditThemeTextContrast(tokens).filter((item) => {
           if (item.pair.startsWith("textSubtle/")) {
@@ -38,7 +37,7 @@ describe("theme contrast baseline", () => {
   it("keeps focus indicator at 3:1 non-text contrast minimum on main surfaces", () => {
     const failures: string[] = []
 
-    for (const preset of presets.filter((item) => coreThemeIds.has(item.id))) {
+    for (const preset of presets) {
       for (const [mode, tokens] of Object.entries(preset.palette)) {
         const focusOnBg = contrastRatio(tokens.focus, tokens.bg)
         const focusOnSurface = contrastRatio(tokens.focus, tokens.surface)

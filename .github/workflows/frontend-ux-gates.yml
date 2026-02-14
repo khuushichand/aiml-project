@@ -1,0 +1,207 @@
+name: Frontend UX Gates
+
+on:
+  pull_request:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-ux-gates-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  onboarding-gate:
+    name: Onboarding E2E Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      PYTHONPATH: .
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      TEST_MODE: 'true'
+      DISABLE_HEAVY_STARTUP: '1'
+      MINIMAL_TEST_APP: '1'
+      PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
+      AUTH_MODE: single_user
+      SINGLE_USER_API_KEY: smoke-ci-key-12345
+      SERVER_LABEL: ux-onboarding
+      E2E_TEST_BASE_URL: http://127.0.0.1:8000
+      TLDW_SERVER_URL: http://127.0.0.1:8000
+      TLDW_API_KEY: smoke-ci-key-12345
+      TLDW_WEB_URL: http://localhost:8080
+      TLDW_WEB_AUTOSTART: 'true'
+      TLDW_WEB_CMD: npm run dev -- -p 8080
+      TLDW_ONBOARDING_EVIDENCE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apps/tldw-frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: apps/tldw-frontend
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/tldw-frontend
+
+      - name: Setup Python and server dependencies
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: '3.12'
+          use-uv: 'true'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+          extras: dev
+
+      - name: Start backend server (single-user)
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py start
+
+      - name: Backend health check
+        if: always()
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
+
+      - name: Run onboarding UX gate
+        working-directory: apps/tldw-frontend
+        run: npm run e2e:onboarding
+
+      - name: Upload onboarding evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-evidence
+          if-no-files-found: ignore
+          path: |
+            Docs/Product/WebUI/evidence/m4_3_onboarding_${{ env.TLDW_ONBOARDING_EVIDENCE_TAG }}/**
+            apps/tldw-frontend/test-results/**
+            apps/tldw-frontend/playwright-report/**
+
+      - name: Print backend server log on failure
+        if: failure()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, pathlib
+          label = os.environ.get("SERVER_LABEL", "ux-onboarding")
+          log_path = pathlib.Path(f"server-{label}.log")
+          if log_path.exists():
+              print("===== backend server log =====")
+              print(log_path.read_text(encoding="utf-8"))
+          PY
+
+      - name: Stop backend server
+        if: always()
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py stop || true
+
+  smoke-gate:
+    name: UX Smoke Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      PYTHONPATH: .
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      TEST_MODE: 'true'
+      DISABLE_HEAVY_STARTUP: '1'
+      MINIMAL_TEST_APP: '1'
+      PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
+      AUTH_MODE: single_user
+      SINGLE_USER_API_KEY: smoke-ci-key-12345
+      SERVER_LABEL: ux-smoke
+      E2E_TEST_BASE_URL: http://127.0.0.1:8000
+      TLDW_SERVER_URL: http://127.0.0.1:8000
+      TLDW_API_KEY: smoke-ci-key-12345
+      TLDW_WEB_URL: http://localhost:8080
+      TLDW_WEB_AUTOSTART: 'true'
+      TLDW_WEB_CMD: npm run dev -- -p 8080
+      TLDW_SMOKE_HARD_GATE: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apps/tldw-frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: apps/tldw-frontend
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/tldw-frontend
+
+      - name: Setup Python and server dependencies
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: '3.12'
+          use-uv: 'true'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+          extras: dev
+
+      - name: Start backend server (single-user)
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py start
+
+      - name: Backend health check
+        if: always()
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
+
+      - name: Run all-pages UX smoke gate
+        working-directory: apps/tldw-frontend
+        run: npx playwright test e2e/smoke/all-pages.spec.ts --reporter=line
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ux-smoke-artifacts
+          if-no-files-found: ignore
+          path: |
+            apps/tldw-frontend/test-results/**
+            apps/tldw-frontend/playwright-report/**
+
+      - name: Print backend server log on failure
+        if: failure()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, pathlib
+          label = os.environ.get("SERVER_LABEL", "ux-smoke")
+          log_path = pathlib.Path(f"server-{label}.log")
+          if log_path.exists():
+              print("===== backend server log =====")
+              print(log_path.read_text(encoding="utf-8"))
+          PY
+
+      - name: Stop backend server
+        if: always()
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py stop || true

@@ -70,6 +70,30 @@ describe("RouteErrorBoundary", () => {
     expect(screen.getByTestId("route-error-reload")).toBeInTheDocument()
   })
 
+  it("applies focus-visible classes to route recovery actions", () => {
+    render(
+      <MemoryRouter initialEntries={["/media"]}>
+        <RouteErrorBoundary routeId="media" routeLabel="Media">
+          <AlwaysThrowChild />
+        </RouteErrorBoundary>
+      </MemoryRouter>
+    )
+
+    const controls = [
+      screen.getByTestId("route-error-retry"),
+      screen.getByTestId("route-error-go-chat"),
+      screen.getByTestId("route-error-open-settings"),
+      screen.getByTestId("route-error-reload"),
+    ]
+
+    for (const control of controls) {
+      expect(control.className).toContain("focus-visible:ring-2")
+      expect(control.className).toContain("focus-visible:ring-focus")
+      expect(control.className).toContain("focus-visible:ring-offset-2")
+      expect(control.className).toContain("focus-visible:ring-offset-bg")
+    }
+  })
+
   it("retries and remounts route content after a transient error", async () => {
     const user = userEvent.setup()
 

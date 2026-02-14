@@ -16,13 +16,6 @@ import { validateThemeDefinition } from "@/themes/validation"
 const THEME_VALUES = ["system", "dark", "light"] as const
 export type ThemeValue = (typeof THEME_VALUES)[number]
 
-const resolveSystemTheme = (): "dark" | "light" => {
-  if (typeof window === "undefined") return "light"
-  return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches
-    ? "dark"
-    : "light"
-}
-
 const normalizeThemeValue = (value: unknown, fallback: ThemeValue) => {
   const normalized = String(value || "").toLowerCase()
   return THEME_VALUES.includes(normalized as ThemeValue)
@@ -32,15 +25,14 @@ const normalizeThemeValue = (value: unknown, fallback: ThemeValue) => {
 
 export const THEME_SETTING = defineSetting(
   "theme",
-  "system" as ThemeValue,
-  (value) => normalizeThemeValue(value, "system"),
+  "dark" as ThemeValue,
+  (value) => normalizeThemeValue(value, "dark"),
   {
     area: "local",
     validate: (value) => THEME_VALUES.includes(value),
     localStorageKey: "theme",
     mirrorToLocalStorage: true,
-    localStorageSerialize: (value) =>
-      value === "system" ? resolveSystemTheme() : value
+    localStorageSerialize: (value) => value
   }
 )
 

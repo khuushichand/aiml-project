@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useMemo } from "react"
 import { useConnectionState } from "@/hooks/useConnectionState"
 import { useConnectionStore } from "@/store/connection"
+import { isRecoverableAuthConfigError } from "@/services/auth-errors"
 import { tldwClient, type ServerChatSummary } from "@/services/tldw/TldwApiClient"
 
 export type ServerChatHistoryItem = ServerChatSummary & {
@@ -20,36 +21,8 @@ type FetchServerChatsPage = (params: {
   total: number
 }>
 
-const getErrorStatusCode = (error: unknown): number | null => {
-  const status = (error as { status?: unknown } | null)?.status
-  if (typeof status === "number" && Number.isFinite(status)) {
-    return status
-  }
-
-  const message = String((error as { message?: unknown } | null)?.message || "")
-  const match = message.match(/\b([45]\d{2})\b/)
-  if (!match) return null
-
-  const parsed = Number(match[1])
-  return Number.isFinite(parsed) ? parsed : null
-}
-
 export const isRecoverableServerChatHistoryError = (error: unknown): boolean => {
-  const status = getErrorStatusCode(error)
-  if (status === 401 || status === 403) {
-    return true
-  }
-
-  const message = String((error as { message?: unknown } | null)?.message || "")
-    .toLowerCase()
-  if (!message) return false
-
-  return (
-    message.includes("invalid api key") ||
-    message.includes("unauthorized") ||
-    message.includes("forbidden") ||
-    message.includes("server not configured")
-  )
+  return isRecoverableAuthConfigError(error)
 }
 
 export const mapServerChatHistoryItems = (

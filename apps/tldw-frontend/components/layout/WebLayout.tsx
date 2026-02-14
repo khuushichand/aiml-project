@@ -35,7 +35,11 @@ import { EventOnlyHosts } from "@/components/Common/EventHosts"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { setSettingsReturnTo } from "@/utils/settings-return"
 import { WorkflowIntegrationHost } from "@/components/Common/Workflow"
-import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
+import {
+  CHAT_BACKGROUND_IMAGE_SETTING,
+  HEADER_SHORTCUTS_EXPANDED_SETTING
+} from "@/services/settings/ui-settings"
+import { setSetting } from "@/services/settings/registry"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
@@ -122,6 +126,13 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     const path = `${location.pathname}${location.search}${location.hash}`
     setSettingsReturnTo(path)
   }, [isLayoutEffectsOwner, location.pathname, location.search, location.hash])
+
+  React.useEffect(() => {
+    setChatSidebarCollapsed(true)
+    void setSetting(HEADER_SHORTCUTS_EXPANDED_SETTING, false).catch(() => {
+      // ignore storage write failures
+    })
+  }, [location.pathname, setChatSidebarCollapsed])
 
   // Create toggle function for sidebar
   const toggleSidebar = () => {
@@ -249,7 +260,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
             {shortcutLoading && renderShortcutOverlay()}
           </div>
         ) : (
-          <div className="relative flex min-h-[135vh] flex-col pt-2 sm:pt-3">
+          <div className="relative flex min-h-[135vh] flex-col">
             <div className="relative z-20 w-full">
               <Header
                 onToggleSidebar={hideSidebar ? undefined : toggleSidebar}

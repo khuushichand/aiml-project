@@ -106,6 +106,7 @@ import { Button as TldwButton } from "@/components/Common/Button"
 import { useSimpleForm } from "@/hooks/useSimpleForm"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useStoreMessageOption } from "@/store/option"
+import { trackOnboardingChatSubmitSuccess } from "@/utils/onboarding-ingestion-telemetry"
 import {
   useModelSelector,
   useComposerTokens,
@@ -1702,6 +1703,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const { mutateAsync: sendMessage } = useMutation({
     mutationFn: onSubmit,
     onSuccess: () => {
+      void trackOnboardingChatSubmitSuccess(
+        typeof window !== "undefined" ? window.location.pathname : "/chat"
+      )
       textAreaFocus()
       queryClient.invalidateQueries({
         queryKey: ["fetchChatHistory"]

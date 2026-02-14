@@ -25,9 +25,9 @@ Stabilize and align WebUI UX for technical/research users by sequencing immediat
 | M0 | Feb 12, 2026 | Quick-win stabilization pass | WebUI | Complete | Critical runtime crashes addressed, blank redirect routes replaced, 404 recovery actions added |
 | M1 | Feb 13-Mar 6, 2026 | Navigation and IA consolidation | WebUI + Product | Complete | Canonical route map published, legacy alias behavior standardized, discoverability gaps prioritized |
 | M2 | Mar 9-Mar 20, 2026 | Error-state architecture | WebUI + Platform | Complete | Route-level recovery UX and shared error contract in core flows |
-| M3 | Mar 23-Apr 10, 2026 | Design system and WCAG baseline | WebUI + Accessibility | In Progress | Baseline tokens/components documented, AA checks defined for core journeys |
-| M4 | Apr 13-Apr 24, 2026 | Ingestion-first onboarding | WebUI + Product | Not Started | Connect -> ingest -> verify -> chat guided journey shipped |
-| M5 | Apr 27-May 15, 2026 | UX governance and release gates | QA + WebUI | Not Started | UX smoke suite and release quality gates active in CI |
+| M3 | Mar 23-Apr 10, 2026 | Design system and WCAG baseline | WebUI + Accessibility | In Progress (Engineering complete; sign-off pending) | Baseline tokens/components documented, AA checks defined for core journeys |
+| M4 | Apr 13-Apr 24, 2026 | Ingestion-first onboarding | WebUI + Product | Complete | Connect -> ingest -> verify -> chat journey shipped with desktop/mobile gate evidence and telemetry |
+| M5 | Apr 27-May 15, 2026 | UX governance and release gates | QA + WebUI | In Progress | UX smoke suite and release quality gates active in CI |
 
 ## 4) Milestone Details and Tracking
 
@@ -127,7 +127,10 @@ Tracking Checklist:
 - [x] Keyboard/focus evidence capture completed for route matrix under `Docs/Product/WebUI/evidence/m3_2_a11y_focus_2026_02_13/`.
 - [x] Non-shell modal focus-visible assertions added for command palette + keyboard shortcuts modal (`apps/packages/ui/src/components/Common/__tests__/CommandPalette.shortcuts.test.tsx`, `apps/packages/ui/src/components/Common/__tests__/KeyboardShortcutsModal.focus.test.tsx`).
 - [x] Non-core decorative themes remediation decision finalized for hard-gate expansion (`Docs/Product/WebUI/M3_3_NonCore_Theme_Contrast_HardGate_Decision_2026_02.md`).
-- [ ] Component-level token coverage expanded for alerts and empty-state variants.
+- [x] Component-level token coverage expanded for alerts and empty-state variants (`Docs/Product/WebUI/M3_3_Component_Baseline_Alerts_EmptyStates_2026_02.md`).
+- [x] M3 release-gate checklist linked for a11y baseline sign-off (`Docs/Product/WebUI/M3_Release_Checklist_A11y_Baseline_2026_02.md`).
+- [x] M4-owned non-core theme remediation backlog committed (`Docs/Product/WebUI/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`).
+- [x] Non-core theme token remediation completed and all built-in themes moved to hard-gate contrast enforcement (`apps/packages/ui/src/themes/presets.ts`, `apps/packages/ui/src/themes/__tests__/contrast-baseline.test.ts`).
 
 Progress update (February 13, 2026):
 - Added reusable contrast utility and WCAG helpers for semantic tokens (`apps/packages/ui/src/themes/contrast.ts`).
@@ -138,6 +141,10 @@ Progress update (February 13, 2026):
 - Captured full M3.2 route-matrix keyboard/focus evidence for desktop and mobile: `2 passed` (`e2e/smoke/m3-2-a11y-focus-evidence.spec.ts`), artifacts in `Docs/Product/WebUI/evidence/m3_2_a11y_focus_2026_02_13/`.
 - Finalized non-core theme contrast hard-gate cut line in `Docs/Product/WebUI/M3_3_NonCore_Theme_Contrast_HardGate_Decision_2026_02.md`.
 - Revalidated M1/M2 regression gate after M3 updates: key-nav + wayfinding + route-boundary smoke slice `25 passed`.
+- Published alert/empty-state component baseline and release-checklist linkage (`Docs/Product/WebUI/M3_3_Component_Baseline_Alerts_EmptyStates_2026_02.md`, `Docs/Product/WebUI/M3_Release_Checklist_A11y_Baseline_2026_02.md`).
+- Expanded non-shell toolbar focus-visible contracts and regression tests (Folder, Timeline, Document Viewer toolbars + shared empty/error action controls).
+- Revalidated focused M3.3 gate: `18 passed` (targeted Vitest suite), plus smoke reruns `25 passed` (`Key Navigation|Wayfinding|Route Error Boundaries`) and `1 passed` (`invalid-api-key` degradation).
+- Closed M4 contrast prework early by patching solarized/nord/rose-pine token gaps and enforcing all-theme contrast checks (paired evidence in `Docs/Product/WebUI/M4_NonCore_Theme_Contrast_Remediation_Checklist_2026_02.md`).
 
 Success Metrics:
 - AA issues in core flows reduced sprint-over-sprint.
@@ -145,7 +152,8 @@ Success Metrics:
 
 ## M4: Ingestion-First Onboarding Journey
 Planned Date: April 13-April 24, 2026  
-Status: Not Started
+Status: Complete
+Execution Plan: `Docs/Product/WebUI/M4_1_Ingestion_First_Onboarding_Execution_Plan_2026_02.md`
 
 Deliverables:
 - Guided first-run flow from connection to successful ingestion.
@@ -153,9 +161,30 @@ Deliverables:
 - Onboarding copy and affordances aligned with technical user goals.
 
 Tracking Checklist:
-- [ ] First-run flow spec approved.
-- [ ] End-to-end happy path test added.
-- [ ] Post-ingest recommendation states implemented.
+- [x] First-run flow spec drafted and linked (`Docs/Product/WebUI/M4_1_Ingestion_First_Onboarding_Execution_Plan_2026_02.md`).
+- [x] End-to-end happy path test added (`apps/tldw-frontend/e2e/workflows/onboarding-ingestion-first.spec.ts`).
+- [x] Post-ingest recommendation states implemented in onboarding success UI (`apps/packages/ui/src/components/Option/Onboarding/OnboardingConnectForm.tsx`).
+- [x] Mobile onboarding assertions + artifact capture completed (`Docs/Product/WebUI/evidence/m4_3_onboarding_<tag>/`).
+- [x] Onboarding telemetry for time-to-first-ingest and first-chat-after-ingest conversion wired with unit coverage (`apps/packages/ui/src/utils/onboarding-ingestion-telemetry.ts`, `apps/packages/ui/src/utils/__tests__/onboarding-ingestion-telemetry.test.ts`).
+- [x] CI-target onboarding gate command added (`apps/tldw-frontend/package.json` -> `e2e:onboarding`).
+
+Progress update (February 13, 2026):
+- Added ingestion-first guided actions to onboarding success state with deterministic test IDs.
+- Implemented `Ingest first source` CTA to open Quick Ingest intro flow after onboarding completion.
+- Extended onboarding journey gate to desktop + mobile and generated evidence bundle (`2 passed`, artifacts in `Docs/Product/WebUI/evidence/m4_3_onboarding_<tag>/`).
+- Added quick-ingest last-run summary contract and wired modal success/failure outcomes to onboarding recommendation state (`apps/packages/ui/src/store/quick-ingest.tsx`, `apps/packages/ui/src/components/Common/QuickIngestModal.tsx`, `apps/packages/ui/src/components/Option/Onboarding/OnboardingConnectForm.tsx`).
+- Added focused store coverage and updated onboarding E2E assertions for recommendation-state transition (`apps/packages/ui/src/store/__tests__/quick-ingest.test.ts`, `apps/tldw-frontend/e2e/workflows/onboarding-ingestion-first.spec.ts`).
+- Added onboarding conversion telemetry contract and wiring for:
+  - onboarding success reached
+  - first ingest success timing
+  - first chat submit after ingest conversion
+  (`apps/packages/ui/src/utils/onboarding-ingestion-telemetry.ts`, `apps/packages/ui/src/components/Option/Onboarding/OnboardingConnectForm.tsx`, `apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx`).
+- Added and validated onboarding telemetry unit coverage plus CI-target script execution (`7 passed` Vitest, `2 passed` Playwright via `bun run e2e:onboarding`).
+- Completed broader post-change smoke confirmation: `165 passed` (`e2e/smoke/all-pages.spec.ts`), with known non-fatal console/rate-limit noise still logged for follow-up triage.
+- Bootstrapped first M5 UX CI job for onboarding gate (`.github/workflows/frontend-ux-gates.yml`) with backend lifecycle start/health/stop and artifact upload.
+- Parameterized onboarding evidence directory naming for CI/runtime tags (`TLDW_ONBOARDING_EVIDENCE_TAG`) and updated evidence output path contract in onboarding workflow.
+- Established M5 hard-gate warning allowlist policy and route-scoped smoke enforcement (`Docs/Product/WebUI/M5_1_Smoke_Warning_HardGate_Allowlist_Policy_2026_02.md`, `apps/tldw-frontend/e2e/smoke/smoke.setup.ts`, `apps/tldw-frontend/e2e/smoke/all-pages.spec.ts`).
+- Expanded CI from onboarding-only UX gating to onboarding + broad all-pages smoke gate (`.github/workflows/frontend-ux-gates.yml`).
 
 Success Metrics:
 - Time-to-first-ingest decreases.
@@ -163,7 +192,7 @@ Success Metrics:
 
 ## M5: UX Governance and Release Gates
 Planned Date: April 27-May 15, 2026  
-Status: Not Started
+Status: In Progress
 
 Deliverables:
 - UX smoke suite for empty/error/loading/responsive regressions.
@@ -171,7 +200,9 @@ Deliverables:
 - Defect SLA and ownership model for UX blockers.
 
 Tracking Checklist:
-- [ ] CI workflow includes UX smoke job.
+- [x] CI workflow includes first UX gate job (`.github/workflows/frontend-ux-gates.yml`, onboarding E2E gate).
+- [x] CI workflow includes broad UX smoke job.
+- [x] M5 hard-gate warning allowlist policy documented and enforced (`Docs/Product/WebUI/M5_1_Smoke_Warning_HardGate_Allowlist_Policy_2026_02.md`, `apps/tldw-frontend/e2e/smoke/*`).
 - [ ] Severity rubric mapped to release decisions.
 - [ ] Regression reporting integrated into release notes.
 
@@ -202,6 +233,6 @@ Success Metrics:
 
 ## 8) Immediate Next Actions (Week of Feb 16, 2026)
 
-1. Publish M3.3 component token baseline for alerts and empty-state variants.
-2. Expand focus-visible assertions to selected workspace toolbar controls beyond modal surfaces.
-3. Convert non-core decorative theme advisory findings into M4 remediation tickets aligned to the hard-gate memo.
+1. Execute QA/accessibility sign-off against `Docs/Product/WebUI/M3_Release_Checklist_A11y_Baseline_2026_02.md`.
+2. Keep all-theme contrast gate green in release-candidate validation (`apps/packages/ui/src/themes/__tests__/contrast-baseline.test.ts`).
+3. Convert high-volume allowlisted warning classes into remediation backlog items and burn down by expiry date.
