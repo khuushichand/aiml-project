@@ -3994,13 +3994,13 @@ export const QuickIngestModal: React.FC<Props> = ({
           </ul>
         </div>
         <div className="space-y-3">
-          <div className="rounded-md border border-border bg-surface p-3">
+          <div className="rounded-md border border-border bg-surface p-3 text-text">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <Typography.Title level={5} className="!mb-1">
+                <Typography.Title level={5} className="!mb-1 !text-text">
                   {t('quickIngest.sourceHeading') || 'Input'}
                 </Typography.Title>
-                <Typography.Text>
+                <Typography.Text className="!text-text-muted">
                   {t('quickIngest.subtitle') || 'Drop files or paste URLs; items immediately join the queue.'}
                 </Typography.Text>
                 <div className="text-xs text-text-subtle mt-1">
@@ -4111,9 +4111,9 @@ export const QuickIngestModal: React.FC<Props> = ({
             </div>
           </div>
 
-          <div className="rounded-md border border-border bg-surface p-3">
+          <div className="rounded-md border border-border bg-surface p-3 text-text">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <Typography.Title level={5} className="!mb-0">
+              <Typography.Title level={5} className="!mb-0 !text-text">
                 {qi('queueTitle', 'Queue')}
               </Typography.Title>
                 <div className="flex items-center gap-2">

@@ -347,10 +347,11 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
               <Title level={5} className="!mb-2">
                 {t("option:flashcards.front", { defaultValue: "Front" })}
               </Title>
-              <div className="rounded border border-border bg-surface p-3 text-sm">
+              <div className="rounded border border-border bg-surface p-3 text-sm text-text">
                 <MarkdownWithBoundary
                   content={activeCard.front}
                   size="sm"
+                  className="prose-headings:!text-text prose-p:!text-text prose-li:!text-text prose-strong:!text-text"
                 />
               </div>
             </div>
@@ -360,10 +361,11 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                 <Title level={5} className="!mb-2">
                   {t("option:flashcards.back", { defaultValue: "Back" })}
                 </Title>
-                <div className="rounded border border-border bg-surface p-3 text-sm">
+                <div className="rounded border border-border bg-surface p-3 text-sm text-text">
                   <MarkdownWithBoundary
                     content={activeCard.back}
                     size="sm"
+                    className="prose-headings:!text-text prose-p:!text-text prose-li:!text-text prose-strong:!text-text"
                   />
                 </div>
                 {activeCard.extra && (
