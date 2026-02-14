@@ -289,8 +289,16 @@ Create a report and enqueue multi-voice audio briefing workflow:
   "audio_model": "kokoro",
   "audio_voice": "af_heart",
   "audio_speed": 1.0,
+  "background_audio_uri": "file:///absolute/path/to/background-bed.mp3",
+  "background_volume": 0.2,
+  "background_delay_ms": 500,
+  "background_fade_seconds": 2.5,
   "llm_provider": "openai",
   "llm_model": "gpt-4o-mini",
+  "persona_summarize": true,
+  "persona_id": "analyst",
+  "persona_provider": "openai",
+  "persona_model": "gpt-4o-mini",
   "voice_map": {"HOST": "af_bella", "REPORTER": "am_adam"}
 }
 ```

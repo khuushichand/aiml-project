@@ -94,6 +94,7 @@ class StepTypeRegistry:
             "s3_upload": StepType("s3_upload", "Upload content to S3-compatible storage"),
             "s3_download": StepType("s3_download", "Download content from S3-compatible storage"),
             "github_create_issue": StepType("github_create_issue", "Create a GitHub issue"),
+            "podcast_rss_publish": StepType("podcast_rss_publish", "Publish/merge podcast RSS feed entries"),
             # Tier 6: Agentic Support
             "llm_with_tools": StepType("llm_with_tools", "LLM call that can invoke tools"),
             "llm_critique": StepType("llm_critique", "Run LLM critique on content (Constitutional AI)"),

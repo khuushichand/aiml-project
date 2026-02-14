@@ -1,7 +1,7 @@
 # PersonaPod -> tldw_server2: Transferable Wins Plan (Adjusted)
 
 Date: 2026-02-12
-Status: Draft (review-adjusted)
+Status: Completed (implemented 2026-02-14)
 
 ## Context
 
@@ -20,9 +20,18 @@ This plan keeps the original 6-win structure, with architecture-safe adjustments
 5. RSS publish must be race-safe and must not default to arbitrary remote URL fetch.
 6. `map` fan-out summarization must define an explicit merge contract back to `[{title, summary, url}]`.
 
+## Implementation Progress (2026-02-14)
+
+- [x] Win 1 implemented in spoken-path sanitization.
+- [x] Win 2 implemented with stronger TTS-safe prompting and `audio_language` support.
+- [x] Win 3 implemented with shared `clean_text_for_tts()` preprocessing in speech path.
+- [x] Win 4 implemented with optional background mixing controls and run-audio final artifact precedence.
+- [x] Win 5 implemented via `podcast_rss_publish` integration adapter with deterministic merge + optimistic version checks.
+- [x] Win 6 implemented via per-item persona pre-summarization in `audio_briefing_compose`, preserving `[{title, summary, url}]` contract.
+
 ---
 
-## Win 1: Strip Reasoning Model `<think>` Blocks (Quick Win)
+## Win 1: Strip Reasoning Model `<think>` Blocks (Quick Win, completed)
 
 ### Problem
 Reasoning model output may include `<think>...</think>`-style blocks that can be spoken aloud.
@@ -44,7 +53,7 @@ Reasoning model output may include `<think>...</think>`-style blocks that can be
 
 ---
 
-## Win 2: TTS-Safe LLM Prompt Rules (Quick Win)
+## Win 2: TTS-Safe LLM Prompt Rules (Quick Win, completed)
 
 ### Problem
 Current briefing prompt says “NO markdown” but misses common audible artifacts (emoji, character counts, stylized labels, signatures, etc.).
@@ -64,7 +73,7 @@ Current briefing prompt says “NO markdown” but misses common audible artifac
 
 ---
 
-## Win 3: TTS Text Preprocessing (Quick Win)
+## Win 3: TTS Text Preprocessing (Quick Win, completed)
 
 ### Problem
 Characters like `+`, `&`, and dash variants can produce low-quality speech.
@@ -87,7 +96,7 @@ Hooking only `split_text_into_chunks()` is insufficient for briefing path, becau
 
 ---
 
-## Win 4: Background Track Mixing for Audio Briefings (Feature Win)
+## Win 4: Background Track Mixing for Audio Briefings (Feature Win, completed)
 
 ### Problem
 Current mix adapter is a basic `amix` path; briefing workflow has no podcast-style background mix stage.
@@ -111,7 +120,7 @@ Current mix adapter is a basic `amix` path; briefing workflow has no podcast-sty
 
 ---
 
-## Win 5: Podcast RSS Feed Generation (Feature Win)
+## Win 5: Podcast RSS Feed Generation (Feature Win, completed)
 
 ### Problem
 Audio briefing generation exists, but feed publication/subscription flow is missing.
@@ -138,15 +147,15 @@ Audio briefing generation exists, but feed publication/subscription flow is miss
 
 ---
 
-## Win 6: Per-Story Persona Summarization (Pattern Win)
+## Win 6: Per-Story Persona Summarization (Pattern Win, completed)
 
 ### Problem
 Single-pass script composition limits per-story persona shaping.
 
 ### Adjusted Implementation
 1. Add optional per-item pre-summarization mode (`persona_summarize=true`).
-2. Use `map` over items with summarize/persona adapter.
-3. Add explicit merge step that reconstructs compose input contract exactly:
+2. Use per-item persona pre-summarization in `audio_briefing_compose` before final script composition.
+3. Preserve explicit compose input contract exactly:
    - `[{title, summary, url}]`.
 4. Add output prefs inputs:
    - `persona_summarize` (bool)
@@ -209,4 +218,3 @@ Single-pass script composition limits per-story persona shaping.
 4. Win 4 - Background mixing + artifact selection precedence
 5. Win 6 - Per-story persona summarization with explicit merge contract
 6. Win 5 - Podcast RSS publish adapter (highest integration complexity)
-

@@ -356,12 +356,50 @@ class WatchlistOutputCreateRequest(BaseModel):
     audio_model: str | None = Field(default=None, description="TTS model for audio briefing, e.g., 'kokoro'")
     audio_voice: str | None = Field(default=None, description="Default voice for audio briefing, e.g., 'af_heart'")
     audio_speed: float | None = Field(default=None, ge=0.25, le=4.0, description="Audio briefing speed override")
+    background_audio_uri: str | None = Field(
+        default=None,
+        description="Optional file:// URI for a background track to mix under generated briefing audio",
+    )
+    background_volume: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Background track volume multiplier when mixing briefing audio",
+    )
+    background_delay_ms: int | None = Field(
+        default=None,
+        ge=0,
+        le=120000,
+        description="Delay before background track starts, in milliseconds",
+    )
+    background_fade_seconds: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=30.0,
+        description="Fade-in/out duration applied to background track, in seconds",
+    )
     audio_language: str | None = Field(
         default=None,
         description="Language for audio briefing script generation, e.g., 'en', 'es', 'fr'",
     )
     llm_provider: str | None = Field(default=None, description="LLM provider for summarization and script composition")
     llm_model: str | None = Field(default=None, description="LLM model for summarization and script composition")
+    persona_summarize: bool = Field(
+        default=False,
+        description="Enable per-item persona pre-summarization before composing the final audio script",
+    )
+    persona_id: str | None = Field(
+        default=None,
+        description="Persona identifier/style hint for per-item pre-summarization",
+    )
+    persona_provider: str | None = Field(
+        default=None,
+        description="Optional provider override for persona pre-summarization",
+    )
+    persona_model: str | None = Field(
+        default=None,
+        description="Optional model override for persona pre-summarization",
+    )
     voice_map: dict[str, str] | None = Field(
         default=None,
         description="Voice marker to Kokoro voice ID mapping, e.g., {'HOST': 'af_bella', 'REPORTER': 'am_adam'}",

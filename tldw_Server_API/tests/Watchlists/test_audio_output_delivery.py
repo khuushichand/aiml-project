@@ -327,3 +327,78 @@ class TestGetRunAudioEndpoint:
         second_call = mock_wf_db.list_runs.call_args_list[1].kwargs
         assert first_call["offset"] == 0
         assert second_call["offset"] == 50
+
+    @pytest.mark.asyncio
+    async def test_prefers_final_or_mixed_artifact_when_multiple_candidates(self):
+        """Returns final-tagged/mixed artifact over earlier intermediate artifacts."""
+        from tldw_Server_API.app.api.v1.endpoints.watchlists import get_run_audio
+
+        run = SimpleNamespace(
+            id=88,
+            job_id=1,
+            status="completed",
+            started_at=None,
+            finished_at=None,
+            stats_json=json.dumps({"audio_briefing_task_id": "task_prefer_final"}),
+            error_msg=None,
+        )
+        db = MagicMock()
+        db.get_run.return_value = run
+
+        user = MagicMock()
+        user.role = "admin"
+        user.id = 1
+        user.tenant_id = "default"
+
+        wf_run = SimpleNamespace(
+            run_id="wf_run_88",
+            status="completed",
+            metadata_json=json.dumps({"watchlist_run_id": 88}),
+        )
+        intermediate = SimpleNamespace(
+            id="art_raw",
+            type="tts_audio",
+            uri="file:///tmp/briefing_raw.mp3",
+            size_bytes=120,
+            mime_type="audio/mpeg",
+            metadata_json=json.dumps({"multi_voice": True}),
+        )
+        final_mixed = SimpleNamespace(
+            id="art_final",
+            type="tts_audio",
+            uri="file:///tmp/briefing_mixed.mp3",
+            size_bytes=240,
+            mime_type="audio/mpeg",
+            metadata_json=json.dumps(
+                {
+                    "multi_voice": True,
+                    "background_mixed": True,
+                    "final_artifact": True,
+                }
+            ),
+        )
+
+        mock_wf_db = MagicMock()
+        mock_wf_db.list_runs.return_value = [wf_run]
+        mock_wf_db.list_artifacts.return_value = [intermediate, final_mixed]
+
+        with (
+            patch(
+                "tldw_Server_API.app.api.v1.endpoints.watchlists.resolve_user_id_for_request",
+                return_value=1,
+            ),
+            patch(
+                "tldw_Server_API.app.core.DB_Management.db_path_utils.DatabasePaths.get_user_base_directory",
+                return_value="/tmp/test_user",
+            ),
+            patch("os.path.exists", return_value=True),
+            patch(
+                "tldw_Server_API.app.core.DB_Management.Workflows_DB.WorkflowsDatabase",
+                return_value=mock_wf_db,
+            ),
+        ):
+            result = await get_run_audio(run_id=88, target_user_id=None, current_user=user, db=db)
+
+        assert result["status"] == "completed"
+        assert result["artifact_id"] == "art_final"
+        assert result["audio_uri"] == "file:///tmp/briefing_mixed.mp3"

@@ -1,6 +1,6 @@
 """Tests for integration adapters.
 
-This module tests all 10 integration adapters:
+This module tests all 11 integration adapters:
 1. run_webhook_adapter - Send webhook
 2. run_notify_adapter - Send notification
 3. run_mcp_tool_adapter - MCP tool execution
@@ -11,12 +11,14 @@ This module tests all 10 integration adapters:
 8. run_chatbooks_adapter - Chatbooks operations
 9. run_character_chat_adapter - Character chat
 10. run_email_send_adapter - Send email
+11. run_podcast_rss_publish_adapter - Publish podcast RSS feed
 """
 
 import os
 from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
+from xml.etree import ElementTree as ET
 
 import pytest
 
@@ -1297,6 +1299,142 @@ async def test_email_send_adapter_body_from_prev(monkeypatch):
 
 
 # ==============================================================================
+# Podcast RSS Publish Adapter Tests
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+async def test_podcast_rss_publish_creates_feed_and_item(monkeypatch, tmp_path):
+    """Test podcast_rss_publish creates a valid feed with one episode item."""
+    monkeypatch.setenv("WORKFLOWS_FILE_BASE_DIR", str(tmp_path))
+
+    from tldw_Server_API.app.core.Workflows.adapters.integration import (
+        run_podcast_rss_publish_adapter,
+    )
+
+    config = {
+        "feed_uri": "file://feeds/podcast.xml",
+        "channel": {
+            "title": "Daily Briefing",
+            "link": "https://example.com/podcast",
+            "description": "Daily podcast briefing",
+        },
+        "episode": {
+            "guid": "episode-1",
+            "title": "Episode 1",
+            "description": "Top stories",
+            "audio_url": "https://cdn.example.com/episode-1.mp3",
+            "published_at": "2026-02-13T20:00:00Z",
+        },
+    }
+    context = {"user_id": "test_user"}
+
+    result = await run_podcast_rss_publish_adapter(config, context)
+
+    assert result.get("published") is True
+    assert result.get("item_guid") == "episode-1"
+    feed_path = tmp_path / "feeds" / "podcast.xml"
+    assert feed_path.exists()
+
+    root = ET.parse(feed_path).getroot()
+    channel = root.find("channel")
+    assert channel is not None
+    item = channel.find("item")
+    assert item is not None
+    assert item.findtext("guid") == "episode-1"
+    assert item.findtext("title") == "Episode 1"
+
+
+@pytest.mark.asyncio
+async def test_podcast_rss_publish_dedupes_guid_and_checks_version(monkeypatch, tmp_path):
+    """Test GUID dedupe and optimistic version conflict handling."""
+    monkeypatch.setenv("WORKFLOWS_FILE_BASE_DIR", str(tmp_path))
+
+    from tldw_Server_API.app.core.Workflows.adapters.integration import (
+        run_podcast_rss_publish_adapter,
+    )
+
+    context = {"user_id": "test_user"}
+    feed_uri = "file://feeds/podcast.xml"
+
+    base_config = {
+        "feed_uri": feed_uri,
+        "episode": {
+            "guid": "episode-dup",
+            "title": "Original Title",
+            "audio_url": "https://cdn.example.com/original.mp3",
+            "published_at": "2026-02-13T20:00:00Z",
+        },
+    }
+    first = await run_podcast_rss_publish_adapter(base_config, context)
+    assert first.get("published") is True
+    assert first.get("version") == 1
+
+    update_config = {
+        "feed_uri": feed_uri,
+        "expected_version": 1,
+        "episode": {
+            "guid": "episode-dup",
+            "title": "Updated Title",
+            "audio_url": "https://cdn.example.com/updated.mp3",
+            "published_at": "2026-02-13T21:00:00Z",
+        },
+    }
+    second = await run_podcast_rss_publish_adapter(update_config, context)
+    assert second.get("published") is True
+    assert second.get("item_count") == 1
+    assert second.get("replaced_existing_guid") is True
+
+    feed_path = tmp_path / "feeds" / "podcast.xml"
+    root = ET.parse(feed_path).getroot()
+    channel = root.find("channel")
+    items = channel.findall("item") if channel is not None else []
+    assert len(items) == 1
+    assert items[0].findtext("title") == "Updated Title"
+
+    conflict = await run_podcast_rss_publish_adapter(
+        {
+            "feed_uri": feed_uri,
+            "expected_version": 0,
+            "episode": {
+                "guid": "episode-new",
+                "title": "New Episode",
+                "audio_url": "https://cdn.example.com/new.mp3",
+            },
+        },
+        context,
+    )
+    assert conflict.get("published") is False
+    assert conflict.get("error") == "version_conflict"
+
+
+@pytest.mark.asyncio
+async def test_podcast_rss_publish_blocks_remote_seed_without_opt_in(monkeypatch, tmp_path):
+    """Test remote feed seeding is disabled unless explicitly enabled."""
+    monkeypatch.setenv("WORKFLOWS_FILE_BASE_DIR", str(tmp_path))
+
+    from tldw_Server_API.app.core.Workflows.adapters.integration import (
+        run_podcast_rss_publish_adapter,
+    )
+
+    result = await run_podcast_rss_publish_adapter(
+        {
+            "feed_uri": "file://feeds/podcast.xml",
+            "source_feed_url": "https://example.com/feed.xml",
+            "allow_remote_fetch": False,
+            "episode": {
+                "guid": "episode-remote-disabled",
+                "title": "Episode",
+                "audio_url": "https://cdn.example.com/episode.mp3",
+            },
+        },
+        {"user_id": "test_user"},
+    )
+    assert result.get("published") is False
+    assert result.get("error") == "remote_fetch_disabled"
+
+
+# ==============================================================================
 # Import Tests
 # ==============================================================================
 
@@ -1314,6 +1452,7 @@ def test_all_integration_adapters_importable():
         run_chatbooks_adapter,
         run_character_chat_adapter,
         run_email_send_adapter,
+        run_podcast_rss_publish_adapter,
     )
 
     assert callable(run_webhook_adapter)
@@ -1326,6 +1465,7 @@ def test_all_integration_adapters_importable():
     assert callable(run_chatbooks_adapter)
     assert callable(run_character_chat_adapter)
     assert callable(run_email_send_adapter)
+    assert callable(run_podcast_rss_publish_adapter)
 
 
 def test_integration_adapters_are_async():
@@ -1343,6 +1483,7 @@ def test_integration_adapters_are_async():
         run_chatbooks_adapter,
         run_character_chat_adapter,
         run_email_send_adapter,
+        run_podcast_rss_publish_adapter,
     )
 
     adapters = [
@@ -1356,6 +1497,7 @@ def test_integration_adapters_are_async():
         run_chatbooks_adapter,
         run_character_chat_adapter,
         run_email_send_adapter,
+        run_podcast_rss_publish_adapter,
     ]
 
     for adapter in adapters:
@@ -1377,6 +1519,7 @@ def test_integration_adapters_registered():
         "chatbooks",
         "character_chat",
         "email_send",
+        "podcast_rss_publish",
     ]
 
     registered = registry.list_adapters()
@@ -1399,6 +1542,7 @@ def test_integration_adapters_in_category():
         "chatbooks",
         "character_chat",
         "email_send",
+        "podcast_rss_publish",
     ]
 
     for name in expected_adapters:

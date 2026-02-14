@@ -3,7 +3,7 @@
 Status: Active Template  
 Owner: WebUI + QA  
 Date: February 13, 2026  
-Related Contract: `Docs/Product/WebUI/M2_Route_Error_Boundary_Contract_2026_02.md`
+Related Contract: `Docs/Product/Completed/WebUI-related/M2_Route_Error_Boundary_Contract_2026_02.md`
 
 ## 1) When to Use
 
@@ -36,11 +36,11 @@ If you encounter a page error after updating:
 ### Troubleshooting links
 
 - Route boundary contract and route coverage map:
-  `Docs/Product/WebUI/M2_Route_Error_Boundary_Contract_2026_02.md`
+  `Docs/Product/Completed/WebUI-related/M2_Route_Error_Boundary_Contract_2026_02.md`
 - Latest route health snapshot and smoke evidence:
-  `Docs/Product/WebUI/M1_4_Route_Health_Snapshot_2026_02_12.md`
+  `Docs/Product/Completed/WebUI-related/M1_4_Route_Health_Snapshot_2026_02_12.md`
 - Wayfinding and keyboard recovery QA script:
-  `Docs/Product/WebUI/M1_3_Wayfinding_Manual_QA_Script_2026_02.md`
+  `Docs/Product/Completed/WebUI-related/M1_3_Wayfinding_Manual_QA_Script_2026_02.md`
 
 ### Verification evidence (attach command output)
 

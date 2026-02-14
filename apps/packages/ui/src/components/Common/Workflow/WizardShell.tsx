@@ -5,8 +5,6 @@ import { useTranslation } from "react-i18next"
 import { useWorkflowsStore } from "@/store/workflows"
 import type { WizardShellProps } from "@/types/workflows"
 
-const { Step } = Steps
-
 /**
  * WizardShell
  *

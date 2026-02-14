@@ -65,6 +65,91 @@ def _strip_reasoning_blocks(text: str) -> str:
     return stripped
 
 
+def _normalize_item(item: Any) -> dict[str, str]:
+    if isinstance(item, dict):
+        title = str(item.get("title") or "").strip()
+        summary = str(item.get("summary") or item.get("snippet") or "").strip()
+        url = str(item.get("url") or item.get("source_url") or "").strip()
+        return {"title": title, "summary": summary, "url": url}
+    title = str(getattr(item, "title", "") or "").strip()
+    summary = str(
+        getattr(item, "summary", "") or getattr(item, "snippet", "") or ""
+    ).strip()
+    url = str(getattr(item, "url", "") or getattr(item, "source_url", "") or "").strip()
+    return {"title": title, "summary": summary, "url": url}
+
+
+def _build_persona_summary_system_prompt(output_language: str, persona_id: str | None) -> str:
+    persona_hint = (persona_id or "").strip()
+    persona_instruction = (
+        f"Adopt this persona style while staying factual: {persona_hint}."
+        if persona_hint
+        else "Use a neutral professional briefing tone."
+    )
+    return (
+        "You rewrite article summaries for short spoken audio news briefings.\n"
+        f"{persona_instruction}\n"
+        f"{_build_language_rule(output_language)}\n"
+        "Rules:\n"
+        "- Return only the rewritten summary text.\n"
+        "- Maximum 2 to 3 short spoken sentences.\n"
+        "- No markdown, no URLs, no bullet points, no labels, no emojis.\n"
+        "- Preserve factual meaning and avoid adding claims."
+    )
+
+
+async def _persona_pre_summarize_items(
+    items: list[dict[str, str]],
+    *,
+    output_language: str,
+    provider: str | None,
+    model: str | None,
+    persona_id: str | None,
+) -> list[dict[str, str]]:
+    if not items:
+        return []
+    if not provider:
+        return items
+
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+
+    system_prompt = _build_persona_summary_system_prompt(output_language, persona_id)
+    rewritten_items: list[dict[str, str]] = []
+
+    for item in items:
+        normalized = _normalize_item(item)
+        title = normalized.get("title") or "Untitled"
+        source_summary = normalized.get("summary") or title
+        source_url = normalized.get("url") or ""
+        if not source_summary:
+            rewritten_items.append(normalized)
+            continue
+
+        user_prompt = (
+            f"Title: {title}\n"
+            f"Summary: {source_summary}\n"
+            f"URL: {source_url}\n\n"
+            "Rewrite this as a concise spoken summary."
+        )
+        try:
+            response = await perform_chat_api_call_async(
+                messages=[{"role": "user", "content": user_prompt}],
+                api_provider=provider,
+                model=model,
+                system_message=system_prompt,
+                max_tokens=240,
+                temperature=0.35,
+            )
+            rewritten = _strip_reasoning_blocks(extract_openai_content(response) or "").strip()
+            if rewritten:
+                normalized["summary"] = rewritten
+        except _BRIEFING_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"Persona pre-summarization failed for '{title}': {exc}")
+        rewritten_items.append(normalized)
+
+    return rewritten_items
+
+
 def _build_system_prompt(target_words: int, multi_voice: bool, output_language: str) -> str:
     """Build the system prompt for LLM script composition."""
     voice_instructions = ""
@@ -179,17 +264,37 @@ async def run_audio_briefing_compose_adapter(
     if not items:
         return {"text": "", "script": "", "sections": [], "error": "missing_items"}
 
+    output_language_cfg = config.get("output_language", "en")
+    if isinstance(output_language_cfg, str):
+        output_language_cfg = apply_template_to_string(output_language_cfg, context) or output_language_cfg
+    output_language = _normalize_output_language(output_language_cfg)
+
+    normalized_items = [_normalize_item(entry) for entry in items]
+    normalized_items = [entry for entry in normalized_items if entry.get("title") or entry.get("summary")]
+    if not normalized_items:
+        return {"text": "", "script": "", "sections": [], "error": "missing_items"}
+
+    persona_summarize = bool(config.get("persona_summarize", False))
+    persona_provider_cfg = config.get("persona_provider") or config.get("provider")
+    persona_model_cfg = config.get("persona_model") or config.get("model")
+    persona_id_cfg = config.get("persona_id")
+    if persona_summarize:
+        normalized_items = await _persona_pre_summarize_items(
+            normalized_items,
+            output_language=output_language,
+            provider=persona_provider_cfg,
+            model=persona_model_cfg,
+            persona_id=str(persona_id_cfg).strip() if persona_id_cfg is not None else None,
+        )
+
+    items = normalized_items
+
     multi_voice = config.get("multi_voice", True)
     target_minutes = config.get("target_audio_minutes", 10)
     target_words = target_minutes * 150
     voice_map_cfg = config.get("voice_map")
     if isinstance(voice_map_cfg, str):
         voice_map_cfg = apply_template_to_string(voice_map_cfg, context) or voice_map_cfg
-
-    output_language_cfg = config.get("output_language", "en")
-    if isinstance(output_language_cfg, str):
-        output_language_cfg = apply_template_to_string(output_language_cfg, context) or output_language_cfg
-    output_language = _normalize_output_language(output_language_cfg)
 
     system_prompt = config.get("system_prompt_override") or _build_system_prompt(
         target_words, multi_voice, output_language

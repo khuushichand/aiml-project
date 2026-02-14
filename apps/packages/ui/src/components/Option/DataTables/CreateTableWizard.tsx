@@ -8,8 +8,6 @@ import { GenerationPanel } from "./GenerationPanel"
 import { TablePreview } from "./TablePreview"
 import { SaveTablePanel } from "./SaveTablePanel"
 
-const { Step } = Steps
-
 /**
  * CreateTableWizard
  *
@@ -113,15 +111,15 @@ export const CreateTableWizard: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Steps indicator */}
-      <Steps current={currentStepIndex} className="mb-8">
-        {steps.map((step) => (
-          <Step
-            key={step.key}
-            title={step.title}
-            description={step.description}
-          />
-        ))}
-      </Steps>
+      <Steps
+        current={currentStepIndex}
+        className="mb-8"
+        items={steps.map((step) => ({
+          key: step.key,
+          title: step.title,
+          description: step.description
+        }))}
+      />
 
       {/* Intro tip */}
       {wizardStep === "sources" && (

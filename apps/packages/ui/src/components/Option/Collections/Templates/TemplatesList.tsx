@@ -293,16 +293,41 @@ const TemplateCard: React.FC<TemplateCardProps> = ({
       className="group transition-shadow hover:shadow-md"
       actions={[
         <Tooltip key="preview" title={t("collections:templates.preview", "Preview")}>
-          <Button type="text" size="small" icon={<Eye className="h-4 w-4" />} onClick={onPreview} />
+          <Button
+            type="text"
+            size="small"
+            icon={<Eye className="h-4 w-4" />}
+            onClick={onPreview}
+            aria-label={t("collections:templates.preview", "Preview")}
+          />
         </Tooltip>,
         <Tooltip key="edit" title={t("common:edit", "Edit")}>
-          <Button type="text" size="small" icon={<Edit className="h-4 w-4" />} onClick={onEdit} />
+          <Button
+            type="text"
+            size="small"
+            icon={<Edit className="h-4 w-4" />}
+            onClick={onEdit}
+            aria-label={t("common:edit", "Edit")}
+          />
         </Tooltip>,
         <Tooltip key="duplicate" title={t("collections:templates.duplicate", "Duplicate")}>
-          <Button type="text" size="small" icon={<Copy className="h-4 w-4" />} onClick={onDuplicate} />
+          <Button
+            type="text"
+            size="small"
+            icon={<Copy className="h-4 w-4" />}
+            onClick={onDuplicate}
+            aria-label={t("collections:templates.duplicate", "Duplicate")}
+          />
         </Tooltip>,
         <Tooltip key="delete" title={t("common:delete", "Delete")}>
-          <Button type="text" size="small" danger icon={<Trash2 className="h-4 w-4" />} onClick={onDelete} />
+          <Button
+            type="text"
+            size="small"
+            danger
+            icon={<Trash2 className="h-4 w-4" />}
+            onClick={onDelete}
+            aria-label={t("common:delete", "Delete")}
+          />
         </Tooltip>
       ]}
     >

@@ -1,5 +1,7 @@
 # Watchlists PersonaPod Transfer Plan (2026-02-12)
 
+Status: Completed (2026-02-14)
+
 ## Scope
 
 Address the review findings by improving `tldw_server2` watchlists behavior and tooling using PersonaPod as pattern inspiration only (no direct code port).
@@ -23,7 +25,7 @@ Covered by: PR1 (completed)
 Covered by: PR3 (completed)
 
 3) Tooling discoverability gap  
-Covered by: PR2 (in progress; script + make target complete, CLI wrapper optional)
+Covered by: PR2 (completed; script + make target + CLI wrapper)
 
 4) Non-transplant guardrail  
 Covered by: Scope + PR3 documentation note
@@ -38,11 +40,11 @@ Covered by: Scope + PR3 documentation note
 - [x] Include audio briefing status/task metadata on created output response metadata.
 - [x] Add/adjust API tests for payload-driven audio trigger.
 
-### PR2 - Tooling ergonomics
+### PR2 - Tooling ergonomics (completed)
 
 - [x] Add `Helper_Scripts/watchlists/watchlists_audio_smoke.py` to execute create source/job/run/output/audio-check flow.
 - [x] Add `Makefile` target(s) for the smoke workflow.
-- [ ] Optional: add watchlists CLI command wrapper under `tldw_Server_API/cli/commands`.
+- [x] Add watchlists CLI command wrapper under `tldw_Server_API/cli/commands` (`tldw-evals watchlists audio-smoke`).
 
 ### PR3 - Docs and runbook sync
 

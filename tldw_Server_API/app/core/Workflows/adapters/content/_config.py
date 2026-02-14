@@ -207,6 +207,22 @@ class AudioBriefingComposeConfig(BaseAdapterConfig):
     system_prompt_override: str | None = Field(None, description="Override default system prompt")
     voice_map: dict[str, str] | None = Field(None, description="Voice marker -> Kokoro voice ID mapping")
     multi_voice: bool = Field(True, description="Enable multi-voice markers in script")
+    persona_summarize: bool = Field(
+        False,
+        description="Pre-summarize each item in persona voice before final script composition",
+    )
+    persona_id: str | None = Field(
+        None,
+        description="Persona identifier/style hint used for per-item pre-summarization",
+    )
+    persona_provider: str | None = Field(
+        None,
+        description="Optional provider override for persona pre-summarization",
+    )
+    persona_model: str | None = Field(
+        None,
+        description="Optional model override for persona pre-summarization",
+    )
 
 
 class DiagramGenerateConfig(BaseAdapterConfig):

@@ -1831,6 +1831,43 @@ class TestAudioBriefingComposeAdapter:
         assert "Reply only in es." in call_kwargs["system_message"]
 
     @pytest.mark.asyncio
+    async def test_compose_persona_pre_summarization_preserves_contract(
+        self, sample_items, mock_llm_response_multi_voice, base_context
+    ):
+        """Test persona pre-summarization runs per item and feeds compose prompt."""
+        from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (
+            run_audio_briefing_compose_adapter,
+        )
+
+        persona_rewrites = [
+            {"choices": [{"message": {"content": "Persona summary one"}}]},
+            {"choices": [{"message": {"content": "Persona summary two"}}]},
+            {"choices": [{"message": {"content": "Persona summary three"}}]},
+        ]
+        config = {
+            "items": sample_items,
+            "persona_summarize": True,
+            "persona_id": "analyst",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+        }
+
+        with patch(
+            "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+            new_callable=AsyncMock,
+            side_effect=persona_rewrites + [mock_llm_response_multi_voice],
+        ) as mock_llm:
+            result = await run_audio_briefing_compose_adapter(config, base_context)
+
+        assert result.get("error") is None
+        assert mock_llm.await_count == 4
+        compose_call = mock_llm.call_args_list[-1][1]
+        assert "Persona summary one" in compose_call["messages"][0]["content"]
+        first_persona_call = mock_llm.call_args_list[0][1]
+        assert "analyst" in first_persona_call["system_message"]
+        assert "Title:" in first_persona_call["messages"][0]["content"]
+
+    @pytest.mark.asyncio
     async def test_compose_strips_reasoning_blocks(self, sample_items, base_context):
         """Test reasoning blocks are stripped from final spoken script."""
         from tldw_Server_API.app.core.Workflows.adapters.content.audio_briefing import (

@@ -45,6 +45,29 @@ class TestAudioBriefingWorkflowDefinition:
         for step in AUDIO_BRIEFING_WORKFLOW_DEF["steps"]:
             assert "timeout_seconds" in step, f"Step {step['id']} missing timeout"
 
+    def test_workflow_def_passes_persona_and_background_inputs(self):
+        from tldw_Server_API.app.core.Watchlists.audio_briefing_workflow import (
+            AUDIO_BRIEFING_WORKFLOW_DEF,
+        )
+
+        compose_cfg = next(
+            step["config"]
+            for step in AUDIO_BRIEFING_WORKFLOW_DEF["steps"]
+            if step["id"] == "compose_script"
+        )
+        assert compose_cfg["persona_summarize"] == "{{ inputs.persona_summarize }}"
+        assert compose_cfg["persona_id"] == "{{ inputs.persona_id }}"
+        assert compose_cfg["persona_provider"] == "{{ inputs.persona_provider }}"
+        assert compose_cfg["persona_model"] == "{{ inputs.persona_model }}"
+
+        audio_cfg = next(
+            step["config"]
+            for step in AUDIO_BRIEFING_WORKFLOW_DEF["steps"]
+            if step["id"] == "generate_audio"
+        )
+        assert audio_cfg["background_audio_uri"] == "{{ inputs.background_audio_uri }}"
+        assert audio_cfg["background_volume"] == "{{ inputs.background_volume }}"
+
 
 class TestBuildWorkflowInputs:
     """Tests for _build_workflow_inputs."""
@@ -68,6 +91,14 @@ class TestBuildWorkflowInputs:
         assert inputs["llm_provider"] is None
         assert inputs["llm_model"] is None
         assert inputs["voice_map"] is None
+        assert inputs["persona_summarize"] is False
+        assert inputs["persona_id"] is None
+        assert inputs["persona_provider"] is None
+        assert inputs["persona_model"] is None
+        assert inputs["background_audio_uri"] is None
+        assert inputs["background_volume"] == 0.15
+        assert inputs["background_delay_ms"] == 0
+        assert inputs["background_fade_seconds"] == 2.0
 
     def test_custom_inputs(self):
         from tldw_Server_API.app.core.Watchlists.audio_briefing_workflow import (
@@ -84,7 +115,15 @@ class TestBuildWorkflowInputs:
             "audio_language": "es",
             "llm_provider": "openai",
             "llm_model": "gpt-4o",
+            "persona_summarize": True,
+            "persona_id": "analyst",
+            "persona_provider": "openai",
+            "persona_model": "gpt-4o-mini",
             "voice_map": {"HOST": "af_bella"},
+            "background_audio_uri": "file:///tmp/bed.mp3",
+            "background_volume": 0.2,
+            "background_delay_ms": 500,
+            "background_fade_seconds": 3.0,
         }
 
         inputs = _build_workflow_inputs(items, output_prefs)
@@ -96,7 +135,15 @@ class TestBuildWorkflowInputs:
         assert inputs["tts_speed"] == 1.2
         assert inputs["llm_provider"] == "openai"
         assert inputs["llm_model"] == "gpt-4o"
+        assert inputs["persona_summarize"] is True
+        assert inputs["persona_id"] == "analyst"
+        assert inputs["persona_provider"] == "openai"
+        assert inputs["persona_model"] == "gpt-4o-mini"
         assert inputs["voice_map"] == {"HOST": "af_bella"}
+        assert inputs["background_audio_uri"] == "file:///tmp/bed.mp3"
+        assert inputs["background_volume"] == 0.2
+        assert inputs["background_delay_ms"] == 500
+        assert inputs["background_fade_seconds"] == 3.0
 
 
 class TestTriggerAudioBriefing:
@@ -166,6 +213,10 @@ class TestTriggerAudioBriefing:
                     "generate_audio": True,
                     "target_audio_minutes": 5,
                     "voice_map": {"HOST": "af_bella"},
+                    "background_audio_uri": "file:///tmp/bed.mp3",
+                    "background_volume": 0.22,
+                    "persona_summarize": True,
+                    "persona_id": "host_style",
                 },
                 db=db,
             )
@@ -179,6 +230,10 @@ class TestTriggerAudioBriefing:
         assert task.payload["user_id"] == 1
         assert task.payload["inputs"]["target_audio_minutes"] == 5
         assert task.payload["inputs"]["voice_map"] == {"HOST": "af_bella"}
+        assert task.payload["inputs"]["background_audio_uri"] == "file:///tmp/bed.mp3"
+        assert task.payload["inputs"]["background_volume"] == 0.22
+        assert task.payload["inputs"]["persona_summarize"] is True
+        assert task.payload["inputs"]["persona_id"] == "host_style"
         assert len(task.payload["inputs"]["items"]) == 2
         assert task.payload["metadata"]["watchlist_job_id"] == 42
         assert task.payload["metadata"]["watchlist_run_id"] == 7

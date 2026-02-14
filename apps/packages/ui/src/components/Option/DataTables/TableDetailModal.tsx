@@ -220,7 +220,12 @@ export const TableDetailModal: React.FC<TableDetailModalProps> = ({
       open={open}
       onClose={handleClose}
       extra={
-        <Button type="text" icon={<X className="h-4 w-4" />} onClick={handleClose} />
+        <Button
+          type="text"
+          icon={<X className="h-4 w-4" />}
+          onClick={handleClose}
+          aria-label={t("common:close", "Close")}
+        />
       }
     >
       {/* Loading */}

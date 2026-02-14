@@ -841,9 +841,17 @@ def test_outputs_generate_audio_payload_triggers_workflow_and_updates_run_stats(
                 "audio_model": "tts-1",
                 "audio_voice": "nova",
                 "audio_speed": 1.2,
+                "background_audio_uri": "file:///tmp/background.mp3",
+                "background_volume": 0.25,
+                "background_delay_ms": 750,
+                "background_fade_seconds": 2.5,
                 "audio_language": "fr",
                 "llm_provider": "openai",
                 "llm_model": "gpt-4o-mini",
+                "persona_summarize": True,
+                "persona_id": "analyst",
+                "persona_provider": "openai",
+                "persona_model": "gpt-4o-mini",
                 "voice_map": {"HOST": "af_bella"},
             },
         )
@@ -864,9 +872,17 @@ def test_outputs_generate_audio_payload_triggers_workflow_and_updates_run_stats(
     assert kwargs["output_prefs"]["audio_model"] == "tts-1"
     assert kwargs["output_prefs"]["audio_voice"] == "nova"
     assert kwargs["output_prefs"]["audio_speed"] == 1.2
+    assert kwargs["output_prefs"]["background_audio_uri"] == "file:///tmp/background.mp3"
+    assert kwargs["output_prefs"]["background_volume"] == 0.25
+    assert kwargs["output_prefs"]["background_delay_ms"] == 750
+    assert kwargs["output_prefs"]["background_fade_seconds"] == 2.5
     assert kwargs["output_prefs"]["audio_language"] == "fr"
     assert kwargs["output_prefs"]["llm_provider"] == "openai"
     assert kwargs["output_prefs"]["llm_model"] == "gpt-4o-mini"
+    assert kwargs["output_prefs"]["persona_summarize"] is True
+    assert kwargs["output_prefs"]["persona_id"] == "analyst"
+    assert kwargs["output_prefs"]["persona_provider"] == "openai"
+    assert kwargs["output_prefs"]["persona_model"] == "gpt-4o-mini"
     assert kwargs["output_prefs"]["voice_map"] == {"HOST": "af_bella"}
 
     r = c.get(f"/api/v1/watchlists/runs/{run_id}")

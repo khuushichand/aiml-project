@@ -1,8 +1,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import type { APIRequestContext, Locator, Page } from "@playwright/test"
 import {
-  type Locator,
-  type Page,
   test,
   expect,
   skipIfServerUnavailable
@@ -89,7 +88,7 @@ const parseNodeCountFromStatusText = (text: string | null): number | null => {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-const getScrollSnapshot = async (page: Parameters<typeof test>[0]["authedPage"]): Promise<ScrollSnapshot> =>
+const getScrollSnapshot = async (page: Page): Promise<ScrollSnapshot> =>
   page.evaluate(() => {
     const container = document.querySelector(
       "div.flex-1.overflow-y-auto.p-4"
@@ -114,7 +113,7 @@ const computeScrollDelta = (before: ScrollSnapshot, after: ScrollSnapshot): numb
   )
 
 const waitForSignificantScroll = async (
-  page: Parameters<typeof test>[0]["authedPage"],
+  page: Page,
   before: ScrollSnapshot,
   threshold = 80,
   timeoutMs = 5000
@@ -134,7 +133,7 @@ const waitForSignificantScroll = async (
 }
 
 const getMediaTitle = async (
-  request: Parameters<typeof test>[0]["request"],
+  request: APIRequestContext,
   mediaId: number
 ): Promise<string> => {
   const urlCandidates = [
@@ -170,7 +169,7 @@ const getMediaTitle = async (
 }
 
 const ensureSearchInputVisible = async (
-  page: Parameters<typeof test>[0]["authedPage"]
+  page: Page
 ) => {
   const searchInput = page.locator("input[placeholder*='Search media']").first()
   if (await searchInput.isVisible().catch(() => false)) return searchInput
@@ -237,7 +236,7 @@ const tryFindMatchingMediaRow = async (
 }
 
 const selectMediaResult = async (
-  page: Parameters<typeof test>[0]["authedPage"],
+  page: Page,
   mediaId: number,
   title: string,
   preferredQuery: string

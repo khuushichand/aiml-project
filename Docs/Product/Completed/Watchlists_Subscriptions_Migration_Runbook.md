@@ -1,8 +1,8 @@
 # Watchlists ⟷ Subscriptions Migration Runbook
 
 Audience: Backend + Ops
-Status: Draft (v0.2.x codebase)
-Updated: 2026-02-12
+Status: Current (validated v0.2.x codebase)
+Updated: 2026-02-14
 
 Related
 - Primary PRD: `Docs/Product/Watchlist_PRD.md`
@@ -238,7 +238,11 @@ curl -sS -X POST \
     "target_audio_minutes": 8,
     "audio_model": "kokoro",
     "audio_voice": "af_heart",
-    "audio_speed": 1.0
+    "audio_speed": 1.0,
+    "background_audio_uri": "file:///absolute/path/to/background-bed.mp3",
+    "background_volume": 0.2,
+    "persona_summarize": true,
+    "persona_id": "analyst"
   }' \
   http://127.0.0.1:8000/api/v1/watchlists/outputs
 ```
@@ -301,6 +305,14 @@ Current helper scripts:
    - Typical usage:
    ```
    make watchlists-audio-smoke WATCHLISTS_API_KEY="$SINGLE_USER_API_KEY"
+   ```
+
+2) CLI wrapper: `tldw-evals watchlists audio-smoke`
+   - Purpose: one-command wrapper around the same helper flow with pass-through args.
+   - Typical usage:
+   ```
+   source .venv/bin/activate
+   tldw-evals watchlists audio-smoke --base-url http://127.0.0.1:8000 --api-key "$SINGLE_USER_API_KEY"
    ```
 
 Optional additions (future ergonomics):

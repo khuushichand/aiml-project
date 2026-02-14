@@ -1827,3 +1827,90 @@ class TestMultiVoiceTTSAdapter:
         assert "<thinking>" not in observed_texts[0].lower()
         assert "plus" in observed_texts[0]
         assert " and " in observed_texts[0]
+
+    @pytest.mark.asyncio
+    async def test_multi_voice_tts_background_mix_applied(
+        self, base_context, tmp_path, monkeypatch
+    ):
+        """Test optional background track mixing produces mixed final artifact."""
+        from tldw_Server_API.app.core.Workflows.adapters.audio.multi_voice_tts import (
+            run_multi_voice_tts_adapter,
+        )
+
+        monkeypatch.setenv("WORKFLOWS_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+
+        async def mock_synthesize(text, model, voice, fmt, speed, output_path):
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"speech_audio")
+            return len(b"speech_audio")
+
+        async def mock_mix_background_track(**kwargs):
+            output_path = kwargs["output_path"]
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"mixed_audio")
+            return True
+
+        config = {
+            "sections": [{"voice": "HOST", "text": "Top stories for today."}],
+            "voice_assignments": {"HOST": "af_bella"},
+            "normalize": False,
+            "background_audio_uri": "file:///tmp/bg.mp3",
+            "background_volume": 0.2,
+            "background_delay_ms": 400,
+            "background_fade_seconds": 2.0,
+        }
+
+        with (
+            patch(
+                "tldw_Server_API.app.core.Workflows.adapters.audio.multi_voice_tts._synthesize_section",
+                side_effect=mock_synthesize,
+            ),
+            patch(
+                "tldw_Server_API.app.core.Workflows.adapters.audio.multi_voice_tts._mix_background_track",
+                side_effect=mock_mix_background_track,
+            ) as mock_mix,
+        ):
+            result = await run_multi_voice_tts_adapter(config, base_context)
+
+        assert "error" not in result
+        assert result["background_mixed"] is True
+        assert result["audio_uri"].endswith("briefing_mixed.mp3")
+        assert mock_mix.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_multi_voice_tts_background_mix_fallback_to_narration(
+        self, base_context, tmp_path, monkeypatch
+    ):
+        """Test mixing failures return narration-only output without hard failure."""
+        from tldw_Server_API.app.core.Workflows.adapters.audio.multi_voice_tts import (
+            run_multi_voice_tts_adapter,
+        )
+
+        monkeypatch.setenv("WORKFLOWS_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+
+        async def mock_synthesize(text, model, voice, fmt, speed, output_path):
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"speech_audio")
+            return len(b"speech_audio")
+
+        config = {
+            "sections": [{"voice": "HOST", "text": "Top stories for today."}],
+            "voice_assignments": {"HOST": "af_bella"},
+            "normalize": False,
+            "background_audio_uri": "file:///tmp/bg.mp3",
+        }
+
+        with (
+            patch(
+                "tldw_Server_API.app.core.Workflows.adapters.audio.multi_voice_tts._synthesize_section",
+                side_effect=mock_synthesize,
+            ),
+            patch(
+                "tldw_Server_API.app.core.Workflows.adapters.audio.multi_voice_tts._mix_background_track",
+                return_value=False,
+            ),
+        ):
+            result = await run_multi_voice_tts_adapter(config, base_context)
+
+        assert "error" not in result
+        assert result["background_mixed"] is False

@@ -20,6 +20,8 @@ from tldw_Server_API.app.core.TTS.utils import clean_text_for_tts
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     AsyncFileWriter,
     resolve_artifacts_dir,
+    resolve_workflow_file_path,
+    resolve_workflow_file_uri,
 )
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.audio._config import MultiVoiceTTSConfig
@@ -109,10 +111,7 @@ async def _concat_files(file_paths: list[Path], output_path: Path, fmt: str = "m
     if not ffmpeg_path:
         return False
 
-    # Determine codec/format args
-    codec_map = {"mp3": ["-c:a", "libmp3lame", "-q:a", "2"], "wav": ["-c:a", "pcm_s16le"],
-                 "opus": ["-c:a", "libopus"], "flac": ["-c:a", "flac"], "aac": ["-c:a", "aac", "-b:a", "128k"]}
-    codec_args = codec_map.get(fmt, ["-c:a", "libmp3lame", "-q:a", "2"])
+    codec_args = _codec_args_for_format(fmt)
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         concat_file = f.name
@@ -180,6 +179,140 @@ async def _normalize_audio(
         return False
 
 
+def _codec_args_for_format(fmt: str) -> list[str]:
+    codec_map = {
+        "mp3": ["-c:a", "libmp3lame", "-q:a", "2"],
+        "wav": ["-c:a", "pcm_s16le"],
+        "opus": ["-c:a", "libopus"],
+        "flac": ["-c:a", "flac"],
+        "aac": ["-c:a", "aac", "-b:a", "128k"],
+    }
+    return codec_map.get(fmt, ["-c:a", "libmp3lame", "-q:a", "2"])
+
+
+async def _probe_duration_seconds(path: Path) -> float | None:
+    ffprobe_path = shutil.which("ffprobe")
+    if not ffprobe_path:
+        return None
+    cmd = [
+        ffprobe_path,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.communicate()
+            return None
+        if proc.returncode != 0:
+            return None
+        text = (stdout or b"").decode("utf-8", errors="ignore").strip()
+        if not text:
+            return None
+        parsed = float(text)
+        if parsed <= 0:
+            return None
+        return parsed
+    except _MULTI_TTS_NONCRITICAL_EXCEPTIONS:
+        return None
+
+
+async def _mix_background_track(
+    *,
+    speech_path: Path,
+    background_audio_uri: str,
+    output_path: Path,
+    fmt: str,
+    volume: float,
+    delay_ms: int,
+    fade_seconds: float,
+    context: dict[str, Any],
+    config: dict[str, Any],
+) -> bool:
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        return False
+
+    try:
+        if background_audio_uri.startswith("file://"):
+            background_path = resolve_workflow_file_uri(background_audio_uri, context, config)
+        else:
+            background_path = resolve_workflow_file_path(background_audio_uri, context, config)
+    except _MULTI_TTS_NONCRITICAL_EXCEPTIONS:
+        return False
+
+    if not background_path.exists():
+        return False
+
+    speech_duration = await _probe_duration_seconds(speech_path)
+    delay_ms = max(0, int(delay_ms))
+    fade_seconds = max(0.0, float(fade_seconds))
+    volume = max(0.0, min(2.0, float(volume)))
+
+    bg_filters: list[str] = [f"volume={volume:.4f}"]
+    if delay_ms > 0:
+        bg_filters.append(f"adelay={delay_ms}|{delay_ms}")
+    if fade_seconds > 0:
+        bg_filters.append(f"afade=t=in:st=0:d={fade_seconds:.3f}")
+        if speech_duration is not None and speech_duration > fade_seconds:
+            fade_out_start = max(0.0, speech_duration - fade_seconds)
+            bg_filters.append(f"afade=t=out:st={fade_out_start:.3f}:d={fade_seconds:.3f}")
+    if speech_duration is not None:
+        bg_filters.append(f"atrim=0:{speech_duration:.3f}")
+    bg_filters.append("asetpts=N/SR/TB")
+    filter_complex = (
+        f"[1:a]{','.join(bg_filters)}[bg];"
+        "[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[mix]"
+    )
+
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-nostdin",
+        "-i",
+        str(speech_path),
+        "-stream_loop",
+        "-1",
+        "-i",
+        str(background_path),
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[mix]",
+        *_codec_args_for_format(fmt),
+        str(output_path),
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            await asyncio.wait_for(proc.communicate(), timeout=180)
+        except asyncio.TimeoutError:
+            proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.communicate()
+            return False
+        return proc.returncode == 0 and output_path.exists()
+    except _MULTI_TTS_NONCRITICAL_EXCEPTIONS:
+        return False
+
+
 @registry.register(
     "multi_voice_tts",
     category="audio",
@@ -237,6 +370,30 @@ async def run_multi_voice_tts_adapter(
     target_lufs = float(config.get("target_lufs", -16.0))
     fallback_provider = config.get("fallback_provider")
     fallback_voice = str(config.get("fallback_voice") or "nova")
+    background_audio_uri = config.get("background_audio_uri")
+    if isinstance(background_audio_uri, str):
+        normalized_bg_uri = background_audio_uri.strip()
+        if normalized_bg_uri.lower() in {"", "none", "null"}:
+            background_audio_uri = None
+        else:
+            background_audio_uri = normalized_bg_uri
+    else:
+        background_audio_uri = None
+    try:
+        background_volume = float(config.get("background_volume", 0.15))
+    except (TypeError, ValueError):
+        background_volume = 0.15
+    background_volume = max(0.0, min(2.0, background_volume))
+    try:
+        background_delay_ms = int(config.get("background_delay_ms", 0))
+    except (TypeError, ValueError):
+        background_delay_ms = 0
+    background_delay_ms = max(0, min(120000, background_delay_ms))
+    try:
+        background_fade_seconds = float(config.get("background_fade_seconds", 2.0))
+    except (TypeError, ValueError):
+        background_fade_seconds = 2.0
+    background_fade_seconds = max(0.0, min(30.0, background_fade_seconds))
 
     import time as _time
 
@@ -321,6 +478,26 @@ async def run_multi_voice_tts_adapter(
         else:
             final_path = concat_path
 
+    background_mixed = False
+    if background_audio_uri:
+        mixed_path = out_dir / f"briefing_mixed.{ext}"
+        mixed_ok = await _mix_background_track(
+            speech_path=final_path,
+            background_audio_uri=background_audio_uri,
+            output_path=mixed_path,
+            fmt=ext,
+            volume=background_volume,
+            delay_ms=background_delay_ms,
+            fade_seconds=background_fade_seconds,
+            context=context,
+            config=config,
+        )
+        if mixed_ok:
+            final_path = mixed_path
+            background_mixed = True
+        else:
+            logger.warning("multi_voice_tts: background mix requested but failed; returning narration-only audio")
+
     size_bytes = final_path.stat().st_size if final_path.exists() else 0
 
     # Register artifact
@@ -341,6 +518,8 @@ async def run_multi_voice_tts_adapter(
                     "sections_generated": sections_generated,
                     "format": ext,
                     "multi_voice": True,
+                    "background_mixed": background_mixed,
+                    "final_artifact": True,
                 },
                 artifact_id=audio_artifact_id,
             )
@@ -354,6 +533,7 @@ async def run_multi_voice_tts_adapter(
         "sections_generated": sections_generated,
         "size_bytes": size_bytes,
         "normalized": normalized,
+        "background_mixed": background_mixed,
     }
 
     if audio_artifact_id:

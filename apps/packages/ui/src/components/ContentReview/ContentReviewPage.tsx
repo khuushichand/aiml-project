@@ -1039,21 +1039,20 @@ export const ContentReviewPage: React.FC = () => {
           </Typography.Title>
           <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
             <Tag color="blue">
-              {t(
-                "contentReview.readyToSubmit",
-                "{{count}} ready",
-                { count: reviewedCount }
-              )}
+              {t("contentReview.readyToSubmit", {
+                defaultValue: "{{count}} ready",
+                count: reviewedCount
+              })}
             </Tag>
             <Tag color="green">
-              {t(
-                "contentReview.committedCount",
-                "{{count}} committed",
-                { count: committedCount }
-              )}
+              {t("contentReview.committedCount", {
+                defaultValue: "{{count}} committed",
+                count: committedCount
+              })}
             </Tag>
             <Tag>
-              {t("contentReview.totalCount", "{{count}} total", {
+              {t("contentReview.totalCount", {
+                defaultValue: "{{count}} total",
                 count: totalCount
               })}
             </Tag>

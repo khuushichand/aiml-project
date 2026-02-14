@@ -50,7 +50,7 @@ test.describe("Persona Workflow", () => {
         }
       }
 
-      window.WebSocket = class {
+      const MockWebSocket = class {
         url: string
         readyState = 0
         binaryType = "blob"
@@ -78,6 +78,7 @@ test.describe("Persona Workflow", () => {
           this.onclose?.({} as CloseEvent)
         }
       }
+      window.WebSocket = MockWebSocket as unknown as typeof WebSocket
     })
 
     await authedPage.route("**/api/v1/persona/catalog*", async (route) => {

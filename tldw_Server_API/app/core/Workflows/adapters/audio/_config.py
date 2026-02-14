@@ -136,6 +136,28 @@ class MultiVoiceTTSConfig(BaseAdapterConfig):
     target_lufs: float = Field(-16.0, description="Target LUFS for normalization")
     fallback_provider: str | None = Field("openai", description="Fallback TTS provider on failure")
     fallback_voice: str = Field("nova", description="Fallback voice for fallback provider")
+    background_audio_uri: str | None = Field(
+        None,
+        description="Optional file:// URI for background music/ambience to mix under narration",
+    )
+    background_volume: float = Field(
+        0.15,
+        ge=0.0,
+        le=2.0,
+        description="Background track volume multiplier",
+    )
+    background_delay_ms: int = Field(
+        0,
+        ge=0,
+        le=120000,
+        description="Delay before background enters, in milliseconds",
+    )
+    background_fade_seconds: float = Field(
+        2.0,
+        ge=0.0,
+        le=30.0,
+        description="Fade-in/out duration for background track, in seconds",
+    )
 
 
 class AudioDiarizeConfig(BaseAdapterConfig):

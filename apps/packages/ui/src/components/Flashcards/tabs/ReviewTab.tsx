@@ -369,10 +369,11 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                   />
                 </div>
                 {activeCard.extra && (
-                  <div className="mt-2 text-sm opacity-80">
+                  <div className="mt-2 rounded border border-border bg-surface p-3 text-sm text-text/80">
                     <MarkdownWithBoundary
                       content={activeCard.extra}
                       size="xs"
+                      className="prose-headings:!text-text prose-p:!text-text prose-li:!text-text prose-strong:!text-text"
                     />
                   </div>
                 )}

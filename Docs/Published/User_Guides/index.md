@@ -54,6 +54,9 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 ## Chat & AI
 
 - [Chat Pages](Chat_Pages.md)
+- [Character Roleplay Quickstart](Character_Roleplay_Quickstart.md)
+- [Effective Character Roleplay and You](Effective_Character_Roleplay_and_You.md)
+- [Advanced Character Roleplay Guide](Advanced_Character_Roleplay_Guide.md)
 - [Setting up a local LLM](Setting_up_a_local_LLM.md)
 - [Prompt Engineering Notes](Prompt_Engineering_Notes.md)
 - [Context MCP Search](context_mcp_search.md)

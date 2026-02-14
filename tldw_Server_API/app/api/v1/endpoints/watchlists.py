@@ -3149,22 +3149,76 @@ async def get_run_audio(
 
         if not used_legacy_artifacts_api:
             artifacts = wf_db.list_artifacts_for_run(str(matching_run_id))
-        audio_artifact = None
-        for art in artifacts or []:
+        def _coerce_artifact_id_rank(value: Any) -> int:
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                digits = "".join(ch for ch in value if ch.isdigit())
+                if digits:
+                    with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
+                        return int(digits)
+            return 0
+
+        def _coerce_created_at_rank(value: Any) -> float:
+            if value is None:
+                return 0.0
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                raw = value.strip()
+                if not raw:
+                    return 0.0
+                normalized = raw
+                if raw.endswith("Z"):
+                    normalized = raw[:-1] + "+00:00"
+                with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
+                    return datetime.fromisoformat(normalized).timestamp()
+                with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
+                    return float(raw)
+            return 0.0
+
+        audio_candidates: list[dict[str, Any]] = []
+        for idx, art in enumerate(artifacts or []):
             if isinstance(art, dict):
                 art_meta = _load_metadata(art.get("metadata_json"))
                 art_type = art.get("type")
+                art_id = art.get("artifact_id") or art.get("id")
+                art_uri = art.get("uri")
+                size_bytes = art.get("size_bytes")
+                mime_type = art.get("mime_type")
+                created_at = art.get("created_at")
             else:
                 art_meta = _load_metadata(getattr(art, "metadata_json", None))
                 art_type = getattr(art, "type", None)
+                art_id = getattr(art, "artifact_id", None) or getattr(art, "id", None)
+                art_uri = getattr(art, "uri", None)
+                size_bytes = getattr(art, "size_bytes", None)
+                mime_type = getattr(art, "mime_type", None)
+                created_at = getattr(art, "created_at", None)
             if art_type == "tts_audio" or art_meta.get("multi_voice"):
-                audio_artifact = {
-                    "artifact_id": (art.get("artifact_id") or art.get("id")) if isinstance(art, dict) else getattr(art, "artifact_id", None) or getattr(art, "id", None),
-                    "uri": art.get("uri") if isinstance(art, dict) else getattr(art, "uri", None),
-                    "size_bytes": art.get("size_bytes") if isinstance(art, dict) else getattr(art, "size_bytes", None),
-                    "mime_type": (art.get("mime_type") if isinstance(art, dict) else getattr(art, "mime_type", None)) or "audio/mpeg",
-                }
-                break
+                final_hint = bool(
+                    art_meta.get("final_artifact")
+                    or art_meta.get("is_final")
+                    or art_meta.get("final")
+                    or art_meta.get("background_mixed")
+                    or art_meta.get("mixed")
+                )
+                audio_candidates.append(
+                    {
+                        "artifact_id": art_id,
+                        "uri": art_uri,
+                        "size_bytes": size_bytes,
+                        "mime_type": mime_type or "audio/mpeg",
+                        "_rank": (
+                            1 if final_hint else 0,
+                            _coerce_created_at_rank(created_at),
+                            idx,
+                            _coerce_artifact_id_rank(art_id),
+                        ),
+                    }
+                )
+
+        audio_artifact = max(audio_candidates, key=lambda candidate: candidate["_rank"]) if audio_candidates else None
 
         matching_run_status = matching_run.get("status") if isinstance(matching_run, dict) else getattr(matching_run, "status", "pending")
         if audio_artifact:
@@ -3446,6 +3500,46 @@ async def create_output(
             maximum=4.0,
         )
 
+    effective_background_audio_uri = payload.background_audio_uri
+    if not effective_background_audio_uri and isinstance(job_prefs.get("background_audio_uri"), str):
+        effective_background_audio_uri = job_prefs.get("background_audio_uri").strip() or None
+    if isinstance(effective_background_audio_uri, str):
+        normalized_background_uri = effective_background_audio_uri.strip()
+        if normalized_background_uri.lower() in {"none", "null"}:
+            effective_background_audio_uri = None
+        else:
+            effective_background_audio_uri = normalized_background_uri
+
+    effective_background_volume = payload.background_volume
+    if effective_background_volume is None:
+        effective_background_volume = _safe_float(
+            job_prefs.get("background_volume"),
+            0.15,
+            minimum=0.0,
+            maximum=2.0,
+        )
+    if effective_background_volume is None:
+        effective_background_volume = 0.15
+
+    effective_background_delay_ms = payload.background_delay_ms
+    if effective_background_delay_ms is None:
+        effective_background_delay_ms = _safe_int(job_prefs.get("background_delay_ms"), 0)
+    if effective_background_delay_ms < 0:
+        effective_background_delay_ms = 0
+    if effective_background_delay_ms > 120000:
+        effective_background_delay_ms = 120000
+
+    effective_background_fade_seconds = payload.background_fade_seconds
+    if effective_background_fade_seconds is None:
+        effective_background_fade_seconds = _safe_float(
+            job_prefs.get("background_fade_seconds"),
+            2.0,
+            minimum=0.0,
+            maximum=30.0,
+        )
+    if effective_background_fade_seconds is None:
+        effective_background_fade_seconds = 2.0
+
     effective_audio_language = payload.audio_language
     if not effective_audio_language and isinstance(job_prefs.get("audio_language"), str):
         effective_audio_language = job_prefs.get("audio_language").strip() or None
@@ -3469,6 +3563,28 @@ async def create_output(
         configured_model = llm_cfg.get("model")
         if isinstance(configured_model, str):
             effective_audio_llm_model = configured_model.strip() or None
+
+    effective_persona_summarize = bool(payload.persona_summarize)
+    if "persona_summarize" not in payload.model_fields_set:
+        effective_persona_summarize = bool(job_prefs.get("persona_summarize", payload.persona_summarize))
+
+    effective_persona_id = payload.persona_id
+    if not effective_persona_id and isinstance(job_prefs.get("persona_id"), str):
+        effective_persona_id = job_prefs.get("persona_id").strip() or None
+    if isinstance(effective_persona_id, str):
+        effective_persona_id = effective_persona_id.strip() or None
+
+    effective_persona_provider = payload.persona_provider
+    if not effective_persona_provider and isinstance(job_prefs.get("persona_provider"), str):
+        effective_persona_provider = job_prefs.get("persona_provider").strip() or None
+    if not effective_persona_provider:
+        effective_persona_provider = effective_audio_llm_provider
+
+    effective_persona_model = payload.persona_model
+    if not effective_persona_model and isinstance(job_prefs.get("persona_model"), str):
+        effective_persona_model = job_prefs.get("persona_model").strip() or None
+    if not effective_persona_model:
+        effective_persona_model = effective_audio_llm_model
 
     effective_voice_map = payload.voice_map
     if effective_voice_map is None and isinstance(job_prefs.get("voice_map"), dict):
@@ -3905,9 +4021,17 @@ async def create_output(
                     "audio_model": effective_audio_model,
                     "audio_voice": effective_audio_voice,
                     "audio_speed": effective_audio_speed,
+                    "background_audio_uri": effective_background_audio_uri,
+                    "background_volume": effective_background_volume,
+                    "background_delay_ms": effective_background_delay_ms,
+                    "background_fade_seconds": effective_background_fade_seconds,
                     "audio_language": effective_audio_language,
                     "llm_provider": effective_audio_llm_provider,
                     "llm_model": effective_audio_llm_model,
+                    "persona_summarize": effective_persona_summarize,
+                    "persona_id": effective_persona_id,
+                    "persona_provider": effective_persona_provider,
+                    "persona_model": effective_persona_model,
                     "voice_map": effective_voice_map,
                 },
                 db=db,
