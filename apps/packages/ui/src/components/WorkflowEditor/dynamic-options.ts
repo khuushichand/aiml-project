@@ -282,7 +282,7 @@ const loadOptions = async (key: OptionSourceKey): Promise<Option[]> => {
     try {
       let options: Option[] = []
       if (key === "chatModels") {
-        const models = await tldwModels.getChatModels(true)
+        const models = await tldwModels.getChatModels()
         options = normalizeOptions(
           models.map((model) => ({
             value: model.id,
@@ -292,7 +292,7 @@ const loadOptions = async (key: OptionSourceKey): Promise<Option[]> => {
           }))
         )
       } else if (key === "embeddingModels") {
-        const models = await tldwModels.getEmbeddingModels(true)
+        const models = await tldwModels.getEmbeddingModels()
         options = normalizeOptions(
           models.map((model) => ({
             value: model.id,
@@ -302,7 +302,7 @@ const loadOptions = async (key: OptionSourceKey): Promise<Option[]> => {
           }))
         )
       } else if (key === "imageModels") {
-        const models = await tldwModels.getImageModels(true)
+        const models = await tldwModels.getImageModels()
         options = normalizeOptions(
           models.map((model) => ({
             value: model.id,

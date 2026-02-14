@@ -49,6 +49,20 @@ export default defineConfig({
         "@tldw/ui": sharedRoot,
         "pa-tesseract.js": path.join(__dirname, "node_modules/pa-tesseract.js")
       }
+    },
+    build: {
+      rollupOptions: {
+        onwarn(warning, warn) {
+          if (
+            warning.code === "MODULE_LEVEL_DIRECTIVE" &&
+            warning.message?.includes('"use client"') &&
+            warning.id?.includes("node_modules")
+          ) {
+            return
+          }
+          warn(warning)
+        }
+      }
     }
   })
 })

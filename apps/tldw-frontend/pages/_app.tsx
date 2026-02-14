@@ -16,6 +16,32 @@ const OptionLayout = dynamic(
   { ssr: false }
 )
 
+// Ordered to match high-traffic navigation:
+// - Route-registry eager imports (chat/media/media-multi/workspace-playground)
+// - Default sidebar shortcut selections (prompts/characters/dictionaries/world-books/knowledge)
+const PRIMARY_WARM_PREFETCH_ROUTES = [
+  "/chat",
+  "/media",
+  "/media-multi",
+  "/workspace-playground",
+  "/knowledge",
+  "/prompts",
+  "/characters",
+  "/dictionaries",
+  "/world-books",
+  "/settings"
+] as const
+
+// Secondary warmups for power-user paths; skipped on data saver / very slow networks.
+const SECONDARY_WARM_PREFETCH_ROUTES = [
+  "/document-workspace"
+] as const
+
+const PREFETCH_STEP_DELAY_MS = 250
+const PREFETCH_IDLE_TIMEOUT_MS = 2000
+const PREFETCH_FALLBACK_DELAY_MS = 1200
+const SLOW_EFFECTIVE_TYPES = new Set(["slow-2g", "2g"])
+
 const hasEnvAuth = () => {
   const envApiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim()
   const envBearer = (process.env.NEXT_PUBLIC_API_BEARER || "").trim()
@@ -95,6 +121,7 @@ export default function App({ Component, pageProps }: AppProps) {
     routePath === "/settings" || routePath.startsWith("/settings/")
   const [isAuthenticated, setIsAuthenticated] = React.useState(false)
   const [authResolved, setAuthResolved] = React.useState(false)
+  const didWarmRoutePrefetch = React.useRef(false)
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -137,6 +164,89 @@ export default function App({ Component, pageProps }: AppProps) {
       window.removeEventListener("storage", onStorage)
     }
   }, [router.asPath])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!authResolved || !isAuthenticated || isLoginRoute) return
+    if (didWarmRoutePrefetch.current) return
+
+    const prefetchRoute = router.prefetch?.bind(router)
+    if (typeof prefetchRoute !== "function") return
+
+    const connection = (navigator as Navigator & {
+      connection?: {
+        saveData?: boolean
+        effectiveType?: string
+      }
+    }).connection
+
+    const shouldReducePrefetch =
+      connection?.saveData === true ||
+      (typeof connection?.effectiveType === "string" &&
+        SLOW_EFFECTIVE_TYPES.has(connection.effectiveType))
+
+    const warmPrefetchRoutes = shouldReducePrefetch
+      ? PRIMARY_WARM_PREFETCH_ROUTES
+      : [...PRIMARY_WARM_PREFETCH_ROUTES, ...SECONDARY_WARM_PREFETCH_ROUTES]
+
+    const routesToPrefetch = warmPrefetchRoutes.filter(
+      (targetRoute, index, allRoutes) =>
+        targetRoute !== routePath && allRoutes.indexOf(targetRoute) === index
+    )
+    if (routesToPrefetch.length === 0) return
+
+    didWarmRoutePrefetch.current = true
+    let cancelled = false
+    let prefetchTimeout: ReturnType<typeof window.setTimeout> | undefined
+    const windowWithIdle = window as Window & {
+      requestIdleCallback?: (
+        callback: () => void,
+        options?: { timeout: number }
+      ) => number
+      cancelIdleCallback?: (handle: number) => void
+    }
+
+    const prefetchRouteAtIndex = (index: number) => {
+      if (cancelled || index >= routesToPrefetch.length) return
+      void prefetchRoute(routesToPrefetch[index])
+        .catch(() => undefined)
+        .finally(() => {
+          if (cancelled) return
+          prefetchTimeout = window.setTimeout(() => {
+            prefetchRouteAtIndex(index + 1)
+          }, PREFETCH_STEP_DELAY_MS)
+        })
+    }
+
+    const startPrefetch = () => {
+      prefetchRouteAtIndex(0)
+    }
+
+    let idleHandle: number | undefined
+    if (typeof windowWithIdle.requestIdleCallback === "function") {
+      idleHandle = windowWithIdle.requestIdleCallback(startPrefetch, {
+        timeout: PREFETCH_IDLE_TIMEOUT_MS
+      })
+    } else {
+      prefetchTimeout = window.setTimeout(
+        startPrefetch,
+        PREFETCH_FALLBACK_DELAY_MS
+      )
+    }
+
+    return () => {
+      cancelled = true
+      if (prefetchTimeout) {
+        window.clearTimeout(prefetchTimeout)
+      }
+      if (
+        idleHandle !== undefined &&
+        typeof windowWithIdle.cancelIdleCallback === "function"
+      ) {
+        windowWithIdle.cancelIdleCallback(idleHandle)
+      }
+    }
+  }, [authResolved, isAuthenticated, isLoginRoute, routePath, router])
 
   const hideShellNav = !authResolved || !isAuthenticated
 

@@ -8,7 +8,8 @@ const mockRouter = {
   pathname: "/media",
   asPath: "/media",
   push: vi.fn(),
-  replace: vi.fn()
+  replace: vi.fn(),
+  prefetch: vi.fn(() => Promise.resolve(true))
 }
 
 const mockGetConfig = vi.fn()
@@ -69,6 +70,7 @@ const originalEnvBearer = process.env.NEXT_PUBLIC_API_BEARER
 beforeEach(() => {
   mockRouter.push.mockClear()
   mockRouter.replace.mockClear()
+  mockRouter.prefetch.mockClear()
   mockGetConfig.mockReset()
   mockGetCurrentUser.mockReset()
   mockGetCurrentUser.mockResolvedValue({ username: "test-user" })
@@ -165,5 +167,52 @@ describe("App layout routing", () => {
     })
     expect(layout).toHaveAttribute("data-hide-header", "true")
     expect(layout).toHaveAttribute("data-hide-sidebar", "true")
+  })
+
+  it("warms primary navigation routes after auth resolves", async () => {
+    process.env.NEXT_PUBLIC_X_API_KEY = "env-api-key"
+
+    const originalRequestIdleCallback = (
+      window as Window & {
+        requestIdleCallback?: (callback: () => void) => number
+      }
+    ).requestIdleCallback
+    const originalCancelIdleCallback = (
+      window as Window & {
+        cancelIdleCallback?: (handle: number) => void
+      }
+    ).cancelIdleCallback
+
+    ;(
+      window as Window & {
+        requestIdleCallback?: (callback: () => void) => number
+      }
+    ).requestIdleCallback = (callback: () => void) => {
+      callback()
+      return 1
+    }
+    ;(
+      window as Window & {
+        cancelIdleCallback?: (handle: number) => void
+      }
+    ).cancelIdleCallback = vi.fn()
+
+    try {
+      renderApp("/media")
+      await waitFor(() => {
+        expect(mockRouter.prefetch).toHaveBeenCalledWith("/chat")
+      })
+    } finally {
+      ;(
+        window as Window & {
+          requestIdleCallback?: (callback: () => void) => number
+        }
+      ).requestIdleCallback = originalRequestIdleCallback
+      ;(
+        window as Window & {
+          cancelIdleCallback?: (handle: number) => void
+        }
+      ).cancelIdleCallback = originalCancelIdleCallback
+    }
   })
 })

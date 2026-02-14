@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from "react-router-dom"
 import { browser } from "wxt/browser"
 import { tldwClient } from '@/services/tldw/TldwApiClient'
+import { submitQuickIngestBatch } from "@/services/tldw/quick-ingest-batch"
 import { QuickIngestTabs } from "./QuickIngest/QuickIngestTabs"
 import { QueueTab } from "./QuickIngest/QueueTab/QueueTab"
 import { FileDropZone } from "./QuickIngest/QueueTab/FileDropZone"
@@ -801,6 +802,9 @@ export const QuickIngestModal: React.FC<Props> = ({
   )
 
   React.useEffect(() => {
+    // StrictMode replays effects in development; reset this guard on mount so
+    // async completions are not incorrectly treated as unmounted.
+    unmountedRef.current = false
     return () => {
       unmountedRef.current = true
     }
@@ -2012,43 +2016,30 @@ export const QuickIngestModal: React.FC<Props> = ({
           }
         | undefined
 
-      // Try extension messaging with timeout, then fall back to direct HTTP if it fails
-      // This handles cases where extension messaging doesn't work (e.g., in Playwright tests)
-      const EXTENSION_TIMEOUT_MS = 10000
       try {
-        const extensionPromise = browser.runtime.sendMessage({
-          type: "tldw:quick-ingest-batch",
-          payload: {
-            entries,
-            files: filesPayload,
-            storeRemote,
-            processOnly,
-            common,
-            advancedValues,
-            fileDefaults,
-            // Chunking template options
-            chunkingTemplateName,
-            autoApplyTemplate
-          }
-        })
-        const timeoutPromise = new Promise<null>((resolve) => {
-          setTimeout(() => resolve(null), EXTENSION_TIMEOUT_MS)
-        })
-        const result = await Promise.race([extensionPromise, timeoutPromise])
-        if (result === null) {
-          console.warn('[QI_MODAL] Extension messaging timed out, cannot fall back for file uploads')
-          throw new Error('Extension messaging timed out. Please try again or reload the page.')
-        }
-        resp = result as
+        resp = (await submitQuickIngestBatch({
+          entries,
+          files: filesPayload,
+          storeRemote,
+          processOnly,
+          common,
+          advancedValues,
+          fileDefaults,
+          chunkingTemplateName,
+          autoApplyTemplate
+        })) as
           | {
               ok: boolean
               error?: string
               results?: Array<Partial<ResultItem>>
             }
           | undefined
-        console.log('[QI_MODAL] sendMessage returned', { ok: resp?.ok, error: resp?.error })
+        console.log('[QI_MODAL] quick ingest batch returned', {
+          ok: resp?.ok,
+          error: resp?.error
+        })
       } catch (sendErr: any) {
-        console.error('[QI_MODAL] sendMessage error', sendErr?.message)
+        console.error('[QI_MODAL] quick ingest batch error', sendErr?.message)
         throw sendErr
       }
 

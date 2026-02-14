@@ -22,9 +22,17 @@ export interface ApiSendResponse<T = any> {
   retryAfterMs?: number | null
 }
 
+const isSafeFallbackMethod = (method?: string): boolean => {
+  const methodUpper = String(method || "GET").toUpperCase()
+  return methodUpper === "GET" || methodUpper === "HEAD" || methodUpper === "OPTIONS"
+}
+
 export async function apiSend<T = any, P extends PathOrUrl = PathOrUrl, M extends AllowedMethodFor<P> = AllowedMethodFor<P>>(
   payload: ApiSendPayload<P, M>
 ): Promise<ApiSendResponse<T>> {
+  const methodIsSafeFallback = isSafeFallbackMethod(
+    payload?.method ? String(payload.method) : "GET"
+  )
   // More detailed diagnostics for extension messaging
   const chromeGlobal = (globalThis as any).chrome
   console.log('[API_SEND_DEBUG] apiSend called', {
@@ -68,10 +76,20 @@ export async function apiSend<T = any, P extends PathOrUrl = PathOrUrl, M extend
       if (resp) {
         return resp as ApiSendResponse<T>
       }
-      // If resp is null (timeout), fall through to direct request
-      console.log('[API_SEND_DEBUG] extension messaging timed out, falling back to direct request')
+      if (!methodIsSafeFallback) {
+        throw new Error("Extension messaging timeout")
+      }
+      // If resp is null (timeout), fall through to direct request for safe methods.
+      console.log('[API_SEND_DEBUG] extension messaging timed out, falling back to direct request (safe method)')
     }
   } catch (err) {
+    const message = err instanceof Error ? err.message.toLowerCase() : String(err || "").toLowerCase()
+    if (
+      !methodIsSafeFallback &&
+      message.includes("extension messaging timeout")
+    ) {
+      throw err
+    }
     console.log('[API_SEND_DEBUG] extension message error', { error: String(err) })
     // fall through to direct request
   }

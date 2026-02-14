@@ -17,6 +17,7 @@ import { CONNECTED_THROTTLE_MS } from "@/config/connection-timing"
 export const CONNECTION_TIMEOUT_MS = 20_000
 const HEALTH_LIVENESS_PATH = "/api/v1/health/live"
 const CONNECTED_FAILURE_THRESHOLD = 3
+const KNOWLEDGE_RECHECK_INTERVAL_MS = 5 * 60_000
 
 const TEST_BYPASS_KEY = "__tldw_allow_offline"
 const FORCE_UNCONFIGURED_KEY = "__tldw_force_unconfigured"
@@ -442,8 +443,12 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       let knowledgeStatus: KnowledgeStatus = prev.knowledgeStatus
       let knowledgeLastCheckedAt = prev.knowledgeLastCheckedAt
       let knowledgeError = prev.knowledgeError
+      const shouldRefreshKnowledge =
+        !prev.knowledgeLastCheckedAt ||
+        now - prev.knowledgeLastCheckedAt >= KNOWLEDGE_RECHECK_INTERVAL_MS ||
+        prev.knowledgeStatus !== "ready"
 
-      if (ok) {
+      if (ok && shouldRefreshKnowledge) {
         try {
           console.log('[CONN_DEBUG] starting RAG health check')
           // Add timeout to RAG health check to prevent hanging
@@ -470,7 +475,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           knowledgeLastCheckedAt = Date.now()
           knowledgeError = (e as Error)?.message ?? "unknown-error"
         }
-      } else {
+      } else if (!ok) {
         knowledgeStatus = "offline"
         knowledgeLastCheckedAt = Date.now()
         knowledgeError = "core-offline"

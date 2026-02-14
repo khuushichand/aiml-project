@@ -102,6 +102,53 @@ const sanitizeResponseData = (
   return result
 }
 
+type NoFallbackError = Error & {
+  __tldwNoDirectFallback?: true
+  __tldwExtensionTimeout?: true
+}
+
+const markNoFallbackError = (
+  error: Error,
+  options?: { timeout?: boolean }
+): NoFallbackError => {
+  const marked = error as NoFallbackError
+  marked.__tldwNoDirectFallback = true
+  if (options?.timeout) {
+    marked.__tldwExtensionTimeout = true
+  }
+  return marked
+}
+
+const isNoFallbackError = (error: unknown): error is NoFallbackError => {
+  return Boolean((error as NoFallbackError | null)?.__tldwNoDirectFallback)
+}
+
+const isExtensionTimeoutError = (error: unknown): boolean => {
+  if ((error as NoFallbackError | null)?.__tldwExtensionTimeout) return true
+  const message =
+    error instanceof Error ? error.message : String(error || "")
+  return message.toLowerCase().includes("extension messaging timeout")
+}
+
+const isSafeFallbackMethod = (method: unknown): boolean => {
+  const methodUpper = String(method || "GET").toUpperCase()
+  return methodUpper === "GET" || methodUpper === "HEAD" || methodUpper === "OPTIONS"
+}
+
+const isExtensionTransportFailure = (error: unknown): boolean => {
+  if (isNoFallbackError(error)) return false
+  const message =
+    error instanceof Error ? error.message : String(error || "")
+  const normalized = message.toLowerCase()
+  return (
+    normalized.includes("extension messaging timeout") ||
+    normalized.includes("could not establish connection") ||
+    normalized.includes("receiving end does not exist") ||
+    normalized.includes("message port closed before a response was received") ||
+    normalized.includes("extension context invalidated")
+  )
+}
+
 export interface BgRequestInit<
   P extends PathOrUrl = AllowedPath,
   M extends AllowedMethodFor<P> = AllowedMethodFor<P>
@@ -176,6 +223,7 @@ export async function bgRequest<
     return false
   }
   const hasRuntimeMessage = Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
+  const methodIsSafeFallback = isSafeFallbackMethod(method)
 
   // Some binary responses do not survive extension message serialization.
   if (shouldBypassBackground) {
@@ -244,11 +292,13 @@ export async function bgRequest<
         )
         const resp = await Promise.race([messagePromiseNoSignal, timeoutPromiseNoSignal]) as { ok: boolean; error?: string; status?: number; data: T } | undefined | null
         if (resp === null) {
-          // Extension messaging timed out, fall through to direct request
-          throw new Error('Extension messaging timeout')
+          throw markNoFallbackError(
+            new Error("Extension messaging timeout"),
+            { timeout: true }
+          )
         }
         if (!resp) {
-          throw new Error(`Request failed (${method} ${path})`)
+          throw new Error(`Background request failed (${method} ${path})`)
         }
         if (!resp.ok) {
           const msg = formatErrorMessage(
@@ -270,7 +320,7 @@ export async function bgRequest<
           }
           error.status = resp?.status
           if (!returnResponse) {
-            throw error
+            throw markNoFallbackError(error)
           }
         }
         if (!returnResponse && responseType === "arrayBuffer") {
@@ -308,7 +358,7 @@ export async function bgRequest<
       }
 
       if (abortSignal.aborted) {
-        throw new Error('Aborted')
+        throw markNoFallbackError(new Error("Aborted"))
       }
 
       const messagePromise = browser.runtime.sendMessage(payload) as Promise<
@@ -342,11 +392,13 @@ export async function bgRequest<
       })
 
       if (resp === null) {
-        // Extension messaging timed out, fall through to direct request
-        throw new Error('Extension messaging timeout')
+        throw markNoFallbackError(
+          new Error("Extension messaging timeout"),
+          { timeout: true }
+        )
       }
       if (!resp) {
-        throw new Error(`Request failed (${method} ${path})`)
+        throw new Error(`Background request failed (${method} ${path})`)
       }
       if (!resp.ok) {
         const msg = formatErrorMessage(
@@ -368,7 +420,7 @@ export async function bgRequest<
         }
         error.status = resp?.status
         if (!returnResponse) {
-          throw error
+          throw markNoFallbackError(error)
         }
       }
       if (!returnResponse && responseType === "arrayBuffer") {
@@ -405,7 +457,15 @@ export async function bgRequest<
       return (returnResponse ? resp : resp.data) as T
     }
   } catch (e) {
-    // fallthrough to direct fetch
+    if (isNoFallbackError(e)) {
+      if (isExtensionTimeoutError(e) && methodIsSafeFallback) {
+        // Safe methods can fall through on timeout because duplicate side-effects are not expected.
+      } else {
+        throw e
+      }
+    } else if (!methodIsSafeFallback && !isExtensionTransportFailure(e)) {
+      throw e
+    }
   }
 
   // Fallback: direct fetch (web/dev context)
@@ -781,6 +841,7 @@ export async function bgUpload<T = any, P extends AllowedPath = AllowedPath, M e
   { path, method = 'POST' as UpperLower<M>, fields = {}, file, fileFieldName, timeoutMs }: BgUploadInit<P, M>
 ): Promise<T> {
   const hasRuntimeMessage = Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
+  const methodIsSafeFallback = isSafeFallbackMethod(method)
   if (hasRuntimeMessage) {
     try {
       // Add timeout to extension messaging for uploads
@@ -795,8 +856,10 @@ export async function bgUpload<T = any, P extends AllowedPath = AllowedPath, M e
       )
       const resp = await Promise.race([uploadPromise, uploadTimeoutPromise]) as { ok: boolean; error?: string; status?: number; data: T } | undefined | null
       if (resp === null) {
-        // Extension messaging timed out, fall through to direct fetch
-        throw new Error('Extension messaging timeout')
+        throw markNoFallbackError(
+          new Error("Extension messaging timeout"),
+          { timeout: true }
+        )
       }
       if (!resp?.ok) {
         const msg = formatErrorMessage(
@@ -808,11 +871,19 @@ export async function bgUpload<T = any, P extends AllowedPath = AllowedPath, M e
         if (typeof resp?.data !== "undefined") {
           error.details = sanitizeResponseData(resp.data)
         }
-        throw error
+        throw markNoFallbackError(error)
       }
       return resp.data as T
-    } catch {
-      // fall through to direct fetch for web/dev contexts
+    } catch (e) {
+      if (isNoFallbackError(e)) {
+        if (isExtensionTimeoutError(e) && methodIsSafeFallback) {
+          // Safe methods can fall through on timeout because duplicate side-effects are not expected.
+        } else {
+          throw e
+        }
+      } else if (!methodIsSafeFallback && !isExtensionTransportFailure(e)) {
+        throw e
+      }
     }
   }
 

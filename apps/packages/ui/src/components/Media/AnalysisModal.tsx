@@ -144,7 +144,7 @@ export function AnalysisModal({
     let cancelled = false
     ;(async () => {
       try {
-        const chatModels = await tldwModels.getChatModels(true)
+        const chatModels = await tldwModels.getChatModels()
         const allModels = chatModels.map((m) => ({
           id: m.id.startsWith("tldw:") ? m.id : `tldw:${m.id}`,
           name: m.name || m.id

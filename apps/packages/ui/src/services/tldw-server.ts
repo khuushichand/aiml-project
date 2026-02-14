@@ -46,6 +46,7 @@ export const getTldwServerURL = async () => {
 export const setTldwServerURL = async (url: string) => {
   await storage.set("tldwServerUrl", url)
   await tldwClient.updateConfig({ serverUrl: url })
+  clearChatModelsCache()
 }
 
 export const isTldwServerRunning = async () => {
@@ -79,6 +80,15 @@ const mapTldwModelToUi = (model: any) => ({
   }
 })
 
+const CHAT_MODELS_CACHE_TTL_MS = 60_000
+let chatModelsCache: { value: any[]; expiresAt: number } | null = null
+let chatModelsInFlight: Promise<any[]> | null = null
+
+export const clearChatModelsCache = () => {
+  chatModelsCache = null
+  chatModelsInFlight = null
+}
+
 export const getAllModels = async ({ returnEmpty = false }: { returnEmpty?: boolean }) => {
   try {
     // If no config, avoid network calls when returnEmpty requested
@@ -91,7 +101,7 @@ export const getAllModels = async ({ returnEmpty = false }: { returnEmpty?: bool
       if (returnEmpty) return []
     }
     // Use the richer tldwModels API (backed by /api/v1/llm/models/metadata)
-    const models = await tldwModels.getModels(true)
+    const models = await tldwModels.getModels()
     return models.map(mapTldwModelToUi)
   } catch (e) {
     if (!returnEmpty) console.error("Failed to fetch tldw models:", e)
@@ -101,93 +111,116 @@ export const getAllModels = async ({ returnEmpty = false }: { returnEmpty?: bool
 }
 
 export const fetchChatModels = async ({ returnEmpty = false }: { returnEmpty?: boolean }) => {
+  const now = Date.now()
+  if (chatModelsCache && chatModelsCache.expiresAt > now) {
+    return chatModelsCache.value
+  }
+  if (chatModelsInFlight) {
+    return await chatModelsInFlight
+  }
+
   try {
-    // Primary: tldw_server aggregated models
-    const chatModels = await tldwModels.getChatModels(true)
-    const tldw = chatModels.map(mapTldwModelToUi)
+    const fetchPromise = (async () => {
+      // Primary: tldw_server aggregated models
+      const chatModels = await tldwModels.getChatModels()
+      const tldw = chatModels.map(mapTldwModelToUi)
 
-    // Only tldw_server models are exposed as chat models
-    const combined = [...tldw]
+      // Only tldw_server models are exposed as chat models
+      const combined = [...tldw]
 
-    const dedupeByModel = (models: any[]) => {
-      const unique: any[] = []
-      const indexByModel = new Map<string, number>()
-      const duplicates: string[] = []
+      const dedupeByModel = (models: any[]) => {
+        const unique: any[] = []
+        const indexByModel = new Map<string, number>()
+        const duplicates: string[] = []
 
-      for (const model of models) {
-        const key = String(model?.model || model?.name || "").trim()
-        if (!key) {
-          unique.push(model)
-          continue
-        }
-        const existingIndex = indexByModel.get(key)
-        if (existingIndex == null) {
-          indexByModel.set(key, unique.length)
-          unique.push(model)
-          continue
-        }
-        duplicates.push(key)
-        const existing = unique[existingIndex] || {}
-        const merged: any = { ...existing }
-        if (!merged.nickname && model?.nickname) merged.nickname = model.nickname
-        if (!merged.name && model?.name) merged.name = model.name
-        if (!merged.provider && model?.provider) merged.provider = model.provider
-        if (!merged.details && model?.details) merged.details = model.details
-        if (!merged.modified_at && model?.modified_at) {
-          merged.modified_at = model.modified_at
+        for (const model of models) {
+          const key = String(model?.model || model?.name || "").trim()
+          if (!key) {
+            unique.push(model)
+            continue
+          }
+          const existingIndex = indexByModel.get(key)
+          if (existingIndex == null) {
+            indexByModel.set(key, unique.length)
+            unique.push(model)
+            continue
+          }
+          duplicates.push(key)
+          const existing = unique[existingIndex] || {}
+          const merged: any = { ...existing }
+          if (!merged.nickname && model?.nickname) merged.nickname = model.nickname
+          if (!merged.name && model?.name) merged.name = model.name
+          if (!merged.provider && model?.provider) merged.provider = model.provider
+          if (!merged.details && model?.details) merged.details = model.details
+          if (!merged.modified_at && model?.modified_at) {
+            merged.modified_at = model.modified_at
+          }
+
+          const existingDetails =
+            merged.details && typeof merged.details === "object"
+              ? merged.details
+              : {}
+          const incomingDetails =
+            model?.details && typeof model.details === "object"
+              ? model.details
+              : {}
+          const mergedDetails: any = { ...incomingDetails, ...existingDetails }
+          const capabilities = new Set<string>()
+          const existingCaps = existingDetails.capabilities
+          const incomingCaps = incomingDetails.capabilities
+          if (Array.isArray(existingCaps)) {
+            existingCaps.forEach((cap) => capabilities.add(String(cap)))
+          }
+          if (Array.isArray(incomingCaps)) {
+            incomingCaps.forEach((cap) => capabilities.add(String(cap)))
+          }
+          if (capabilities.size > 0) {
+            mergedDetails.capabilities = Array.from(capabilities)
+          }
+          if (Object.keys(mergedDetails).length > 0) {
+            merged.details = mergedDetails
+          }
+          unique[existingIndex] = merged
         }
 
-        const existingDetails =
-          merged.details && typeof merged.details === "object"
-            ? merged.details
-            : {}
-        const incomingDetails =
-          model?.details && typeof model.details === "object"
-            ? model.details
-            : {}
-        const mergedDetails: any = { ...incomingDetails, ...existingDetails }
-        const capabilities = new Set<string>()
-        const existingCaps = existingDetails.capabilities
-        const incomingCaps = incomingDetails.capabilities
-        if (Array.isArray(existingCaps)) {
-          existingCaps.forEach((cap) => capabilities.add(String(cap)))
+        if (import.meta.env?.DEV && duplicates.length > 0) {
+          const uniqueDupes = Array.from(new Set(duplicates))
+          console.debug("tldw_server: deduped chat models", {
+            duplicates: uniqueDupes,
+            total: models.length,
+            unique: unique.length
+          })
         }
-        if (Array.isArray(incomingCaps)) {
-          incomingCaps.forEach((cap) => capabilities.add(String(cap)))
-        }
-        if (capabilities.size > 0) {
-          mergedDetails.capabilities = Array.from(capabilities)
-        }
-        if (Object.keys(mergedDetails).length > 0) {
-          merged.details = mergedDetails
-        }
-        unique[existingIndex] = merged
+
+        return unique
       }
 
-      if (import.meta.env?.DEV && duplicates.length > 0) {
-        const uniqueDupes = Array.from(new Set(duplicates))
-        console.debug("tldw_server: deduped chat models", {
-          duplicates: uniqueDupes,
-          total: models.length,
-          unique: unique.length
+      if (import.meta.env?.DEV) {
+        console.debug("tldw_server: fetchChatModels resolved", {
+          tldwCount: tldw.length,
+          total: combined.length
         })
       }
 
-      return unique
-    }
+      const resolved = dedupeByModel(combined)
+      chatModelsCache = {
+        value: resolved,
+        expiresAt: Date.now() + CHAT_MODELS_CACHE_TTL_MS
+      }
+      return resolved
+    })()
 
-    if (import.meta.env?.DEV) {
-      console.debug("tldw_server: fetchChatModels resolved", {
-        tldwCount: tldw.length,
-        total: combined.length
-      })
-    }
-
-    return dedupeByModel(combined)
+    chatModelsInFlight = fetchPromise
+    return await fetchPromise
   } catch (e) {
     console.error("Failed to fetch chat models:", e)
+    if (chatModelsCache?.value?.length) {
+      return chatModelsCache.value
+    }
     if (returnEmpty) return []
     throw e
+  } finally {
+    chatModelsInFlight = null
   }
 }
 
@@ -195,7 +228,7 @@ export const fetchImageModels = async ({
   returnEmpty = false
 }: { returnEmpty?: boolean } = {}) => {
   try {
-    const models = await tldwModels.getImageModels(true)
+    const models = await tldwModels.getImageModels()
     return models
   } catch (e) {
     if (!returnEmpty) {
