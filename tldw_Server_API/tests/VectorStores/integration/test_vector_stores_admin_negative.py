@@ -4,6 +4,7 @@ No internal mocks; relies on actual API behavior to return proper error codes.
 """
 
 import pytest
+import uuid
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
@@ -25,11 +26,12 @@ def client_with_user():
 
 def test_admin_uniqueness_and_missing_resources(client_with_user: TestClient):
     client = client_with_user
+    store_name = f"UniqA_{uuid.uuid4().hex[:8]}"
     # Create store
-    r1 = client.post('/api/v1/vector_stores', json={'name': 'UniqA', 'dimensions': 8})
+    r1 = client.post('/api/v1/vector_stores', json={'name': store_name, 'dimensions': 8})
     assert r1.status_code == 200, r1.text
     # Attempt to create another with same name and dimensions could succeed with unique id or fail; try renaming
-    r_dup = client.post('/api/v1/vector_stores', json={'name': 'UniqA', 'dimensions': 8})
+    r_dup = client.post('/api/v1/vector_stores', json={'name': store_name, 'dimensions': 8})
     assert r_dup.status_code in (200, 409, 400)
 
     # Query/update missing store
@@ -42,8 +44,9 @@ def test_admin_uniqueness_and_missing_resources(client_with_user: TestClient):
 
 def test_vector_record_negative_cases(client_with_user: TestClient):
     client = client_with_user
+    store_name = f"NegVec_{uuid.uuid4().hex[:8]}"
     # Create a store
-    cs = client.post('/api/v1/vector_stores', json={'name': 'NegVec', 'dimensions': 8})
+    cs = client.post('/api/v1/vector_stores', json={'name': store_name, 'dimensions': 8})
     assert cs.status_code == 200, cs.text
     sid = cs.json()['id']
 

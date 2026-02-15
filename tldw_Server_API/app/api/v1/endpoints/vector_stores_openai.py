@@ -538,6 +538,7 @@ async def list_vector_store_users(current_user: User = Depends(get_request_user)
                     store_count = 0
                 # Count batches
                 try:
+                    init_batches_db(uid)
                     from tldw_Server_API.app.core.Embeddings.vector_store_batches_db import _connect as batches_conn
                     with batches_conn(uid) as conn:
                         try:

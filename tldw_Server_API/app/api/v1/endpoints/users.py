@@ -693,12 +693,22 @@ async def change_password(
     try:
         user_context = await _require_principal_active_verified(principal)
         user_id = int(user_context["id"])
-        # Fetch password hash through repository to keep backend SQL out of endpoint code.
-        users_repo = await AuthnzUsersRepo.from_pool()
-        user_row = await users_repo.get_user_by_id(user_id)
-        password_hash = str(user_row.get("password_hash")) if user_row and user_row.get("password_hash") else None
+        # Prefer the request-scoped DB transaction for compatibility with legacy
+        # tests that override get_db_transaction.
+        password_hash = await _fetch_password_hash_for_user(db, user_id)
+        user_row: dict[str, Any] = {}
+        try:
+            users_repo = await AuthnzUsersRepo.from_pool()
+            fetched_row = await users_repo.get_user_by_id(user_id)
+            if isinstance(fetched_row, dict):
+                user_row = dict(fetched_row)
+                if not password_hash and user_row.get("password_hash"):
+                    password_hash = str(user_row.get("password_hash"))
+        except _USERS_ENDPOINT_EXCEPTIONS as repo_exc:
+            logger.debug("User repo lookup skipped for password change: {}", repo_exc)
+
         username = str(
-            (user_row or {}).get("username")
+            user_row.get("username")
             or user_context.get("username")
             or principal.username
             or f"user-{user_id}"

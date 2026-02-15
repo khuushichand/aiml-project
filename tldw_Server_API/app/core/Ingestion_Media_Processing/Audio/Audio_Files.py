@@ -500,6 +500,18 @@ def download_audio_file(
     except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Unexpected error downloading audio file from {url}: {type(e).__name__} - {e}", exc_info=True)
         raise AudioDownloadError(f"Unexpected download error for {url}: {type(e).__name__} - {str(e)}") from e
+    except Exception as e:
+        # Some HTTP client failures (for example httpx.ConnectError in
+        # restricted CI/network environments) are not covered by the noncritical
+        # tuple above. Normalize them to AudioDownloadError so per-item handling
+        # can continue without aborting the whole batch.
+        logging.error(
+            f"Unhandled download exception for {url}: {type(e).__name__} - {e}",
+            exc_info=True,
+        )
+        raise AudioDownloadError(
+            f"Unexpected download error for {url}: {type(e).__name__} - {e}"
+        ) from e
 
 
 def process_audio_files(

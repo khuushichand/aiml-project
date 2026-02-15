@@ -235,6 +235,41 @@ def _preprocess_audio(audio: np.ndarray, sample_rate: int = 16000) -> np.ndarray
     return features
 
 
+def _prepare_onnx_inputs(session: Any, features: np.ndarray) -> dict[str, np.ndarray]:
+    """
+    Build a best-effort ONNX input map from runtime input names.
+
+    Different exported Parakeet variants use different names for the feature
+    tensor (e.g. `input_features`, `audio`, `encoder_outputs`). This helper
+    keeps mapping resilient across those variants and test doubles.
+    """
+    inputs_meta = list(session.get_inputs() or [])
+    input_names = [getattr(inp, "name", "") for inp in inputs_meta]
+    prepared: dict[str, np.ndarray] = {}
+
+    feature_name: str | None = None
+    for name in input_names:
+        lname = str(name).lower()
+        if any(token in lname for token in ("audio", "input", "encoder", "feature", "speech", "mel")):
+            feature_name = name
+            break
+    if feature_name is None and input_names:
+        feature_name = input_names[0]
+    if feature_name is not None:
+        prepared[feature_name] = features
+
+    for name in input_names:
+        if name == feature_name:
+            continue
+        lname = str(name).lower()
+        if "length" in lname or lname.endswith("_len") or "seq_len" in lname:
+            prepared[name] = np.array([features.shape[1]], dtype=np.int64)
+        elif "batch" in lname:
+            prepared[name] = np.array([features.shape[0]], dtype=np.int64)
+
+    return prepared
+
+
 def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cpu'):
     """
     Load Parakeet ONNX model and tokenizer.
@@ -338,7 +373,7 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
         logger.info(f"Successfully loaded ONNX model with {len(session.get_inputs())} inputs")
         return session, tokenizer
 
-    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+    except Exception as e:
         logger.exception(f"Failed to load ONNX model: {e}")
         return None, None
 
@@ -372,7 +407,7 @@ def transcribe_with_parakeet_onnx(
     # Load model
     try:
         session, tokenizer = load_parakeet_onnx_model(model_path, device)
-    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+    except Exception as e:
         return f"[Error: {str(e)}]"
     if session is None or tokenizer is None:
         return "[Error: Failed to load ONNX model]"
@@ -429,18 +464,10 @@ def transcribe_with_parakeet_onnx(
         # Add batch dimension
         features = np.expand_dims(features, axis=0)
 
-        # Get input names
-        input_names = [inp.name for inp in session.get_inputs()]
         output_names = [out.name for out in session.get_outputs()]
 
         # Prepare inputs
-        inputs = {}
-        for input_name in input_names:
-            if 'audio' in input_name.lower() or 'input' in input_name.lower():
-                inputs[input_name] = features
-            elif 'length' in input_name.lower():
-                # Input lengths
-                inputs[input_name] = np.array([features.shape[1]], dtype=np.int64)
+        inputs = _prepare_onnx_inputs(session, features)
 
         # Run inference
         outputs = session.run(output_names, inputs)
@@ -469,7 +496,7 @@ def transcribe_with_parakeet_onnx(
 
         return "[Error: No output from model]"
 
-    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+    except Exception as e:
         logger.exception(f"Transcription error: {e}")
         return f"[Error: Transcription failed: {e}]"
 
@@ -510,7 +537,6 @@ def transcribe_chunked_onnx(
     transcripts = []
 
     # Get input/output names
-    input_names = [inp.name for inp in session.get_inputs()]
     output_names = [out.name for out in session.get_outputs()]
 
     for i in range(num_chunks):
@@ -535,12 +561,7 @@ def transcribe_chunked_onnx(
             features = np.expand_dims(features, axis=0)
 
             # Prepare inputs
-            inputs = {}
-            for input_name in input_names:
-                if 'audio' in input_name.lower() or 'input' in input_name.lower():
-                    inputs[input_name] = features
-                elif 'length' in input_name.lower():
-                    inputs[input_name] = np.array([features.shape[1]], dtype=np.int64)
+            inputs = _prepare_onnx_inputs(session, features)
 
             # Run inference
             outputs = session.run(output_names, inputs)
@@ -573,7 +594,7 @@ def transcribe_chunked_onnx(
 
                     transcripts.append(text)
 
-        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+        except Exception as e:
             logger.exception(f"Error processing chunk {i+1}/{num_chunks}: {e}")
 
         # Progress callback

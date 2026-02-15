@@ -135,6 +135,14 @@ async def test_upload_voice_short_duration_warning_and_strict_mode(tmp_path, mon
     monkeypatch.setattr(manager, "_get_audio_duration", fake_short_duration, raising=False)
     monkeypatch.setattr(manager, "_process_for_provider", fake_process_for_provider, raising=False)
 
+    mock_storage = AsyncMock()
+    mock_storage.register_generated_file = AsyncMock(return_value={"id": 1})
+
+    async def _get_storage_service():
+        return mock_storage
+
+    monkeypatch.setattr(voice_manager_module, "get_storage_service", _get_storage_service)
+
     file_bytes = b"RIFF" + b"\x00" * 1000
     request = VoiceUploadRequest(name="short-voice", description=None, provider="higgs")
 

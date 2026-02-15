@@ -7,6 +7,7 @@ Only external services like YouTube downloads are mocked.
 
 import json
 import tempfile
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -564,6 +565,22 @@ class TestFileUpload:
 class TestMediaAddGoldenEnvelopes:
     """Golden-sample envelope tests for /media/add."""
 
+    @staticmethod
+    def _normalize_golden_envelope(payload: dict) -> dict:
+        """
+        Normalize dynamic, additive response fields before strict golden compares.
+
+        `/media/add` now enriches successful rows with collections linkage
+        metadata. Golden envelope assertions in this file intentionally validate
+        the stable base contract, so we strip those additive fields.
+        """
+        normalized = deepcopy(payload)
+        for row in normalized.get("results", []):
+            if isinstance(row, dict):
+                row.pop("collections_item_id", None)
+                row.pop("collections_origin", None)
+        return normalized
+
     @pytest.mark.unit
     def test_add_video_golden_envelope(
         self,
@@ -593,7 +610,7 @@ class TestMediaAddGoldenEnvelopes:
                 )
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.json() == VIDEO_ADD_GOLDEN_RESPONSE
+        assert self._normalize_golden_envelope(response.json()) == VIDEO_ADD_GOLDEN_RESPONSE
 
     @pytest.mark.unit
     def test_add_video_mixed_url_and_file_golden_envelope(
@@ -632,7 +649,7 @@ class TestMediaAddGoldenEnvelopes:
                 )
 
         assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.json() == VIDEO_MIXED_URL_FILE_GOLDEN_RESPONSE
+        assert self._normalize_golden_envelope(response.json()) == VIDEO_MIXED_URL_FILE_GOLDEN_RESPONSE
 
     @pytest.mark.unit
     def test_add_document_golden_envelope(
@@ -664,7 +681,7 @@ class TestMediaAddGoldenEnvelopes:
                 )
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.json() == DOCUMENT_ADD_GOLDEN_RESPONSE
+        assert self._normalize_golden_envelope(response.json()) == DOCUMENT_ADD_GOLDEN_RESPONSE
 
     @pytest.mark.unit
     def test_add_document_mixed_url_and_file_golden_envelope(
@@ -708,7 +725,7 @@ class TestMediaAddGoldenEnvelopes:
                 )
 
         assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.json() == DOCUMENT_MIXED_URL_FILE_GOLDEN_RESPONSE
+        assert self._normalize_golden_envelope(response.json()) == DOCUMENT_MIXED_URL_FILE_GOLDEN_RESPONSE
 
     @pytest.mark.unit
     def test_add_email_golden_envelope(
@@ -754,7 +771,7 @@ class TestMediaAddGoldenEnvelopes:
             )
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.json() == EMAIL_ADD_GOLDEN_RESPONSE
+        assert self._normalize_golden_envelope(response.json()) == EMAIL_ADD_GOLDEN_RESPONSE
 
     @pytest.mark.unit
     def test_add_email_mixed_url_and_file_golden_envelope(
@@ -807,4 +824,4 @@ class TestMediaAddGoldenEnvelopes:
             )
 
         assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.json() == EMAIL_MIXED_URL_FILE_GOLDEN_RESPONSE
+        assert self._normalize_golden_envelope(response.json()) == EMAIL_MIXED_URL_FILE_GOLDEN_RESPONSE

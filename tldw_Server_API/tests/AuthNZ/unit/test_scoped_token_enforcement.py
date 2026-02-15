@@ -391,6 +391,32 @@ def test_require_token_scope_allows_missing_credentials_when_optional():
     asyncio.run(dep(request=req, credentials=None, jwt_service=object(), db_pool=object()))
 
 
+def test_require_token_scope_allows_missing_credentials_with_request_user_override_in_tests(
+    monkeypatch,
+):
+    monkeypatch.setenv("TEST_MODE", "1")
+    dep = require_token_scope(
+        "workflows",
+        require_if_present=True,
+        endpoint_id="unit.test_override_scope",
+    )
+    req = SimpleNamespace(
+        method="GET",
+        headers={},
+        scope={"path": "/protected"},
+        path_params={},
+        client=SimpleNamespace(host="127.0.0.1"),
+        state=SimpleNamespace(),
+        app=SimpleNamespace(
+            dependency_overrides={get_request_user: lambda: SimpleNamespace(id=1)}
+        ),
+    )
+
+    # Test-mode compatibility: legacy get_request_user overrides should satisfy
+    # scoped routes that otherwise fail closed on missing credentials.
+    asyncio.run(dep(request=req, credentials=None, jwt_service=object(), db_pool=object()))
+
+
 def test_require_token_scope_fails_closed_for_invalid_api_key(monkeypatch):
     class _StubAPIKeyManager:
         async def validate_api_key(self, api_key: str, ip_address=None, record_usage=True):

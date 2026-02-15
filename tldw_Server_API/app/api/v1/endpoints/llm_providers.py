@@ -1203,6 +1203,9 @@ def discover_models_from_endpoint(
         except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"[Model discovery] {provider}: error querying {url}: {exc}")
             continue
+        except Exception as exc:  # noqa: BLE001 - best-effort local discovery must fail open
+            logger.debug(f"[Model discovery] {provider}: unexpected error querying {url}: {exc}")
+            continue
 
     _LOCAL_MODEL_CACHE[cache_key] = (now, discovered)
     return discovered

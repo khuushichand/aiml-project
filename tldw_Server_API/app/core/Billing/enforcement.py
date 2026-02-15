@@ -48,6 +48,16 @@ _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS = (
     sqlite3.Error,
 )
 
+try:  # pragma: no cover - optional dependency guard
+    import asyncpg  # type: ignore
+except Exception:  # pragma: no cover - asyncpg may be absent in SQLite-only setups
+    asyncpg = None  # type: ignore[assignment]
+else:
+    _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS = (
+        *_BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS,
+        asyncpg.PostgresError,  # type: ignore[attr-defined]
+    )
+
 
 class LimitCategory(str, Enum):
     """Categories of limits that can be enforced."""
@@ -240,47 +250,94 @@ class BillingEnforcer:
 
             async with pool.acquire() as conn:
                 if is_postgres:
-                    # PostgreSQL: canonical column is `requests`; keep fallback for legacy schemas.
-                    try:
-                        result = await conn.fetchval(
+                    query_variants: tuple[tuple[str, tuple[Any, ...]], ...] = (
+                        (
                             """
                             SELECT COALESCE(SUM(requests), 0)
                             FROM usage_daily
                             WHERE org_id = $1 AND day = $2
                             """,
-                            org_id, today,
-                        )
-                    except Exception:  # noqa: BLE001 - fallback for legacy/variant schemas
-                        result = await conn.fetchval(
+                            (org_id, today),
+                        ),
+                        (
                             """
                             SELECT COALESCE(SUM(request_count), 0)
                             FROM usage_daily
                             WHERE org_id = $1 AND day = $2
                             """,
-                            org_id, today,
-                        )
+                            (org_id, today),
+                        ),
+                        (
+                            """
+                            SELECT COALESCE(SUM(requests), 0)
+                            FROM usage_daily
+                            WHERE day = $1
+                            """,
+                            (today,),
+                        ),
+                        (
+                            """
+                            SELECT COALESCE(SUM(request_count), 0)
+                            FROM usage_daily
+                            WHERE day = $1
+                            """,
+                            (today,),
+                        ),
+                    )
+                    result = 0
+                    for query, params in query_variants:
+                        try:
+                            fetched = await conn.fetchval(query, *params)
+                            result = int(fetched or 0)
+                            break
+                        except Exception as exc:  # noqa: BLE001 - schema variance fallback
+                            logger.debug("usage_daily PG query variant failed: {}", exc)
+                            continue
                 else:
-                    # SQLite: canonical column is `requests`; keep fallback for legacy schemas.
-                    try:
-                        cur = await conn.execute(
+                    query_variants = (
+                        (
                             """
                             SELECT COALESCE(SUM(requests), 0)
                             FROM usage_daily
                             WHERE org_id = ? AND day = ?
                             """,
                             (org_id, today),
-                        )
-                    except Exception:  # noqa: BLE001 - fallback for legacy/variant schemas
-                        cur = await conn.execute(
+                        ),
+                        (
                             """
                             SELECT COALESCE(SUM(request_count), 0)
                             FROM usage_daily
                             WHERE org_id = ? AND day = ?
                             """,
                             (org_id, today),
-                        )
-                    row = await cur.fetchone()
-                    result = row[0] if row else 0
+                        ),
+                        (
+                            """
+                            SELECT COALESCE(SUM(requests), 0)
+                            FROM usage_daily
+                            WHERE day = ?
+                            """,
+                            (today,),
+                        ),
+                        (
+                            """
+                            SELECT COALESCE(SUM(request_count), 0)
+                            FROM usage_daily
+                            WHERE day = ?
+                            """,
+                            (today,),
+                        ),
+                    )
+                    result = 0
+                    for query, params in query_variants:
+                        try:
+                            cur = await conn.execute(query, params)
+                            row = await cur.fetchone()
+                            result = int((row[0] if row else 0) or 0)
+                            break
+                        except Exception as exc:  # noqa: BLE001 - schema variance fallback
+                            logger.debug("usage_daily SQLite query variant failed: {}", exc)
+                            continue
 
                 return int(result or 0)
         except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:

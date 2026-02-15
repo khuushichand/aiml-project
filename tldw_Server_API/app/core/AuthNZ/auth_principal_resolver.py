@@ -480,9 +480,8 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             else:
                 logger.exception("Error resolving principal from JWT: {}", exc)
                 raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Could not validate credentials",
-                    headers={"WWW-Authenticate": "Bearer"},
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Authentication failed due to internal error",
                 ) from exc
 
         if token is not None:
@@ -574,8 +573,8 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
         except Exception as exc:
             logger.exception("Error resolving principal from API key: {}", exc)
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication failed",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Authentication failed due to internal error",
             ) from exc
 
         # authenticate_api_key_user populates request.state.auth / _auth_user; reuse if present.

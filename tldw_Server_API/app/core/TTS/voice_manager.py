@@ -406,6 +406,20 @@ class VoiceManager:
             self._registry_store_cache[db_path] = store
         return store
 
+    def _get_registry_store_safe(self, user_id: int) -> Optional[VoiceRegistryDB]:
+        """Return persistent registry store, or None when unavailable."""
+        if not self._is_persistent_registry_enabled():
+            return None
+        try:
+            return self._get_registry_store(user_id)
+        except _VOICE_NONCRITICAL_EXCEPTIONS as e:
+            logger.warning(
+                "Persistent voice registry unavailable for user {}: {}",
+                user_id,
+                e,
+            )
+            return None
+
     @staticmethod
     def _to_registry_record(voice: VoiceInfo) -> dict[str, Any]:
         return {
@@ -453,9 +467,9 @@ class VoiceManager:
         )
 
     async def _list_persisted_voices(self, user_id: int) -> list[VoiceInfo]:
-        if not self._is_persistent_registry_enabled():
+        store = self._get_registry_store_safe(user_id)
+        if store is None:
             return []
-        store = self._get_registry_store(user_id)
         try:
             rows = await asyncio.to_thread(store.list_voices, user_id)
             return [self._from_registry_record(row) for row in rows]
@@ -464,9 +478,9 @@ class VoiceManager:
             return []
 
     async def _get_persisted_voice(self, user_id: int, voice_id: str) -> Optional[VoiceInfo]:
-        if not self._is_persistent_registry_enabled():
+        store = self._get_registry_store_safe(user_id)
+        if store is None:
             return None
-        store = self._get_registry_store(user_id)
         try:
             row = await asyncio.to_thread(store.get_voice, user_id, voice_id)
             if row is None:
@@ -482,18 +496,18 @@ class VoiceManager:
             return None
 
     async def _upsert_persisted_voice(self, user_id: int, voice: VoiceInfo) -> None:
-        if not self._is_persistent_registry_enabled():
+        store = self._get_registry_store_safe(user_id)
+        if store is None:
             return
-        store = self._get_registry_store(user_id)
         try:
             await asyncio.to_thread(store.upsert_voice, user_id, self._to_registry_record(voice))
         except Exception as e:
             logger.warning("Failed to upsert persisted voice {} for user {}: {}", voice.voice_id, user_id, e)
 
     async def _replace_persisted_voices(self, user_id: int, voices: list[VoiceInfo]) -> None:
-        if not self._is_persistent_registry_enabled():
+        store = self._get_registry_store_safe(user_id)
+        if store is None:
             return
-        store = self._get_registry_store(user_id)
         records = [self._to_registry_record(voice) for voice in voices]
         try:
             await asyncio.to_thread(store.replace_user_voices, user_id, records)
@@ -501,9 +515,9 @@ class VoiceManager:
             logger.warning("Failed to replace persisted voices for user {}: {}", user_id, e)
 
     async def _delete_persisted_voice(self, user_id: int, voice_id: str) -> bool:
-        if not self._is_persistent_registry_enabled():
+        store = self._get_registry_store_safe(user_id)
+        if store is None:
             return False
-        store = self._get_registry_store(user_id)
         try:
             return await asyncio.to_thread(store.delete_voice, user_id, voice_id)
         except Exception as e:

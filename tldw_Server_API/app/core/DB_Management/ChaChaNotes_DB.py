@@ -5359,6 +5359,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     skip_trigger_block = False
                 continue
 
+            # SQLite FTS maintenance statements have no equivalent Postgres table.
+            # Example: INSERT INTO notes_fts(notes_fts) VALUES('rebuild');
+            if re.match(
+                r"^INSERT\s+INTO\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\1\s*\)\s*VALUES\s*\(\s*'rebuild'\s*\)\s*;?$",
+                stripped,
+                flags=re.IGNORECASE,
+            ):
+                continue
+
             if 'CREATE VIRTUAL TABLE' in upper:
                 if not stripped.endswith(';'):
                     skip_until_semicolon = True

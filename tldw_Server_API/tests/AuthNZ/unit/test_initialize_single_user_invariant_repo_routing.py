@@ -119,4 +119,10 @@ async def test_collect_single_user_invariants_reports_repo_driven_conflicts(
 
     assert any("Multiple active users detected" in message for message in errors)
     assert any("Multiple admin users detected" in message for message in errors)
-    assert any("Multiple active non-virtual API keys found" in message for message in errors)
+    assert any(
+        "Active primary API key does not match SINGLE_USER_API_KEY." in message
+        for message in errors
+    )
+    assert any(
+        "Unexpected active non-virtual API keys found" in message for message in errors
+    )

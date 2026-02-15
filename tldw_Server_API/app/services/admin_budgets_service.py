@@ -21,12 +21,14 @@ async def _emit_budget_audit_event(*args, **kwargs):
     """Dispatch audit events through the admin module to preserve test monkeypatch hooks."""
     try:
         from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
-
+    except Exception:
+        admin_mod = None
+    else:
         emit_fn = getattr(admin_mod, "emit_budget_audit_event", None)
         if callable(emit_fn):
+            # Important: do not swallow emit_fn exceptions. Tests intentionally
+            # monkeypatch this symbol and expect failures to block updates.
             return await emit_fn(*args, **kwargs)
-    except Exception:
-        pass
 
     from tldw_Server_API.app.services.budget_audit_service import emit_budget_audit_event
 

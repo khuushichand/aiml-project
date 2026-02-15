@@ -518,6 +518,8 @@ async def import_chatbook(
         valid, error, safe_filename = ChatbookValidator.validate_filename(file.filename)
         if not valid:
             raise HTTPException(status_code=400, detail=error)
+        if Path(safe_filename).name != safe_filename or "/" in safe_filename or "\\" in safe_filename:
+            raise HTTPException(status_code=400, detail="Invalid file path")
 
         # Check file size
         file.file.seek(0, 2)  # Seek to end
@@ -707,6 +709,8 @@ async def preview_chatbook(
         valid, error, safe_filename = ChatbookValidator.validate_filename(file.filename)
         if not valid:
             raise HTTPException(status_code=400, detail=error)
+        if Path(safe_filename).name != safe_filename or "/" in safe_filename or "\\" in safe_filename:
+            raise HTTPException(status_code=400, detail="Invalid file path")
 
         # Initialize quota manager (DB-backed) for consistent rate limiting
         quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'), db=service.db)

@@ -783,7 +783,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     name="single-user test key",
                     description="Deterministic API key for test automation",
                     scope="admin",
-                    is_virtual=True,
+                    is_virtual=False,
                 )
         except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as role_assign_err:
             # Log at warning level with context so repeated failures surface operationally
@@ -810,6 +810,7 @@ async def _collect_single_user_invariant_errors(
     *,
     expected_user_id: int,
     expected_key_hash: Optional[str],
+    allowed_non_virtual_key_hashes: Optional[set[str]] = None,
     check_keys: bool,
 ) -> list[str]:
     """Return a list of invariant violations for single-user bootstrap."""
@@ -876,6 +877,13 @@ async def _collect_single_user_invariant_errors(
                 user_id=expected_user_id,
                 include_revoked=False,
             )
+            allowed_hashes: set[str] = {str(expected_key_hash)}
+            if allowed_non_virtual_key_hashes:
+                allowed_hashes.update(
+                    str(item)
+                    for item in allowed_non_virtual_key_hashes
+                    if item
+                )
             active_non_virtual_rows = [
                 row
                 for row in key_rows
@@ -890,17 +898,37 @@ async def _collect_single_user_invariant_errors(
                 errors.append(
                     "No active non-virtual API key found for the single-user admin."
                 )
-            elif len(key_ids) > 1:
+                return errors
+
+            primary_rows = [
+                row
+                for row in active_non_virtual_rows
+                if str(row.get("key_hash") or "") == str(expected_key_hash)
+            ]
+            if len(primary_rows) != 1:
                 errors.append(
-                    "Multiple active non-virtual API keys found for the single-user admin: "
-                    + ", ".join(str(kid) for kid in key_ids)
+                    "Active primary API key does not match SINGLE_USER_API_KEY."
                 )
-            else:
-                raw_hash = active_non_virtual_rows[0].get("key_hash")
-                row_hash = str(raw_hash) if raw_hash is not None else None
-                if row_hash != expected_key_hash:
+
+            unexpected_rows = [
+                row
+                for row in active_non_virtual_rows
+                if str(row.get("key_hash") or "") not in allowed_hashes
+            ]
+            if unexpected_rows:
+                unexpected_ids = [
+                    str(int(row["id"]))
+                    for row in unexpected_rows
+                    if row.get("id") is not None
+                ]
+                if unexpected_ids:
                     errors.append(
-                        "Active primary API key does not match SINGLE_USER_API_KEY."
+                        "Unexpected active non-virtual API keys found for the single-user admin: "
+                        + ", ".join(unexpected_ids)
+                    )
+                else:
+                    errors.append(
+                        "Unexpected active non-virtual API keys found for the single-user admin."
                     )
         except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as exc:
             errors.append(f"Failed to verify single-user API key invariants: {exc}")
@@ -1080,10 +1108,19 @@ async def bootstrap_single_user_profile() -> bool:
 
         print("✅ Single-user primary API key ensured in AuthNZ store")
         logger.info("Single-user primary API key ensured in AuthNZ store")
+        allowed_hashes: set[str] = {key_hash}
+        test_api_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+        if (
+            is_test_mode()
+            and test_api_key
+            and test_api_key != api_key_value
+        ):
+            allowed_hashes.add(manager.hash_api_key(test_api_key))
         errors = await _collect_single_user_invariant_errors(
             pool,
             expected_user_id=expected_user_id,
             expected_key_hash=key_hash,
+            allowed_non_virtual_key_hashes=allowed_hashes,
             check_keys=True,
         )
         if errors:

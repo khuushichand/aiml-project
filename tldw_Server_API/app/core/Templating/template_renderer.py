@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
 
-from jinja2 import StrictUndefined, nodes
+from jinja2 import StrictUndefined, TemplateError, nodes
 from jinja2.sandbox import SandboxedEnvironment
 from loguru import logger
 
@@ -38,6 +38,7 @@ _TEMPLATE_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     UnicodeDecodeError,
     ValueError,
+    TemplateError,
 )
 
 

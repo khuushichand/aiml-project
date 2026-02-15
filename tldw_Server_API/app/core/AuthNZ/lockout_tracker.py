@@ -142,3 +142,18 @@ def get_lockout_tracker() -> LockoutTracker:
     if _lockout_tracker is None:
         _lockout_tracker = LockoutTracker()
     return _lockout_tracker
+
+
+async def reset_lockout_tracker() -> None:
+    """Reset the process-global LockoutTracker singleton.
+
+    Primarily used by tests that create isolated databases per test and need to
+    avoid stale repository/database pool references between app lifecycles.
+    """
+    global _lockout_tracker
+    tracker = _lockout_tracker
+    _lockout_tracker = None
+    if tracker is not None:
+        tracker._repo = None
+        tracker.db_pool = None
+        tracker._initialized = False

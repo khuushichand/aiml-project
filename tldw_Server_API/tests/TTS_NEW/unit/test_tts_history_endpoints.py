@@ -6,7 +6,6 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.TTS.utils import compute_tts_history_text_hash
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.main import app
 
 
 pytestmark = [pytest.mark.unit]
@@ -18,8 +17,34 @@ def _override_media_db(db: MediaDatabase):
     return _override
 
 
+def _media_db_dependency_keys():
+    keys = [get_media_db_for_user]
+    # When app.main is reloaded in other tests, router modules can retain a
+    # different dependency function object identity.
+    from tldw_Server_API.app.api.v1.endpoints.audio import audio_history
+
+    history_dep = getattr(audio_history, "get_media_db_for_user", None)
+    if history_dep is not None and history_dep not in keys:
+        keys.append(history_dep)
+    return keys
+
+
+def _set_media_db_override(fastapi_app, db: MediaDatabase):
+    override = _override_media_db(db)
+    keys = _media_db_dependency_keys()
+    for key in keys:
+        fastapi_app.dependency_overrides[key] = override
+    return keys
+
+
+def _clear_media_db_override(fastapi_app, keys):
+    for key in keys:
+        fastapi_app.dependency_overrides.pop(key, None)
+
+
 def test_history_list_favorite_delete(test_client, auth_headers):
     db = MediaDatabase(db_path=":memory:", client_id="tts_history_test")
+    fastapi_app = test_client.app
     entry_one = db.create_tts_history_entry(
         user_id="1",
         text_hash="hash_one",
@@ -45,7 +70,7 @@ def test_history_list_favorite_delete(test_client, auth_headers):
         favorite=True,
     )
 
-    app.dependency_overrides[get_media_db_for_user] = _override_media_db(db)
+    dep_keys = _set_media_db_override(fastapi_app, db)
     try:
         resp = test_client.get("/api/v1/audio/history?favorite=true", headers=auth_headers)
         assert resp.status_code == status.HTTP_200_OK
@@ -76,24 +101,26 @@ def test_history_list_favorite_delete(test_client, auth_headers):
         ids = {item["id"] for item in payload["items"]}
         assert entry_two not in ids
     finally:
-        app.dependency_overrides.pop(get_media_db_for_user, None)
+        _clear_media_db_override(fastapi_app, dep_keys)
         db.close_connection()
 
 
 def test_history_q_rejected_when_text_disabled(test_client, auth_headers, monkeypatch):
     db = MediaDatabase(db_path=":memory:", client_id="tts_history_q")
-    app.dependency_overrides[get_media_db_for_user] = _override_media_db(db)
+    fastapi_app = test_client.app
+    dep_keys = _set_media_db_override(fastapi_app, db)
     monkeypatch.setattr(settings, "TTS_HISTORY_STORE_TEXT", False, raising=False)
     try:
         resp = test_client.get("/api/v1/audio/history?q=hello", headers=auth_headers)
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
     finally:
-        app.dependency_overrides.pop(get_media_db_for_user, None)
+        _clear_media_db_override(fastapi_app, dep_keys)
         db.close_connection()
 
 
 def test_history_text_exact_search(test_client, auth_headers, monkeypatch):
     db = MediaDatabase(db_path=":memory:", client_id="tts_history_text_exact")
+    fastapi_app = test_client.app
     monkeypatch.setattr(settings, "TTS_HISTORY_STORE_TEXT", False, raising=False)
     monkeypatch.setattr(settings, "TTS_HISTORY_HASH_KEY", "test-history-key", raising=False)
 
@@ -107,7 +134,7 @@ def test_history_text_exact_search(test_client, auth_headers, monkeypatch):
         status="success",
     )
 
-    app.dependency_overrides[get_media_db_for_user] = _override_media_db(db)
+    dep_keys = _set_media_db_override(fastapi_app, db)
     try:
         resp = test_client.get(f"/api/v1/audio/history?text_exact={text_value}", headers=auth_headers)
         assert resp.status_code == status.HTTP_200_OK
@@ -115,12 +142,13 @@ def test_history_text_exact_search(test_client, auth_headers, monkeypatch):
         assert len(payload["items"]) == 1
         assert payload["items"][0]["has_text"] is False
     finally:
-        app.dependency_overrides.pop(get_media_db_for_user, None)
+        _clear_media_db_override(fastapi_app, dep_keys)
         db.close_connection()
 
 
 def test_history_voice_id_and_voice_name_filters(test_client, auth_headers):
     db = MediaDatabase(db_path=":memory:", client_id="tts_history_voice_filters")
+    fastapi_app = test_client.app
     first_id = db.create_tts_history_entry(
         user_id="1",
         text_hash="voice_hash_1",
@@ -155,7 +183,7 @@ def test_history_voice_id_and_voice_name_filters(test_client, auth_headers):
         status="success",
     )
 
-    app.dependency_overrides[get_media_db_for_user] = _override_media_db(db)
+    dep_keys = _set_media_db_override(fastapi_app, db)
     try:
         resp = test_client.get("/api/v1/audio/history?voice_id=rachel_v2", headers=auth_headers)
         assert resp.status_code == status.HTTP_200_OK
@@ -175,5 +203,5 @@ def test_history_voice_id_and_voice_name_filters(test_client, auth_headers):
         payload = resp.json()
         assert [item["id"] for item in payload["items"]] == [first_id]
     finally:
-        app.dependency_overrides.pop(get_media_db_for_user, None)
+        _clear_media_db_override(fastapi_app, dep_keys)
         db.close_connection()

@@ -33,7 +33,7 @@ from .numpy_compat import ensure_numpy_compatibility
 ensure_numpy_compatibility()
 
 # Import local config helpers
-from tldw_Server_API.app.core.config import get_stt_config
+from tldw_Server_API.app.core.config import get_stt_config, loaded_config_data
 
 # Global model cache
 _model_cache: dict[str, Any] = {}

@@ -27,7 +27,8 @@ from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.settings import Settings
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
-from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, reset_rate_limiter
+from tldw_Server_API.app.core.AuthNZ.lockout_tracker import reset_lockout_tracker
 from tldw_Server_API.app.services.registration_service import RegistrationService
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
@@ -490,12 +491,26 @@ async def reset_singletons(request):
     await reset_token_blacklist()
     await reset_security_alert_dispatcher()
     await reset_authnz_scheduler()
+    await reset_rate_limiter()
+    await reset_lockout_tracker()
     reset_settings()
     reset_jwt_service()
     await reset_registration_service()
     await reset_invite_service()
     await reset_subscription_service()
     reset_billing_enforcer()
+    try:
+        from tldw_Server_API.app.services.storage_cleanup_service import (
+            reset_cleanup_service as _reset_cleanup_service,
+        )
+        from tldw_Server_API.app.services.storage_quota_service import (
+            reset_storage_service as _reset_storage_service,
+        )
+
+        await _reset_cleanup_service()
+        await _reset_storage_service()
+    except Exception:
+        pass
     await shutdown_audit_service()
     await reset_api_key_manager()
     await reset_users_db()
@@ -561,6 +576,8 @@ async def reset_singletons(request):
     await reset_token_blacklist()
     await reset_security_alert_dispatcher()
     await reset_authnz_scheduler()
+    await reset_rate_limiter()
+    await reset_lockout_tracker()
     reset_settings()
     reset_jwt_service()
     await reset_registration_service()
@@ -1339,6 +1356,8 @@ async def isolated_test_environment(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager
+    from tldw_Server_API.app.core.AuthNZ.rate_limiter import reset_rate_limiter
+    from tldw_Server_API.app.core.AuthNZ.lockout_tracker import reset_lockout_tracker
     from tldw_Server_API.app.services.registration_service import reset_registration_service
     from tldw_Server_API.app.core.Audit.unified_audit_service import shutdown_audit_service
     from tldw_Server_API.app.core.DB_Management.Users_DB import reset_users_db
@@ -1347,6 +1366,8 @@ async def isolated_test_environment(monkeypatch):
     await reset_db_pool()
     await reset_session_manager()
     await reset_api_key_manager()
+    await reset_rate_limiter()
+    await reset_lockout_tracker()
     reset_settings()
     reset_jwt_service()
     await reset_registration_service()
@@ -1376,7 +1397,21 @@ async def isolated_test_environment(monkeypatch):
     await reset_session_manager()
     await reset_token_blacklist()
     await reset_authnz_scheduler()
+    await reset_rate_limiter()
+    await reset_lockout_tracker()
     reset_settings()
+    try:
+        from tldw_Server_API.app.services.storage_cleanup_service import (
+            reset_cleanup_service as _reset_cleanup_service,
+        )
+        from tldw_Server_API.app.services.storage_quota_service import (
+            reset_storage_service as _reset_storage_service,
+        )
+
+        await _reset_cleanup_service()
+        await _reset_storage_service()
+    except Exception:
+        pass
     await reset_registration_service()
     await shutdown_audit_service()
     await reset_users_db()
@@ -1416,10 +1451,14 @@ async def setup_test_database(monkeypatch):
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as _reset_settings
         from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool as _reset_db_pool
+        from tldw_Server_API.app.core.AuthNZ.rate_limiter import reset_rate_limiter as _reset_rate_limiter
+        from tldw_Server_API.app.core.AuthNZ.lockout_tracker import reset_lockout_tracker as _reset_lockout_tracker
         _reset_settings()
         # Reset any pre-existing pool so app endpoints use Postgres on first access
         # (some tests hit endpoints that call get_db_pool inside request handlers)
         await _reset_db_pool()
+        await _reset_rate_limiter()
+        await _reset_lockout_tracker()
     except Exception:
         pass
     # Ensure Postgres reachable before creating the session DB

@@ -43,10 +43,20 @@ def check_mlx_available() -> bool:
         logger.debug("MLX is only available on macOS")
         return False
 
-    if importlib.util.find_spec("mlx") is None:
+    try:
+        mlx_spec = importlib.util.find_spec("mlx")
+    except (ImportError, ModuleNotFoundError, ValueError):
         logger.debug("MLX not installed")
         return False
-    if importlib.util.find_spec("mlx.core") is None:
+    if mlx_spec is None:
+        logger.debug("MLX not installed")
+        return False
+    try:
+        mlx_core_spec = importlib.util.find_spec("mlx.core")
+    except (ImportError, ModuleNotFoundError, ValueError):
+        logger.debug("MLX core not available")
+        return False
+    if mlx_core_spec is None:
         logger.debug("MLX core not available")
         return False
     return True
@@ -54,7 +64,13 @@ def check_mlx_available() -> bool:
 
 def check_parakeet_mlx_installed() -> bool:
     """Check if parakeet-mlx is installed."""
-    return importlib.util.find_spec("parakeet_mlx") is not None
+    try:
+        return importlib.util.find_spec("parakeet_mlx") is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        # Some test doubles register modules with __spec__ = None, which makes
+        # find_spec() raise ValueError. If the module is already present in
+        # sys.modules, treat it as available.
+        return sys.modules.get("parakeet_mlx") is not None
 
 
 def install_parakeet_mlx() -> bool:

@@ -12,6 +12,7 @@ from starlette.requests import Request
 from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoint
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.main import app
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 
@@ -129,6 +130,7 @@ def test_tts_headers_via_http(monkeypatch):
     app.dependency_overrides[audio_endpoint.check_rate_limit] = lambda: None
 
     try:
+        settings = get_settings()
         with TestClient(app) as client:
             resp = client.post(
                 "/api/v1/audio/speech",
@@ -140,6 +142,7 @@ def test_tts_headers_via_http(monkeypatch):
                     "stream": False,
                     "return_download_link": True,
                 },
+                headers={"X-API-KEY": settings.SINGLE_USER_API_KEY},
             )
         assert resp.status_code == 200
         assert resp.headers.get("X-Download-Path") == "/api/v1/storage/files/456/download"

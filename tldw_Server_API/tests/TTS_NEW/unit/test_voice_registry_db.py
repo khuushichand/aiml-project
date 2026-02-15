@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime
 
 from tldw_Server_API.app.core.DB_Management.Voice_Registry_DB import VoiceRegistryDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 def _voice_record(voice_id: str, *, name: str | None = None, file_path: str | None = None) -> dict[str, object]:
@@ -24,7 +25,13 @@ def _voice_record(voice_id: str, *, name: str | None = None, file_path: str | No
     }
 
 
-def test_voice_registry_db_crud_and_replace(tmp_path):
+def test_voice_registry_db_crud_and_replace(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        DatabasePaths,
+        "get_user_db_base_dir",
+        lambda *args, **kwargs: tmp_path,
+        raising=True,
+    )
     db = VoiceRegistryDB(tmp_path / "voice_registry.db")
 
     db.upsert_voice(1, _voice_record("voice-a", name="Alpha"))
@@ -54,7 +61,13 @@ def test_voice_registry_db_crud_and_replace(tmp_path):
     assert db.delete_voice(1, "voice-c") is False
 
 
-def test_voice_registry_db_migrates_legacy_schema(tmp_path):
+def test_voice_registry_db_migrates_legacy_schema(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        DatabasePaths,
+        "get_user_db_base_dir",
+        lambda *args, **kwargs: tmp_path,
+        raising=True,
+    )
     db_path = tmp_path / "voice_registry.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute(

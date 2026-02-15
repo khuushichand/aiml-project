@@ -175,6 +175,98 @@ class ConversationRateLimiter:
     def __init__(self, config: RateLimitConfig):
         self.config = config
         self._state_lock = asyncio.Lock()
+        # Lightweight in-memory counters used only for deterministic TEST_MODE
+        # legacy enforcement when RG is explicitly disabled.
+        self._global_requests: list[float] = []
+        self._user_requests: dict[str, list[float]] = {}
+        self._conversation_requests: dict[str, list[float]] = {}
+        self._user_tokens: dict[str, list[tuple[float, int]]] = {}
+
+    @staticmethod
+    def _legacy_test_limits_enabled() -> bool:
+        if not is_test_mode():
+            return False
+        return any(
+            os.getenv(name) is not None
+            for name in (
+                "TEST_CHAT_PER_USER_RPM",
+                "TEST_CHAT_PER_CONVERSATION_RPM",
+                "TEST_CHAT_GLOBAL_RPM",
+                "TEST_CHAT_TOKENS_PER_MINUTE",
+                "TEST_CHAT_BURST_MULTIPLIER",
+            )
+        )
+
+    def _effective_limit(self, base_limit: int) -> int:
+        try:
+            burst = float(self.config.burst_multiplier)
+        except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS:
+            burst = 1.0
+        return max(1, int(base_limit * max(1.0, burst)))
+
+    @staticmethod
+    def _prune_timestamps(samples: list[float], now_ts: float, window_seconds: float = 60.0) -> None:
+        cutoff = now_ts - window_seconds
+        while samples and samples[0] < cutoff:
+            samples.pop(0)
+
+    @staticmethod
+    def _prune_token_samples(samples: list[tuple[float, int]], now_ts: float, window_seconds: float = 60.0) -> None:
+        cutoff = now_ts - window_seconds
+        while samples and samples[0][0] < cutoff:
+            samples.pop(0)
+
+    async def _check_legacy_test_limits(
+        self,
+        *,
+        user_id: str,
+        conversation_id: Optional[str],
+        estimated_tokens: int,
+    ) -> tuple[bool, Optional[str]]:
+        now_ts = time.time()
+        user_key = str(user_id)
+        conversation_key = str(conversation_id) if conversation_id else None
+        token_units = max(0, int(estimated_tokens or 0))
+
+        async with self._state_lock:
+            self._prune_timestamps(self._global_requests, now_ts)
+            user_samples = self._user_requests.setdefault(user_key, [])
+            self._prune_timestamps(user_samples, now_ts)
+
+            conversation_samples: list[float] | None = None
+            if conversation_key is not None:
+                conversation_samples = self._conversation_requests.setdefault(conversation_key, [])
+                self._prune_timestamps(conversation_samples, now_ts)
+
+            token_samples = self._user_tokens.setdefault(user_key, [])
+            self._prune_token_samples(token_samples, now_ts)
+
+            if len(self._global_requests) >= self._effective_limit(self.config.global_rpm):
+                return False, "Global rate limit exceeded"
+
+            if len(user_samples) >= self._effective_limit(self.config.per_user_rpm):
+                return False, "User rate limit exceeded"
+
+            if (
+                conversation_samples is not None
+                and len(conversation_samples) >= self._effective_limit(self.config.per_conversation_rpm)
+            ):
+                return False, "Conversation rate limit exceeded"
+
+            if token_units > 0:
+                used_tokens = sum(amount for _, amount in token_samples)
+                if used_tokens + token_units > self._effective_limit(self.config.per_user_tokens_per_minute):
+                    return False, "Token rate limit exceeded"
+
+            # Reserve the capacity on successful checks.
+            self._global_requests.append(now_ts)
+            user_samples.append(now_ts)
+            if conversation_samples is not None:
+                conversation_samples.append(now_ts)
+            if token_units > 0:
+                token_samples.append((now_ts, token_units))
+
+        return True, None
 
     async def check_rate_limit(
         self,
@@ -194,6 +286,12 @@ class ConversationRateLimiter:
             Tuple of (allowed, error_message)
         """
         if not _rg_chat_primary_enabled():
+            if self._legacy_test_limits_enabled():
+                return await self._check_legacy_test_limits(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    estimated_tokens=estimated_tokens,
+                )
             # RG is disabled - fail open with deprecation warning.
             _emit_chat_legacy_deprecation("rg_disabled")
             return True, None

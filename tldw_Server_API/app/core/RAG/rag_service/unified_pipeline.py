@@ -2350,7 +2350,6 @@ async def unified_rag_pipeline(
                     )
                     # Optional date filter
                     if enable_date_filter and date_range and isinstance(date_range, dict):
-                        from datetime import datetime
                         try:
                             start = datetime.fromisoformat(date_range.get("start", "")) if date_range.get("start") else None
                             end = datetime.fromisoformat(date_range.get("end", "")) if date_range.get("end") else None
@@ -2363,7 +2362,6 @@ async def unified_rag_pipeline(
                         tf = result.metadata.get("temporal_filter") if isinstance(result.metadata, dict) else None
                         if isinstance(tf, dict):
                             try:
-                                from datetime import datetime
                                 start_val = tf.get("start")
                                 end_val = tf.get("end")
                                 if start_val and end_val:
@@ -4170,7 +4168,6 @@ async def unified_rag_pipeline(
                         if isinstance(created, (int, float)):
                             ts = float(created)
                         elif isinstance(created, str) and created:
-                            from datetime import datetime
                             ts = datetime.fromisoformat(created.replace('Z','+00:00')).timestamp()
                     except (TypeError, ValueError):
                         ts = None

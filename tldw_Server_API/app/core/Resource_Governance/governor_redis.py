@@ -1412,7 +1412,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 try:
                     await client.hset(
                         self._keys.handle(handle_id),
-                        {
+                        mapping={
                             "entity": req.entity,
                             "policy_id": dec.details.get("policy_id") or req.tags.get("policy_id") or "default",
                             "categories": json.dumps({k: int((v or {}).get("units") or 0) for k, v in req.categories.items()}),
@@ -1745,7 +1745,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 reserved_by_cat[cat] = min(counts) if counts else int((req.categories.get(cat) or {}).get("units") or 0)
             await client.hset(
                 self._keys.handle(handle_id),
-                {
+                mapping={
                     "entity": req.entity,
                     "policy_id": policy_id,
                     "categories": json.dumps(reserved_by_cat),

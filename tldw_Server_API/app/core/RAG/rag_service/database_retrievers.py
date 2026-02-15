@@ -40,8 +40,8 @@ if TYPE_CHECKING:
 class DatabasePathError(ValueError):
     """Raised when a database path is invalid."""
 
-    def __init__(self) -> None:
-        super().__init__("Invalid database path")
+    def __init__(self, message: str = "Invalid database path") -> None:
+        super().__init__(message)
 
 
 class PathNormalizationError(DatabasePathError):
@@ -83,7 +83,7 @@ class SuspiciousDatabasePathError(DatabasePathError):
     """Raised when suspicious path patterns are detected."""
 
     def __init__(self) -> None:
-        super().__init__("Suspicious path pattern detected in database path")
+        super().__init__("suspicious pattern detected in database path")
 
 
 class RestrictedDatabasePathError(DatabasePathError):
@@ -450,9 +450,21 @@ class MediaDBRetriever(BaseRetriever):
             validated_path = self._validate_path(db_path)
             if not validated_path:
                 return None
+            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+                DatabaseError as MediaDatabaseError,
+            )
             from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
             return MediaDatabase(db_path=validated_path, client_id="rag_service")
-        except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        except (
+            ImportError,
+            AttributeError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            sqlite3.Error,
+            MediaDatabaseError,
+        ):
             return None
 
     def close(self):

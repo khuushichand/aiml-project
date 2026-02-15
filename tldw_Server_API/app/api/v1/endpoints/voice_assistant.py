@@ -58,6 +58,7 @@ from tldw_Server_API.app.api.v1.schemas.voice_assistant_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.TTS.tts_exceptions import TTSError
 from tldw_Server_API.app.core.VoiceAssistant import (
     ActionType,
     VoiceCommand,
@@ -1405,7 +1406,7 @@ async def _stream_tts_response(
             ).model_dump()
         )
 
-    except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
+    except (TTSError, AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.error(f"TTS streaming failed: {e}")
         await websocket.send_json(
             WSErrorMessage(

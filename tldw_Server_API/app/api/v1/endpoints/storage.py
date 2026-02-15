@@ -15,7 +15,7 @@ from pathlib import Path as PathlibPath
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.schemas.storage_schemas import (
     BulkDeleteRequest,
     BulkDeleteResponse,
@@ -63,6 +63,35 @@ router = APIRouter(prefix="/storage", tags=["storage"])
 async def _get_service():
     """Get initialized storage quota service."""
     return await get_storage_service()
+
+
+def _principal_is_storage_admin(principal: AuthPrincipal) -> bool:
+    """Storage admin compatibility check.
+
+    Storage admin endpoints intentionally preserve legacy `is_admin` support in
+    addition to claim-first admin role/permission checks.
+    """
+    roles = {str(role).strip().lower() for role in (principal.roles or []) if str(role).strip()}
+    permissions = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    if bool(getattr(principal, "is_admin", False)):
+        return True
+    if "admin" in roles:
+        return True
+    return bool(permissions & {"*", "system.configure"})
+
+
+async def require_storage_admin(principal: AuthPrincipal = Depends(get_auth_principal)) -> AuthPrincipal:
+    """Authorize storage admin endpoints with legacy `is_admin` compatibility."""
+    if _principal_is_storage_admin(principal):
+        return principal
+    raise HTTPException(
+        status_code=403,
+        detail="Access denied. Required role(s): admin",
+    )
 
 
 def _to_generated_file(record: dict) -> GeneratedFile:
@@ -635,7 +664,7 @@ async def permanently_delete_file(
 async def set_user_quota(
     user_id: int,
     request: SetQuotaRequest,
-    _principal: AuthPrincipal = Depends(require_roles("admin")),
+    _principal: AuthPrincipal = Depends(require_storage_admin),
 ):
     """Set storage quota for a user (admin only)."""
     service = await _get_service()
@@ -664,7 +693,7 @@ async def set_user_quota(
 async def set_team_quota(
     team_id: int,
     request: SetQuotaRequest,
-    _principal: AuthPrincipal = Depends(require_roles("admin")),
+    _principal: AuthPrincipal = Depends(require_storage_admin),
 ):
     """Set storage quota for a team (admin only)."""
     service = await _get_service()
@@ -688,7 +717,7 @@ async def set_team_quota(
 async def set_org_quota(
     org_id: int,
     request: SetQuotaRequest,
-    _principal: AuthPrincipal = Depends(require_roles("admin")),
+    _principal: AuthPrincipal = Depends(require_storage_admin),
 ):
     """Set storage quota for an organization (admin only)."""
     service = await _get_service()
@@ -711,7 +740,7 @@ async def set_org_quota(
 @router.get("/admin/quotas/team/{team_id}", response_model=TeamQuotaResponse)
 async def get_team_quota(
     team_id: int,
-    _principal: AuthPrincipal = Depends(require_roles("admin")),
+    _principal: AuthPrincipal = Depends(require_storage_admin),
 ):
     """Get storage quota for a team (admin only)."""
     service = await _get_service()
@@ -726,7 +755,7 @@ async def get_team_quota(
 @router.get("/admin/quotas/org/{org_id}", response_model=OrgQuotaResponse)
 async def get_org_quota(
     org_id: int,
-    _principal: AuthPrincipal = Depends(require_roles("admin")),
+    _principal: AuthPrincipal = Depends(require_storage_admin),
 ):
     """Get storage quota for an organization (admin only)."""
     service = await _get_service()

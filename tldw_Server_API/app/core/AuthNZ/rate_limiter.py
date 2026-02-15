@@ -17,7 +17,11 @@ from datetime import datetime
 from typing import Any
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
-from tldw_Server_API.app.core.AuthNZ.lockout_tracker import LockoutTracker, get_lockout_tracker
+from tldw_Server_API.app.core.AuthNZ.lockout_tracker import (
+    LockoutTracker,
+    get_lockout_tracker,
+    reset_lockout_tracker,
+)
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
 
@@ -119,6 +123,18 @@ def get_rate_limiter() -> RateLimiter:
     if _rate_limiter is None:
         _rate_limiter = RateLimiter()
     return _rate_limiter
+
+
+async def reset_rate_limiter() -> None:
+    """Reset the process-global RateLimiter and its lockout singleton."""
+    global _rate_limiter
+    limiter = _rate_limiter
+    _rate_limiter = None
+    if limiter is not None:
+        limiter._lockout = None
+        limiter.db_pool = None
+        limiter._initialized = False
+    await reset_lockout_tracker()
 
 
 async def check_rate_limit(

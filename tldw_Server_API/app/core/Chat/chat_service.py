@@ -3115,7 +3115,12 @@ async def execute_non_stream_call(
             # Execute provided LLM call function in a worker to avoid blocking the loop.
             # llm_call_func is a sync callable (partial of perform_chat_api_call or a mock).
             loop = asyncio.get_running_loop()
-            llm_response = await loop.run_in_executor(None, llm_call_func)
+            try:
+                llm_response = await loop.run_in_executor(None, llm_call_func)
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
+                raise
+            except Exception as exc:  # noqa: BLE001 - normalize unexpected provider exceptions
+                raise ChatAPIError(str(exc)) from exc
         llm_latency = time.time() - llm_start_time
         if not metrics_recorded:
             metrics.track_llm_call(selected_provider, model, llm_latency, success=True)

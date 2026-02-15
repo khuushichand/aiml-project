@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import functools
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -223,6 +224,54 @@ def _ensure_warnings_list(result: dict[str, Any]) -> list[str]:
         warnings = []
         result["warnings"] = warnings
     return warnings
+
+
+def _callable_accepts_keyword(
+    callable_obj: Callable[..., Any],
+    keyword: str,
+) -> bool:
+    """Return True if callable_obj accepts keyword directly or via **kwargs."""
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return False
+
+    parameter = signature.parameters.get(keyword)
+    if parameter and parameter.kind in (
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    ):
+        return True
+
+    return any(
+        candidate.kind == inspect.Parameter.VAR_KEYWORD
+        for candidate in signature.parameters.values()
+    )
+
+
+def _resolve_shimmed_batch_processor(
+    *,
+    core_callable: Callable[..., Any],
+    media_module: Any,
+    shim_attr: str,
+    shim_core_attr: str,
+) -> Callable[..., Any]:
+    """
+    Resolve shimmed processor callable while avoiding stale endpoint aliases.
+
+    Endpoint module aliases (`process_* = _process_*_core`) can become stale when
+    tests monkeypatch the core module directly after endpoint import. In that case,
+    prefer the currently patched core callable.
+    """
+    shimmed_callable = getattr(media_module, shim_attr, None)
+    if not callable(shimmed_callable):
+        return core_callable
+
+    shim_core_callable = getattr(media_module, shim_core_attr, None)
+    if shimmed_callable is shim_core_callable and core_callable is not shim_core_callable:
+        return core_callable
+
+    return shimmed_callable
 
 
 def _normalize_analysis_text_chunk(
@@ -3657,6 +3706,23 @@ async def process_batch_media(
                 process_videos,
             )
 
+            target_callable: Callable[..., Any] = process_videos
+            try:
+                import tldw_Server_API.app.api.v1.endpoints.media as _media_mod  # type: ignore
+
+                target_callable = _resolve_shimmed_batch_processor(
+                    core_callable=process_videos,
+                    media_module=_media_mod,
+                    shim_attr="process_videos",
+                    shim_core_attr="_process_videos_core",
+                )
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+                target_callable = process_videos
+            attach_chunk_options = _callable_accepts_keyword(
+                target_callable,
+                "chunk_options",
+            )
+
             video_args = {
                 "inputs": items_to_process,
                 "temp_dir": str(temp_dir),
@@ -3711,16 +3777,38 @@ async def process_batch_media(
                 "keep_original": getattr(form_data, "keep_original_file", False),
                 "cancel_check": cancel_check,
             }
+            if attach_chunk_options:
+                video_args["chunk_options"] = chunk_options
             logger.debug(
                 "Calling external process_videos with args including temp_dir: {}",
                 list(video_args.keys()),
             )
-            target_func = functools.partial(process_videos, **video_args)
-            processing_output = await loop.run_in_executor(None, target_func)
+            if asyncio.iscoroutinefunction(target_callable):
+                processing_output = await target_callable(**video_args)
+            else:
+                target_func = functools.partial(target_callable, **video_args)
+                processing_output = await loop.run_in_executor(None, target_func)
 
         elif str(media_type) == "audio":
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
                 process_audio_files,  # type: ignore  # noqa: E501
+            )
+
+            target_callable: Callable[..., Any] = process_audio_files
+            try:
+                import tldw_Server_API.app.api.v1.endpoints.media as _media_mod  # type: ignore
+
+                target_callable = _resolve_shimmed_batch_processor(
+                    core_callable=process_audio_files,
+                    media_module=_media_mod,
+                    shim_attr="process_audio_files",
+                    shim_core_attr="_process_audio_files_core",
+                )
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+                target_callable = process_audio_files
+            attach_chunk_options = _callable_accepts_keyword(
+                target_callable,
+                "chunk_options",
             )
 
             audio_args = {
@@ -3776,12 +3864,17 @@ async def process_batch_media(
                 "author": getattr(form_data, "author", None),
                 "cancel_check": cancel_check,
             }
+            if attach_chunk_options:
+                audio_args["chunk_options"] = chunk_options
             logger.debug(
                 "Calling external process_audio_files with args including temp_dir: {}",
                 list(audio_args.keys()),
             )
-            target_func = functools.partial(process_audio_files, **audio_args)
-            processing_output = await loop.run_in_executor(None, target_func)
+            if asyncio.iscoroutinefunction(target_callable):
+                processing_output = await target_callable(**audio_args)
+            else:
+                target_func = functools.partial(target_callable, **audio_args)
+                processing_output = await loop.run_in_executor(None, target_func)
         else:
             raise ValueError(f"Invalid media type '{media_type}' for batch processing.")
 

@@ -204,7 +204,8 @@ async def _is_mfa_backend_supported() -> bool:
         supports_backend = getattr(mfa_service, "supports_backend", None)
         if callable(supports_backend):
             return bool(supports_backend())
-        logger.debug("MFA service missing supports_backend(); treating MFA backend as unsupported")
+        # Test stubs may omit supports_backend(); fall back to canonical backend detection.
+        return await is_postgres_backend()
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         logger.debug("Failed to resolve MFA service backend support flag", exc_info=True)
     return False
@@ -2716,9 +2717,7 @@ async def disable_mfa(
     """
     try:
         await _ensure_mfa_available()
-        user_id = getattr(current_user, "id", None)
-        if user_id is None and isinstance(current_user, dict):
-            user_id = current_user.get("id")
+        user_id = _current_user_id(current_user)
         if user_id is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 

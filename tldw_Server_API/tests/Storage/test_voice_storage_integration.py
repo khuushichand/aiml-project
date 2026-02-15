@@ -27,6 +27,7 @@ async def test_upload_voice_registers_generated_file(tmp_path, monkeypatch):
     voices_path.mkdir(parents=True, exist_ok=True)
     (voices_path / "uploads").mkdir(parents=True, exist_ok=True)
     (voices_path / "processed").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path))
 
     monkeypatch.setattr(manager, "get_user_voices_path", lambda user_id: voices_path)
 
@@ -65,6 +66,7 @@ async def test_upload_voice_quota_exceeded_maps_to_voice_quota(monkeypatch, tmp_
     voices_path.mkdir(parents=True, exist_ok=True)
     (voices_path / "uploads").mkdir(parents=True, exist_ok=True)
     (voices_path / "processed").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path))
 
     monkeypatch.setattr(manager, "get_user_voices_path", lambda user_id: voices_path)
     monkeypatch.setattr(manager, "_get_audio_duration", AsyncMock(return_value=5.0))
@@ -94,6 +96,44 @@ async def test_upload_voice_quota_exceeded_maps_to_voice_quota(monkeypatch, tmp_
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_upload_voice_registry_path_mismatch_falls_back_runtime_registry(monkeypatch, tmp_path):
+    """Persistent registry path validation errors should not fail uploads."""
+    manager = VoiceManager()
+    voices_path = tmp_path / "voices"
+    voices_path.mkdir(parents=True, exist_ok=True)
+    (voices_path / "uploads").mkdir(parents=True, exist_ok=True)
+    (voices_path / "processed").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "isolated_user_db_root"))
+
+    monkeypatch.setattr(manager, "get_user_voices_path", lambda user_id: voices_path)
+
+    async def _process_for_provider(src, dst, provider):
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(src, dst)
+        return dst
+
+    monkeypatch.setattr(manager, "_process_for_provider", _process_for_provider)
+    monkeypatch.setattr(manager, "_get_audio_duration", AsyncMock(return_value=5.0))
+    manager.registry.register_voice = AsyncMock()
+
+    mock_storage = AsyncMock()
+    mock_storage.register_generated_file = AsyncMock(return_value={"id": 1})
+
+    async def _get_storage_service():
+        return mock_storage
+
+    monkeypatch.setattr(voice_manager_module, "get_storage_service", _get_storage_service)
+
+    req = VoiceUploadRequest(name="Test Voice", description=None, provider="vibevoice", reference_text=None)
+    response = await manager.upload_voice(user_id=1, file_content=b"RIFFDATA", filename="sample.wav", request=req)
+
+    assert response.voice_id
+    assert mock_storage.register_generated_file.await_count == 1
+    assert manager.registry.register_voice.await_count == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_delete_voice_unregisters_generated_file_and_metadata(monkeypatch, tmp_path):
     """Deleting a voice removes metadata and unregisters matching generated_files records."""
     manager = VoiceManager()
@@ -102,6 +142,7 @@ async def test_delete_voice_unregisters_generated_file_and_metadata(monkeypatch,
     (voices_path / "uploads").mkdir(parents=True, exist_ok=True)
     (voices_path / "processed").mkdir(parents=True, exist_ok=True)
     (voices_path / "metadata").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path))
 
     monkeypatch.setattr(manager, "get_user_voices_path", lambda user_id: voices_path)
     monkeypatch.setattr(manager, "_get_audio_duration", AsyncMock(return_value=5.0))

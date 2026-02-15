@@ -1440,6 +1440,8 @@ async def lifespan(app: FastAPI):
             if getattr(db_pool, "pool", None):
                 from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
                     ensure_api_keys_tables_pg,
+                    ensure_authnz_core_tables_pg,
+                    ensure_generated_files_table_pg,
                     ensure_llm_provider_overrides_pg,
                     ensure_privilege_snapshots_table_pg,
                     ensure_tool_catalogs_tables_pg,
@@ -1447,6 +1449,12 @@ async def lifespan(app: FastAPI):
                     ensure_virtual_key_counters_pg,
                 )
 
+                ok_authnz_core_pg = await ensure_authnz_core_tables_pg(db_pool)
+                if ok_authnz_core_pg:
+                    logger.info("App Startup: Ensured PG AuthNZ core tables")
+                ok_generated_files_pg = await ensure_generated_files_table_pg(db_pool)
+                if ok_generated_files_pg:
+                    logger.info("App Startup: Ensured PG generated_files table")
                 ok_catalogs = await ensure_tool_catalogs_tables_pg(db_pool)
                 if ok_catalogs:
                     logger.info("App Startup: Ensured PG tool catalogs tables")
@@ -2236,7 +2244,8 @@ async def lifespan(app: FastAPI):
 
         from tldw_Server_API.app.services.storage_cleanup_service import get_cleanup_service as _get_storage_cleanup
 
-        _storage_cleanup_enabled = _os.getenv("STORAGE_CLEANUP_ENABLED", "true").lower() in {
+        _storage_cleanup_default = "false" if globals().get("_TEST_MODE") else "true"
+        _storage_cleanup_enabled = _os.getenv("STORAGE_CLEANUP_ENABLED", _storage_cleanup_default).lower() in {
             "true", "1", "yes", "y", "on"
         }
         if _storage_cleanup_enabled:
@@ -3166,6 +3175,28 @@ async def lifespan(app: FastAPI):
                 logger.info("Storage cleanup worker stopped")
             except _STARTUP_GUARD_EXCEPTIONS:
                 pass
+        try:
+            from tldw_Server_API.app.services.storage_cleanup_service import (
+                reset_cleanup_service as _reset_cleanup_service,
+            )
+            from tldw_Server_API.app.services.storage_quota_service import (
+                reset_storage_service as _reset_storage_service,
+            )
+
+            await _reset_cleanup_service()
+            await _reset_storage_service()
+            logger.info("Storage service singletons reset")
+        except _STARTUP_GUARD_EXCEPTIONS:
+            pass
+        try:
+            from tldw_Server_API.app.core.AuthNZ.rate_limiter import (
+                reset_rate_limiter as _reset_authnz_rate_limiter,
+            )
+
+            await _reset_authnz_rate_limiter()
+            logger.info("AuthNZ limiter singletons reset")
+        except _STARTUP_GUARD_EXCEPTIONS:
+            pass
         if "core_jobs_task" in locals() and core_jobs_task:
             # Prefer graceful stop via explicit stop_event
             if "core_jobs_stop_event" in locals() and core_jobs_stop_event:

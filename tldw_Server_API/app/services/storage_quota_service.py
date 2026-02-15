@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -568,6 +569,9 @@ class StorageQuotaService:
 
     async def shutdown(self):
         """Shutdown hook retained for compatibility."""
+        self._initialized = False
+        self.quota_cache.clear()
+        self.storage_cache.clear()
         logger.info("StorageQuotaService shutdown complete (no dedicated executor)")
 
     # =========================================================================
@@ -1078,6 +1082,21 @@ async def get_storage_service() -> StorageQuotaService:
         _storage_service = StorageQuotaService()
         await _storage_service.initialize()
     return _storage_service
+
+
+async def reset_storage_service() -> None:
+    """Reset module-level storage service singletons and release cached state."""
+    global _storage_service, _quota_service
+    candidates: list[StorageQuotaService] = []
+    if _storage_service is not None:
+        candidates.append(_storage_service)
+    if _quota_service is not None and _quota_service is not _storage_service:
+        candidates.append(_quota_service)
+    _storage_service = None
+    _quota_service = None
+    for service in candidates:
+        with contextlib.suppress(Exception):
+            await service.shutdown()
 
 
 #

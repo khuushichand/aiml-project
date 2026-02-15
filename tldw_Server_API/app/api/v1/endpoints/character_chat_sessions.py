@@ -7,6 +7,7 @@ Provides CRUD operations for chat sessions and character-specific completions.
 import asyncio
 import contextlib
 import hashlib
+import inspect
 import json
 import os
 import random
@@ -841,6 +842,7 @@ def _resolve_effective_prompt_preset(
     character: dict[str, Any],
     *,
     request_preset: Any = None,
+    db: Optional[CharactersRAGDB] = None,
 ) -> str:
     """Resolve prompt formatting preset with scope-aware precedence.
 
@@ -871,7 +873,15 @@ def _resolve_effective_prompt_preset(
     )
 
     if scope == "chat":
-        return chat_override or DEFAULT_PROMPT_PRESET
+        if chat_override in {"default", "st_default"}:
+            return chat_override
+        if chat_override and db is not None:
+            try:
+                if isinstance(db.get_prompt_preset(chat_override), dict):
+                    return chat_override
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                pass
+        return DEFAULT_PROMPT_PRESET
 
     character_preset = _coerce_preset_id(resolve_character_prompt_preset(character))
     return character_preset or DEFAULT_PROMPT_PRESET
@@ -2034,10 +2044,15 @@ async def create_chat_session(
         # Persist a greetings checksum so staleness can be detected later.
         try:
             checksum = _compute_greetings_checksum(character)
-            db.upsert_conversation_settings(
+            updated_settings = db.upsert_conversation_settings(
                 created_id,
                 {"greetingsChecksum": checksum},
             )
+            # Keep optimistic-locking version in response in sync with DB.
+            if updated_settings:
+                latest_conv = db.get_conversation_by_id(created_id)
+                if isinstance(latest_conv, dict):
+                    created_conv = latest_conv
         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             pass  # best-effort; staleness detection degrades gracefully
 
@@ -2554,6 +2569,7 @@ async def prepare_chat_completion(
             prep_settings,
             character,
             request_preset=body.prompt_preset,
+            db=db,
         )
 
         formatted: list[dict[str, Any]] = []
@@ -2784,6 +2800,7 @@ async def prompt_assembly_preview(
             settings,
             character,
             request_preset=body.prompt_preset,
+            db=db,
         )
 
         # Assemble prompt in the same order as completion-v2.
@@ -3111,6 +3128,7 @@ async def character_chat_completion(
             completion_settings,
             character,
             request_preset=body.prompt_preset,
+            db=db,
         )
 
         formatted: list[dict[str, Any]] = []
@@ -3287,7 +3305,7 @@ async def character_chat_completion(
                 )
                 # Support async-returning provider hooks (test stubs or adapters)
                 try:
-                    if asyncio.iscoroutine(llm_resp):
+                    if inspect.isawaitable(llm_resp):
                         llm_resp = await llm_resp  # type: ignore
                 except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to await async LLM response: {e}")
@@ -3917,6 +3935,9 @@ async def get_chat_settings(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat settings not found")
 
         settings = settings_row.get("settings") or {}
+        # Internal bootstrap metadata alone should not count as user-visible settings.
+        if settings and set(settings.keys()) <= {"greetingsChecksum"}:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat settings not found")
 
         # Normalize stored enum values so the client always gets valid scopes.
         _SCOPE_DEFAULTS = {

@@ -47,6 +47,9 @@ from tldw_Server_API.app.core.testing import is_test_mode, is_truthy
 router = APIRouter()
 public_router = APIRouter()
 
+# Backward-compatible symbol used by legacy tests.
+http_client_factory = async_http_client_factory
+
 MESSAGES_NATIVE_PROVIDERS = {"anthropic", "llama.cpp"}
 DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
 
