@@ -72,7 +72,10 @@ import type {
 } from "@/store/option"
 import type { ChatModelSettings } from "@/store/model"
 import type { SaveMessageData } from "@/types/chat-modes"
-import { isGreetingMessageType } from "@/utils/character-greetings"
+import {
+  collectGreetings,
+  isGreetingMessageType
+} from "@/utils/character-greetings"
 
 type ChatModelSettingsStore = ChatModelSettings & {
   setSystemPrompt?: (prompt: string) => void
@@ -504,6 +507,63 @@ export const useChatActions = ({
       throw new Error("No character selected")
     }
 
+    const resolveGreetingText = (): string => {
+      if (!greetingEnabled) return ""
+
+      const fromMessages = chatHistory.find(
+        (entry) =>
+          entry.isBot &&
+          isGreetingMessageType(entry.messageType) &&
+          typeof entry.message === "string" &&
+          entry.message.trim().length > 0
+      )
+      if (fromMessages?.message) {
+        return fromMessages.message.trim()
+      }
+
+      const fromHistory = chatMemory.find(
+        (entry) =>
+          entry.role === "assistant" &&
+          isGreetingMessageType(entry.messageType) &&
+          typeof entry.content === "string" &&
+          entry.content.trim().length > 0
+      )
+      if (fromHistory?.content) {
+        return fromHistory.content.trim()
+      }
+
+      const fromCharacter = collectGreetings(activeCharacter as any).find(
+        (candidate) =>
+          typeof candidate === "string" && candidate.trim().length > 0
+      )
+      if (fromCharacter) {
+        return fromCharacter.trim()
+      }
+
+      return ""
+    }
+
+    const greetingText = resolveGreetingText()
+    const hasGreetingInHistory =
+      greetingText.length > 0 &&
+      chatMemory.some(
+        (entry) =>
+          entry.role === "assistant" &&
+          typeof entry.content === "string" &&
+          entry.content.trim() === greetingText
+      )
+    const historyBase: ChatHistory =
+      greetingText.length > 0 && !hasGreetingInHistory
+        ? [
+            {
+              role: "assistant",
+              content: greetingText,
+              messageType: "character:greeting"
+            },
+            ...chatMemory
+          ]
+        : chatMemory
+
     let fullText = ""
     let contentToSave = ""
     const resolvedAssistantMessageId = generateID()
@@ -539,6 +599,33 @@ export const useChatActions = ({
       const characterAvatar =
         activeCharacter?.avatar_url || modelInfo?.model_avatar
       const createdAt = Date.now()
+      const hasGreetingInMessages = chatHistory.some((entry) => {
+        if (!entry?.isBot) return false
+        if (isGreetingMessageType(entry?.messageType)) return true
+        if (!greetingText) return false
+        return (
+          typeof entry.message === "string" &&
+          entry.message.trim() === greetingText
+        )
+      })
+      const greetingSeedMessage: Message | null =
+        greetingText.length > 0 && !hasGreetingInMessages
+          ? {
+              isBot: true,
+              role: "assistant",
+              name: characterName,
+              message: greetingText,
+              messageType: "character:greeting",
+              sources: [],
+              createdAt,
+              id: generateID(),
+              modelImage: characterAvatar,
+              modelName: characterName
+            }
+          : null
+      const chatMessagesBase = greetingSeedMessage
+        ? [greetingSeedMessage, ...chatHistory]
+        : chatHistory
       const assistantStub: Message = {
         isBot: true,
         role: "assistant",
@@ -562,7 +649,7 @@ export const useChatActions = ({
 
       const newMessageList: Message[] = !isRegenerate
         ? [
-            ...chatHistory,
+            ...chatMessagesBase,
             {
               isBot: false,
               role: "user",
@@ -576,7 +663,7 @@ export const useChatActions = ({
             },
             assistantStub
           ]
-        : [...chatHistory, assistantStub]
+        : [...chatMessagesBase, assistantStub]
       setMessages(newMessageList)
 
       const activeCharacterId = String(activeCharacter.id)
@@ -600,6 +687,7 @@ export const useChatActions = ({
       }
 
       let chatId = shouldResetServerChat ? null : serverChatId
+      let createdNewChat = false
       if (!chatId) {
         const created = await tldwClient.createChat({
           character_id: activeCharacter.id,
@@ -642,6 +730,7 @@ export const useChatActions = ({
           throw new Error("Failed to create character chat session")
         }
         chatId = normalizedId
+        createdNewChat = true
         setServerChatId(normalizedId)
         const createdTitle =
           created && typeof created === "object"
@@ -655,6 +744,45 @@ export const useChatActions = ({
         setServerChatCharacterId(createdCharacterId)
         setServerChatMetaLoaded(true)
         invalidateServerChatHistory()
+      }
+
+      if (createdNewChat && !isRegenerate && greetingText.length > 0) {
+        try {
+          const createdGreeting = (await tldwClient.addChatMessage(chatId, {
+            role: "assistant",
+            content: greetingText
+          })) as { id?: string | number; version?: number } | null
+          if (createdGreeting?.id != null) {
+            setMessages((prev) => {
+              const updated = [...prev] as (Message & {
+                serverMessageId?: string
+                serverMessageVersion?: number
+              })[]
+              const serverMessageId = String(createdGreeting.id)
+              const serverMessageVersion = createdGreeting.version
+              for (let i = 0; i < updated.length; i += 1) {
+                if (
+                  updated[i]?.isBot &&
+                  isGreetingMessageType(updated[i]?.messageType) &&
+                  !updated[i]?.serverMessageId
+                ) {
+                  updated[i] = {
+                    ...updated[i],
+                    serverMessageId,
+                    serverMessageVersion
+                  }
+                  break
+                }
+              }
+              return updated as Message[]
+            })
+          }
+        } catch (greetingPersistError) {
+          console.warn(
+            "Failed to persist character greeting for new chat:",
+            greetingPersistError
+          )
+        }
       }
 
       if (!isRegenerate) {
@@ -915,8 +1043,8 @@ export const useChatActions = ({
         }
       }
 
-      const lastEntry = chatMemory[chatMemory.length - 1]
-      const prevEntry = chatMemory[chatMemory.length - 2]
+      const lastEntry = historyBase[historyBase.length - 1]
+      const prevEntry = historyBase[historyBase.length - 2]
       const endsWithUser =
         lastEntry?.role === "user" && lastEntry.content === message
       const endsWithUserAssistant =
@@ -927,27 +1055,27 @@ export const useChatActions = ({
       if (isRegenerate) {
         if (endsWithUser) {
           setHistory([
-            ...chatMemory,
+            ...historyBase,
             { role: "assistant", content: finalContent }
           ])
         } else if (endsWithUserAssistant) {
           setHistory(
-            chatMemory.map((entry, index) =>
-              index === chatMemory.length - 1 && entry.role === "assistant"
+            historyBase.map((entry, index) =>
+              index === historyBase.length - 1 && entry.role === "assistant"
                 ? { ...entry, content: finalContent }
                 : entry
             )
           )
         } else {
           setHistory([
-            ...chatMemory,
+            ...historyBase,
             { role: "user", content: message, image },
             { role: "assistant", content: finalContent }
           ])
         }
       } else {
         setHistory([
-          ...chatMemory,
+          ...historyBase,
           { role: "user", content: message, image },
           { role: "assistant", content: finalContent }
         ])
@@ -985,7 +1113,7 @@ export const useChatActions = ({
       const errorSave = await saveMessageOnError({
         e,
         botMessage: assistantContent,
-        history: chatMemory,
+        history: historyBase,
         historyId,
         image,
         selectedModel: resolvedModel,

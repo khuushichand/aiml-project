@@ -84,11 +84,8 @@ export const pageAssistModel = async ({
   const normalizedModelId = String(model || "").replace(/^tldw:/, "")
   let modelSupportsTools = false
   let modelSupportsMultimodal = false
-  let modelProviderHint: string | null = null
   try {
     const modelInfo = await tldwModels.getModel(normalizedModelId)
-    modelProviderHint =
-      typeof modelInfo?.provider === "string" ? modelInfo.provider : null
     modelSupportsTools = Boolean(modelInfo?.capabilities?.includes("tools"))
     modelSupportsMultimodal = Boolean(
       modelInfo?.capabilities?.includes("vision")
@@ -151,8 +148,7 @@ export const pageAssistModel = async ({
     !explicitProvider ? await getDefaultApiProvider() : null
   const normalizedApiProvider = await resolveApiProviderForModel({
     modelId: model,
-    explicitProvider: explicitProvider ?? defaultApiProvider ?? undefined,
-    providerHint: modelProviderHint
+    explicitProvider: explicitProvider ?? defaultApiProvider ?? undefined
   })
   const resolvedExtraHeaders = parseJsonObject(
     extraHeaders ?? currentChatModelSettings.extraHeaders

@@ -211,11 +211,7 @@ export const useServerChatLoader = ({
             { signal: controller.signal }
           )
 
-          const history = list.map((m) => ({
-            role: m.role,
-            content: m.content
-          }))
-
+          let encounteredUserMessage = false
           const mappedMessages = list.map((m) => {
             const meta = m as unknown as Record<string, unknown>
             const createdAt = Date.parse(m.created_at)
@@ -252,6 +248,19 @@ export const useServerChatLoader = ({
               typeof (m as any).sender === "string"
                 ? String((m as any).sender).trim()
                 : ""
+            const explicitMessageType =
+              (meta?.message_type as string | undefined) ??
+              (meta?.messageType as string | undefined)
+            const inferredGreetingMessageType =
+              !explicitMessageType &&
+              characterId != null &&
+              m.role === "assistant" &&
+              !encounteredUserMessage
+                ? "character:greeting"
+                : undefined
+            if (m.role === "user") {
+              encounteredUserMessage = true
+            }
             return {
               createdAt: Number.isNaN(createdAt) ? undefined : createdAt,
               isBot: m.role === "assistant",
@@ -272,9 +281,7 @@ export const useServerChatLoader = ({
                 (meta?.parent_message_id as string | null | undefined) ??
                 (meta?.parentMessageId as string | null | undefined) ??
                 null,
-              messageType:
-                (meta?.message_type as string | undefined) ??
-                (meta?.messageType as string | undefined),
+              messageType: explicitMessageType ?? inferredGreetingMessageType,
               clusterId:
                 (meta?.cluster_id as string | undefined) ??
                 (meta?.clusterId as string | undefined),
@@ -309,6 +316,11 @@ export const useServerChatLoader = ({
               )
             }
           })
+          const history = mappedMessages.map((message) => ({
+            role: message.role,
+            content: message.message,
+            messageType: message.messageType
+          }))
 
           const currentMessages = messagesRef.current
           const hasLocalMessages = currentMessages.length > 0

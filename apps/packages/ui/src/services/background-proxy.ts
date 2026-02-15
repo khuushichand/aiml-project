@@ -627,7 +627,8 @@ const parseStreamError = async (resp: Response): Promise<string> => {
   if (ct.includes("application/json")) {
     const json = await resp.json().catch(() => null)
     if (json && (json.detail || json.error || json.message)) {
-      return String(json.detail || json.error || json.message)
+      const candidate = json.detail ?? json.error ?? json.message
+      return formatErrorMessage(candidate, resp.statusText || `HTTP ${resp.status}`)
     }
   }
   const text = await resp.text().catch(() => null)

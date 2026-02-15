@@ -16,6 +16,7 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Literal, Optional
 
 from fastapi import (
@@ -61,6 +62,9 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     PresetListResponse,
     PresetTokenInfo,
     PresetUpdate,
+)
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
+    DEFAULT_LLM_PROVIDER,
 )
 from tldw_Server_API.app.api.v1.utils.deprecation import build_deprecation_headers
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
@@ -119,6 +123,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_pr
 # Completion schemas centralized in schemas/chat_session_schemas.py
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.Utils.common import parse_boolean
+from tldw_Server_API.app.core.config import load_and_log_configs
 
 _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -153,6 +158,54 @@ DEFAULT_AUTO_SUMMARY_WINDOW_MESSAGES = 12
 MAX_AUTO_SUMMARY_LINES = 24
 MAX_AUTO_SUMMARY_LINE_CHARS = 220
 MAX_AUTO_SUMMARY_CONTENT_CHARS = 8_000
+
+
+@lru_cache(maxsize=1)
+def _config_default_llm_provider() -> str | None:
+    """Read default provider from config sections used by chat endpoints."""
+    cfg = load_and_log_configs()
+    if not isinstance(cfg, dict):
+        return None
+
+    def _extract(section: str) -> str | None:
+        section_data = cfg.get(section)
+        if not isinstance(section_data, dict):
+            return None
+        default_api = section_data.get("default_api")
+        if not isinstance(default_api, str):
+            return None
+        value = default_api.strip()
+        return value or None
+
+    return _extract("llm_api_settings") or _extract("API")
+
+
+def _is_char_chat_test_mode() -> bool:
+    """Return True when running under test-mode semantics."""
+    for env_key in ("TEST_MODE", "TLDW_TEST_MODE", "PYTEST_CURRENT_TEST"):
+        raw = os.getenv(env_key)
+        if isinstance(raw, str) and raw.strip():
+            if env_key == "PYTEST_CURRENT_TEST":
+                return True
+            if is_truthy(raw):
+                return True
+    return False
+
+
+def _get_default_provider() -> str:
+    """Resolve default provider: config, then env, then test fallback, then schema default."""
+    cfg_default = _config_default_llm_provider()
+    if cfg_default:
+        return cfg_default
+
+    env_default = os.getenv("DEFAULT_LLM_PROVIDER")
+    if isinstance(env_default, str) and env_default.strip():
+        return env_default.strip()
+
+    if _is_char_chat_test_mode():
+        return "local-llm"
+
+    return DEFAULT_LLM_PROVIDER
 
 def _safe_replace_placeholders(value: Any, char_name: str, user_name: str) -> str:
     if value is None:
@@ -3225,7 +3278,11 @@ async def character_chat_completion(
             pass  # world book injection is best-effort
 
         # Determine provider/model with safe defaults for test/offline
-        provider = (body.provider or os.getenv("CHAR_CHAT_PROVIDER") or "local-llm").strip()
+        provider = (
+            body.provider
+            or os.getenv("CHAR_CHAT_PROVIDER")
+            or _get_default_provider()
+        ).strip()
         model = (body.model or os.getenv("CHAR_CHAT_MODEL") or "local-test").strip()
 
         # If we will persist, ensure message cap won't be exceeded.

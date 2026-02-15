@@ -33,28 +33,62 @@ export const createRegenerateLastMessage = ({
     if (!isOk) {
       return
     }
-    if (history.length > 0) {
-      const lastMessage = history[history.length - 2]
-      const lastAssistant = messages[messages.length - 1]
-      if (!lastAssistant || !lastAssistant.isBot) {
-        return
+    const lastAssistantIndex = (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]?.isBot) return i
       }
-      let newHistory = history.slice(0, -2)
-      const mewMessages = messages.slice(0, -1)
-      setHistory(newHistory)
-      setMessages(mewMessages)
-      if (lastMessage.role === "user") {
-        const newController = new AbortController()
-        await onSubmit({
-          message: lastMessage.content,
-          image: lastMessage.image || "",
-          isRegenerate: true,
-          memory: newHistory,
-          controller: newController,
-          regenerateFromMessage: lastAssistant
-        })
-      }
+      return -1
+    })()
+    if (lastAssistantIndex < 0) {
+      return
     }
+
+    const lastAssistant = messages[lastAssistantIndex]
+    const historyUser = (() => {
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i]?.role === "user") {
+          return { index: i, entry: history[i] }
+        }
+      }
+      return null
+    })()
+    const messageUser = (() => {
+      for (let i = lastAssistantIndex - 1; i >= 0; i--) {
+        if (!messages[i]?.isBot) return messages[i]
+      }
+      return null
+    })()
+
+    const userContent =
+      (historyUser?.entry?.content ?? messageUser?.message ?? "").trim()
+    if (!userContent) {
+      return
+    }
+
+    const userImage =
+      historyUser?.entry?.image || messageUser?.images?.[0] || ""
+    const userMessageType =
+      historyUser?.entry?.messageType || messageUser?.messageType
+
+    const newHistory = historyUser
+      ? history.slice(0, historyUser.index)
+      : history.slice(0, Math.max(history.length - 2, 0))
+    const nextMessages = messages.filter((_, idx) => idx !== lastAssistantIndex)
+
+    setHistory(newHistory)
+    setMessages(nextMessages)
+
+    const newController = new AbortController()
+    await onSubmit({
+      message: userContent,
+      image: userImage,
+      isRegenerate: true,
+      memory: newHistory,
+      messages: nextMessages,
+      controller: newController,
+      messageType: userMessageType,
+      regenerateFromMessage: lastAssistant
+    })
   }
 }
 

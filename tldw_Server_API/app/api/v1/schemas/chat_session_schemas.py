@@ -351,7 +351,10 @@ class CharacterChatCompletionV2Request(BaseModel):
         description="Optional single-turn prompt preset override.",
     )
     # LLM controls
-    provider: Optional[str] = Field(None, description="LLM provider (e.g., openai, anthropic, local-llm). Defaults to local-llm if omitted.")
+    provider: Optional[str] = Field(
+        None,
+        description="LLM provider (e.g., openai, anthropic, local-llm). When omitted, server default provider settings are used.",
+    )
     model: Optional[str] = Field(None, description="Model identifier. Defaults to a local test model if omitted.")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Sampling temperature")
     top_p: Optional[float] = Field(None, ge=0.0, le=1.0, description="Nucleus sampling probability")

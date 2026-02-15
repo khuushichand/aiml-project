@@ -63,6 +63,10 @@ import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import type { ChatDocuments } from "@/models/ChatTypes"
 import type { UploadedFile } from "@/db/dexie/types"
 import { applyMcpModuleDisclosureFromToolCalls } from "@/utils/mcp-disclosure"
+import {
+  collectGreetings,
+  isGreetingMessageType
+} from "@/utils/character-greetings"
 
 const extractToolCalls = (generationInfo: unknown): ToolCall[] | undefined => {
   if (!generationInfo || typeof generationInfo !== "object") return undefined
@@ -996,6 +1000,59 @@ export const useMessage = () => {
     regenerateFromMessage?: Message
   ) => {
     setStreaming(true)
+    const resolveGreetingText = (): string => {
+      const fromMessages = messages.find(
+        (entry) =>
+          entry.isBot &&
+          isGreetingMessageType(entry.messageType) &&
+          typeof entry.message === "string" &&
+          entry.message.trim().length > 0
+      )
+      if (fromMessages?.message) {
+        return fromMessages.message.trim()
+      }
+
+      const fromHistory = history.find(
+        (entry) =>
+          entry.role === "assistant" &&
+          isGreetingMessageType(entry.messageType) &&
+          typeof entry.content === "string" &&
+          entry.content.trim().length > 0
+      )
+      if (fromHistory?.content) {
+        return fromHistory.content.trim()
+      }
+
+      const fromCharacter = collectGreetings(selectedCharacter as any).find(
+        (candidate) =>
+          typeof candidate === "string" && candidate.trim().length > 0
+      )
+      if (fromCharacter) {
+        return fromCharacter.trim()
+      }
+
+      return ""
+    }
+    const greetingText = resolveGreetingText()
+    const hasGreetingInHistory =
+      greetingText.length > 0 &&
+      history.some(
+        (entry) =>
+          entry.role === "assistant" &&
+          typeof entry.content === "string" &&
+          entry.content.trim() === greetingText
+      )
+    const historyBase: ChatHistory =
+      greetingText.length > 0 && !hasGreetingInHistory
+        ? [
+            {
+              role: "assistant",
+              content: greetingText,
+              messageType: "character:greeting"
+            },
+            ...history
+          ]
+        : history
     let fullText = ""
     let contentToSave = ""
     const resolvedAssistantMessageId = generateID()
@@ -1025,6 +1082,33 @@ export const useMessage = () => {
       const characterAvatar =
         selectedCharacter?.avatar_url || modelInfo?.model_avatar
       const createdAt = Date.now()
+      const hasGreetingInMessages = messages.some((entry) => {
+        if (!entry?.isBot) return false
+        if (isGreetingMessageType(entry?.messageType)) return true
+        if (!greetingText) return false
+        return (
+          typeof entry.message === "string" &&
+          entry.message.trim() === greetingText
+        )
+      })
+      const greetingSeedMessage: Message | null =
+        greetingText.length > 0 && !hasGreetingInMessages
+          ? {
+              isBot: true,
+              role: "assistant",
+              name: characterName,
+              message: greetingText,
+              messageType: "character:greeting",
+              sources: [],
+              createdAt,
+              id: generateID(),
+              modelImage: characterAvatar,
+              modelName: characterName
+            }
+          : null
+      const chatMessagesBase = greetingSeedMessage
+        ? [greetingSeedMessage, ...messages]
+        : messages
       const assistantStub: Message = {
         isBot: true,
         name: characterName,
@@ -1047,7 +1131,7 @@ export const useMessage = () => {
 
       const newMessageList: Message[] = !isRegenerate
         ? [
-            ...messages,
+            ...chatMessagesBase,
             {
               isBot: false,
               name: "You",
@@ -1060,11 +1144,12 @@ export const useMessage = () => {
             },
             assistantStub
           ]
-        : [...messages, assistantStub]
+        : [...chatMessagesBase, assistantStub]
       setMessages(newMessageList)
 
       // Ensure server chat session exists
       let chatId = serverChatId
+      let createdNewChat = false
       if (!chatId) {
         type TldwChatMeta =
           | {
@@ -1133,6 +1218,7 @@ export const useMessage = () => {
           throw new Error('Failed to create character chat session')
         }
         chatId = normalizedId
+        createdNewChat = true
         setServerChatId(normalizedId)
         setServerChatTitle(String((created as any)?.title || ""))
         setServerChatCharacterId(
@@ -1140,6 +1226,42 @@ export const useMessage = () => {
         )
         setServerChatMetaLoaded(true)
         invalidateServerChatHistory()
+      }
+
+      if (createdNewChat && !isRegenerate && greetingText.length > 0) {
+        try {
+          const createdGreeting = (await tldwClient.addChatMessage(chatId, {
+            role: "assistant",
+            content: greetingText
+          })) as { id?: string | number; version?: number } | null
+          if (createdGreeting?.id != null) {
+            setMessages((prev) => {
+              const updated = [...prev] as ServerBackedMessage[]
+              const serverMessageId = String(createdGreeting.id)
+              const serverMessageVersion = createdGreeting.version
+              for (let i = 0; i < updated.length; i += 1) {
+                if (
+                  updated[i]?.isBot &&
+                  isGreetingMessageType(updated[i]?.messageType) &&
+                  !updated[i]?.serverMessageId
+                ) {
+                  updated[i] = {
+                    ...updated[i],
+                    serverMessageId,
+                    serverMessageVersion
+                  }
+                  break
+                }
+              }
+              return updated as Message[]
+            })
+          }
+        } catch (greetingPersistError) {
+          console.warn(
+            "Failed to persist character greeting for new chat:",
+            greetingPersistError
+          )
+        }
       }
 
       // Add user message to server (only if not regenerate)
@@ -1378,12 +1500,43 @@ export const useMessage = () => {
         }
       }
 
-      // Update local history as well (keeps local features consistent)
-      setHistory([
-        ...history,
-        { role: 'user', content: message, image },
-        { role: 'assistant', content: fullText }
-      ])
+      const lastEntry = historyBase[historyBase.length - 1]
+      const prevEntry = historyBase[historyBase.length - 2]
+      const endsWithUser =
+        lastEntry?.role === "user" && lastEntry.content === message
+      const endsWithUserAssistant =
+        lastEntry?.role === "assistant" &&
+        prevEntry?.role === "user" &&
+        prevEntry.content === message
+
+      if (isRegenerate) {
+        if (endsWithUser) {
+          setHistory([
+            ...historyBase,
+            { role: "assistant", content: fullText }
+          ])
+        } else if (endsWithUserAssistant) {
+          setHistory(
+            historyBase.map((entry, index) =>
+              index === historyBase.length - 1 && entry.role === "assistant"
+                ? { ...entry, content: fullText }
+                : entry
+            )
+          )
+        } else {
+          setHistory([
+            ...historyBase,
+            { role: "user", content: message, image },
+            { role: "assistant", content: fullText }
+          ])
+        }
+      } else {
+        setHistory([
+          ...historyBase,
+          { role: "user", content: message, image },
+          { role: "assistant", content: fullText }
+        ])
+      }
 
       await saveMessageOnSuccess({
         historyId,
@@ -1418,7 +1571,7 @@ export const useMessage = () => {
       const errorSave = await saveMessageOnError({
         e,
         botMessage: assistantContent,
-        history,
+        history: historyBase,
         historyId,
         image,
         selectedModel: model,
@@ -2159,30 +2312,60 @@ export const useMessage = () => {
   )
 
   const regenerateLastMessage = async () => {
-    if (history.length > 0) {
-      const lastMessage = history[history.length - 2]
-      let newHistory = history.slice(0, -2)
-      const currentMessages = messages as ServerBackedMessage[]
-      const lastAssistant = currentMessages[currentMessages.length - 1]
-      if (!lastAssistant || !lastAssistant.isBot) {
-        return
+    const currentMessages = messages as ServerBackedMessage[]
+    const lastAssistantIndex = (() => {
+      for (let i = currentMessages.length - 1; i >= 0; i--) {
+        if (currentMessages[i]?.isBot) return i
       }
-      const mewMessages = currentMessages.slice(0, -1)
-      setHistory(newHistory)
-      setMessages(mewMessages)
-      if (lastMessage.role === "user") {
-        const newController = new AbortController()
-        await onSubmit({
-          message: lastMessage.content,
-          image: lastMessage.image || "",
-          isRegenerate: true,
-          memory: newHistory,
-          controller: newController,
-          messageType: lastMessage.messageType,
-          regenerateFromMessage: lastAssistant
-        })
+      return -1
+    })()
+    if (lastAssistantIndex < 0) return
+
+    const lastAssistant = currentMessages[lastAssistantIndex]
+    const historyUser = (() => {
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i]?.role === "user") {
+          return { index: i, entry: history[i] }
+        }
       }
-    }
+      return null
+    })()
+    const messageUser = (() => {
+      for (let i = lastAssistantIndex - 1; i >= 0; i--) {
+        if (!currentMessages[i]?.isBot) return currentMessages[i]
+      }
+      return null
+    })()
+
+    const userContent =
+      (historyUser?.entry?.content ?? messageUser?.message ?? "").trim()
+    if (!userContent) return
+
+    const userImage =
+      historyUser?.entry?.image || messageUser?.images?.[0] || ""
+    const userMessageType =
+      historyUser?.entry?.messageType || messageUser?.messageType
+
+    const newHistory = historyUser
+      ? history.slice(0, historyUser.index)
+      : history.slice(0, Math.max(history.length - 2, 0))
+    const nextMessages = currentMessages.filter(
+      (_, idx) => idx !== lastAssistantIndex
+    )
+    setHistory(newHistory)
+    setMessages(nextMessages)
+
+    const newController = new AbortController()
+    await onSubmit({
+      message: userContent,
+      image: userImage,
+      isRegenerate: true,
+      memory: newHistory,
+      messages: nextMessages,
+      controller: newController,
+      messageType: userMessageType,
+      regenerateFromMessage: lastAssistant
+    })
   }
   const createChatBranch = createBranchMessage({
     notification,

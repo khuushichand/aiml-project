@@ -56,7 +56,7 @@ const baseProps = () =>
 
 describe("MessageActionsBar feedback visibility", () => {
   it("shows feedback row for non-bot messages when showFeedbackControls is true", () => {
-    render(
+    const { container } = render(
       <MessageActionsBar
         {...baseProps()}
         showFeedbackControls
@@ -64,11 +64,13 @@ describe("MessageActionsBar feedback visibility", () => {
     )
 
     expect(screen.getByText("Was this helpful?")).toBeInTheDocument()
+    expect(container.firstElementChild).toHaveClass("justify-between")
   })
 
   it("hides feedback row when showFeedbackControls is false", () => {
-    render(<MessageActionsBar {...baseProps()} />)
+    const { container } = render(<MessageActionsBar {...baseProps()} />)
 
     expect(screen.queryByText("Was this helpful?")).toBeNull()
+    expect(container.firstElementChild).toHaveClass("justify-end")
   })
 })

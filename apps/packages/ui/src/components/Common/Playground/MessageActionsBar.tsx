@@ -195,6 +195,7 @@ export function MessageActionsBar({
   }`
 
   const [overflowOpen, setOverflowOpen] = React.useState(false)
+  const showLeftFeedback = !editMode && showFeedbackControls
 
   // Build overflow menu items
   const overflowItems = React.useMemo(() => {
@@ -386,8 +387,26 @@ export function MessageActionsBar({
   ])
 
   return (
-    <div className="flex w-full justify-end">
-      <div className="flex items-center gap-1">
+    <div
+      className={`flex w-full items-start gap-2 ${
+        showLeftFeedback ? "justify-between" : "justify-end"
+      }`}>
+      {showLeftFeedback && (
+        <FeedbackButtons
+          compact
+          selected={feedbackSelected}
+          disabled={feedbackDisabled}
+          disabledReason={feedbackDisabledReason}
+          isSubmitting={isFeedbackSubmitting}
+          onThumbUp={onThumbUp}
+          onThumbDown={onThumbDown}
+          onOpenDetails={onOpenDetails}
+          showThanks={showThanks}
+          className="mr-auto"
+        />
+      )}
+
+      <div className="ml-auto flex items-center gap-1">
         {/* Variant pager */}
         {showVariantPager && (
           <div className="inline-flex items-center gap-1 rounded-full border border-border bg-surface2 px-1.5 py-0.5 text-xs text-text-muted">
@@ -529,20 +548,6 @@ export function MessageActionsBar({
             )}
           </div>
 
-          {/* Feedback buttons (separate row, unaffected) */}
-          {!editMode && showFeedbackControls && (
-            <FeedbackButtons
-              compact
-              selected={feedbackSelected}
-              disabled={feedbackDisabled}
-              disabledReason={feedbackDisabledReason}
-              isSubmitting={isFeedbackSubmitting}
-              onThumbUp={onThumbUp}
-              onThumbDown={onThumbDown}
-              onOpenDetails={onOpenDetails}
-              showThanks={showThanks}
-            />
-          )}
         </div>
       </div>
     </div>

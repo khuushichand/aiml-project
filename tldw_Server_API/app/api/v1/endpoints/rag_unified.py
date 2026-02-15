@@ -259,6 +259,45 @@ def _sync_retriever_overrides_to_pipeline() -> None:
         logger.debug("Failed to sync retriever overrides to unified pipeline", exc_info=True)
 
 
+def _resolve_implicit_feedback_user_id(
+    request_user_id: Optional[str],
+    current_user: Optional[User],
+) -> Optional[str]:
+    """
+    Resolve a stable user identifier for implicit-feedback personalization state.
+
+    Prefer explicit request user_id when provided, but normalize legacy
+    ``single_user`` to the authenticated numeric user id to avoid filesystem-path
+    validation failures in single-user mode.
+    """
+    raw_request = str(request_user_id).strip() if request_user_id is not None else ""
+    if raw_request:
+        if raw_request.lower() == "single_user" and current_user is not None:
+            current_id = getattr(current_user, "id_int", None)
+            if isinstance(current_id, int):
+                return str(current_id)
+            fallback_id = getattr(current_user, "id", None)
+            if fallback_id is not None:
+                fallback_raw = str(fallback_id).strip()
+                if fallback_raw:
+                    return fallback_raw
+        return raw_request
+
+    if current_user is None:
+        return None
+
+    current_id = getattr(current_user, "id_int", None)
+    if isinstance(current_id, int):
+        return str(current_id)
+
+    fallback_id = getattr(current_user, "id", None)
+    if fallback_id is None:
+        return None
+
+    fallback_raw = str(fallback_id).strip()
+    return fallback_raw or None
+
+
 def _resolve_kanban_db_path(current_user: Optional[User], request_user_id: Optional[str] = None) -> Optional[str]:
     """Resolve the Kanban DB path for the active user context."""
     user_id: Optional[Any] = None
@@ -1256,7 +1295,7 @@ async def rag_implicit_feedback(
         from tldw_Server_API.app.core.config import implicit_feedback_enabled
         if not implicit_feedback_enabled():
             return {"ok": True, "disabled": True}
-        user_id = request.user_id or (current_user.username if current_user else None)
+        user_id = _resolve_implicit_feedback_user_id(request.user_id, current_user)
         collector = UnifiedFeedbackSystem()
         await collector.record_implicit_interaction(
             user_id=user_id,
