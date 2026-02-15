@@ -3283,5 +3283,74 @@
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
     "message": "첫 번째 줄\\n두 번째 줄 ||인라인 스포일러|| 포함\\n\\n[spoiler]블록 스포일러 내용[/spoiler]"
+  },
+  "generalSettings_settings_chatRichTextStyles_title": {
+    "message": "리치 텍스트 요소 스타일"
+  },
+  "generalSettings_settings_chatRichTextStyles_description": {
+    "message": "채팅에서 기울임, 굵게, 인용 표시를 사용자 지정합니다."
+  },
+  "generalSettings_settings_chatRichTextStyles_reset": {
+    "message": "리치 텍스트 스타일 초기화"
+  },
+  "generalSettings_settings_chatRichTextStyles_preset": {
+    "message": "스타일 프리셋"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_default": {
+    "message": "기본값(권장)"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_muted": {
+    "message": "차분함"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_highContrast": {
+    "message": "고대비"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_custom": {
+    "message": "사용자 지정"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_text": {
+    "message": "텍스트"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_muted": {
+    "message": "차분함"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_primary": {
+    "message": "기본"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_accent": {
+    "message": "강조"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_success": {
+    "message": "성공"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_warn": {
+    "message": "경고"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_danger": {
+    "message": "위험"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicColor": {
+    "message": "기울임 색상"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicFont": {
+    "message": "기울임 글꼴"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldColor": {
+    "message": "굵게 색상"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldFont": {
+    "message": "굵게 글꼴"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteTextColor": {
+    "message": "인용문 텍스트 색상"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteFont": {
+    "message": "인용문 글꼴"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBorderColor": {
+    "message": "인용문 테두리 색상"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBackgroundColor": {
+    "message": "인용문 배경 색상"
   }
 }

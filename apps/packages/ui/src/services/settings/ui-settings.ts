@@ -283,6 +283,32 @@ export const SIDEBAR_ACTIVE_TAB_SETTING = defineSetting(
   }
 )
 
+const SIDEBAR_SERVER_CHAT_FILTER_VALUES = [
+  "all",
+  "character",
+  "non_character"
+] as const
+export type SidebarServerChatFilterValue =
+  (typeof SIDEBAR_SERVER_CHAT_FILTER_VALUES)[number]
+
+export const SIDEBAR_SERVER_CHAT_FILTER_SETTING = defineSetting(
+  "tldw:sidebar:serverChatFilter",
+  "all" as SidebarServerChatFilterValue,
+  (value) => {
+    const normalized = String(value || "").toLowerCase()
+    return SIDEBAR_SERVER_CHAT_FILTER_VALUES.includes(
+      normalized as SidebarServerChatFilterValue
+    )
+      ? (normalized as SidebarServerChatFilterValue)
+      : "all"
+  },
+  {
+    area: "local",
+    validate: (value) =>
+      SIDEBAR_SERVER_CHAT_FILTER_VALUES.includes(value)
+  }
+)
+
 export const SIDEBAR_SHORTCUTS_COLLAPSED_SETTING = defineSetting(
   "tldw:sidebar:shortcutsCollapsed",
   false,

@@ -185,6 +185,35 @@
         "previewSafeTitle": "Sicheres Markdown",
         "previewStCompatTitle": "Mit SillyTavern kompatibel",
         "previewSample": "Zeile eins\nZeile zwei mit ||Inline-Spoiler||\n\n[spoiler]Block-Spoiler-Inhalt[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "Stile für Rich-Text-Elemente",
+        "description": "Passe Kursiv-, Fett- und Zitatdarstellung im Chat an.",
+        "reset": "Rich-Text-Stile zurücksetzen",
+        "preset": "Stil-Voreinstellung",
+        "presets": {
+          "default": "Standard (empfohlen)",
+          "muted": "Gedämpft",
+          "highContrast": "Hoher Kontrast",
+          "custom": "Benutzerdefiniert"
+        },
+        "colors": {
+          "text": "Text",
+          "muted": "Gedämpft",
+          "primary": "Primär",
+          "accent": "Akzent",
+          "success": "Erfolg",
+          "warn": "Warnung",
+          "danger": "Gefahr"
+        },
+        "italicColor": "Farbe für Kursivtext",
+        "italicFont": "Schriftart für Kursivtext",
+        "boldColor": "Farbe für Fettdruck",
+        "boldFont": "Schriftart für Fettdruck",
+        "quoteTextColor": "Textfarbe für Zitate",
+        "quoteFont": "Schriftart für Zitate",
+        "quoteBorderColor": "Rahmenfarbe für Zitate",
+        "quoteBackgroundColor": "Hintergrundfarbe für Zitate"
       }
     },
     "sidepanelRag": {

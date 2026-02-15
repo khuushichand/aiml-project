@@ -185,6 +185,35 @@
         "previewSafeTitle": "Markdown آمن",
         "previewStCompatTitle": "متوافق مع SillyTavern",
         "previewSample": "السطر الأول\nالسطر الثاني مع ||مفسد مضمن||\n\n[spoiler]محتوى مفسد كتلي[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "أنماط عناصر النص المنسق",
+        "description": "خصص عرض النص المائل والعريض والاقتباسات في المحادثة.",
+        "reset": "إعادة تعيين أنماط النص المنسق",
+        "preset": "إعداد النمط",
+        "presets": {
+          "default": "الافتراضي (موصى به)",
+          "muted": "هادئ",
+          "highContrast": "تباين عالٍ",
+          "custom": "مخصص"
+        },
+        "colors": {
+          "text": "النص",
+          "muted": "باهت",
+          "primary": "أساسي",
+          "accent": "تمييز",
+          "success": "نجاح",
+          "warn": "تحذير",
+          "danger": "خطر"
+        },
+        "italicColor": "لون النص المائل",
+        "italicFont": "خط النص المائل",
+        "boldColor": "لون النص العريض",
+        "boldFont": "خط النص العريض",
+        "quoteTextColor": "لون نص الاقتباس",
+        "quoteFont": "خط الاقتباس",
+        "quoteBorderColor": "لون حدود الاقتباس",
+        "quoteBackgroundColor": "لون خلفية الاقتباس"
       }
     },
     "sidepanelRag": {

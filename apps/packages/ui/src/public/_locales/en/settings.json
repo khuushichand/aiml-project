@@ -5485,5 +5485,74 @@
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
     "message": "Line one\\nLine two with ||inline spoiler||\\n\\n[spoiler]Block spoiler content[/spoiler]"
+  },
+  "generalSettings_settings_chatRichTextStyles_title": {
+    "message": "Rich text element styles"
+  },
+  "generalSettings_settings_chatRichTextStyles_description": {
+    "message": "Customize italic, bold, and quote rendering across chat."
+  },
+  "generalSettings_settings_chatRichTextStyles_reset": {
+    "message": "Reset rich text styles"
+  },
+  "generalSettings_settings_chatRichTextStyles_preset": {
+    "message": "Style preset"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_default": {
+    "message": "Default (recommended)"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_muted": {
+    "message": "Muted"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_highContrast": {
+    "message": "High contrast"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_custom": {
+    "message": "Custom"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_text": {
+    "message": "Text"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_muted": {
+    "message": "Muted"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_primary": {
+    "message": "Primary"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_accent": {
+    "message": "Accent"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_success": {
+    "message": "Success"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_warn": {
+    "message": "Warning"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_danger": {
+    "message": "Danger"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicColor": {
+    "message": "Italic color"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicFont": {
+    "message": "Italic font"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldColor": {
+    "message": "Bold color"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldFont": {
+    "message": "Bold font"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteTextColor": {
+    "message": "Quote text color"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteFont": {
+    "message": "Quote font"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBorderColor": {
+    "message": "Quote border color"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBackgroundColor": {
+    "message": "Quote background color"
   }
 }

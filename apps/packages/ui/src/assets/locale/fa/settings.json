@@ -185,6 +185,35 @@
         "previewSafeTitle": "Markdown امن",
         "previewStCompatTitle": "سازگار با SillyTavern",
         "previewSample": "خط اول\nخط دوم با ||اسپویلر درون‌خطی||\n\n[spoiler]محتوای اسپویلر بلوکی[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "سبک عناصر متن غنی",
+        "description": "نمایش متن ایتالیک، بولد و نقل‌قول را در چت شخصی‌سازی کنید.",
+        "reset": "بازنشانی سبک‌های متن غنی",
+        "preset": "پیش‌تنظیم سبک",
+        "presets": {
+          "default": "پیش‌فرض (پیشنهادی)",
+          "muted": "ملایم",
+          "highContrast": "کنتراست بالا",
+          "custom": "سفارشی"
+        },
+        "colors": {
+          "text": "متن",
+          "muted": "ملایم",
+          "primary": "اصلی",
+          "accent": "تأکیدی",
+          "success": "موفقیت",
+          "warn": "هشدار",
+          "danger": "خطر"
+        },
+        "italicColor": "رنگ ایتالیک",
+        "italicFont": "فونت ایتالیک",
+        "boldColor": "رنگ بولد",
+        "boldFont": "فونت بولد",
+        "quoteTextColor": "رنگ متن نقل‌قول",
+        "quoteFont": "فونت نقل‌قول",
+        "quoteBorderColor": "رنگ حاشیه نقل‌قول",
+        "quoteBackgroundColor": "رنگ پس‌زمینه نقل‌قول"
       }
     },
     "sidepanelRag": {

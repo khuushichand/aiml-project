@@ -185,6 +185,35 @@
         "previewSafeTitle": "Безопасный Markdown",
         "previewStCompatTitle": "Совместимо с SillyTavern",
         "previewSample": "Строка один\nСтрока два с ||встроенным спойлером||\n\n[spoiler]Содержимое блочного спойлера[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "Стили элементов форматированного текста",
+        "description": "Настройте отображение курсива, жирного и цитат в чате.",
+        "reset": "Сбросить стили форматированного текста",
+        "preset": "Пресет стиля",
+        "presets": {
+          "default": "По умолчанию (рекомендуется)",
+          "muted": "Приглушённый",
+          "highContrast": "Высокий контраст",
+          "custom": "Пользовательский"
+        },
+        "colors": {
+          "text": "Текст",
+          "muted": "Приглушённый",
+          "primary": "Основной",
+          "accent": "Акцент",
+          "success": "Успех",
+          "warn": "Предупреждение",
+          "danger": "Опасность"
+        },
+        "italicColor": "Цвет курсива",
+        "italicFont": "Шрифт курсива",
+        "boldColor": "Цвет жирного",
+        "boldFont": "Шрифт жирного",
+        "quoteTextColor": "Цвет текста цитаты",
+        "quoteFont": "Шрифт цитаты",
+        "quoteBorderColor": "Цвет рамки цитаты",
+        "quoteBackgroundColor": "Цвет фона цитаты"
       }
     },
     "sidepanelRag": {

@@ -188,6 +188,35 @@
         "previewSafeTitle": "സുരക്ഷിത Markdown",
         "previewStCompatTitle": "SillyTavern-നോട് അനുയോജ്യം",
         "previewSample": "ഒന്നാം വരി\n||ഇൻലൈൻ സ്പോയിലർ|| ഉൾപ്പെട്ട രണ്ടാം വരി\n\n[spoiler]ബ്ലോക്ക് സ്പോയിലർ ഉള്ളടക്കം[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "റിച്ച് ടെക്സ്റ്റ് ഘടകങ്ങളുടെ സ്റ്റൈലുകൾ",
+        "description": "ചാറ്റിലെ ഇറ്റാലിക്ക്, ബോൾഡ്, ഉദ്ധരണി പ്രദർശനം ഇഷ്ടാനുസൃതമാക്കുക.",
+        "reset": "റിച്ച് ടെക്സ്റ്റ് സ്റ്റൈലുകൾ റീസെറ്റ് ചെയ്യുക",
+        "preset": "സ്റ്റൈൽ പ്രീസെറ്റ്",
+        "presets": {
+          "default": "ഡിഫോൾട്ട് (ശുപാർശ)",
+          "muted": "മന്ദം",
+          "highContrast": "ഉയർന്ന കോൺട്രാസ്റ്റ്",
+          "custom": "ഇഷ്ടാനുസൃതം"
+        },
+        "colors": {
+          "text": "ടെക്സ്റ്റ്",
+          "muted": "മന്ദം",
+          "primary": "പ്രാഥമികം",
+          "accent": "ആക്സന്റ്",
+          "success": "വിജയം",
+          "warn": "മുന്നറിയിപ്പ്",
+          "danger": "അപాయం"
+        },
+        "italicColor": "ഇറ്റാലിക് നിറം",
+        "italicFont": "ഇറ്റാലിക് ഫോണ്ട്",
+        "boldColor": "ബോൾഡ് നിറം",
+        "boldFont": "ബോൾഡ് ഫോണ്ട്",
+        "quoteTextColor": "ഉദ്ധരണി ടെക്സ്റ്റ് നിറം",
+        "quoteFont": "ഉദ്ധരണി ഫോണ്ട്",
+        "quoteBorderColor": "ഉദ്ധരണി ബോർഡർ നിറം",
+        "quoteBackgroundColor": "ഉദ്ധരണി പശ്ചാത്തല നിറം"
       }
     },
     "sidepanelRag": {

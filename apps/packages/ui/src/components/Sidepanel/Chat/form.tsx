@@ -97,6 +97,11 @@ import { generateID } from "@/db/dexie/helpers"
 import type { UploadedFile } from "@/db/dexie/types"
 import { formatFileSize } from "@/utils/format"
 import { formatPinnedResults } from "@/utils/rag-format"
+import {
+  buildAvailableChatModelIds,
+  findUnavailableChatModel,
+  normalizeChatModelId
+} from "@/utils/chat-model-availability"
 import { CONTEXT_FILE_SIZE_MB_SETTING } from "@/services/settings/ui-settings"
 import { browser } from "wxt/browser"
 import type { Character } from "@/types/character"
@@ -166,6 +171,10 @@ export const SidepanelForm = ({
     }
     return options
   }, [voiceChatModels, t])
+  const availableChatModelIds = React.useMemo(
+    () => buildAvailableChatModelIds(voiceChatModels as any[]),
+    [voiceChatModels]
+  )
   // STT settings consolidated into a single hook
   const sttSettings = useSttSettings()
   const {
@@ -1122,8 +1131,23 @@ export const SidepanelForm = ({
     }
     await stopListening()
     if (!intent.isImageCommand) {
-      if (!selectedModel || selectedModel.length === 0) {
+      const normalizedSelectedModel = normalizeChatModelId(selectedModel)
+      if (!normalizedSelectedModel) {
         form.setFieldError("message", t("formError.noModel"))
+        return
+      }
+      const unavailableModel = findUnavailableChatModel(
+        [normalizedSelectedModel],
+        availableChatModelIds
+      )
+      if (unavailableModel) {
+        form.setFieldError(
+          "message",
+          t(
+            "playground:composer.validationModelUnavailableInline",
+            "Selected model is not available on this server. Refresh models or choose a different model."
+          )
+        )
         return
       }
     }
@@ -1599,8 +1623,23 @@ export const SidepanelForm = ({
     if (!isConnectionReady) return
     await stopListening()
     stopServerDictation()
-    if (!selectedModel || selectedModel.length === 0) {
+    const normalizedSelectedModel = normalizeChatModelId(selectedModel)
+    if (!normalizedSelectedModel) {
       form.setFieldError("message", t("formError.noModel"))
+      return
+    }
+    const unavailableModel = findUnavailableChatModel(
+      [normalizedSelectedModel],
+      availableChatModelIds
+    )
+    if (unavailableModel) {
+      form.setFieldError(
+        "message",
+        t(
+          "playground:composer.validationModelUnavailableInline",
+          "Selected model is not available on this server. Refresh models or choose a different model."
+        )
+      )
       return
     }
     await sendMessage({

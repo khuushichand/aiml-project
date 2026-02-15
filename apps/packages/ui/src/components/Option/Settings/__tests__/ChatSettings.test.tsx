@@ -88,6 +88,24 @@ const buildChatSettingsState = () => ({
   setUseMarkdownForUserMessage: vi.fn(),
   chatRichTextMode: "safe_markdown" as const,
   setChatRichTextMode: vi.fn(),
+  chatRichTextStylePreset: "default" as const,
+  setChatRichTextStylePreset: vi.fn(),
+  chatRichItalicColor: "default" as const,
+  setChatRichItalicColor: vi.fn(),
+  chatRichItalicFont: "default" as const,
+  setChatRichItalicFont: vi.fn(),
+  chatRichBoldColor: "default" as const,
+  setChatRichBoldColor: vi.fn(),
+  chatRichBoldFont: "default" as const,
+  setChatRichBoldFont: vi.fn(),
+  chatRichQuoteTextColor: "default" as const,
+  setChatRichQuoteTextColor: vi.fn(),
+  chatRichQuoteFont: "default" as const,
+  setChatRichQuoteFont: vi.fn(),
+  chatRichQuoteBorderColor: "default" as const,
+  setChatRichQuoteBorderColor: vi.fn(),
+  chatRichQuoteBackgroundColor: "default" as const,
+  setChatRichQuoteBackgroundColor: vi.fn(),
   copyAsFormattedText: false,
   setCopyAsFormattedText: vi.fn(),
   allowExternalImages: false,
@@ -197,5 +215,7 @@ describe("ChatSettings background image controls", () => {
     expect(screen.getByText("Rendering preview")).toBeInTheDocument()
     expect(screen.getByText("Safe Markdown")).toBeInTheDocument()
     expect(screen.getAllByText("SillyTavern-compatible").length).toBeGreaterThan(0)
+    expect(screen.getByText("Rich text element styles")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Reset rich text styles" })).toBeInTheDocument()
   })
 })

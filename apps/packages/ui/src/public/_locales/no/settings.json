@@ -3283,5 +3283,74 @@
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
     "message": "Linje én\\nLinje to med ||inline-spoiler||\\n\\n[spoiler]Innhold i blokkspoiler[/spoiler]"
+  },
+  "generalSettings_settings_chatRichTextStyles_title": {
+    "message": "Stiler for riktekst-elementer"
+  },
+  "generalSettings_settings_chatRichTextStyles_description": {
+    "message": "Tilpass visning av kursiv, fet og sitater i chatten."
+  },
+  "generalSettings_settings_chatRichTextStyles_reset": {
+    "message": "Tilbakestill riktekststiler"
+  },
+  "generalSettings_settings_chatRichTextStyles_preset": {
+    "message": "Stilforhåndsinnstilling"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_default": {
+    "message": "Standard (anbefalt)"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_muted": {
+    "message": "Dempet"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_highContrast": {
+    "message": "Høy kontrast"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_custom": {
+    "message": "Egendefinert"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_text": {
+    "message": "Tekst"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_muted": {
+    "message": "Dempet"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_primary": {
+    "message": "Primær"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_accent": {
+    "message": "Aksent"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_success": {
+    "message": "Suksess"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_warn": {
+    "message": "Advarsel"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_danger": {
+    "message": "Fare"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicColor": {
+    "message": "Kursivfarge"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicFont": {
+    "message": "Kursivskrift"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldColor": {
+    "message": "Fetfarge"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldFont": {
+    "message": "Fetskrift"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteTextColor": {
+    "message": "Sitattekstfarge"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteFont": {
+    "message": "Sitatskrift"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBorderColor": {
+    "message": "Sitatkantfarge"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBackgroundColor": {
+    "message": "Sitatbakgrunnsfarge"
   }
 }

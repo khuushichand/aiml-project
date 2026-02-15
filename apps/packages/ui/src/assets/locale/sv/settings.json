@@ -185,6 +185,35 @@
         "previewSafeTitle": "Säker Markdown",
         "previewStCompatTitle": "Kompatibel med SillyTavern",
         "previewSample": "Rad ett\nRad två med ||inline-spoiler||\n\n[spoiler]Innehåll i blockspoiler[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "Stilar för rich text-element",
+        "description": "Anpassa hur kursiv, fetstil och citat visas i chatten.",
+        "reset": "Återställ rich text-stilar",
+        "preset": "Stilförinställning",
+        "presets": {
+          "default": "Standard (rekommenderad)",
+          "muted": "Dämpad",
+          "highContrast": "Hög kontrast",
+          "custom": "Anpassad"
+        },
+        "colors": {
+          "text": "Text",
+          "muted": "Dämpad",
+          "primary": "Primär",
+          "accent": "Accent",
+          "success": "Framgång",
+          "warn": "Varning",
+          "danger": "Fara"
+        },
+        "italicColor": "Färg för kursiv",
+        "italicFont": "Typsnitt för kursiv",
+        "boldColor": "Färg för fetstil",
+        "boldFont": "Typsnitt för fetstil",
+        "quoteTextColor": "Textfärg för citat",
+        "quoteFont": "Typsnitt för citat",
+        "quoteBorderColor": "Kantfärg för citat",
+        "quoteBackgroundColor": "Bakgrundsfärg för citat"
       }
     },
     "sidepanelRag": {

@@ -185,6 +185,35 @@
         "previewSafeTitle": "Sikker Markdown",
         "previewStCompatTitle": "Kompatibel med SillyTavern",
         "previewSample": "Linje én\nLinje to med ||inline-spoiler||\n\n[spoiler]Innhold i blokkspoiler[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "Stiler for riktekst-elementer",
+        "description": "Tilpass visning av kursiv, fet og sitater i chatten.",
+        "reset": "Tilbakestill riktekststiler",
+        "preset": "Stilforhåndsinnstilling",
+        "presets": {
+          "default": "Standard (anbefalt)",
+          "muted": "Dempet",
+          "highContrast": "Høy kontrast",
+          "custom": "Egendefinert"
+        },
+        "colors": {
+          "text": "Tekst",
+          "muted": "Dempet",
+          "primary": "Primær",
+          "accent": "Aksent",
+          "success": "Suksess",
+          "warn": "Advarsel",
+          "danger": "Fare"
+        },
+        "italicColor": "Kursivfarge",
+        "italicFont": "Kursivskrift",
+        "boldColor": "Fetfarge",
+        "boldFont": "Fetskrift",
+        "quoteTextColor": "Sitattekstfarge",
+        "quoteFont": "Sitatskrift",
+        "quoteBorderColor": "Sitatkantfarge",
+        "quoteBackgroundColor": "Sitatbakgrunnsfarge"
       }
     },
     "sidepanelRag": {

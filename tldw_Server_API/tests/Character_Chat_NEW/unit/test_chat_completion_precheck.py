@@ -72,3 +72,52 @@ def test_completion_precheck_uses_count_not_bulk_get(test_client, auth_headers, 
     # Verify a count was used at least once and that no huge-limit fetch was used (10000)
     assert calls["count_calls"] >= 1
     assert 10000 not in calls["get_limits"], "Bulk get with 10000 limit should not be used for pre-check"
+
+
+@pytest.mark.unit
+def test_complete_v2_explicit_unavailable_model_returns_400(test_client, auth_headers, monkeypatch):
+    monkeypatch.setenv("CHAT_ENFORCE_STRICT_MODEL_SELECTION", "1")
+
+    char_resp = test_client.post(
+        "/api/v1/characters/",
+        json={
+            "name": "StrictModelCharacter",
+            "description": "",
+            "personality": "",
+            "first_message": "Hello there",
+        },
+        headers=auth_headers,
+    )
+    assert char_resp.status_code == 201
+    char_id = char_resp.json()["id"]
+
+    chat_resp = test_client.post(
+        "/api/v1/chats/",
+        json={"character_id": char_id, "title": "Strict model check"},
+        headers=auth_headers,
+    )
+    assert chat_resp.status_code == 201
+    chat_id = chat_resp.json()["id"]
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.character_chat_sessions.is_model_known_for_provider",
+        lambda provider, model: False,
+    )
+
+    resp = test_client.post(
+        f"/api/v1/chats/{chat_id}/complete-v2",
+        json={
+            "provider": "openai",
+            "model": "gpt-not-installed",
+            "append_user_message": "Hello",
+            "stream": False,
+            "include_character_context": False,
+        },
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["error_code"] == "model_not_available"
+    assert detail["provider"] == "openai"
+    assert detail["model"] == "gpt-not-installed"

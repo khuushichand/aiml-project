@@ -188,6 +188,35 @@
         "previewSafeTitle": "安全なMarkdown",
         "previewStCompatTitle": "SillyTavern互換",
         "previewSample": "1行目\n2行目（||インラインネタバレ|| を含む）\n\n[spoiler]ブロックネタバレの内容[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "リッチテキスト要素のスタイル",
+        "description": "チャット内の斜体・太字・引用の表示をカスタマイズします。",
+        "reset": "リッチテキストスタイルをリセット",
+        "preset": "スタイルプリセット",
+        "presets": {
+          "default": "デフォルト（推奨）",
+          "muted": "控えめ",
+          "highContrast": "高コントラスト",
+          "custom": "カスタム"
+        },
+        "colors": {
+          "text": "テキスト",
+          "muted": "控えめ",
+          "primary": "プライマリ",
+          "accent": "アクセント",
+          "success": "成功",
+          "warn": "警告",
+          "danger": "危険"
+        },
+        "italicColor": "斜体の色",
+        "italicFont": "斜体のフォント",
+        "boldColor": "太字の色",
+        "boldFont": "太字のフォント",
+        "quoteTextColor": "引用テキストの色",
+        "quoteFont": "引用のフォント",
+        "quoteBorderColor": "引用枠線の色",
+        "quoteBackgroundColor": "引用背景の色"
       }
     },
     "sidepanelRag": {

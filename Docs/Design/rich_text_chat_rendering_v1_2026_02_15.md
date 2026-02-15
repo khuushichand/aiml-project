@@ -50,6 +50,14 @@ Add new Chat setting:
   - `SillyTavern-compatible`
 - Include a compact side-by-side preview panel in settings so users can compare both renderers on the same sample message before switching.
 
+Add rich text style token controls:
+- Presets: `Default`, `Muted`, `High contrast`, `Custom`
+- Element tokens:
+  - Italic: color, font
+  - Bold: color, font
+  - Quote: text color, font, border color, background color
+- A reset control restores default rich text style tokens.
+
 ## Out of Scope (v1)
 - Full parser parity with SillyTavern plugins/macros.
 - Per-message mode override.

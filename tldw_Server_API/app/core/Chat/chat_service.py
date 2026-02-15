@@ -143,6 +143,31 @@ _CHAT_TOOL_CALLS_MAX = 20
 _CHAT_TOOL_TIMEOUT_MS_MIN = 1000
 _CHAT_TOOL_TIMEOUT_MS_MAX = 120_000
 
+_PROVIDER_MODEL_CONFIG_FIELDS: dict[str, tuple[str, str]] = {
+    "openai": ("API", "openai_model"),
+    "anthropic": ("API", "anthropic_model"),
+    "cohere": ("API", "cohere_model"),
+    "deepseek": ("API", "deepseek_model"),
+    "qwen": ("API", "qwen_model"),
+    "google": ("API", "google_model"),
+    "groq": ("API", "groq_model"),
+    "huggingface": ("API", "huggingface_model"),
+    "mistral": ("API", "mistral_model"),
+    "bedrock": ("API", "bedrock_model"),
+    "openrouter": ("API", "openrouter_model"),
+    "moonshot": ("API", "moonshot_model"),
+    "zai": ("API", "zai_model"),
+    "custom-openai-api": ("API", "custom_openai_api_model"),
+    "custom-openai-api-2": ("API", "custom_openai2_api_model"),
+    "llama.cpp": ("Local-API", "llama_model"),
+    "kobold": ("Local-API", "kobold_model"),
+    "ooba": ("Local-API", "ooba_model"),
+    "tabbyapi": ("Local-API", "tabby_model"),
+    "vllm": ("Local-API", "vllm_model"),
+    "ollama": ("Local-API", "ollama_model"),
+    "aphrodite": ("Local-API", "aphrodite_model"),
+}
+
 
 def _parse_tool_allow_catalog(value: str | None) -> list[str]:
     """Parse chat tool allow-catalog from comma-separated names/prefixes.
@@ -176,6 +201,71 @@ def _parse_tool_allow_catalog(value: str | None) -> list[str]:
             seen.add(entry)
             items.append(entry)
     return items
+
+
+def _split_model_list(raw_value: str | None) -> list[str]:
+    """Split a model list string into distinct model IDs."""
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(",") if item and item.strip()]
+
+
+@lru_cache(maxsize=64)
+def _configured_models_for_provider_cached(provider: str) -> tuple[str, ...]:
+    """Return models explicitly configured for a provider in config files."""
+    provider_key = (provider or "").strip().lower()
+    mapping = _PROVIDER_MODEL_CONFIG_FIELDS.get(provider_key)
+    if not mapping:
+        return tuple()
+
+    section, field = mapping
+    try:
+        if not _config or not _config.has_section(section):
+            return tuple()
+        raw_value = _config.get(section, field, fallback="")
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        return tuple()
+
+    return tuple(_split_model_list(raw_value))
+
+
+@lru_cache(maxsize=64)
+def known_models_for_provider_cached(provider: str) -> tuple[str, ...]:
+    """Return known model IDs for a provider from catalog + configured values."""
+    provider_key = (provider or "").strip().lower()
+    if not provider_key:
+        return tuple()
+
+    known: set[str] = set()
+    try:
+        for model_name in list_provider_models(provider_key) or []:
+            normalized = str(model_name).strip()
+            if normalized:
+                known.add(normalized)
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    for model_name in _configured_models_for_provider_cached(provider_key):
+        normalized = str(model_name).strip()
+        if normalized:
+            known.add(normalized)
+
+    return tuple(sorted(known))
+
+
+def is_model_known_for_provider(provider: str, model: str) -> bool | None:
+    """Return whether model is known for provider; None means no inventory is available."""
+    provider_key = (provider or "").strip().lower()
+    model_key = (model or "").strip().lower()
+    if not provider_key or not model_key:
+        return None
+
+    known_models = known_models_for_provider_cached(provider_key)
+    if not known_models:
+        return None
+    known_lower = {item.lower() for item in known_models}
+    return model_key in known_lower
 
 
 _MAX_HISTORY_MESSAGES = max(1, _coerce_int(_chat_config.get("max_history_messages"), 200))
@@ -549,6 +639,10 @@ def invalidate_model_alias_caches() -> None:
         _provider_has_model_cached.cache_clear()
     with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
         _find_catalog_providers_for_model_cached.cache_clear()
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
+        _configured_models_for_provider_cached.cache_clear()
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
+        known_models_for_provider_cached.cache_clear()
 
 
 def queue_is_active(queue: Any) -> bool:

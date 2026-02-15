@@ -3280,5 +3280,74 @@
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
     "message": "Рядок один\\nРядок два з ||вбудованим спойлером||\\n\\n[spoiler]Вміст блочного спойлера[/spoiler]"
+  },
+  "generalSettings_settings_chatRichTextStyles_title": {
+    "message": "Стилі елементів форматованого тексту"
+  },
+  "generalSettings_settings_chatRichTextStyles_description": {
+    "message": "Налаштуйте відображення курсиву, жирного та цитат у чаті."
+  },
+  "generalSettings_settings_chatRichTextStyles_reset": {
+    "message": "Скинути стилі форматованого тексту"
+  },
+  "generalSettings_settings_chatRichTextStyles_preset": {
+    "message": "Набір стилів"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_default": {
+    "message": "Типово (рекомендовано)"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_muted": {
+    "message": "Приглушений"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_highContrast": {
+    "message": "Високий контраст"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_custom": {
+    "message": "Користувацький"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_text": {
+    "message": "Текст"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_muted": {
+    "message": "Приглушений"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_primary": {
+    "message": "Основний"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_accent": {
+    "message": "Акцент"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_success": {
+    "message": "Успіх"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_warn": {
+    "message": "Попередження"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_danger": {
+    "message": "Небезпека"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicColor": {
+    "message": "Колір курсиву"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicFont": {
+    "message": "Шрифт курсиву"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldColor": {
+    "message": "Колір жирного"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldFont": {
+    "message": "Шрифт жирного"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteTextColor": {
+    "message": "Колір тексту цитати"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteFont": {
+    "message": "Шрифт цитати"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBorderColor": {
+    "message": "Колір межі цитати"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBackgroundColor": {
+    "message": "Колір тла цитати"
   }
 }

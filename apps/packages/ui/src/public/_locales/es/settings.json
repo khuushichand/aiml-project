@@ -3283,5 +3283,74 @@
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
     "message": "Línea uno\\nLínea dos con ||spoiler en línea||\\n\\n[spoiler]Contenido del spoiler en bloque[/spoiler]"
+  },
+  "generalSettings_settings_chatRichTextStyles_title": {
+    "message": "Estilos de elementos de texto enriquecido"
+  },
+  "generalSettings_settings_chatRichTextStyles_description": {
+    "message": "Personaliza cómo se muestran la cursiva, la negrita y las citas en el chat."
+  },
+  "generalSettings_settings_chatRichTextStyles_reset": {
+    "message": "Restablecer estilos de texto enriquecido"
+  },
+  "generalSettings_settings_chatRichTextStyles_preset": {
+    "message": "Preajuste de estilo"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_default": {
+    "message": "Predeterminado (recomendado)"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_muted": {
+    "message": "Suave"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_highContrast": {
+    "message": "Alto contraste"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_custom": {
+    "message": "Personalizado"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_text": {
+    "message": "Texto"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_muted": {
+    "message": "Suave"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_primary": {
+    "message": "Primario"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_accent": {
+    "message": "Acento"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_success": {
+    "message": "Éxito"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_warn": {
+    "message": "Advertencia"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_danger": {
+    "message": "Peligro"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicColor": {
+    "message": "Color de cursiva"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicFont": {
+    "message": "Fuente de cursiva"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldColor": {
+    "message": "Color de negrita"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldFont": {
+    "message": "Fuente de negrita"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteTextColor": {
+    "message": "Color del texto de cita"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteFont": {
+    "message": "Fuente de cita"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBorderColor": {
+    "message": "Color del borde de cita"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBackgroundColor": {
+    "message": "Color de fondo de cita"
   }
 }

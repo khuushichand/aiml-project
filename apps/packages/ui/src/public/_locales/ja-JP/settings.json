@@ -3283,5 +3283,74 @@
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
     "message": "1行目\\n2行目（||インラインネタバレ|| を含む）\\n\\n[spoiler]ブロックネタバレの内容[/spoiler]"
+  },
+  "generalSettings_settings_chatRichTextStyles_title": {
+    "message": "リッチテキスト要素のスタイル"
+  },
+  "generalSettings_settings_chatRichTextStyles_description": {
+    "message": "チャット内の斜体・太字・引用の表示をカスタマイズします。"
+  },
+  "generalSettings_settings_chatRichTextStyles_reset": {
+    "message": "リッチテキストスタイルをリセット"
+  },
+  "generalSettings_settings_chatRichTextStyles_preset": {
+    "message": "スタイルプリセット"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_default": {
+    "message": "デフォルト（推奨）"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_muted": {
+    "message": "控えめ"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_highContrast": {
+    "message": "高コントラスト"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_custom": {
+    "message": "カスタム"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_text": {
+    "message": "テキスト"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_muted": {
+    "message": "控えめ"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_primary": {
+    "message": "プライマリ"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_accent": {
+    "message": "アクセント"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_success": {
+    "message": "成功"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_warn": {
+    "message": "警告"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_danger": {
+    "message": "危険"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicColor": {
+    "message": "斜体の色"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicFont": {
+    "message": "斜体のフォント"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldColor": {
+    "message": "太字の色"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldFont": {
+    "message": "太字のフォント"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteTextColor": {
+    "message": "引用テキストの色"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteFont": {
+    "message": "引用のフォント"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBorderColor": {
+    "message": "引用枠線の色"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBackgroundColor": {
+    "message": "引用背景の色"
   }
 }

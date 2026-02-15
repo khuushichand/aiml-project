@@ -118,6 +118,11 @@ import { useStoreMessageOption } from "@/store/option"
 import { trackOnboardingChatSubmitSuccess } from "@/utils/onboarding-ingestion-telemetry"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import {
+  buildAvailableChatModelIds,
+  findUnavailableChatModel,
+  normalizeChatModelId
+} from "@/utils/chat-model-availability"
+import {
   useModelSelector,
   useComposerTokens,
   useImageBackend,
@@ -540,6 +545,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   }, [composerModels, selectedModel, favoriteModels, setSelectedModel])
 
   const compareModeActive = compareFeatureEnabled && compareMode
+  const availableChatModelIds = React.useMemo(
+    () => buildAvailableChatModelIds(Array.isArray(composerModels) ? (composerModels as any[]) : []),
+    [composerModels]
+  )
 
   const voiceChatModelOptions = React.useMemo(() => {
     const options = [
@@ -1762,6 +1771,24 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     },
     [fileRetrievalEnabled, ragPinnedResults]
   )
+  const validateSelectedChatModelsAvailability = React.useCallback(
+    (modelsToCheck: string[]) => {
+      const unavailableModel = findUnavailableChatModel(
+        modelsToCheck,
+        availableChatModelIds
+      )
+      if (!unavailableModel) return true
+      form.setFieldError(
+        "message",
+        t(
+          "playground:composer.validationModelUnavailableInline",
+          "Selected model is not available on this server. Refresh models or choose a different model."
+        )
+      )
+      return false
+    },
+    [availableChatModelIds, form, t]
+  )
 
   const submitForm = (options?: { ignorePinnedResults?: boolean }) => {
     form.onSubmit(async (value) => {
@@ -1811,8 +1838,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       const defaultEM = await defaultEmbeddingModelForRag()
       if (!intent.isImageCommand) {
         if (!compareModeActive) {
-          if (!selectedModel || selectedModel.length === 0) {
+          const normalizedSelectedModel = normalizeChatModelId(selectedModel)
+          if (!normalizedSelectedModel) {
             form.setFieldError("message", t("formError.noModel"))
+            return
+          }
+          if (!validateSelectedChatModelsAvailability([normalizedSelectedModel])) {
             return
           }
         } else if (!compareSelectedModels || compareSelectedModels.length === 0) {
@@ -1823,6 +1854,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               "Select at least one model for Compare mode."
             )
           )
+          return
+        } else if (
+          !validateSelectedChatModelsAvailability(compareSelectedModels)
+        ) {
           return
         }
       }
@@ -1905,8 +1940,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       const defaultEM = await defaultEmbeddingModelForRag()
       if (!intent.isImageCommand) {
         if (!compareModeActive) {
-          if (!selectedModel || selectedModel.length === 0) {
+          const normalizedSelectedModel = normalizeChatModelId(selectedModel)
+          if (!normalizedSelectedModel) {
             form.setFieldError("message", t("formError.noModel"))
+            return
+          }
+          if (!validateSelectedChatModelsAvailability([normalizedSelectedModel])) {
             return
           }
         } else if (!compareSelectedModels || compareSelectedModels.length === 0) {
@@ -1917,6 +1956,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               "Select at least one model for Compare mode."
             )
           )
+          return
+        } else if (
+          !validateSelectedChatModelsAvailability(compareSelectedModels)
+        ) {
           return
         }
       }

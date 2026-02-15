@@ -185,6 +185,35 @@
         "previewSafeTitle": "Безпечний Markdown",
         "previewStCompatTitle": "Сумісно з SillyTavern",
         "previewSample": "Рядок один\nРядок два з ||вбудованим спойлером||\n\n[spoiler]Вміст блочного спойлера[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "Стилі елементів форматованого тексту",
+        "description": "Налаштуйте відображення курсиву, жирного та цитат у чаті.",
+        "reset": "Скинути стилі форматованого тексту",
+        "preset": "Набір стилів",
+        "presets": {
+          "default": "Типово (рекомендовано)",
+          "muted": "Приглушений",
+          "highContrast": "Високий контраст",
+          "custom": "Користувацький"
+        },
+        "colors": {
+          "text": "Текст",
+          "muted": "Приглушений",
+          "primary": "Основний",
+          "accent": "Акцент",
+          "success": "Успіх",
+          "warn": "Попередження",
+          "danger": "Небезпека"
+        },
+        "italicColor": "Колір курсиву",
+        "italicFont": "Шрифт курсиву",
+        "boldColor": "Колір жирного",
+        "boldFont": "Шрифт жирного",
+        "quoteTextColor": "Колір тексту цитати",
+        "quoteFont": "Шрифт цитати",
+        "quoteBorderColor": "Колір межі цитати",
+        "quoteBackgroundColor": "Колір тла цитати"
       }
     },
     "sidepanelRag": {

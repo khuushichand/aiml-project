@@ -524,6 +524,17 @@ export const SETTINGS_INDEX: SettingDefinition[] = [
     storageKey: "chatRichTextMode",
     controlType: "select",
   },
+  {
+    id: "setting-chat-rich-text-style-preset",
+    labelKey: "settings:generalSettings.settings.chatRichTextStyles.preset",
+    defaultLabel: "Rich text style preset",
+    defaultDescription: "Choose style tokens for italic, bold, and quote text rendering",
+    route: "/settings/chat",
+    section: "Chat",
+    keywords: ["rich", "text", "style", "italic", "bold", "quote", "preset"],
+    storageKey: "chatRichTextStylePreset",
+    controlType: "select",
+  },
 
   // ========================================
   // About

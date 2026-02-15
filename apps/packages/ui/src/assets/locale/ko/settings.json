@@ -188,6 +188,35 @@
         "previewSafeTitle": "안전한 마크다운",
         "previewStCompatTitle": "SillyTavern 호환",
         "previewSample": "첫 번째 줄\n두 번째 줄 ||인라인 스포일러|| 포함\n\n[spoiler]블록 스포일러 내용[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "리치 텍스트 요소 스타일",
+        "description": "채팅에서 기울임, 굵게, 인용 표시를 사용자 지정합니다.",
+        "reset": "리치 텍스트 스타일 초기화",
+        "preset": "스타일 프리셋",
+        "presets": {
+          "default": "기본값(권장)",
+          "muted": "차분함",
+          "highContrast": "고대비",
+          "custom": "사용자 지정"
+        },
+        "colors": {
+          "text": "텍스트",
+          "muted": "차분함",
+          "primary": "기본",
+          "accent": "강조",
+          "success": "성공",
+          "warn": "경고",
+          "danger": "위험"
+        },
+        "italicColor": "기울임 색상",
+        "italicFont": "기울임 글꼴",
+        "boldColor": "굵게 색상",
+        "boldFont": "굵게 글꼴",
+        "quoteTextColor": "인용문 텍스트 색상",
+        "quoteFont": "인용문 글꼴",
+        "quoteBorderColor": "인용문 테두리 색상",
+        "quoteBackgroundColor": "인용문 배경 색상"
       }
     },
     "sidepanelRag": {

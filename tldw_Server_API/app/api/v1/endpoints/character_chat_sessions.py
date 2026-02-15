@@ -112,6 +112,7 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 # Chat helpers and utilities
 # For chat completions
 from tldw_Server_API.app.core.Chat.chat_service import (
+    is_model_known_for_provider,
     perform_chat_api_call,
     resolve_provider_and_model,
 )
@@ -211,6 +212,14 @@ def _get_default_provider() -> str:
         return "local-llm"
 
     return DEFAULT_LLM_PROVIDER
+
+
+def _should_enforce_char_chat_strict_model_selection() -> bool:
+    """Return whether explicit model/provider requests should be strictly enforced."""
+    raw = os.getenv("CHAT_ENFORCE_STRICT_MODEL_SELECTION")
+    if raw is not None:
+        return is_truthy(raw)
+    return not _is_char_chat_test_mode()
 
 def _safe_replace_placeholders(value: Any, char_name: str, user_name: str) -> str:
     if value is None:
@@ -3351,6 +3360,8 @@ async def character_chat_completion(
 
         # Determine provider/model with shared normalization and safe defaults.
         default_provider = _get_default_provider().strip()
+        explicit_model_requested = bool(str(body.model or "").strip())
+        strict_model_selection = _should_enforce_char_chat_strict_model_selection()
         raw_provider = (
             body.provider
             or os.getenv("CHAR_CHAT_PROVIDER")
@@ -3385,6 +3396,22 @@ async def character_chat_completion(
             logger.debug("Character provider/model resolution: {}", provider_debug)
         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Character provider/model normalization fallback: {}", exc)
+
+        if strict_model_selection and explicit_model_requested:
+            availability = is_model_known_for_provider(provider, model)
+            if availability is False:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error_code": "model_not_available",
+                        "message": (
+                            f"Model '{model}' is not available for provider '{provider}'. "
+                            "Select one of the server-advertised models for this provider."
+                        ),
+                        "provider": provider,
+                        "model": model,
+                    },
+                )
 
         # If we will persist, ensure message cap won't be exceeded.
         # Otherwise enforce a soft cap for non-persisted completions.

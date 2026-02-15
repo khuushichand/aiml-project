@@ -185,6 +185,35 @@
         "previewSafeTitle": "Markdown seguro",
         "previewStCompatTitle": "Compatible con SillyTavern",
         "previewSample": "Línea uno\nLínea dos con ||spoiler en línea||\n\n[spoiler]Contenido del spoiler en bloque[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "Estilos de elementos de texto enriquecido",
+        "description": "Personaliza cómo se muestran la cursiva, la negrita y las citas en el chat.",
+        "reset": "Restablecer estilos de texto enriquecido",
+        "preset": "Preajuste de estilo",
+        "presets": {
+          "default": "Predeterminado (recomendado)",
+          "muted": "Suave",
+          "highContrast": "Alto contraste",
+          "custom": "Personalizado"
+        },
+        "colors": {
+          "text": "Texto",
+          "muted": "Suave",
+          "primary": "Primario",
+          "accent": "Acento",
+          "success": "Éxito",
+          "warn": "Advertencia",
+          "danger": "Peligro"
+        },
+        "italicColor": "Color de cursiva",
+        "italicFont": "Fuente de cursiva",
+        "boldColor": "Color de negrita",
+        "boldFont": "Fuente de negrita",
+        "quoteTextColor": "Color del texto de cita",
+        "quoteFont": "Fuente de cita",
+        "quoteBorderColor": "Color del borde de cita",
+        "quoteBackgroundColor": "Color de fondo de cita"
       }
     },
     "sidepanelRag": {

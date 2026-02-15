@@ -3286,5 +3286,74 @@
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
     "message": "第一行\\n第二行，包含 ||行内剧透||\\n\\n[spoiler]块级剧透内容[/spoiler]"
+  },
+  "generalSettings_settings_chatRichTextStyles_title": {
+    "message": "富文本元素样式"
+  },
+  "generalSettings_settings_chatRichTextStyles_description": {
+    "message": "自定义聊天中斜体、加粗和引用的显示效果。"
+  },
+  "generalSettings_settings_chatRichTextStyles_reset": {
+    "message": "重置富文本样式"
+  },
+  "generalSettings_settings_chatRichTextStyles_preset": {
+    "message": "样式预设"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_default": {
+    "message": "默认（推荐）"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_muted": {
+    "message": "柔和"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_highContrast": {
+    "message": "高对比度"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_custom": {
+    "message": "自定义"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_text": {
+    "message": "文本"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_muted": {
+    "message": "柔和"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_primary": {
+    "message": "主色"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_accent": {
+    "message": "强调色"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_success": {
+    "message": "成功"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_warn": {
+    "message": "警告"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_danger": {
+    "message": "危险"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicColor": {
+    "message": "斜体颜色"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicFont": {
+    "message": "斜体字体"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldColor": {
+    "message": "加粗颜色"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldFont": {
+    "message": "加粗字体"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteTextColor": {
+    "message": "引用文本颜色"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteFont": {
+    "message": "引用字体"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBorderColor": {
+    "message": "引用边框颜色"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBackgroundColor": {
+    "message": "引用背景颜色"
   }
 }

@@ -3283,5 +3283,74 @@
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
     "message": "ഒന്നാം വരി\\n||ഇൻലൈൻ സ്പോയിലർ|| ഉൾപ്പെട്ട രണ്ടാം വരി\\n\\n[spoiler]ബ്ലോക്ക് സ്പോയിലർ ഉള്ളടക്കം[/spoiler]"
+  },
+  "generalSettings_settings_chatRichTextStyles_title": {
+    "message": "റിച്ച് ടെക്സ്റ്റ് ഘടകങ്ങളുടെ സ്റ്റൈലുകൾ"
+  },
+  "generalSettings_settings_chatRichTextStyles_description": {
+    "message": "ചാറ്റിലെ ഇറ്റാലിക്ക്, ബോൾഡ്, ഉദ്ധരണി പ്രദർശനം ഇഷ്ടാനുസൃതമാക്കുക."
+  },
+  "generalSettings_settings_chatRichTextStyles_reset": {
+    "message": "റിച്ച് ടെക്സ്റ്റ് സ്റ്റൈലുകൾ റീസെറ്റ് ചെയ്യുക"
+  },
+  "generalSettings_settings_chatRichTextStyles_preset": {
+    "message": "സ്റ്റൈൽ പ്രീസെറ്റ്"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_default": {
+    "message": "ഡിഫോൾട്ട് (ശുപാർശ)"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_muted": {
+    "message": "മന്ദം"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_highContrast": {
+    "message": "ഉയർന്ന കോൺട്രാസ്റ്റ്"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_custom": {
+    "message": "ഇഷ്ടാനുസൃതം"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_text": {
+    "message": "ടെക്സ്റ്റ്"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_muted": {
+    "message": "മന്ദം"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_primary": {
+    "message": "പ്രാഥമികം"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_accent": {
+    "message": "ആക്സന്റ്"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_success": {
+    "message": "വിജയം"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_warn": {
+    "message": "മുന്നറിയിപ്പ്"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_danger": {
+    "message": "അപాయం"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicColor": {
+    "message": "ഇറ്റാലിക് നിറം"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicFont": {
+    "message": "ഇറ്റാലിക് ഫോണ്ട്"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldColor": {
+    "message": "ബോൾഡ് നിറം"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldFont": {
+    "message": "ബോൾഡ് ഫോണ്ട്"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteTextColor": {
+    "message": "ഉദ്ധരണി ടെക്സ്റ്റ് നിറം"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteFont": {
+    "message": "ഉദ്ധരണി ഫോണ്ട്"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBorderColor": {
+    "message": "ഉദ്ധരണി ബോർഡർ നിറം"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBackgroundColor": {
+    "message": "ഉദ്ധരണി പശ്ചാത്തല നിറം"
   }
 }

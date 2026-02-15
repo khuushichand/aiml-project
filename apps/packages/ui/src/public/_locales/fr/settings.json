@@ -3283,5 +3283,74 @@
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
     "message": "Ligne un\\nLigne deux avec ||spoiler en ligne||\\n\\n[spoiler]Contenu du spoiler en bloc[/spoiler]"
+  },
+  "generalSettings_settings_chatRichTextStyles_title": {
+    "message": "Styles des éléments de texte enrichi"
+  },
+  "generalSettings_settings_chatRichTextStyles_description": {
+    "message": "Personnalisez l’affichage de l’italique, du gras et des citations dans le chat."
+  },
+  "generalSettings_settings_chatRichTextStyles_reset": {
+    "message": "Réinitialiser les styles de texte enrichi"
+  },
+  "generalSettings_settings_chatRichTextStyles_preset": {
+    "message": "Préréglage de style"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_default": {
+    "message": "Par défaut (recommandé)"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_muted": {
+    "message": "Atténué"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_highContrast": {
+    "message": "Contraste élevé"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_custom": {
+    "message": "Personnalisé"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_text": {
+    "message": "Texte"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_muted": {
+    "message": "Atténué"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_primary": {
+    "message": "Principal"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_accent": {
+    "message": "Accent"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_success": {
+    "message": "Succès"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_warn": {
+    "message": "Avertissement"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_danger": {
+    "message": "Danger"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicColor": {
+    "message": "Couleur de l’italique"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicFont": {
+    "message": "Police de l’italique"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldColor": {
+    "message": "Couleur du gras"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldFont": {
+    "message": "Police du gras"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteTextColor": {
+    "message": "Couleur du texte de citation"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteFont": {
+    "message": "Police de citation"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBorderColor": {
+    "message": "Couleur de bordure de citation"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBackgroundColor": {
+    "message": "Couleur d’arrière-plan de citation"
   }
 }

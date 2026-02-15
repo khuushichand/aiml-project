@@ -3298,5 +3298,74 @@
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
     "message": "Zeile eins\\nZeile zwei mit ||Inline-Spoiler||\\n\\n[spoiler]Block-Spoiler-Inhalt[/spoiler]"
+  },
+  "generalSettings_settings_chatRichTextStyles_title": {
+    "message": "Stile für Rich-Text-Elemente"
+  },
+  "generalSettings_settings_chatRichTextStyles_description": {
+    "message": "Passe Kursiv-, Fett- und Zitatdarstellung im Chat an."
+  },
+  "generalSettings_settings_chatRichTextStyles_reset": {
+    "message": "Rich-Text-Stile zurücksetzen"
+  },
+  "generalSettings_settings_chatRichTextStyles_preset": {
+    "message": "Stil-Voreinstellung"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_default": {
+    "message": "Standard (empfohlen)"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_muted": {
+    "message": "Gedämpft"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_highContrast": {
+    "message": "Hoher Kontrast"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_custom": {
+    "message": "Benutzerdefiniert"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_text": {
+    "message": "Text"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_muted": {
+    "message": "Gedämpft"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_primary": {
+    "message": "Primär"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_accent": {
+    "message": "Akzent"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_success": {
+    "message": "Erfolg"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_warn": {
+    "message": "Warnung"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_danger": {
+    "message": "Gefahr"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicColor": {
+    "message": "Farbe für Kursivtext"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicFont": {
+    "message": "Schriftart für Kursivtext"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldColor": {
+    "message": "Farbe für Fettdruck"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldFont": {
+    "message": "Schriftart für Fettdruck"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteTextColor": {
+    "message": "Textfarbe für Zitate"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteFont": {
+    "message": "Schriftart für Zitate"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBorderColor": {
+    "message": "Rahmenfarbe für Zitate"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBackgroundColor": {
+    "message": "Hintergrundfarbe für Zitate"
   }
 }

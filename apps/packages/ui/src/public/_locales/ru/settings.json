@@ -3280,5 +3280,74 @@
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
     "message": "Строка один\\nСтрока два с ||встроенным спойлером||\\n\\n[spoiler]Содержимое блочного спойлера[/spoiler]"
+  },
+  "generalSettings_settings_chatRichTextStyles_title": {
+    "message": "Стили элементов форматированного текста"
+  },
+  "generalSettings_settings_chatRichTextStyles_description": {
+    "message": "Настройте отображение курсива, жирного и цитат в чате."
+  },
+  "generalSettings_settings_chatRichTextStyles_reset": {
+    "message": "Сбросить стили форматированного текста"
+  },
+  "generalSettings_settings_chatRichTextStyles_preset": {
+    "message": "Пресет стиля"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_default": {
+    "message": "По умолчанию (рекомендуется)"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_muted": {
+    "message": "Приглушённый"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_highContrast": {
+    "message": "Высокий контраст"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_custom": {
+    "message": "Пользовательский"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_text": {
+    "message": "Текст"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_muted": {
+    "message": "Приглушённый"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_primary": {
+    "message": "Основной"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_accent": {
+    "message": "Акцент"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_success": {
+    "message": "Успех"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_warn": {
+    "message": "Предупреждение"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_danger": {
+    "message": "Опасность"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicColor": {
+    "message": "Цвет курсива"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicFont": {
+    "message": "Шрифт курсива"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldColor": {
+    "message": "Цвет жирного"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldFont": {
+    "message": "Шрифт жирного"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteTextColor": {
+    "message": "Цвет текста цитаты"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteFont": {
+    "message": "Шрифт цитаты"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBorderColor": {
+    "message": "Цвет рамки цитаты"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBackgroundColor": {
+    "message": "Цвет фона цитаты"
   }
 }

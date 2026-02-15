@@ -742,6 +742,264 @@ export const ChatSettings = () => {
           </div>
         </div>
       </div>
+      <div className="rounded-md border border-border bg-surface2/40 p-3 space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold text-text-muted">
+              {t(
+                "generalSettings.settings.chatRichTextStyles.title",
+                "Rich text element styles"
+              )}
+            </p>
+            <p className="mt-1 text-xs text-text-muted">
+              {t(
+                "generalSettings.settings.chatRichTextStyles.description",
+                "Customize italic, bold, and quote rendering across chat."
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={resetRichTextStyles}
+            className="inline-flex items-center rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-muted hover:bg-surface2 hover:text-text"
+          >
+            {t(
+              "generalSettings.settings.chatRichTextStyles.reset",
+              "Reset rich text styles"
+            )}
+          </button>
+        </div>
+
+        <SettingRow
+          label={t(
+            "generalSettings.settings.chatRichTextStyles.preset",
+            "Style preset"
+          )}
+          {...getResetProps(
+            chatRichTextStylePreset,
+            DEFAULT_CHAT_SETTINGS.chatRichTextStylePreset,
+            setChatRichTextStylePreset
+          )}
+          control={
+            <Select
+              className={SELECT_CLASSNAME}
+              value={chatRichTextStylePreset}
+              onChange={handleRichTextPresetChange}
+              options={richTextStylePresetOptions}
+              aria-label={t(
+                "generalSettings.settings.chatRichTextStyles.preset",
+                "Style preset"
+              )}
+            />
+          }
+        />
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <SettingRow
+            label={t(
+              "generalSettings.settings.chatRichTextStyles.italicColor",
+              "Italic color"
+            )}
+            {...getResetProps(
+              chatRichItalicColor,
+              DEFAULT_CHAT_SETTINGS.chatRichItalicColor,
+              setChatRichItalicColor
+            )}
+            control={
+              <Select
+                className={SELECT_CLASSNAME}
+                value={chatRichItalicColor}
+                onChange={(value) =>
+                  handleRichTextColorChange(setChatRichItalicColor, value)
+                }
+                options={richTextColorOptions}
+                aria-label={t(
+                  "generalSettings.settings.chatRichTextStyles.italicColor",
+                  "Italic color"
+                )}
+              />
+            }
+          />
+          <SettingRow
+            label={t(
+              "generalSettings.settings.chatRichTextStyles.italicFont",
+              "Italic font"
+            )}
+            {...getResetProps(
+              chatRichItalicFont,
+              DEFAULT_CHAT_SETTINGS.chatRichItalicFont,
+              setChatRichItalicFont
+            )}
+            control={
+              <Select
+                className={SELECT_CLASSNAME}
+                value={chatRichItalicFont}
+                onChange={(value) =>
+                  handleRichTextFontChange(setChatRichItalicFont, value)
+                }
+                options={fontOptions}
+                aria-label={t(
+                  "generalSettings.settings.chatRichTextStyles.italicFont",
+                  "Italic font"
+                )}
+              />
+            }
+          />
+          <SettingRow
+            label={t(
+              "generalSettings.settings.chatRichTextStyles.boldColor",
+              "Bold color"
+            )}
+            {...getResetProps(
+              chatRichBoldColor,
+              DEFAULT_CHAT_SETTINGS.chatRichBoldColor,
+              setChatRichBoldColor
+            )}
+            control={
+              <Select
+                className={SELECT_CLASSNAME}
+                value={chatRichBoldColor}
+                onChange={(value) =>
+                  handleRichTextColorChange(setChatRichBoldColor, value)
+                }
+                options={richTextColorOptions}
+                aria-label={t(
+                  "generalSettings.settings.chatRichTextStyles.boldColor",
+                  "Bold color"
+                )}
+              />
+            }
+          />
+          <SettingRow
+            label={t(
+              "generalSettings.settings.chatRichTextStyles.boldFont",
+              "Bold font"
+            )}
+            {...getResetProps(
+              chatRichBoldFont,
+              DEFAULT_CHAT_SETTINGS.chatRichBoldFont,
+              setChatRichBoldFont
+            )}
+            control={
+              <Select
+                className={SELECT_CLASSNAME}
+                value={chatRichBoldFont}
+                onChange={(value) =>
+                  handleRichTextFontChange(setChatRichBoldFont, value)
+                }
+                options={fontOptions}
+                aria-label={t(
+                  "generalSettings.settings.chatRichTextStyles.boldFont",
+                  "Bold font"
+                )}
+              />
+            }
+          />
+          <SettingRow
+            label={t(
+              "generalSettings.settings.chatRichTextStyles.quoteTextColor",
+              "Quote text color"
+            )}
+            {...getResetProps(
+              chatRichQuoteTextColor,
+              DEFAULT_CHAT_SETTINGS.chatRichQuoteTextColor,
+              setChatRichQuoteTextColor
+            )}
+            control={
+              <Select
+                className={SELECT_CLASSNAME}
+                value={chatRichQuoteTextColor}
+                onChange={(value) =>
+                  handleRichTextColorChange(setChatRichQuoteTextColor, value)
+                }
+                options={richTextColorOptions}
+                aria-label={t(
+                  "generalSettings.settings.chatRichTextStyles.quoteTextColor",
+                  "Quote text color"
+                )}
+              />
+            }
+          />
+          <SettingRow
+            label={t(
+              "generalSettings.settings.chatRichTextStyles.quoteFont",
+              "Quote font"
+            )}
+            {...getResetProps(
+              chatRichQuoteFont,
+              DEFAULT_CHAT_SETTINGS.chatRichQuoteFont,
+              setChatRichQuoteFont
+            )}
+            control={
+              <Select
+                className={SELECT_CLASSNAME}
+                value={chatRichQuoteFont}
+                onChange={(value) =>
+                  handleRichTextFontChange(setChatRichQuoteFont, value)
+                }
+                options={fontOptions}
+                aria-label={t(
+                  "generalSettings.settings.chatRichTextStyles.quoteFont",
+                  "Quote font"
+                )}
+              />
+            }
+          />
+          <SettingRow
+            label={t(
+              "generalSettings.settings.chatRichTextStyles.quoteBorderColor",
+              "Quote border color"
+            )}
+            {...getResetProps(
+              chatRichQuoteBorderColor,
+              DEFAULT_CHAT_SETTINGS.chatRichQuoteBorderColor,
+              setChatRichQuoteBorderColor
+            )}
+            control={
+              <Select
+                className={SELECT_CLASSNAME}
+                value={chatRichQuoteBorderColor}
+                onChange={(value) =>
+                  handleRichTextColorChange(setChatRichQuoteBorderColor, value)
+                }
+                options={richTextColorOptions}
+                aria-label={t(
+                  "generalSettings.settings.chatRichTextStyles.quoteBorderColor",
+                  "Quote border color"
+                )}
+              />
+            }
+          />
+          <SettingRow
+            label={t(
+              "generalSettings.settings.chatRichTextStyles.quoteBackgroundColor",
+              "Quote background color"
+            )}
+            {...getResetProps(
+              chatRichQuoteBackgroundColor,
+              DEFAULT_CHAT_SETTINGS.chatRichQuoteBackgroundColor,
+              setChatRichQuoteBackgroundColor
+            )}
+            control={
+              <Select
+                className={SELECT_CLASSNAME}
+                value={chatRichQuoteBackgroundColor}
+                onChange={(value) =>
+                  handleRichTextColorChange(
+                    setChatRichQuoteBackgroundColor,
+                    value
+                  )
+                }
+                options={richTextColorOptions}
+                aria-label={t(
+                  "generalSettings.settings.chatRichTextStyles.quoteBackgroundColor",
+                  "Quote background color"
+                )}
+              />
+            }
+          />
+        </div>
+      </div>
       <SettingRow
         label={t(
           "generalSettings.settings.allowExternalImages.label",

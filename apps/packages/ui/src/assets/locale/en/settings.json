@@ -653,6 +653,35 @@
         "previewSafeTitle": "Safe Markdown",
         "previewStCompatTitle": "SillyTavern-compatible",
         "previewSample": "Line one\nLine two with ||inline spoiler||\n\n[spoiler]Block spoiler content[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "Rich text element styles",
+        "description": "Customize italic, bold, and quote rendering across chat.",
+        "reset": "Reset rich text styles",
+        "preset": "Style preset",
+        "presets": {
+          "default": "Default (recommended)",
+          "muted": "Muted",
+          "highContrast": "High contrast",
+          "custom": "Custom"
+        },
+        "colors": {
+          "text": "Text",
+          "muted": "Muted",
+          "primary": "Primary",
+          "accent": "Accent",
+          "success": "Success",
+          "warn": "Warning",
+          "danger": "Danger"
+        },
+        "italicColor": "Italic color",
+        "italicFont": "Italic font",
+        "boldColor": "Bold color",
+        "boldFont": "Bold font",
+        "quoteTextColor": "Quote text color",
+        "quoteFont": "Quote font",
+        "quoteBorderColor": "Quote border color",
+        "quoteBackgroundColor": "Quote background color"
       }
     },
     "systemBasics": {

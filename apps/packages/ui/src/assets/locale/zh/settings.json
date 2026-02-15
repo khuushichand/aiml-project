@@ -188,6 +188,35 @@
         "previewSafeTitle": "安全 Markdown",
         "previewStCompatTitle": "兼容 SillyTavern",
         "previewSample": "第一行\n第二行，包含 ||行内剧透||\n\n[spoiler]块级剧透内容[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "富文本元素样式",
+        "description": "自定义聊天中斜体、加粗和引用的显示效果。",
+        "reset": "重置富文本样式",
+        "preset": "样式预设",
+        "presets": {
+          "default": "默认（推荐）",
+          "muted": "柔和",
+          "highContrast": "高对比度",
+          "custom": "自定义"
+        },
+        "colors": {
+          "text": "文本",
+          "muted": "柔和",
+          "primary": "主色",
+          "accent": "强调色",
+          "success": "成功",
+          "warn": "警告",
+          "danger": "危险"
+        },
+        "italicColor": "斜体颜色",
+        "italicFont": "斜体字体",
+        "boldColor": "加粗颜色",
+        "boldFont": "加粗字体",
+        "quoteTextColor": "引用文本颜色",
+        "quoteFont": "引用字体",
+        "quoteBorderColor": "引用边框颜色",
+        "quoteBackgroundColor": "引用背景颜色"
       }
     },
     "sidepanelRag": {

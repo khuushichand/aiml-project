@@ -3301,5 +3301,74 @@
   },
   "generalSettings_settings_chatRichTextMode_previewSample": {
     "message": "Riga uno\\nRiga due con ||spoiler in linea||\\n\\n[spoiler]Contenuto spoiler a blocco[/spoiler]"
+  },
+  "generalSettings_settings_chatRichTextStyles_title": {
+    "message": "Stili degli elementi di testo avanzato"
+  },
+  "generalSettings_settings_chatRichTextStyles_description": {
+    "message": "Personalizza la resa di corsivo, grassetto e citazioni nella chat."
+  },
+  "generalSettings_settings_chatRichTextStyles_reset": {
+    "message": "Reimposta stili testo avanzato"
+  },
+  "generalSettings_settings_chatRichTextStyles_preset": {
+    "message": "Preimpostazione stile"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_default": {
+    "message": "Predefinito (consigliato)"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_muted": {
+    "message": "Attenuato"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_highContrast": {
+    "message": "Alto contrasto"
+  },
+  "generalSettings_settings_chatRichTextStyles_presets_custom": {
+    "message": "Personalizzato"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_text": {
+    "message": "Testo"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_muted": {
+    "message": "Attenuato"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_primary": {
+    "message": "Primario"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_accent": {
+    "message": "Accento"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_success": {
+    "message": "Successo"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_warn": {
+    "message": "Avviso"
+  },
+  "generalSettings_settings_chatRichTextStyles_colors_danger": {
+    "message": "Pericolo"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicColor": {
+    "message": "Colore corsivo"
+  },
+  "generalSettings_settings_chatRichTextStyles_italicFont": {
+    "message": "Font corsivo"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldColor": {
+    "message": "Colore grassetto"
+  },
+  "generalSettings_settings_chatRichTextStyles_boldFont": {
+    "message": "Font grassetto"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteTextColor": {
+    "message": "Colore testo citazione"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteFont": {
+    "message": "Font citazione"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBorderColor": {
+    "message": "Colore bordo citazione"
+  },
+  "generalSettings_settings_chatRichTextStyles_quoteBackgroundColor": {
+    "message": "Colore sfondo citazione"
   }
 }

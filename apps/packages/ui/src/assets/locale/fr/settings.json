@@ -185,6 +185,35 @@
         "previewSafeTitle": "Markdown sûr",
         "previewStCompatTitle": "Compatible SillyTavern",
         "previewSample": "Ligne un\nLigne deux avec ||spoiler en ligne||\n\n[spoiler]Contenu du spoiler en bloc[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "Styles des éléments de texte enrichi",
+        "description": "Personnalisez l’affichage de l’italique, du gras et des citations dans le chat.",
+        "reset": "Réinitialiser les styles de texte enrichi",
+        "preset": "Préréglage de style",
+        "presets": {
+          "default": "Par défaut (recommandé)",
+          "muted": "Atténué",
+          "highContrast": "Contraste élevé",
+          "custom": "Personnalisé"
+        },
+        "colors": {
+          "text": "Texte",
+          "muted": "Atténué",
+          "primary": "Principal",
+          "accent": "Accent",
+          "success": "Succès",
+          "warn": "Avertissement",
+          "danger": "Danger"
+        },
+        "italicColor": "Couleur de l’italique",
+        "italicFont": "Police de l’italique",
+        "boldColor": "Couleur du gras",
+        "boldFont": "Police du gras",
+        "quoteTextColor": "Couleur du texte de citation",
+        "quoteFont": "Police de citation",
+        "quoteBorderColor": "Couleur de bordure de citation",
+        "quoteBackgroundColor": "Couleur d’arrière-plan de citation"
       }
     },
     "sidepanelRag": {

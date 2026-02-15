@@ -185,6 +185,35 @@
         "previewSafeTitle": "安全 Markdown",
         "previewStCompatTitle": "相容 SillyTavern",
         "previewSample": "第一行\n第二行，含有 ||行內劇透||\n\n[spoiler]區塊劇透內容[/spoiler]"
+      },
+      "chatRichTextStyles": {
+        "title": "富文字元素樣式",
+        "description": "自訂聊天中斜體、粗體與引用的顯示效果。",
+        "reset": "重設富文字樣式",
+        "preset": "樣式預設",
+        "presets": {
+          "default": "預設（建議）",
+          "muted": "柔和",
+          "highContrast": "高對比",
+          "custom": "自訂"
+        },
+        "colors": {
+          "text": "文字",
+          "muted": "柔和",
+          "primary": "主色",
+          "accent": "強調色",
+          "success": "成功",
+          "warn": "警告",
+          "danger": "危險"
+        },
+        "italicColor": "斜體顏色",
+        "italicFont": "斜體字型",
+        "boldColor": "粗體顏色",
+        "boldFont": "粗體字型",
+        "quoteTextColor": "引用文字顏色",
+        "quoteFont": "引用字型",
+        "quoteBorderColor": "引用邊框顏色",
+        "quoteBackgroundColor": "引用背景顏色"
       }
     },
     "sidepanelRag": {

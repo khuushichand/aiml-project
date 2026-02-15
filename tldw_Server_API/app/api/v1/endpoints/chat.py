@@ -148,6 +148,7 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     queue_is_active,
     resolve_provider_and_model,
     resolve_provider_api_key,
+    is_model_known_for_provider,
 )
 
 # Backward-compatible re-exports for legacy tests patching these symbols on the endpoint module.
@@ -1175,6 +1176,36 @@ def _get_default_provider() -> str:
         return "local-llm"
     return DEFAULT_LLM_PROVIDER
 
+
+def _should_enforce_strict_model_selection() -> bool:
+    """Return whether explicit model/provider requests should be strictly enforced."""
+    raw = os.getenv("CHAT_ENFORCE_STRICT_MODEL_SELECTION")
+    if raw is not None:
+        return _shared_is_truthy(raw)
+    return not _shared_is_test_mode()
+
+
+def _validate_explicit_model_availability(provider: str, model: str) -> dict[str, Any] | None:
+    """Validate explicit model selection against known provider inventory when available."""
+    provider_name = (provider or "").strip()
+    model_name = (model or "").strip()
+    if not provider_name or not model_name:
+        return None
+
+    availability = is_model_known_for_provider(provider_name, model_name)
+    if availability is None or availability:
+        return None
+
+    return {
+        "error_code": "model_not_available",
+        "message": (
+            f"Model '{model_name}' is not available for provider '{provider_name}'. "
+            "Select one of the server-advertised models for this provider."
+        ),
+        "provider": provider_name,
+        "model": model_name,
+    }
+
 async def _process_content_for_db_sync(
     content_iterable: Any, # Can be list of dicts or string
     conversation_id: str # For logging
@@ -1731,6 +1762,12 @@ async def create_chat_completion(
 
     # Capture raw model input before any normalization for later decisions
     raw_model_input = request_data.model
+    explicit_model_requested = bool(str(raw_model_input or "").strip())
+    strict_model_selection = _should_enforce_strict_model_selection()
+    allow_provider_fallback_for_request = (
+        ENABLE_PROVIDER_FALLBACK
+        and not (strict_model_selection and explicit_model_requested)
+    )
 
     # Resolve provider/model for both metrics and execution, and record decision path
     (
@@ -2435,6 +2472,14 @@ async def create_chat_completion(
         if override_error:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
+        if strict_model_selection and explicit_model_requested:
+            availability_error = _validate_explicit_model_availability(provider, model)
+            if availability_error:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=availability_error,
+                )
+
         persona_alias_used = _resolve_character_id_from_persona_alias(request_data)
 
         user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
@@ -2811,7 +2856,7 @@ async def create_chat_completion(
                    provider_manager.circuit_breakers[provider].can_attempt_call():
                     selected_provider = provider
                     logger.info(f"Using requested provider {selected_provider} (health check passed)")
-                elif ENABLE_PROVIDER_FALLBACK:
+                elif allow_provider_fallback_for_request:
                     # Only try alternative providers if fallback is enabled
                     healthy_provider = provider_manager.get_available_provider(
                         exclude=[provider, *sorted(disabled_overrides)]
@@ -3094,7 +3139,7 @@ async def create_chat_completion(
                     audit_context=context,
                     client_id=user_id,
                     queue_execution_enabled=QUEUED_EXECUTION,
-                    enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
+                    enable_provider_fallback=allow_provider_fallback_for_request,
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
                     moderation_getter=_get_moderation_with_guardian,
@@ -3142,7 +3187,7 @@ async def create_chat_completion(
                     audit_context=context,
                     client_id=user_id,
                     queue_execution_enabled=QUEUED_EXECUTION,
-                    enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
+                    enable_provider_fallback=allow_provider_fallback_for_request,
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
                     moderation_getter=_get_moderation_with_guardian,
