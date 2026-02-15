@@ -119,6 +119,7 @@ import {
   type CollapsedRange,
   type ModelSortMode
 } from "@/hooks/playground"
+import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
 
 type Props = {
   droppedFiles: File[]
@@ -134,6 +135,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   const [typing, setTyping] = React.useState<boolean>(false)
   const [checkWideMode] = useStorage("checkWideMode", false)
+  const [allowExternalImages, setAllowExternalImages] = useStorage(
+    "allowExternalImages",
+    DEFAULT_CHAT_SETTINGS.allowExternalImages
+  )
   const {
     onSubmit,
     messages,
@@ -2837,6 +2842,30 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
         {advancedToolsExpanded && (
           <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-1.5 px-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm text-text">
+                  {t(
+                    "playground:tools.allowExternalImages",
+                    "Load external images in chat"
+                  )}
+                </span>
+                <Switch
+                  size="small"
+                  checked={allowExternalImages}
+                  onChange={(checked) => setAllowExternalImages(checked)}
+                />
+              </div>
+              <p className="text-[11px] text-text-muted">
+                {t(
+                  "playground:tools.allowExternalImagesHelp",
+                  "When off, external image URLs are blocked and shown as links."
+                )}
+              </p>
+            </div>
+
+            <div className="border-t border-border my-1" />
+
             {/* Voice Settings */}
             <div className="flex flex-col gap-2 px-2">
               <Tooltip
@@ -2900,6 +2929,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       </div>
     ),
     [
+      allowExternalImages,
       advancedToolsExpanded,
       capabilities?.hasWebSearch,
       defaultInternetSearchOn,
@@ -2910,6 +2940,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       imageProviderControl,
       isSending,
       navigate,
+      setAllowExternalImages,
       setDefaultInternetSearchOnSetting,
       setSimpleInternetSearch,
       setToolsPopoverOpen,

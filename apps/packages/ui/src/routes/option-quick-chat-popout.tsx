@@ -35,7 +35,7 @@ const QuickChatPopout: React.FC = () => {
     isError: modelsError
   } = useQuery({
     queryKey: ["quickChatModels"],
-    queryFn: () => fetchChatModels({ returnEmpty: false }),
+    queryFn: () => fetchChatModels({ returnEmpty: true }),
     staleTime: 5 * 60 * 1000,
     gcTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,

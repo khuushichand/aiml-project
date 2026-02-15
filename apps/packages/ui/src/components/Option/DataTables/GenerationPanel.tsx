@@ -86,7 +86,13 @@ export const GenerationPanel: React.FC = () => {
   // Fetch available models
   const { data: models } = useQuery({
     queryKey: ["tldw-chat-models"],
-    queryFn: () => tldwClient.getModels(),
+    queryFn: async () => {
+      try {
+        return await tldwClient.getModels()
+      } catch {
+        return []
+      }
+    },
     staleTime: 5 * 60 * 1000
   })
 

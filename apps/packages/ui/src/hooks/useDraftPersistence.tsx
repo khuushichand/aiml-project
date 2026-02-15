@@ -127,6 +127,7 @@ export const useDraftPersistence = ({
   const persistTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const setValueRef = React.useRef(setValue)
   const setValueWithMetadataRef = React.useRef(setValueWithMetadata)
+  const getMetadataRef = React.useRef(getMetadata)
 
   React.useEffect(() => {
     setValueRef.current = setValue
@@ -135,6 +136,10 @@ export const useDraftPersistence = ({
   React.useEffect(() => {
     setValueWithMetadataRef.current = setValueWithMetadata
   }, [setValueWithMetadata])
+
+  React.useEffect(() => {
+    getMetadataRef.current = getMetadata
+  }, [getMetadata])
 
   // Restore unsent draft on mount
   React.useEffect(() => {
@@ -214,7 +219,7 @@ export const useDraftPersistence = ({
       void (async () => {
         let metadata: DraftMetadata | undefined
         try {
-          metadata = getMetadata?.() ?? undefined
+          metadata = getMetadataRef.current?.() ?? undefined
         } catch {
           metadata = undefined
         }
@@ -245,7 +250,7 @@ export const useDraftPersistence = ({
         draftSavedTimeoutRef.current = null
       }
     }
-  }, [currentValue, storageKey, enabled, getMetadata])
+  }, [currentValue, storageKey, enabled])
 
   // Cleanup timeout on unmount
   React.useEffect(() => {

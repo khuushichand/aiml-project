@@ -197,7 +197,9 @@ export default function App({ Component, pageProps }: AppProps) {
 
     didWarmRoutePrefetch.current = true
     let cancelled = false
-    let prefetchTimeout: ReturnType<typeof window.setTimeout> | undefined
+    // In this mixed DOM + Node type environment, using an explicit numeric
+    // handle avoids NodeJS.Timeout incompatibilities with window.setTimeout.
+    let prefetchTimeout: number | undefined
     const windowWithIdle = window as Window & {
       requestIdleCallback?: (
         callback: () => void,

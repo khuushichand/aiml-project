@@ -184,8 +184,8 @@ export function HeaderShortcuts({
     modifiers: ["shift"],
     action: handleToggle,
     description: "Toggle keyboard shortcuts",
-    // Allow global toggle, even when an input is focused.
-    allowInInput: true,
+    // Never steal "?" while the user is typing.
+    allowInInput: false,
   })
 
   useEffect(() => {

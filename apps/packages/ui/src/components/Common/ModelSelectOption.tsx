@@ -21,7 +21,7 @@ export const ModelSelectOption: React.FC<Props> = ({ iconClassName = "size-5" })
   const { data } = useQuery({
     queryKey: ["getAllModelsForSelectOption"],
     queryFn: async () => {
-      const models = await fetchChatModels({ returnEmpty: false })
+      const models = await fetchChatModels({ returnEmpty: true })
       return models
     }
   })

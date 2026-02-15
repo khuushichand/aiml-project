@@ -3,6 +3,10 @@ import { Storage } from "@plasmohq/storage"
 import { createSafeStorage } from "@/utils/safe-storage"
 import { formatErrorMessage } from "@/utils/format-error-message"
 import { tldwRequest } from "@/services/tldw/request-core"
+import {
+  BACKEND_UNREACHABLE_EVENT,
+  type BackendUnreachableDetail
+} from "@/services/request-events"
 import type {
   AllowedMethodFor,
   AllowedPath,
@@ -15,7 +19,11 @@ import type {
 const ERROR_LOG_THROTTLE_MS = 15_000
 const RATE_LIMIT_LOG_THROTTLE_MS = 60_000
 const ERROR_LOG_MAX_ENTRIES = 200
+const BACKEND_UNREACHABLE_EVENT_THROTTLE_MS = 5_000
+const BACKEND_UNREACHABLE_PATTERN =
+  /(networkerror|failed to fetch|network error|load failed|err_connection|could not establish connection|receiving end does not exist)/i
 const errorLogHistory = new Map<string, number>()
+let lastBackendUnreachableEventAt = 0
 
 const isRateLimitEntry = (entry: { status?: number; error?: string }): boolean => {
   if (entry.status === 429) return true
@@ -149,6 +157,55 @@ const isExtensionTransportFailure = (error: unknown): boolean => {
   )
 }
 
+const shouldNotifyBackendUnavailable = (entry: {
+  method: string
+  path: string
+  status?: number
+  error?: string
+}): boolean => {
+  const path = String(entry.path || "")
+  // Restrict notifications to API requests only.
+  if (!path.includes("/api/")) return false
+  if (entry.status === 0) return true
+  return BACKEND_UNREACHABLE_PATTERN.test(String(entry.error || ""))
+}
+
+const notifyBackendUnavailable = (entry: {
+  method: string
+  path: string
+  status?: number
+  error?: string
+  source: "background" | "direct"
+}) => {
+  if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") {
+    return
+  }
+  if (!shouldNotifyBackendUnavailable(entry)) return
+  const now = Date.now()
+  if (now - lastBackendUnreachableEventAt < BACKEND_UNREACHABLE_EVENT_THROTTLE_MS) {
+    return
+  }
+  lastBackendUnreachableEventAt = now
+
+  const detail: BackendUnreachableDetail = {
+    method: entry.method,
+    path: entry.path,
+    status: entry.status,
+    message: String(entry.error || "Network error"),
+    source: entry.source,
+    timestamp: now
+  }
+  try {
+    window.dispatchEvent(
+      new CustomEvent<BackendUnreachableDetail>(BACKEND_UNREACHABLE_EVENT, {
+        detail
+      })
+    )
+  } catch {
+    // best-effort notification only
+  }
+}
+
 export interface BgRequestInit<
   P extends PathOrUrl = AllowedPath,
   M extends AllowedMethodFor<P> = AllowedMethodFor<P>
@@ -255,6 +312,13 @@ export async function bgRequest<
           error: msg,
           source: "direct"
         })
+        notifyBackendUnavailable({
+          method: String(method),
+          path: String(path),
+          status: resp?.status,
+          error: msg,
+          source: "direct"
+        })
       }
       const error = new Error(`${msg} (${method} ${path})`) as Error & {
         status?: number
@@ -308,6 +372,13 @@ export async function bgRequest<
           if (!isAbortErrorMessage(msg)) {
             console.warn("[tldw:request]", method, path, resp?.status, msg)
             await recordRequestError({
+              method: String(method),
+              path: String(path),
+              status: resp?.status,
+              error: msg,
+              source: "background"
+            })
+            notifyBackendUnavailable({
               method: String(method),
               path: String(path),
               status: resp?.status,
@@ -414,6 +485,13 @@ export async function bgRequest<
             error: msg,
             source: "background"
           })
+          notifyBackendUnavailable({
+            method: String(method),
+            path: String(path),
+            status: resp?.status,
+            error: msg,
+            source: "background"
+          })
         }
         const error = new Error(`${msg} (${method} ${path})`) as Error & {
           status?: number
@@ -491,6 +569,13 @@ export async function bgRequest<
     if (!isAbortErrorMessage(msg)) {
       console.warn("[tldw:request]", method, path, resp?.status, msg)
       await recordRequestError({
+        method: String(method),
+        path: String(path),
+        status: resp?.status,
+        error: msg,
+        source: "direct"
+      })
+      notifyBackendUnavailable({
         method: String(method),
         path: String(path),
         status: resp?.status,

@@ -53,6 +53,48 @@ describe("background proxy fallback safety", () => {
     expect(mocks.tldwRequest).not.toHaveBeenCalled()
   })
 
+  it("emits backend-unreachable event when API request fails with network status 0", async () => {
+    mocks.sendMessage.mockRejectedValue(
+      new Error("Could not establish connection. Receiving end does not exist.")
+    )
+    mocks.tldwRequest.mockResolvedValue({
+      ok: false,
+      status: 0,
+      error: "NetworkError when attempting to fetch resource."
+    })
+
+    const eventSpy = vi.fn()
+    const eventName = "tldw:backend-unreachable"
+    window.addEventListener(eventName, eventSpy as EventListener)
+
+    try {
+      const { bgRequest } = await importProxy()
+      await expect(
+        bgRequest({
+          path: "/api/v1/llm/models/metadata",
+          method: "GET"
+        })
+      ).rejects.toMatchObject({ status: 0 })
+    } finally {
+      window.removeEventListener(eventName, eventSpy as EventListener)
+    }
+
+    expect(eventSpy).toHaveBeenCalledTimes(1)
+    const detail = (eventSpy.mock.calls[0]?.[0] as CustomEvent | undefined)
+      ?.detail as
+      | {
+          path?: string
+          method?: string
+          status?: number
+          source?: string
+        }
+      | undefined
+    expect(detail?.path).toBe("/api/v1/llm/models/metadata")
+    expect(detail?.method).toBe("GET")
+    expect(detail?.status).toBe(0)
+    expect(detail?.source).toBe("direct")
+  })
+
   it("falls back to direct request on GET extension timeout", async () => {
     vi.useFakeTimers()
     mocks.sendMessage.mockImplementation(() => new Promise(() => undefined))

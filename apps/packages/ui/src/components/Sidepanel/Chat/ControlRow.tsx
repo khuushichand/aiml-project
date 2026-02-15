@@ -7,7 +7,8 @@ import {
   Globe,
   Image as ImageIcon,
   UploadCloud,
-  ExternalLink
+  ExternalLink,
+  ChevronRight
 } from "lucide-react"
 import React from "react"
 import { useTranslation } from "react-i18next"
@@ -21,6 +22,7 @@ import { browser } from "wxt/browser"
 import { useStorage } from "@plasmohq/storage/hook"
 import { fetchChatModels } from "@/services/tldw-server"
 import type { ToolChoice } from "@/store/option"
+import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
 
 interface ControlRowProps {
   // Prompt selection
@@ -85,6 +87,11 @@ export const ControlRow: React.FC<ControlRowProps> = ({
   } = useMcpTools()
 
   const [catalogDraft, setCatalogDraft] = React.useState(toolCatalog)
+  const [advancedToolsExpanded, setAdvancedToolsExpanded] = React.useState(false)
+  const [allowExternalImages, setAllowExternalImages] = useStorage(
+    "allowExternalImages",
+    DEFAULT_CHAT_SETTINGS.allowExternalImages
+  )
 
   React.useEffect(() => {
     setCatalogDraft(toolCatalog)
@@ -507,6 +514,44 @@ export const ControlRow: React.FC<ControlRowProps> = ({
           {t("sidepanel:controlRow.uploadImage", "Upload Image")}
         </button>
       </Upload>
+
+      <div className="panel-divider my-1" />
+
+      <button
+        type="button"
+        onClick={() => setAdvancedToolsExpanded((open) => !open)}
+        className="flex items-center justify-between px-2 py-1 text-[10px] font-semibold uppercase text-text-muted tracking-wider hover:text-text transition"
+      >
+        <span>{t("sidepanel:controlRow.advanced", "Advanced")}</span>
+        <ChevronRight
+          className={`h-3 w-3 transition-transform ${
+            advancedToolsExpanded ? "rotate-90" : ""
+          }`}
+        />
+      </button>
+      {advancedToolsExpanded && (
+        <div className="flex flex-col gap-1.5 px-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm text-text">
+              {t(
+                "sidepanel:controlRow.allowExternalImages",
+                "Load external images in chat"
+              )}
+            </span>
+            <Switch
+              size="small"
+              checked={allowExternalImages}
+              onChange={(checked) => setAllowExternalImages(checked)}
+            />
+          </div>
+          <p className="text-[11px] text-text-muted">
+            {t(
+              "sidepanel:controlRow.allowExternalImagesHelp",
+              "When off, external image URLs are blocked and shown as links."
+            )}
+          </p>
+        </div>
+      )}
 
       <div className="panel-divider my-1" />
 

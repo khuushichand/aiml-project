@@ -192,7 +192,7 @@ export const GenerateCharacterPanel: React.FC<GenerateCharacterPanelProps> = ({
   // Fetch available models
   const { data: models, isLoading: modelsLoading } = useQuery<ChatModel[]>({
     queryKey: ["getAllModelsForGeneration"],
-    queryFn: () => fetchChatModels({ returnEmpty: false })
+    queryFn: () => fetchChatModels({ returnEmpty: true })
   })
 
   const hasModels = Array.isArray(models) && models.length > 0

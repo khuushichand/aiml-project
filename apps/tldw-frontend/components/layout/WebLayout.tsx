@@ -1,9 +1,9 @@
 import React, { lazy, Suspense, useState, useContext } from "react"
 
-import { Drawer, Tooltip } from "antd"
+import { Button, Drawer, Modal, Tooltip } from "antd"
 import { EraserIcon, XIcon } from "lucide-react"
 import { IconButton } from "@/components/Common/IconButton"
-import { useLocation } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { useQueryClient } from "@tanstack/react-query"
 import { useShallow } from "zustand/react/shallow"
@@ -41,6 +41,16 @@ import {
   HEADER_SHORTCUTS_EXPANDED_SETTING
 } from "@/services/settings/ui-settings"
 import { setSetting } from "@/services/settings/registry"
+import {
+  BACKEND_UNREACHABLE_EVENT,
+  type BackendUnreachableDetail
+} from "@/services/request-events"
+import {
+  useConnectionActions,
+  useConnectionState,
+  useConnectionUxState
+} from "@/hooks/useConnectionState"
+import { ConnectionPhase } from "@/types/connection"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
@@ -89,12 +99,18 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     (state) => state.setChatSidebarCollapsed
   )
   const { t } = useTranslation(["option", "common", "settings"])
+  const navigate = useNavigate()
   const [openModelSettings, setOpenModelSettings] = useState(false)
   const { isLoading: migrationLoading } = useMigration()
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
   const isMobileViewport = useMobile()
   const location = useLocation()
+  const { phase, isConnected } = useConnectionState()
+  const { checkOnce } = useConnectionActions()
+  const { isChecking } = useConnectionUxState()
+  const [backendUnavailableDetail, setBackendUnavailableDetail] =
+    useState<BackendUnreachableDetail | null>(null)
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const isChatScreen = location.pathname === "/chat"
   const chatScreenBackgroundStyle =
@@ -135,6 +151,47 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
       // ignore storage write failures
     })
   }, [location.pathname, setChatSidebarCollapsed])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const onBackendUnreachable = (event: Event) => {
+      const detail = (event as CustomEvent<BackendUnreachableDetail | undefined>)
+        ?.detail
+      if (!detail || typeof detail !== "object") return
+      setBackendUnavailableDetail(detail)
+      void checkOnce().catch(() => undefined)
+    }
+
+    window.addEventListener(
+      BACKEND_UNREACHABLE_EVENT,
+      onBackendUnreachable as EventListener
+    )
+    return () => {
+      window.removeEventListener(
+        BACKEND_UNREACHABLE_EVENT,
+        onBackendUnreachable as EventListener
+      )
+    }
+  }, [checkOnce])
+
+  React.useEffect(() => {
+    if (isConnected && phase === ConnectionPhase.CONNECTED) {
+      setBackendUnavailableDetail(null)
+    }
+  }, [isConnected, phase])
+
+  const closeBackendUnavailableModal = React.useCallback(() => {
+    setBackendUnavailableDetail(null)
+  }, [])
+
+  const openHealthDiagnostics = React.useCallback(() => {
+    setBackendUnavailableDetail(null)
+    navigate("/settings/health")
+  }, [navigate])
+
+  const retryConnectionCheck = React.useCallback(() => {
+    void checkOnce().catch(() => undefined)
+  }, [checkOnce])
 
   // Create toggle function for sidebar
   const toggleSidebar = () => {
@@ -395,6 +452,48 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
 
         {/* Workflow landing modal + active workflow overlay */}
         <WorkflowIntegrationHost autoShowPaths={["/"]} />
+
+        <Modal
+          title={t(
+            "sidepanel:connectionBanner.unreachableTitle",
+            "Can't reach your tldw server"
+          )}
+          open={Boolean(backendUnavailableDetail)}
+          onCancel={closeBackendUnavailableModal}
+          maskClosable={false}
+          destroyOnHidden
+          footer={[
+            <Button key="dismiss" onClick={closeBackendUnavailableModal}>
+              {t("common:dismiss", "Dismiss")}
+            </Button>,
+            <Button key="health" onClick={openHealthDiagnostics}>
+              {t(
+                "settings:healthSummary.diagnostics",
+                "Health & diagnostics"
+              )}
+            </Button>,
+            <Button
+              key="retry"
+              type="primary"
+              loading={isChecking}
+              onClick={retryConnectionCheck}
+            >
+              {t("common:retry", "Retry")}
+            </Button>
+          ]}
+        >
+          <p className="text-sm text-text">
+            {t(
+              "sidepanel:connectionBanner.unreachableBody",
+              "Check that your server is running and accessible."
+            )}
+          </p>
+          {backendUnavailableDetail && (
+            <p className="mt-2 break-all text-xs text-text-subtle">
+              {`${backendUnavailableDetail.message} (${backendUnavailableDetail.method} ${backendUnavailableDetail.path})`}
+            </p>
+          )}
+        </Modal>
       </main>
     </div>
   )

@@ -172,9 +172,7 @@ export const CharacterSelect: React.FC<Props> = ({
     "chatShowCharacterPortraits",
     true
   )
-  const previousCharacterId = React.useRef<string | null>(null)
   const latestSelectionIdRef = React.useRef<string | null>(null)
-  const initialized = React.useRef(false)
   const lastErrorRef = React.useRef<unknown | null>(null)
   const importInputRef = React.useRef<HTMLInputElement | null>(null)
   const personaImageInputRef = React.useRef<HTMLInputElement | null>(null)
@@ -638,6 +636,14 @@ export const CharacterSelect: React.FC<Props> = ({
 
       latestSelectionIdRef.current = nextId
       await setSelectedCharacter(next)
+      if (next?.name) {
+        notification.success({
+          message: t("option:characters.chattingAs", {
+            defaultValue: "You are chatting with {{name}}.",
+            name: next.name
+          })
+        })
+      }
 
       const shouldHydrateGreetingOrExtensions =
         Boolean(next) &&
@@ -746,29 +752,6 @@ export const CharacterSelect: React.FC<Props> = ({
     })
   }, [error, isFetching, notification, t])
 
-  React.useEffect(() => {
-    if (!initialized.current) {
-      initialized.current = true
-      previousCharacterId.current = selectedCharacter?.id ?? null
-      return
-    }
-
-    if (
-      selectedCharacter?.id &&
-      selectedCharacter?.name &&
-      previousCharacterId.current !== selectedCharacter.id
-    ) {
-      notification.success({
-        message: t("option:characters.chattingAs", {
-          defaultValue: "You are chatting with {{name}}.",
-          name: selectedCharacter.name
-        })
-      })
-    }
-
-    previousCharacterId.current = selectedCharacter?.id ?? null
-  }, [notification, selectedCharacter?.id, selectedCharacter?.name, t])
-
   const buildCharactersHash = React.useCallback((create?: boolean) => {
     const params = new URLSearchParams({ from: "header-select" })
     if (create) {
@@ -818,7 +801,6 @@ export const CharacterSelect: React.FC<Props> = ({
     return () => {
       imageOnlyModalRef.current?.destroy()
       imageOnlyModalRef.current = null
-      displayNameModalRef.current?.destroy()
       displayNameModalRef.current = null
     }
   }, [])
