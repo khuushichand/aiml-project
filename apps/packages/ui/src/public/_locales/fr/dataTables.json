@@ -1,0 +1,380 @@
+{
+  "title": {
+    "message": "Studio des tableaux de données"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "betaNotice": {
+    "message": "Fonctionnalité bêta"
+  },
+  "betaDescription": {
+    "message": "Data Tables est actuellement en bêta. La génération de tableaux nécessite un support côté serveur."
+  },
+  "offline": {
+    "message": "Le serveur est hors ligne. Veuillez vous connecter pour utiliser Data Tables."
+  },
+  "tabs_tables": {
+    "message": "Mes tableaux"
+  },
+  "tabs_create": {
+    "message": "Créer un tableau"
+  },
+  "wizard_sources": {
+    "message": "Sélectionner des sources"
+  },
+  "wizard_sourcesDesc": {
+    "message": "Choisir des sources de données"
+  },
+  "wizard_prompt": {
+    "message": "Décrire le tableau"
+  },
+  "wizard_promptDesc": {
+    "message": "Rédigez votre prompt"
+  },
+  "wizard_preview": {
+    "message": "Aperçu"
+  },
+  "wizard_previewDesc": {
+    "message": "Examiner le tableau généré"
+  },
+  "wizard_save": {
+    "message": "Enregistrer"
+  },
+  "wizard_saveDesc": {
+    "message": "Enregistrer dans la bibliothèque"
+  },
+  "wizard_tip": {
+    "message": "Astuce"
+  },
+  "wizard_tipText": {
+    "message": "Sélectionnez des chats, des documents ou recherchez dans votre base de connaissances pour extraire des données structurées. Plus vos sources sont précises, meilleurs seront les résultats."
+  },
+  "wizard_reset": {
+    "message": "Recommencer"
+  },
+  "sourceTypes_chat": {
+    "message": "Chats"
+  },
+  "sourceTypes_document": {
+    "message": "Documents"
+  },
+  "sourceTypes_rag": {
+    "message": "Recherche RAG"
+  },
+  "selectedSources": {
+    "message": "Sources sélectionnées"
+  },
+  "sourcesSelected": {
+    "message": "Sources sélectionnées"
+  },
+  "searchPlaceholder": {
+    "message": "Rechercher..."
+  },
+  "ragPlaceholder": {
+    "message": "Saisissez une requête de recherche pour votre base de connaissances..."
+  },
+  "ragQuerySnippet": {
+    "message": "Requête de recherche de la base de connaissances"
+  },
+  "ragAdded": {
+    "message": "Requête RAG ajoutée comme source"
+  },
+  "ragTip": {
+    "message": "Saisissez des requêtes pour trouver du contenu pertinent dans votre base de connaissances. Chaque requête sera ajoutée comme source distincte."
+  },
+  "fetchError": {
+    "message": "Échec du chargement des éléments"
+  },
+  "promptLabel": {
+    "message": "Décrivez le tableau que vous souhaitez créer"
+  },
+  "promptPlaceholder": {
+    "message": "Ex. Créez un tableau comparant les principaux sujets abordés, avec des colonnes pour le sujet, les points clés et le score de pertinence..."
+  },
+  "examplePrompts": {
+    "message": "Exemples de prompts :"
+  },
+  "advancedOptions": {
+    "message": "Options avancées"
+  },
+  "columnHints": {
+    "message": "Indices de colonnes (facultatif)"
+  },
+  "columnHintsDesc": {
+    "message": "Suggérez des noms et types de colonnes pour guider le LLM. À défaut, les colonnes seront déduites de votre prompt."
+  },
+  "newColumnName": {
+    "message": "Nom de colonne"
+  },
+  "modelSelection": {
+    "message": "Modèle"
+  },
+  "selectModel": {
+    "message": "Utiliser le modèle par défaut"
+  },
+  "maxRows": {
+    "message": "Nombre maximum de lignes"
+  },
+  "maxRowsHint": {
+    "message": "(1-1000)"
+  },
+  "generating": {
+    "message": "Génération du tableau à partir de vos sources..."
+  },
+  "generatingNote": {
+    "message": "Cela peut prendre un moment selon la quantité de données."
+  },
+  "generateSuccess": {
+    "message": "Tableau généré avec succès !"
+  },
+  "generationFailed": {
+    "message": "Échec de la génération"
+  },
+  "tryAgain": {
+    "message": "Réessayer"
+  },
+  "warnings": {
+    "message": "Avertissements"
+  },
+  "noPreview": {
+    "message": "Aucun aperçu disponible"
+  },
+  "promptUsed": {
+    "message": "Prompt utilisé :"
+  },
+  "previewModified": {
+    "message": "Vous avez modifié l'aperçu. Les modifications seront enregistrées avec le tableau."
+  },
+  "addRow": {
+    "message": "Ajouter une ligne"
+  },
+  "addColumn": {
+    "message": "Ajouter une colonne"
+  },
+  "deleteRow": {
+    "message": "Supprimer la ligne ?"
+  },
+  "deleteRowConfirm": {
+    "message": "Cette action est irréversible."
+  },
+  "deleteColumn": {
+    "message": "Supprimer la colonne ?"
+  },
+  "deleteColumnConfirm": {
+    "message": "Cette action est irréversible."
+  },
+  "discard": {
+    "message": "Annuler"
+  },
+  "changesDiscarded": {
+    "message": "Modifications annulées"
+  },
+  "save": {
+    "message": "Enregistrer"
+  },
+  "saveSuccess": {
+    "message": "Modifications enregistrées avec succès !"
+  },
+  "unsavedChanges": {
+    "message": "Vous avez des modifications non enregistrées"
+  },
+  "columnAdded": {
+    "message": "Colonne '{{name}}' ajoutée"
+  },
+  "rows": {
+    "message": "lignes"
+  },
+  "columnsLabel": {
+    "message": "colonnes"
+  },
+  "showingRows": {
+    "message": "{{total}} lignes affichées"
+  },
+  "tableSummary": {
+    "message": "Résumé du tableau"
+  },
+  "tableName": {
+    "message": "Nom du tableau"
+  },
+  "tableNamePlaceholder": {
+    "message": "Saisissez un nom pour votre tableau"
+  },
+  "tableDescription": {
+    "message": "Description (facultatif)"
+  },
+  "tableDescPlaceholder": {
+    "message": "Ajoutez une description pour vous aider à vous souvenir du contenu de ce tableau"
+  },
+  "saveToLibrary": {
+    "message": "Enregistrer dans la bibliothèque"
+  },
+  "tableSaved": {
+    "message": "Tableau enregistré !"
+  },
+  "tableSavedDesc": {
+    "message": "Votre tableau a été enregistré dans la bibliothèque. Vous pouvez le consulter et l'exporter à tout moment."
+  },
+  "viewTables": {
+    "message": "Voir mes tableaux"
+  },
+  "createAnother": {
+    "message": "Créer un autre"
+  },
+  "orExport": {
+    "message": "Ou exporter directement :"
+  },
+  "export": {
+    "message": "Exporter"
+  },
+  "exportCSV": {
+    "message": "Exporter en CSV"
+  },
+  "exportExcel": {
+    "message": "Exporter en Excel"
+  },
+  "exportJSON": {
+    "message": "Exporter en JSON"
+  },
+  "exportSuccess": {
+    "message": "Tableau exporté en {{format}}"
+  },
+  "noTableToSave": {
+    "message": "Aucun tableau à enregistrer"
+  },
+  "goBackToGenerate": {
+    "message": "Revenez à l'étape précédente pour générer un tableau d'abord."
+  },
+  "tableDetails": {
+    "message": "Détails du tableau"
+  },
+  "tableNotFound": {
+    "message": "Tableau introuvable"
+  },
+  "noData": {
+    "message": "Aucune donnée"
+  },
+  "data": {
+    "message": "Données"
+  },
+  "editMode": {
+    "message": "Mode édition"
+  },
+  "editModeActive": {
+    "message": "Cliquez sur les cellules pour modifier"
+  },
+  "regenerate": {
+    "message": "Régénérer"
+  },
+  "regenerateSuccess": {
+    "message": "Tableau régénéré avec succès !"
+  },
+  "model": {
+    "message": "Modèle"
+  },
+  "prompt": {
+    "message": "Prompt de génération"
+  },
+  "sources": {
+    "message": "Sources"
+  },
+  "created": {
+    "message": "Créé"
+  },
+  "updated": {
+    "message": "Mis à jour"
+  },
+  "noTables": {
+    "message": "Aucun tableau pour l'instant. Créez votre premier tableau !"
+  },
+  "noSearchResults": {
+    "message": "Aucun tableau trouvé correspondant à votre recherche"
+  },
+  "totalTables": {
+    "message": "{{total}} tableaux"
+  },
+  "view": {
+    "message": "Voir"
+  },
+  "delete": {
+    "message": "Supprimer"
+  },
+  "deleteConfirmTitle": {
+    "message": "Supprimer le tableau"
+  },
+  "deleteConfirmMessage": {
+    "message": "Êtes-vous sûr de vouloir supprimer ce tableau ? Cette action est irréversible."
+  },
+  "noTable": {
+    "message": "Aucune donnée de tableau"
+  },
+  "add": {
+    "message": "Ajouter"
+  },
+  "columnName": {
+    "message": "Nom de colonne"
+  },
+  "columnNamePlaceholder": {
+    "message": "ex. Prix, Statut, Date"
+  },
+  "columnNameRequired": {
+    "message": "Veuillez saisir un nom de colonne"
+  },
+  "columnNameTooLong": {
+    "message": "Le nom de colonne doit comporter 50 caractères ou moins"
+  },
+  "columnNameExists": {
+    "message": "Une colonne portant ce nom existe déjà"
+  },
+  "columnType": {
+    "message": "Type de colonne"
+  },
+  "columnTypeRequired": {
+    "message": "Veuillez sélectionner un type de colonne"
+  },
+  "columnDescription": {
+    "message": "Description (facultatif)"
+  },
+  "columnDescriptionHint": {
+    "message": "Une brève description du contenu de cette colonne"
+  },
+  "columnDescriptionPlaceholder": {
+    "message": "ex. Le prix de l'article en USD"
+  },
+  "discardUnsavedChanges": {
+    "message": "Vous avez des modifications non enregistrées. Êtes-vous sûr de vouloir fermer ?"
+  },
+  "createFromChat": {
+    "message": "Créer un tableau à partir du chat"
+  },
+  "saveFromArtifact": {
+    "message": "Enregistrer dans Data Tables"
+  },
+  "importedPrompt": {
+    "message": "Importé depuis l'artefact du tableau"
+  },
+  "columns_name": {
+    "message": "Nom"
+  },
+  "columns_rows": {
+    "message": "Lignes"
+  },
+  "columns_columns": {
+    "message": "Colonnes"
+  },
+  "columns_sources": {
+    "message": "Sources"
+  },
+  "columns_created": {
+    "message": "Créé"
+  },
+  "columns_actions": {
+    "message": "Actions"
+  },
+  "dataTablesDescription": {
+    "message": "Générez des tableaux structurés à partir de vos chats, documents et base de connaissances à l'aide de prompts en langage naturel."
+  },
+  "descriptionLabel": {
+    "message": "Description"
+  }
+}

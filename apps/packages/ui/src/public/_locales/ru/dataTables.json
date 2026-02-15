@@ -1,0 +1,380 @@
+{
+  "title": {
+    "message": "Студия таблиц данных"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "betaNotice": {
+    "message": "Бета-функция"
+  },
+  "betaDescription": {
+    "message": "Таблицы данных сейчас в бете. Генерация таблиц требует поддержки на сервере."
+  },
+  "offline": {
+    "message": "Сервер офлайн. Подключитесь, чтобы использовать таблицы данных."
+  },
+  "tabs_tables": {
+    "message": "Мои таблицы"
+  },
+  "tabs_create": {
+    "message": "Создать таблицу"
+  },
+  "wizard_sources": {
+    "message": "Выбор источников"
+  },
+  "wizard_sourcesDesc": {
+    "message": "Выберите источники данных"
+  },
+  "wizard_prompt": {
+    "message": "Описание таблицы"
+  },
+  "wizard_promptDesc": {
+    "message": "Напишите промпт"
+  },
+  "wizard_preview": {
+    "message": "Предпросмотр"
+  },
+  "wizard_previewDesc": {
+    "message": "Просмотрите сгенерированную таблицу"
+  },
+  "wizard_save": {
+    "message": "Сохранить"
+  },
+  "wizard_saveDesc": {
+    "message": "Сохранить в библиотеку"
+  },
+  "wizard_tip": {
+    "message": "Совет"
+  },
+  "wizard_tipText": {
+    "message": "Выберите чаты, документы или выполните поиск по базе знаний, чтобы извлечь структурированные данные. Чем конкретнее ваши источники, тем лучше результаты."
+  },
+  "wizard_reset": {
+    "message": "Начать заново"
+  },
+  "sourceTypes_chat": {
+    "message": "Чаты"
+  },
+  "sourceTypes_document": {
+    "message": "Документы"
+  },
+  "sourceTypes_rag": {
+    "message": "Поиск RAG"
+  },
+  "selectedSources": {
+    "message": "Выбранные источники"
+  },
+  "sourcesSelected": {
+    "message": "Источников выбрано"
+  },
+  "searchPlaceholder": {
+    "message": "Поиск..."
+  },
+  "ragPlaceholder": {
+    "message": "Введите поисковый запрос для вашей базы знаний..."
+  },
+  "ragQuerySnippet": {
+    "message": "Поисковый запрос базы знаний"
+  },
+  "ragAdded": {
+    "message": "Запрос RAG добавлен как источник"
+  },
+  "ragTip": {
+    "message": "Введите поисковые запросы, чтобы найти релевантный контент в вашей базе знаний. Каждый запрос будет добавлен как отдельный источник."
+  },
+  "fetchError": {
+    "message": "Не удалось загрузить элементы"
+  },
+  "promptLabel": {
+    "message": "Опишите таблицу, которую хотите создать"
+  },
+  "promptPlaceholder": {
+    "message": "Напр.: создайте таблицу, сравнивающую основные темы, со столбцами для темы, ключевых пунктов и оценки релевантности..."
+  },
+  "examplePrompts": {
+    "message": "Примеры промптов:"
+  },
+  "advancedOptions": {
+    "message": "Расширенные настройки"
+  },
+  "columnHints": {
+    "message": "Подсказки по столбцам (необязательно)"
+  },
+  "columnHintsDesc": {
+    "message": "Предложите названия и типы столбцов, чтобы направлять LLM. Если не указано, столбцы будут выведены из вашего промпта."
+  },
+  "newColumnName": {
+    "message": "Название столбца"
+  },
+  "modelSelection": {
+    "message": "Модель"
+  },
+  "selectModel": {
+    "message": "Использовать модель по умолчанию"
+  },
+  "maxRows": {
+    "message": "Максимум строк"
+  },
+  "maxRowsHint": {
+    "message": "(1-1000)"
+  },
+  "generating": {
+    "message": "Генерируем таблицу из ваших источников..."
+  },
+  "generatingNote": {
+    "message": "Это может занять некоторое время в зависимости от объёма данных."
+  },
+  "generateSuccess": {
+    "message": "Таблица успешно сгенерирована!"
+  },
+  "generationFailed": {
+    "message": "Ошибка генерации"
+  },
+  "tryAgain": {
+    "message": "Повторить"
+  },
+  "warnings": {
+    "message": "Предупреждения"
+  },
+  "noPreview": {
+    "message": "Предпросмотр недоступен"
+  },
+  "promptUsed": {
+    "message": "Использованный промпт:"
+  },
+  "previewModified": {
+    "message": "Вы изменили предпросмотр. Изменения будут сохранены вместе с таблицей."
+  },
+  "addRow": {
+    "message": "Добавить строку"
+  },
+  "addColumn": {
+    "message": "Добавить столбец"
+  },
+  "deleteRow": {
+    "message": "Удалить строку?"
+  },
+  "deleteRowConfirm": {
+    "message": "Это действие нельзя отменить."
+  },
+  "deleteColumn": {
+    "message": "Удалить столбец?"
+  },
+  "deleteColumnConfirm": {
+    "message": "Это действие нельзя отменить."
+  },
+  "discard": {
+    "message": "Сбросить"
+  },
+  "changesDiscarded": {
+    "message": "Изменения отменены"
+  },
+  "save": {
+    "message": "Сохранить"
+  },
+  "saveSuccess": {
+    "message": "Изменения успешно сохранены!"
+  },
+  "unsavedChanges": {
+    "message": "У вас есть несохранённые изменения"
+  },
+  "columnAdded": {
+    "message": "Столбец '{{name}}' добавлен"
+  },
+  "rows": {
+    "message": "строк"
+  },
+  "columnsLabel": {
+    "message": "столбцов"
+  },
+  "showingRows": {
+    "message": "Показано {{total}} строк"
+  },
+  "tableSummary": {
+    "message": "Сводка таблицы"
+  },
+  "tableName": {
+    "message": "Название таблицы"
+  },
+  "tableNamePlaceholder": {
+    "message": "Введите название таблицы"
+  },
+  "tableDescription": {
+    "message": "Описание (необязательно)"
+  },
+  "tableDescPlaceholder": {
+    "message": "Добавьте описание, чтобы помнить, что содержит эта таблица"
+  },
+  "saveToLibrary": {
+    "message": "Сохранить в библиотеку"
+  },
+  "tableSaved": {
+    "message": "Таблица сохранена!"
+  },
+  "tableSavedDesc": {
+    "message": "Ваша таблица сохранена в библиотеке. Вы можете просматривать и экспортировать её в любое время."
+  },
+  "viewTables": {
+    "message": "Просмотреть мои таблицы"
+  },
+  "createAnother": {
+    "message": "Создать ещё одну"
+  },
+  "orExport": {
+    "message": "Или экспортировать напрямую:"
+  },
+  "export": {
+    "message": "Экспорт"
+  },
+  "exportCSV": {
+    "message": "Экспорт в CSV"
+  },
+  "exportExcel": {
+    "message": "Экспорт в Excel"
+  },
+  "exportJSON": {
+    "message": "Экспорт в JSON"
+  },
+  "exportSuccess": {
+    "message": "Таблица экспортирована как {{format}}"
+  },
+  "noTableToSave": {
+    "message": "Нет таблицы для сохранения"
+  },
+  "goBackToGenerate": {
+    "message": "Вернитесь на предыдущий шаг, чтобы сначала сгенерировать таблицу."
+  },
+  "tableDetails": {
+    "message": "Детали таблицы"
+  },
+  "tableNotFound": {
+    "message": "Таблица не найдена"
+  },
+  "noData": {
+    "message": "Нет данных"
+  },
+  "data": {
+    "message": "Данные"
+  },
+  "editMode": {
+    "message": "Режим редактирования"
+  },
+  "editModeActive": {
+    "message": "Кликните по ячейкам для редактирования"
+  },
+  "regenerate": {
+    "message": "Сгенерировать заново"
+  },
+  "regenerateSuccess": {
+    "message": "Таблица успешно сгенерирована заново!"
+  },
+  "model": {
+    "message": "Модель"
+  },
+  "prompt": {
+    "message": "Промпт генерации"
+  },
+  "sources": {
+    "message": "Источники"
+  },
+  "created": {
+    "message": "Создано"
+  },
+  "updated": {
+    "message": "Обновлено"
+  },
+  "noTables": {
+    "message": "Таблиц пока нет. Создайте свою первую таблицу!"
+  },
+  "noSearchResults": {
+    "message": "Не найдено таблиц, соответствующих вашему поиску"
+  },
+  "totalTables": {
+    "message": "{{total}} таблиц"
+  },
+  "view": {
+    "message": "Просмотр"
+  },
+  "delete": {
+    "message": "Удалить"
+  },
+  "deleteConfirmTitle": {
+    "message": "Удалить таблицу"
+  },
+  "deleteConfirmMessage": {
+    "message": "Вы уверены, что хотите удалить эту таблицу? Это действие нельзя отменить."
+  },
+  "noTable": {
+    "message": "Нет данных таблицы"
+  },
+  "add": {
+    "message": "Добавить"
+  },
+  "columnName": {
+    "message": "Название столбца"
+  },
+  "columnNamePlaceholder": {
+    "message": "например, Цена, Статус, Дата"
+  },
+  "columnNameRequired": {
+    "message": "Введите название столбца"
+  },
+  "columnNameTooLong": {
+    "message": "Название столбца должно быть не длиннее 50 символов"
+  },
+  "columnNameExists": {
+    "message": "Столбец с таким именем уже существует"
+  },
+  "columnType": {
+    "message": "Тип столбца"
+  },
+  "columnTypeRequired": {
+    "message": "Выберите тип столбца"
+  },
+  "columnDescription": {
+    "message": "Описание (необязательно)"
+  },
+  "columnDescriptionHint": {
+    "message": "Краткое описание того, что содержит этот столбец"
+  },
+  "columnDescriptionPlaceholder": {
+    "message": "например, Цена товара в USD"
+  },
+  "discardUnsavedChanges": {
+    "message": "У вас есть несохранённые изменения. Вы уверены, что хотите закрыть?"
+  },
+  "createFromChat": {
+    "message": "Создать таблицу из чата"
+  },
+  "saveFromArtifact": {
+    "message": "Сохранить в Таблицы данных"
+  },
+  "importedPrompt": {
+    "message": "Импортировано из артефакта таблицы"
+  },
+  "columns_name": {
+    "message": "Название"
+  },
+  "columns_rows": {
+    "message": "Строки"
+  },
+  "columns_columns": {
+    "message": "Столбцы"
+  },
+  "columns_sources": {
+    "message": "Источники"
+  },
+  "columns_created": {
+    "message": "Создано"
+  },
+  "columns_actions": {
+    "message": "Действия"
+  },
+  "dataTablesDescription": {
+    "message": "Создавайте структурированные таблицы из ваших чатов, документов и базы знаний с помощью промптов на естественном языке."
+  },
+  "descriptionLabel": {
+    "message": "Описание"
+  }
+}

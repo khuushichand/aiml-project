@@ -107,10 +107,14 @@ from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets im
 from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
     sanitize_sender_name,
 )
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 
 # Chat helpers and utilities
 # For chat completions
-from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+from tldw_Server_API.app.core.Chat.chat_service import (
+    perform_chat_api_call,
+    resolve_provider_and_model,
+)
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -126,6 +130,7 @@ from tldw_Server_API.app.core.Utils.common import parse_boolean
 from tldw_Server_API.app.core.config import load_and_log_configs
 
 _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS = (
+    ChatAPIError,
     asyncio.CancelledError,
     asyncio.TimeoutError,
     AssertionError,
@@ -1147,18 +1152,36 @@ def _resolve_chat_turn_context(
 
 
 def _normalize_greeting_values(value: Any) -> list[str]:
-    if isinstance(value, str):
-        trimmed = value.strip()
-        return [trimmed] if trimmed else []
-    if isinstance(value, list):
+    def _normalize_string_entries(entries: list[Any]) -> list[str]:
         normalized: list[str] = []
-        for entry in value:
+        for entry in entries:
             if not isinstance(entry, str):
                 continue
-            trimmed = entry.strip()
-            if trimmed:
-                normalized.append(trimmed)
+            trimmed_entry = entry.strip()
+            if trimmed_entry:
+                normalized.append(trimmed_entry)
         return normalized
+
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return []
+        try:
+            parsed = json.loads(trimmed)
+        except json.JSONDecodeError:
+            return [trimmed]
+        if isinstance(parsed, list):
+            return _normalize_string_entries(parsed)
+        if isinstance(parsed, str):
+            try:
+                nested_parsed = json.loads(parsed)
+            except json.JSONDecodeError:
+                return [trimmed]
+            if isinstance(nested_parsed, list):
+                return _normalize_string_entries(nested_parsed)
+        return [trimmed]
+    if isinstance(value, list):
+        return _normalize_string_entries(value)
     return []
 
 
@@ -3277,13 +3300,42 @@ async def character_chat_completion(
         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             pass  # world book injection is best-effort
 
-        # Determine provider/model with safe defaults for test/offline
-        provider = (
+        # Determine provider/model with shared normalization and safe defaults.
+        default_provider = _get_default_provider().strip()
+        raw_provider = (
             body.provider
             or os.getenv("CHAR_CHAT_PROVIDER")
-            or _get_default_provider()
-        ).strip()
-        model = (body.model or os.getenv("CHAR_CHAT_MODEL") or "local-test").strip()
+            or None
+        )
+        if isinstance(raw_provider, str):
+            raw_provider = raw_provider.strip() or None
+        raw_model = (body.model or os.getenv("CHAR_CHAT_MODEL") or "local-test").strip()
+
+        class _ProviderModelResolutionRequest:
+            def __init__(self, provider_value: Optional[str], model_value: str):
+                self.api_provider = provider_value
+                self.model = model_value
+
+        provider = (raw_provider or default_provider).strip()
+        model = raw_model or "local-test"
+        try:
+            resolution_req = _ProviderModelResolutionRequest(raw_provider, raw_model)
+            (
+                _metrics_provider,
+                _metrics_model,
+                selected_provider,
+                selected_model,
+                provider_debug,
+            ) = resolve_provider_and_model(
+                request_data=resolution_req,
+                metrics_default_provider=default_provider,
+                normalize_default_provider=default_provider,
+            )
+            provider = (selected_provider or provider).strip()
+            model = (selected_model or model).strip()
+            logger.debug("Character provider/model resolution: {}", provider_debug)
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("Character provider/model normalization fallback: {}", exc)
 
         # If we will persist, ensure message cap won't be exceeded.
         # Otherwise enforce a soft cap for non-persisted completions.
@@ -3370,6 +3422,12 @@ async def character_chat_completion(
                         status_code=status.HTTP_502_BAD_GATEWAY,
                         detail="LLM provider error"
                     ) from e
+            except ChatAPIError as e:
+                logger.error("Chat provider call failed [{}]: {}", e.__class__.__name__, e)
+                raise HTTPException(
+                    status_code=int(getattr(e, "status_code", status.HTTP_502_BAD_GATEWAY)),
+                    detail=str(e),
+                ) from e
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Chat provider call failed: {e}")
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Chat provider error") from e

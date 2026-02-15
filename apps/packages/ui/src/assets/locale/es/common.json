@@ -1,0 +1,559 @@
+{
+  "pageAssist": "Asistente tldw",
+  "titles": {
+    "options": "tldw Assistant — Options",
+    "sidepanel": "tldw Assistant — Sidepanel"
+  },
+  "dismiss": "Descartar",
+  "confirmTitle": "Confirma la acción",
+  "pdf": {
+    "passwordTitle": "Introduce la contraseña del PDF",
+    "unlock": "Desbloquear"
+  },
+  "loading": {
+    "title": "Cargando…",
+    "description": "Espera mientras preparamos todo.",
+    "content": "Cargando contenido…"
+  },
+  "selectAModel": "Selecione un Modelo",
+  "modelSelect": {
+    "label": "Modelo",
+    "tooltip": "Cambia el modelo para el próximo mensaje",
+    "searchPlaceholder": "Search models",
+    "noMatches": "No models match your search.",
+    "favoriteAdd": "Add to favorites",
+    "favoriteRemove": "Remove from favorites",
+    "sort": {
+      "favorites": "Favorites",
+      "az": "A-Z",
+      "provider": "Provider",
+      "localFirst": "Local-first"
+    }
+  },
+  "save": "Guardar",
+  "saved": "Guardado",
+  "cancel": "Cancelar",
+  "saving": "Guardando...",
+  "retry": "Reintentar",
+  "close": "Cerrar",
+  "loadMore": "Cargar más...",
+  "share": {
+    "tooltip": {
+      "share": "Compartir"
+    },
+    "modal": {
+      "title": "Compartir enlace para chat"
+    },
+    "form": {
+      "defaultValue": {
+        "name": "Anónimo",
+        "title": "Chat sin título"
+      },
+      "title": {
+        "label": "Título del Chat",
+        "placeholder": "Ingresar el título del Chat",
+        "required": "El título del Chat es obligatorio"
+      },
+      "name": {
+        "label": "Tu nombre",
+        "placeholder": "Ingresar tu nombre",
+        "required": "Tu nombre es obligatorio"
+      },
+      "btn": {
+        "save": "Generar enlace",
+        "saving": "Generando enlace..."
+      }
+    },
+    "notification": {
+      "successGenerate": "Enlace copiado al Clipboard",
+      "failGenerate": "Fallo al generar el enlace"
+    }
+  },
+  "copyToClipboard": "Copiar al clipboard",
+  "table": {
+    "copyCsv": "Copiar como CSV",
+    "downloadCsv": "Descargar CSV"
+  },
+  "webSearch": "Buscando en la web",
+  "regenerate": "Regenerar",
+  "edit": "Editar",
+  "generate": "Generar",
+  "view": "Ver",
+  "previewMaxHeight": "Altura máxima",
+  "previewFitHeight": "Ajustar altura",
+  "previewToggleExpand": "Ampliar vista previa",
+  "previewToggleClamp": "Limitar vista previa",
+  "delete": "Borrar",
+  "deleteMessageConfirm": "¿Eliminar este mensaje?",
+  "deleteFailed": "Error al eliminar",
+  "continue": "Continuar Respuesta",
+  "saveAndSubmit": "Guardar y Enviar",
+  "editMessage": {
+    "placeholder": "Ingresar un mensaje..."
+  },
+  "submit": "Enviar",
+  "send": "Enviar",
+  "startChat": "Iniciar chat",
+  "connectToServer": "Conectar con el servidor",
+  "previous": "Anterior",
+  "next": "Siguiente",
+  "noData": "Sin datos",
+  "noHistory": "Chat sin histórico",
+  "chatWithCurrentPage": "Conversar con la página actual",
+  "chatWithCharacter": "Chatear con personaje",
+  "beta": "Versión beta",
+  "tts": "Leer en voz alta",
+  "ttsShort": "Voz",
+  "reply": "Responder",
+  "replyShort": "Resp.",
+  "replyingTo": "Respondiendo a",
+  "clearReply": "Borrar respuesta",
+  "replyTargetFallback": "Mensaje",
+  "artifactsTitle": "Artefacto",
+  "artifactsDefaultTitle": "Código",
+  "artifactsView": "Ver código",
+  "artifactsPin": "Fijar",
+  "artifactsUnpin": "Desfijar",
+  "artifactsClose": "Cerrar",
+  "artifactsCopy": "Copiar",
+  "artifactsDownload": "Descargar",
+  "artifactsRun": "Ejecutar",
+  "copyShort": "Copiar",
+  "branchShort": "Rama",
+  "infoShort": "Info.",
+  "saveToNotes": "Guardar en notas",
+  "saveToFlashcards": "Guardar en tarjetas de estudio",
+  "generateDocument": "Generar documento",
+  "documentShort": "Doc.",
+  "documentCard": {
+    "removeAria": "Eliminar {{name}}"
+  },
+  "saveNoteShort": "Nota",
+  "saveFlashcardShort": "Tarjeta",
+  "savedToNotes": "Guardado en notas",
+  "savedToFlashcards": "Guardado en tarjetas de estudio",
+  "saveToNotesEmpty": "Aún no hay nada que guardar.",
+  "regenShort": "Repetir",
+  "continueShort": "Más",
+  "fileChanges": "Cambios de archivos",
+  "deletions": "Eliminaciones",
+  "gitOperations": "Operaciones de Git",
+  "commands": "Comandos",
+  "otherOperations": "Otras operaciones",
+  "fileAccess": "Acceso a archivos",
+  "notebookEdits": "Ediciones del cuaderno",
+  "applyPatch": "Aplicar parche",
+  "recursive": "(recursivo)",
+  "complexArguments": "[Argumentos complejos]",
+  "currentChatModelSettings": "Configuraciones del Modelo de Chat Actual",
+  "modelSettings": {
+    "label": "Configuraciones del Modelo",
+    "description": "Definir las opciones del modelo globalmente para todos los chats",
+    "form": {
+      "keepAlive": {
+        "label": "Mantener vivo",
+        "help": "controlar cuanto tiempo el modelo permanecera cargado en la memoria luego de su utilización (por defecto: 5m)",
+        "placeholder": "Ingresar duración para mantenerlo vivo (ej: 5m, 10m, 1h)"
+      },
+      "temperature": {
+        "label": "Temperatura",
+        "placeholder": "Ingresar valor de la Temperatura (ej: 0.7, 1.0)"
+      },
+      "numCtx": {
+        "label": "Tamaño de la Ventana de Contexto (num_ctx)",
+        "placeholder": "Ingrese el valor del tamaño de la ventana de contexto (por defecto: 2048)"
+      },
+      "numPredict": {
+        "label": "Máximo de Tokens (num_predict)",
+        "placeholder": "Ingrese el valor máximo de Tokens (ej: 2048, 4096)"
+      },
+      "thinking": {
+        "label": "Modo de razonamiento"
+      },
+      "seed": {
+        "label": "Semilla",
+        "placeholder": "Ingresar el valor de la semilla (ej: 1234)",
+        "help": "Reproductibilidad de la salida del modelo"
+      },
+      "topK": {
+        "label": "Top K (superior K)",
+        "placeholder": "Ingresar el valor de Top K (ej: 40, 100)"
+      },
+      "topP": {
+        "label": "Top P (superior P)",
+        "placeholder": "Ingresar el valor de Top P (ej: 0.9, 0.95)"
+      },
+      "useMMap": {
+        "label": "useMmap (mapear en memoria)"
+      },
+      "tfsZ": {
+        "label": "TFS-Z (parámetro TFS)",
+        "placeholder": "p. ej.: 1.0, 1.1"
+      },
+      "numKeep": {
+        "label": "Num Keep (n.º a mantener)",
+        "placeholder": "p. ej.: 256, 512"
+      },
+      "numThread": {
+        "label": "Num Thread (n.º de hilos)",
+        "placeholder": "p. ej.: 8, 16"
+      },
+      "useMlock": {
+        "label": "useMlock (bloquear en memoria)"
+      },
+      "reasoningEffort": {
+        "label": "Esfuerzo de razonamiento",
+        "placeholder": "bajo, medio, alto"
+      },
+      "minP": {
+        "label": "Min P (P mínima)",
+        "placeholder": "p. ej.: 0.05"
+      },
+      "repeatPenalty": {
+        "label": "Penalización por repetición",
+        "placeholder": "p. ej.: 1.1, 1.2"
+      },
+      "repeatLastN": {
+        "label": "Repetir últimos N",
+        "placeholder": "p. ej.: 64, 128"
+      },
+      "numGpu": {
+        "label": "N.º de GPU",
+        "placeholder": "Ingrese el número de capas para enviar a la(s) GPU(s)"
+      },
+      "systemPrompt": {
+        "label": "Prompt de Sistema Temporal",
+        "placeholder": "Ingrese el Prompt de Sistema",
+        "help": "Esta es una forma rápida de establecer el prompt de sistema en el chat actual, que anulará el prompt de sistema seleccionado si existe."
+      },
+      "historyMessageLimit": {
+        "label": "Límite de mensajes del historial",
+        "placeholder": "p. ej. 10",
+        "help": "Limita cuántos mensajes anteriores se envían con cada solicitud."
+      },
+      "historyMessageOrder": {
+        "label": "Orden de mensajes del historial",
+        "placeholder": "Selecciona el orden",
+        "help": "Elige si se envían primero los mensajes más recientes o los más antiguos.",
+        "options": {
+          "desc": "Más recientes primero",
+          "asc": "Más antiguos primero"
+        }
+      },
+      "slashCommandInjectionMode": {
+        "label": "Inyección de comandos con barra",
+        "placeholder": "Selecciona el modo de inyección",
+        "help": "Elige cómo se insertan los comandos con barra en la solicitud.",
+        "options": {
+          "system": "Mensaje del sistema",
+          "preface": "Anteponer al mensaje del usuario",
+          "replace": "Reemplazar mensaje del usuario"
+        }
+      },
+      "apiProvider": {
+        "label": "Anulación del proveedor de API",
+        "placeholder": "Selecciona proveedor (opcional)",
+        "help": "Fuerza un proveedor específico para este chat (p. ej. openai, anthropic)."
+      },
+      "extraHeaders": {
+        "label": "Encabezados extra (JSON)",
+        "placeholder": "{ \"X-API-Key\": \"...\" }",
+        "help": "Objeto JSON que se fusiona en los encabezados de la solicitud."
+      },
+      "extraBody": {
+        "label": "Cuerpo extra (JSON)",
+        "placeholder": "{ \"user\": \"...\" }",
+        "help": "Objeto JSON que se fusiona en el cuerpo de la solicitud."
+      },
+      "guardrails": {
+        "invalidJson": "Introduce un objeto JSON válido."
+      }
+    },
+    "advanced": "Más Configuraciones del Modelo",
+    "requestOverrides": "Anulaciones de solicitud",
+    "tabs": {
+      "model": "Modelo",
+      "conversation": "Conversación",
+      "advanced": "Avanzado",
+      "actor": "Director de escena"
+    }
+  },
+  "copilot": {
+    "summary": "Resumir",
+    "explain": "Explicar",
+    "rephrase": "Reformular",
+    "translate": "Traducir",
+    "custom": "Personalizado"
+  },
+  "citations": "Citas",
+  "segmented": {
+    "available": "Modelos del servidor",
+    "custom": "Modelos personalizados"
+  },
+  "downloadCode": "Descargar Código",
+  "success": "Éxito",
+  "created": "Creado",
+  "updated": "Actualizado",
+  "deleted": "Eliminado",
+  "create": "Crear",
+  "reset": "Restablecer",
+  "serverOffline": "Servidor sin conexión o no configurado",
+  "serverChats": "Chats del servidor",
+  "serverChatLoadError": "No se pudo cargar el chat del servidor. Comprueba la conexión e inténtalo de nuevo.",
+  "serverChatSourceLabel": "Servidor",
+  "serverChatForkedLabel": "Chat bifurcado",
+  "serverChatForkedTooltip": "Bifurcado del chat {{chatId}}",
+  "serverChatsUnavailableNotConnected": "Los chats del servidor estarán disponibles cuando te conectes a tu servidor tldw.",
+  "serverChatsUnavailableServerError": "Los chats del servidor no están disponibles en este momento. Revisa los registros de tu servidor o inténtalo de nuevo.",
+  "date": {
+    "pinned": "Fijado",
+    "today": "Hoy",
+    "yesterday": "Ayer",
+    "last7Days": "Últimos 7 días",
+    "older": "Más antiguo"
+  },
+  "range": {
+    "deleteConfirm": {
+      "pinned": "¿Está seguro de que desea eliminar todos los mensajes fijados?",
+      "today": "¿Está seguro de que desea eliminar todos los mensajes de hoy?",
+      "yesterday": "¿Está seguro de que desea eliminar todos los mensajes de ayer?",
+      "last7Days": "¿Está seguro de que desea eliminar todos los mensajes de los últimos 7 días?",
+      "older": "¿Está seguro de que desea eliminar todos los mensajes más antiguos?"
+    },
+    "tooltip": {
+      "pinned": "Eliminar todos los mensajes fijados",
+      "today": "Eliminar todos los mensajes de hoy",
+      "yesterday": "Eliminar todos los mensajes de ayer",
+      "last7Days": "Eliminar todos los mensajes de los últimos 7 días",
+      "older": "Eliminar todos los mensajes más antiguos"
+    }
+  },
+  "historiesDeleted": "{{count}} historiales eliminados",
+  "deleteHistoriesError": "Error al eliminar historiales",
+  "pin": "Fijar",
+  "unpin": "Desfijar",
+  "generationInfo": "Información de Generación",
+  "sidebarChat": "Chat lateral",
+  "reasoning": {
+    "thinking": "Pensando....",
+    "loading": "Cargando razonamiento....",
+    "thought": "Pensamiento por {{time}}"
+  },
+  "mermaid": "Diagramas Mermaid",
+  "search": "Buscar",
+  "searchResults": "Resultados de la búsqueda",
+  "embeddingGen": "Creando embeddings, esto puede tardar un poco",
+  "semanticSearch": "Realizando búsqueda semántica",
+  "newBranch": "Nueva rama",
+  "downloading": "Descargando",
+  "cancelPullingModel": {
+    "confirm": "¿Está seguro de que desea cancelar la descarga? Esto detendrá el proceso de descarga. Según la documentación de Ollama, puede reiniciar desde donde lo dejó."
+  },
+  "privateModeSaveErrorTitle": "tldw Assistant no puede guardar datos",
+  "error": {
+    "label": "Error",
+    "friendlyApiKeySummary": "No pudimos conectarnos a su servidor tldw.",
+    "friendlyApiKeyHint": "Su clave API puede ser inválida. Abra Ajustes → servidor tldw para comprobar la URL y la clave API, luego inténtelo de nuevo.",
+    "friendlyTimeoutSummary": "Su chat agotó el tiempo de espera.",
+    "friendlyTimeoutHint": "El servidor dejó de transmitir respuestas. Inténtelo de nuevo o abra Salud y diagnóstico para comprobar el estado del servidor.",
+    "friendlyGenericSummary": "Algo salió mal al comunicarse con su servidor tldw.",
+    "friendlyGenericHint": "Inténtelo de nuevo en un momento o abra Salud y diagnóstico para revisar el estado del servidor.",
+    "showDetails": "Mostrar detalles técnicos",
+    "hideDetails": "Ocultar detalles técnicos",
+    "createFolder": "No se pudo crear la carpeta"
+  },
+  "folders": "Carpetas",
+  "folderView": "Vista de carpetas",
+  "dateView": "Vista de fecha",
+  "newFolder": "Nueva carpeta",
+  "folderName": "Nombre de carpeta",
+  "selectFolder": "Seleccionar carpeta",
+  "noFolders": "Sin carpetas",
+  "expandAll": "Expandir todo",
+  "collapseAll": "Contraer todo",
+  "refresh": "Actualizar",
+  "confirm": "Confirmar",
+  "untitled": "Sin título",
+  "moveToFolder": "Mover a carpeta",
+  "timeline": {
+    "title": "Línea de tiempo de la conversación",
+    "searchPlaceholder": "Buscar mensajes... (espacio = Y)",
+    "searchMatches": "coincidencias",
+    "searchNoMatches": "sin coincidencias",
+    "searchMode": {
+      "fragments": "Fragmentos",
+      "substring": "Subcadena",
+      "regex": "Expresión regular"
+    },
+    "layout": {
+      "horizontal": "horizontal",
+      "vertical": "vertical"
+    },
+    "refreshGraph": "Actualizar gráfico",
+    "switchLayout": "Cambiar al diseño {{layout}}",
+    "expandAllAlternatives": "Expandir todas las alternativas",
+    "collapseAllAlternatives": "Contraer todas las alternativas",
+    "hideLegend": "Ocultar leyenda",
+    "showLegend": "Mostrar leyenda",
+    "zoomIn": "Acercar",
+    "zoomOut": "Alejar",
+    "unableLocateMessage": "No se pudo localizar el mensaje para esta acción.",
+    "actionFailed": "No se pudo realizar la acción de la línea de tiempo. Inténtalo de nuevo."
+  },
+  "noToolCalls": "Aún no hay llamadas de herramientas",
+  "sourceLabel": "Fuente",
+  "sourceOpen": "Abrir fuente",
+  "status": {
+    "pending": "Pendiente",
+    "running": "Procesando",
+    "complete": "Finalizado",
+    "error": "Error"
+  },
+  "arguments": "Argumentos",
+  "invalidJson": "JSON no válido; se muestra el valor bruto",
+  "result": "Resultado",
+  "tools": {
+    "fs_list": "Listar directorio",
+    "fs_read": "Leer archivo",
+    "fs_write": "Escribir archivo",
+    "fs_apply_patch": "Aplicar parche",
+    "fs_mkdir": "Crear directorio",
+    "fs_delete": "Eliminar",
+    "search_grep": "Buscar contenido",
+    "search_glob": "Buscar archivos",
+    "git_status": "Estado de Git",
+    "git_diff": "Diff de Git",
+    "git_log": "Log de Git",
+    "git_branch": "Rama de Git",
+    "git_add": "Preparar archivos",
+    "git_commit": "Commit",
+    "exec_run": "Ejecutar comando"
+  },
+  "markdown": {
+    "unableToRender": "No se puede renderizar el contenido",
+    "couldNotDisplay": "El contenido del mensaje no se pudo mostrar. Esto puede deberse a un formato inválido.",
+    "showRawContent": "Mostrar contenido sin formato"
+  },
+  "commandPalette": {
+    "goToChat": "Ir al chat",
+    "goToMedia": "Ir a Medios",
+    "goToNotes": "Ir a Notas",
+    "goToFlashcards": "Ir a tarjetas de estudio",
+    "goToSettings": "Ir a Configuración",
+    "goToHealth": "Ir a Salud y diagnósticos",
+    "newChat": "Nuevo chat",
+    "toggleKnowledgeSearch": "Alternar búsqueda en conocimiento",
+    "toggleKnowledgeSearchDesc": "Buscar en tu base de conocimiento",
+    "toggleWebSearch": "Alternar búsqueda web",
+    "toggleWebDesc": "Buscar en Internet",
+    "ingestPage": "Ingerir página actual",
+    "ingestDesc": "Guardar esta página en tu base de conocimiento",
+    "switchModel": "Cambiar modelo",
+    "toggleSidebar": "Alternar barra lateral",
+    "toggleSidebarDesc": "Mostrar u ocultar la barra lateral de chat",
+    "placeholder": "Escribe un comando o busca...",
+    "noResults": "No se encontraron resultados",
+    "title": "Paleta de comandos",
+    "navigate": "navegar",
+    "select": "seleccionar",
+    "toOpen": "para abrir",
+    "categoryActions": "Acciones",
+    "categoryNavigation": "Navegación",
+    "categorySettings": "Configuración",
+    "categoryRecent": "Recientes"
+  },
+  "featureHints": {
+    "knowledge": {
+      "title": "Buscar en tu conocimiento",
+      "description": "Abre el panel de búsqueda de conocimiento para encontrar fragmentos e insertarlos en tu chat."
+    },
+    "moreTools": {
+      "title": "Más herramientas disponibles",
+      "description": "Accede al modo visión, carga de imágenes, ingesta rápida y la aplicación completa."
+    },
+    "commandPalette": {
+      "title": "Comandos rápidos",
+      "description": "Presiona {{shortcut}} para buscar comandos, configuración y más."
+    },
+    "modelSettings": {
+      "title": "Ajustar parámetros del modelo",
+      "description": "Ajusta la temperatura, longitud del contexto y otras configuraciones del modelo."
+    }
+  },
+  "chatSidebar": {
+    "title": "Conversaciones",
+    "newChat": "Nuevo chat",
+    "collapse": "Contraer barra lateral",
+    "expand": "Expandir barra lateral",
+    "search": "Buscar chats...",
+    "modeLabel": "Modo",
+    "modeCasual": "Informal",
+    "modePro": "Profesional",
+    "ingest": "Ingerir página",
+    "media": "Medios",
+    "notes": "Notas",
+    "flashcards": "Tarjetas de estudio",
+    "prompts": "Indicaciones",
+    "multiItem": "Múltiples elementos",
+    "shortcuts": "Accesos directos",
+    "settings": "Configuración",
+    "loadError": "Error al cargar chats",
+    "localTab": "Local",
+    "serverTab": "Servidor",
+    "foldersTab": "Carpetas",
+    "tabs": {
+      "local": "Local",
+      "server": "Servidor",
+      "folders": "Carpetas"
+    },
+    "noServerChats": "Aún no hay chats del servidor",
+    "foldersRequireConnection": "Las carpetas requieren conexión al servidor"
+  },
+  "extName": "Asistente tldw",
+  "extDescription": "Usa tu modelo de IA corriendo localmente para asistirte en la navegación.",
+  "openSidePanelToChat": "Abrir barra lateral para chatear",
+  "openOptionToChat": "Abrir Web UI para Chatear",
+  "contextSummarize": "Resumir",
+  "contextExplain": "Explicar",
+  "contextRephrase": "Reformular",
+  "contextTranslate": "Traducir",
+  "contextCustom": "Personalizado",
+  "contextNarrateSelection": "Narrar selección",
+  "contextNarrateSelectionNoSelection": "Selecciona texto primero para narrar.",
+  "contextSendToTldw": "Enviar a tldw_server",
+  "contextProcessLocalTldw": "Procesar con tldw_server (no guardar)",
+  "contextTranscribeMedia": "Transcribir vídeo/audio",
+  "contextTranscribeAndSummarizeMedia": "Transcribir y resumir vídeo/audio",
+  "contextSaveToNotes": "Guardar en notas",
+  "contextSaveToNotesNoSelection": "Selecciona texto primero para guardarlo en notas.",
+  "contextSidebarOpening": "Abriendo la barra lateral...",
+  "contextSaveToNotesOpeningSidebar": "Abriendo la barra lateral para guardar la nota...",
+  "contextSaveToNotesDeliveryFailed": "No se pudo abrir la barra lateral para guardar esta nota. Verifica que la barra lateral de tldw Assistant esté permitida en este sitio y vuelve a intentarlo.",
+  "hfSendPageRejected": "[tldw] La solicitud para enviar la página fue rechazada por tldw_server",
+  "hfSendPageErrorWithDetail": "[tldw] No se pudo enviar esta página a tldw_server: $1. Revisa \"Settings → tldw server\" y vuelve a intentarlo.",
+  "hfSendPageError": "[tldw] No se pudo enviar esta página a tldw_server. Revisa \"Settings → tldw server\" y vuelve a intentarlo.",
+  "hfSendPageSuccess": "[tldw] Página enviada a tldw_server para su procesamiento",
+  "hfSendPageException": "[tldw] Ocurrió un problema al enviar esta página a tldw_server. Comprueba que tu tldw_server y la extensión estén en ejecución y vuelve a intentarlo.",
+  "hfPullInProgress": "[tldw Assistant] Ya hay una solicitud de descarga de modelo en curso. Espera a que termine antes de iniciar otra.",
+  "hfPullConfirm": "[tldw Assistant] ¿Quieres enviar una solicitud a tu tldw_server para descargar el modelo \"$1\"? Esto es independiente del sitio web huggingface.co. Tu servidor empezará a descargar el modelo después de que lo confirmes.",
+  "hfPullSending": "[tldw Assistant] Enviando una solicitud a tu tldw_server para descargar \"$1\". Revisa el icono de la extensión o los registros de tu tldw_server para ver el progreso.",
+  "hfPullErrorWithDetail": "[tldw Assistant] No se pudo enviar la solicitud de descarga para \"$1\": $2. Revisa \"Settings → tldw server\" y vuelve a intentarlo.",
+  "hfPullError": "[tldw Assistant] No se pudo enviar la solicitud de descarga para \"$1\". Revisa \"Settings → tldw server\" y vuelve a intentarlo.",
+  "hfPullSuccess": "[tldw Assistant] Solicitud enviada a tu tldw_server para descargar \"$1\". Supervisa el icono de la extensión o los registros de tldw_server para ver el estado.",
+  "hfPullException": "[tldw Assistant] Ocurrió un problema al enviar una solicitud de descarga de \"$1\" a tu tldw_server. Comprueba que tu tldw_server y la extensión estén en ejecución y vuelve a intentarlo.",
+  "stepLabel": "Bienvenido",
+  "path": "¿Cómo quieres empezar?",
+  "nextSteps": "Ya estás listo",
+  "restartOnboardingLabel": "Reiniciar la incorporación desde el principio",
+  "restartOnboardingButton": "Reiniciar incorporación",
+  "restartOnboardingConfirmTitle": "¿Reiniciar la incorporación?",
+  "restartOnboardingConfirmMessage": "Esto restablecerá tu estado de incorporación y te llevará de nuevo al flujo de configuración.",
+  "relativeTime": {
+    "unknown": "Desconocido",
+    "justNow": "Justo ahora",
+    "agoShort": "hace",
+    "minutesAgoShort": "hace {{count}}m",
+    "hoursAgoShort": "hace {{count}}h",
+    "daysAgoShort": "hace {{count}}d"
+  }
+}

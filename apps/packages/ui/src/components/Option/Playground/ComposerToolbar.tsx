@@ -353,6 +353,8 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
       {/* Row 1: Primary selectors - always present */}
       <div className={`flex flex-col gap-2 ${isProMode ? "mt-1" : ""}`}>
         <div className="flex flex-wrap items-center gap-2">
+          <ConnectionStatus showLabel={false} className="px-1 py-0.5" />
+          {!isMobile && mcpControl}
           <PromptSelect
             selectedSystemPrompt={selectedSystemPrompt}
             setSelectedSystemPrompt={setSelectedSystemPrompt}
@@ -366,7 +368,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
             iconClassName="h-4 w-4"
             className="text-text-muted hover:text-text"
           />
-          {!isMobile && mcpControl}
         </div>
 
         {/* Row 2 (Pro-only): Enhanced features */}
@@ -391,7 +392,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
         {/* Row 3: Toggles + action controls */}
         <div className={`flex ${isProMode ? "flex-col gap-2 md:flex-row md:items-center md:justify-between" : "items-center justify-between gap-2"}`}>
           <div className={`flex items-center gap-2 ${isProMode ? "flex-wrap text-text-muted" : "flex-nowrap"}`}>
-            <ConnectionStatus showLabel={false} className="px-1 py-0.5" />
             {ephemeralToggle}
             {/* Desktop: show inline; Mobile: hidden (in overflow) */}
             {!isMobile && searchContextButton}

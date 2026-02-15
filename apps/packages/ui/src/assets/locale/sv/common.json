@@ -1,0 +1,559 @@
+{
+  "pageAssist": "tldw-assistenten",
+  "titles": {
+    "options": "tldw Assistant — Options",
+    "sidepanel": "tldw Assistant — Sidepanel"
+  },
+  "dismiss": "Avfärda",
+  "confirmTitle": "Vänligen bekräfta",
+  "pdf": {
+    "passwordTitle": "Ange PDF-lösenordet",
+    "unlock": "Lås upp"
+  },
+  "loading": {
+    "title": "Läser in…",
+    "description": "Vänta medan vi förbereder allt.",
+    "content": "Läser in innehåll…"
+  },
+  "selectAModel": "Välj en modell",
+  "modelSelect": {
+    "label": "Modell",
+    "tooltip": "Byter modell för nästa meddelande",
+    "searchPlaceholder": "Search models",
+    "noMatches": "No models match your search.",
+    "favoriteAdd": "Add to favorites",
+    "favoriteRemove": "Remove from favorites",
+    "sort": {
+      "favorites": "Favorites",
+      "az": "A-Z",
+      "provider": "Provider",
+      "localFirst": "Local-first"
+    }
+  },
+  "save": "Spara",
+  "saved": "Sparad",
+  "cancel": "Avbryt",
+  "saving": "Sparar...",
+  "retry": "Försök igen",
+  "close": "Stäng",
+  "loadMore": "Ladda mer...",
+  "share": {
+    "tooltip": {
+      "share": "Dela"
+    },
+    "modal": {
+      "title": "Dela länk till chatt"
+    },
+    "form": {
+      "defaultValue": {
+        "name": "Anonym",
+        "title": "Chatt utan titel"
+      },
+      "title": {
+        "label": "Chattitel",
+        "placeholder": "Ange chattitel",
+        "required": "Chattitel krävs"
+      },
+      "name": {
+        "label": "Ditt namn",
+        "placeholder": "Ange ditt namn",
+        "required": "Ditt namn krävs"
+      },
+      "btn": {
+        "save": "Generera länk",
+        "saving": "Genererar länk..."
+      }
+    },
+    "notification": {
+      "successGenerate": "Länk kopierad till urklipp",
+      "failGenerate": "Misslyckades med att generera länk"
+    }
+  },
+  "copyToClipboard": "Kopiera till urklipp",
+  "table": {
+    "copyCsv": "Kopiera som CSV",
+    "downloadCsv": "Ladda ner CSV"
+  },
+  "webSearch": "Söker på webben",
+  "regenerate": "Återskapa",
+  "edit": "Redigera",
+  "generate": "Generera",
+  "view": "Visa",
+  "previewMaxHeight": "Maxhöjd",
+  "previewFitHeight": "Anpassa höjd",
+  "previewToggleExpand": "Expandera förhandsvisning",
+  "previewToggleClamp": "Begränsa förhandsvisning",
+  "delete": "Radera",
+  "deleteMessageConfirm": "Radera det här meddelandet?",
+  "deleteFailed": "Radering misslyckades",
+  "continue": "Fortsätt svar",
+  "saveAndSubmit": "Spara & Skicka",
+  "editMessage": {
+    "placeholder": "Skriv ett meddelande..."
+  },
+  "submit": "Skicka",
+  "send": "Skicka",
+  "startChat": "Starta chatt",
+  "connectToServer": "Anslut till servern",
+  "previous": "Föregående",
+  "next": "Nästa",
+  "noData": "Inga data",
+  "noHistory": "Ingen chattlogg",
+  "chatWithCurrentPage": "Chatta med nuvarande sidan",
+  "chatWithCharacter": "Chatta med en karaktär",
+  "beta": "Betaversion",
+  "tts": "Läs högt",
+  "ttsShort": "Röst",
+  "reply": "Svara",
+  "replyShort": "Svar",
+  "replyingTo": "Svarar på",
+  "clearReply": "Rensa svarsmål",
+  "replyTargetFallback": "Meddelande",
+  "artifactsTitle": "Artefakt",
+  "artifactsDefaultTitle": "Kod",
+  "artifactsView": "Visa kod",
+  "artifactsPin": "Fäst",
+  "artifactsUnpin": "Avfäst",
+  "artifactsClose": "Stäng",
+  "artifactsCopy": "Kopiera",
+  "artifactsDownload": "Ladda ner",
+  "artifactsRun": "Kör",
+  "copyShort": "Kopiera",
+  "branchShort": "Gren",
+  "infoShort": "Information",
+  "saveToNotes": "Spara i anteckningar",
+  "saveToFlashcards": "Spara i flashkort",
+  "generateDocument": "Generera dokument",
+  "documentShort": "Dok",
+  "documentCard": {
+    "removeAria": "Ta bort {{name}}"
+  },
+  "saveNoteShort": "Anteckn.",
+  "saveFlashcardShort": "Kort",
+  "savedToNotes": "Sparat i anteckningar",
+  "savedToFlashcards": "Sparat i flashkort",
+  "saveToNotesEmpty": "Inget att spara ännu.",
+  "regenShort": "Igen",
+  "continueShort": "Mer",
+  "fileChanges": "Filändringar",
+  "deletions": "Raderingar",
+  "gitOperations": "Git‑åtgärder",
+  "commands": "Kommandon",
+  "otherOperations": "Andra åtgärder",
+  "fileAccess": "Filåtkomst",
+  "notebookEdits": "Ändringar i anteckningsbok",
+  "applyPatch": "Applicera patch",
+  "recursive": "(rekursivt)",
+  "complexArguments": "[Komplexa argument]",
+  "currentChatModelSettings": "Nuvarande chattmodellinställningar",
+  "modelSettings": {
+    "label": "Modellinställningar",
+    "description": "Ställ in modellalternativen globalt för alla chatter",
+    "form": {
+      "keepAlive": {
+        "label": "Håll aktiv",
+        "help": "kontrollerar hur länge modellen kommer att vara laddad i minnet efter förfrågan (standard: 5 min)",
+        "placeholder": "Ange Keep Alive varaktighet (t.ex. 5m, 10m, 1h)"
+      },
+      "temperature": {
+        "label": "Temperatur",
+        "placeholder": "Ange temperaturvärde (t.ex. 0.7, 1.0)"
+      },
+      "numCtx": {
+        "label": "Kontextfönsterstorlek (num_ctx)",
+        "placeholder": "Ange kontextfönsterstorlek (standard: 2048)"
+      },
+      "numPredict": {
+        "label": "Max antal tokens (num_predict)",
+        "placeholder": "Ange Max antal tokens värde (t.ex. 2048, 4096)"
+      },
+      "thinking": {
+        "label": "Tänkeläge"
+      },
+      "seed": {
+        "label": "Frö",
+        "placeholder": "Ange frövärde (t.ex. 1234)",
+        "help": "Reproducerbarhet av modellens utskrift"
+      },
+      "topK": {
+        "label": "Topp K",
+        "placeholder": "Ange Topp K värde (t.ex. 40, 100)"
+      },
+      "topP": {
+        "label": "Topp P",
+        "placeholder": "Ange Topp P värde (t.ex. 0.9, 0.95)"
+      },
+      "useMMap": {
+        "label": "useMmap (minnesmappning)"
+      },
+      "tfsZ": {
+        "label": "TFS-Z (TFS-parameter)",
+        "placeholder": "t.ex. 1.0, 1.1"
+      },
+      "numKeep": {
+        "label": "Num Keep (antal att behålla)",
+        "placeholder": "t.ex. 256, 512"
+      },
+      "numThread": {
+        "label": "Num Thread (antal trådar)",
+        "placeholder": "t.ex. 8, 16"
+      },
+      "useMlock": {
+        "label": "useMlock (låsa i minnet)"
+      },
+      "reasoningEffort": {
+        "label": "Resonemangsinsats",
+        "placeholder": "låg, medel, hög"
+      },
+      "minP": {
+        "label": "Min P (minsta P)",
+        "placeholder": "t.ex. 0.05"
+      },
+      "repeatPenalty": {
+        "label": "Repetitionsstraff",
+        "placeholder": "t.ex. 1.1, 1.2"
+      },
+      "repeatLastN": {
+        "label": "Upprepa senaste N",
+        "placeholder": "t.ex. 64, 128"
+      },
+      "numGpu": {
+        "label": "Antal GPU",
+        "placeholder": "Ange antal lager att skicka till GPU(s)"
+      },
+      "systemPrompt": {
+        "label": "Tillfällig systempromt",
+        "placeholder": "Ange systemprompt",
+        "help": "Detta är ett snabbt sätt att ställa in systemprompten i den nuvarande chatten, vilket kommer att åsidosätta den valda systemprompten om den finns."
+      },
+      "historyMessageLimit": {
+        "label": "Gräns för historikmeddelanden",
+        "placeholder": "t.ex. 10",
+        "help": "Begränsa hur många tidigare meddelanden som skickas med varje begäran."
+      },
+      "historyMessageOrder": {
+        "label": "Ordning för historikmeddelanden",
+        "placeholder": "Välj ordning",
+        "help": "Välj om de senaste eller äldsta meddelandena skickas först.",
+        "options": {
+          "desc": "Nyaste först",
+          "asc": "Äldsta först"
+        }
+      },
+      "slashCommandInjectionMode": {
+        "label": "Injektion av snedstreckskommandon",
+        "placeholder": "Välj injektionsläge",
+        "help": "Välj hur snedstreckskommandon infogas i begäran.",
+        "options": {
+          "system": "Systemmeddelande",
+          "preface": "Inled användarmeddelande",
+          "replace": "Ersätt användarmeddelande"
+        }
+      },
+      "apiProvider": {
+        "label": "Åsidosätt API-leverantör",
+        "placeholder": "Välj leverantör (valfritt)",
+        "help": "Tvinga en specifik leverantör för den här chatten (t.ex. openai, anthropic)."
+      },
+      "extraHeaders": {
+        "label": "Extra HTTP-huvuden (JSON)",
+        "placeholder": "{ \"X-API-Key\": \"...\" }",
+        "help": "JSON-objekt som slås ihop med begärans HTTP-huvuden."
+      },
+      "extraBody": {
+        "label": "Extra begäranskropp (JSON)",
+        "placeholder": "{ \"user\": \"...\" }",
+        "help": "JSON-objekt som slås ihop med begärans kropp."
+      },
+      "guardrails": {
+        "invalidJson": "Ange ett giltigt JSON-objekt."
+      }
+    },
+    "advanced": "Fler modellinställningar",
+    "requestOverrides": "Åsidosättningar av begäran",
+    "tabs": {
+      "model": "Modell",
+      "conversation": "Konversation",
+      "advanced": "Avancerat",
+      "actor": "Scenregissör"
+    }
+  },
+  "copilot": {
+    "summary": "Sammanfatta",
+    "explain": "Förklara",
+    "rephrase": "Formulera om",
+    "translate": "Översätt",
+    "custom": "Anpassad"
+  },
+  "citations": "Citat",
+  "segmented": {
+    "available": "Servermodeller",
+    "custom": "Anpassade modeller"
+  },
+  "downloadCode": "Ladda ner kod",
+  "success": "Lyckades",
+  "created": "Skapad",
+  "updated": "Uppdaterad",
+  "deleted": "Raderad",
+  "create": "Skapa",
+  "reset": "Återställ",
+  "serverOffline": "Servern är offline eller inte konfigurerad",
+  "serverChats": "Serverchattar",
+  "serverChatLoadError": "Det gick inte att läsa in serverchatt. Kontrollera anslutningen och försök igen.",
+  "serverChatSourceLabel": "Serverkälla",
+  "serverChatForkedLabel": "Förgrenad chatt",
+  "serverChatForkedTooltip": "Förgrenad från chatten {{chatId}}",
+  "serverChatsUnavailableNotConnected": "Serverchattar blir tillgängliga när du ansluter till din tldw‑server.",
+  "serverChatsUnavailableServerError": "Serverchattar är inte tillgängliga just nu. Kontrollera serverloggarna eller försök igen.",
+  "date": {
+    "pinned": "Fäst",
+    "today": "Idag",
+    "yesterday": "Igår",
+    "last7Days": "Senaste 7 dagarna",
+    "older": "Äldre"
+  },
+  "range": {
+    "deleteConfirm": {
+      "pinned": "Är du säker på att du vill ta bort alla fästa meddelanden?",
+      "today": "Är du säker på att du vill ta bort alla meddelanden från idag?",
+      "yesterday": "Är du säker på att du vill ta bort alla meddelanden från igår?",
+      "last7Days": "Är du säker på att du vill ta bort alla meddelanden från de senaste 7 dagarna?",
+      "older": "Är du säker på att du vill ta bort alla äldre meddelanden?"
+    },
+    "tooltip": {
+      "pinned": "Ta bort alla fästa meddelanden",
+      "today": "Ta bort alla meddelanden från idag",
+      "yesterday": "Ta bort alla meddelanden från igår",
+      "last7Days": "Ta bort alla meddelanden från de senaste 7 dagarna",
+      "older": "Ta bort alla äldre meddelanden"
+    }
+  },
+  "historiesDeleted": "{{count}} historiker borttagna",
+  "deleteHistoriesError": "Fel vid borttagning av historiker",
+  "pin": "Fäst",
+  "unpin": "Ta bort fäst",
+  "generationInfo": "Generationsinformation",
+  "sidebarChat": "Sidofältschatt",
+  "reasoning": {
+    "thinking": "Tänker....",
+    "loading": "Laddar resonemang....",
+    "thought": "Tänkte i {{time}}"
+  },
+  "mermaid": "Mermaid-diagram",
+  "search": "Sök",
+  "searchResults": "Sökresultat",
+  "embeddingGen": "Skapar embeddings, detta kan ta lite tid",
+  "semanticSearch": "Utför semantisk sökning",
+  "newBranch": "Ny gren",
+  "downloading": "Laddar ner",
+  "cancelPullingModel": {
+    "confirm": "Är du säker på att du vill avbryta nedladdningen? Detta kommer att stoppa nedladdningsprocessen. Enligt Ollama-dokumentationen kan du återuppta från där du slutade."
+  },
+  "privateModeSaveErrorTitle": "tldw Assistant kan inte spara data",
+  "error": {
+    "label": "Fel",
+    "friendlyApiKeySummary": "Vi kunde inte nå din tldw-server.",
+    "friendlyApiKeyHint": "Din API‑nyckel kan vara ogiltig. Öppna Inställningar → tldw‑server för att kontrollera din URL och API‑nyckel och försök igen.",
+    "friendlyTimeoutSummary": "Din chatt gick ut på tid.",
+    "friendlyTimeoutHint": "Servern slutade strömma svar. Försök igen eller öppna Hälsa & diagnostik för att kontrollera serverstatus.",
+    "friendlyGenericSummary": "Något gick fel vid kommunikationen med din tldw‑server.",
+    "friendlyGenericHint": "Försök igen om en stund eller öppna Hälsa & diagnostik för att undersöka serverhälsan.",
+    "showDetails": "Visa tekniska detaljer",
+    "hideDetails": "Dölj tekniska detaljer",
+    "createFolder": "Misslyckades med att skapa mapp"
+  },
+  "folders": "Mappar",
+  "folderView": "Mappvy",
+  "dateView": "Datumvy",
+  "newFolder": "Ny mapp",
+  "folderName": "Mappnamn",
+  "selectFolder": "Välj mapp",
+  "noFolders": "Inga mappar",
+  "expandAll": "Expandera alla",
+  "collapseAll": "Fäll ihop alla",
+  "refresh": "Uppdatera",
+  "confirm": "Bekräfta",
+  "untitled": "Utan titel",
+  "moveToFolder": "Flytta till mapp",
+  "timeline": {
+    "title": "Samtalstidslinje",
+    "searchPlaceholder": "Sök meddelanden... (mellanslag = OCH)",
+    "searchMatches": "träffar",
+    "searchNoMatches": "inga träffar",
+    "searchMode": {
+      "fragments": "Fragment",
+      "substring": "Delsträng",
+      "regex": "Reguljära uttryck"
+    },
+    "layout": {
+      "horizontal": "horisontell",
+      "vertical": "vertikal"
+    },
+    "refreshGraph": "Uppdatera graf",
+    "switchLayout": "Växla till {{layout}} layout",
+    "expandAllAlternatives": "Expandera alla alternativ",
+    "collapseAllAlternatives": "Fäll ihop alla alternativ",
+    "hideLegend": "Dölj teckenförklaring",
+    "showLegend": "Visa teckenförklaring",
+    "zoomIn": "Zooma in",
+    "zoomOut": "Zooma ut",
+    "unableLocateMessage": "Det gick inte att hitta meddelandet för den här åtgärden.",
+    "actionFailed": "Det gick inte att utföra tidslinjeåtgärden. Försök igen."
+  },
+  "noToolCalls": "Inga verktygsanrop ännu",
+  "sourceLabel": "Källa",
+  "sourceOpen": "Öppna källa",
+  "status": {
+    "pending": "Väntar",
+    "running": "Bearbetar",
+    "complete": "Klar",
+    "error": "Fel"
+  },
+  "arguments": "Argument",
+  "invalidJson": "Ogiltig JSON; visar råvärde",
+  "result": "Resultat",
+  "tools": {
+    "fs_list": "Lista katalog",
+    "fs_read": "Läs fil",
+    "fs_write": "Skriv fil",
+    "fs_apply_patch": "Applicera patch",
+    "fs_mkdir": "Skapa katalog",
+    "fs_delete": "Ta bort",
+    "search_grep": "Sök i innehåll",
+    "search_glob": "Hitta filer",
+    "git_status": "Git-status",
+    "git_diff": "Git-diff",
+    "git_log": "Git-logg",
+    "git_branch": "Git-gren",
+    "git_add": "Stagea filer",
+    "git_commit": "Incheckning",
+    "exec_run": "Kör kommando"
+  },
+  "markdown": {
+    "unableToRender": "Kunde inte rendera innehållet",
+    "couldNotDisplay": "Meddelandeinnehållet kunde inte visas. Detta kan bero på ogiltig formatering.",
+    "showRawContent": "Visa råinnehåll"
+  },
+  "commandPalette": {
+    "goToChat": "Gå till chatten",
+    "goToMedia": "Gå till Media",
+    "goToNotes": "Gå till Anteckningar",
+    "goToFlashcards": "Gå till flashcards",
+    "goToSettings": "Gå till Inställningar",
+    "goToHealth": "Gå till Hälsa & diagnostik",
+    "newChat": "Ny chatt",
+    "toggleKnowledgeSearch": "Växla kunskapssökning",
+    "toggleKnowledgeSearchDesc": "Sök i din kunskapsbas",
+    "toggleWebSearch": "Växla webbsökning",
+    "toggleWebDesc": "Sök på internet",
+    "ingestPage": "Importera aktuell sida",
+    "ingestDesc": "Spara den här sidan i din kunskapsbas",
+    "switchModel": "Byt modell",
+    "toggleSidebar": "Växla sidopanel",
+    "toggleSidebarDesc": "Visa eller dölj chattens sidopanel",
+    "placeholder": "Skriv ett kommando eller sök…",
+    "noResults": "Inga resultat hittades",
+    "title": "Kommandopalett",
+    "navigate": "navigera",
+    "select": "välj",
+    "toOpen": "för att öppna",
+    "categoryActions": "Åtgärder",
+    "categoryNavigation": "Navigering",
+    "categorySettings": "Inställningar",
+    "categoryRecent": "Senaste"
+  },
+  "featureHints": {
+    "knowledge": {
+      "title": "Sök i din kunskap",
+      "description": "Öppna kunskapssökpanelen för att hitta utdrag och infoga dem i din chatt."
+    },
+    "moreTools": {
+      "title": "Fler verktyg tillgängliga",
+      "description": "Använd synläge, bilduppladdning, snabbimport och hela appen."
+    },
+    "commandPalette": {
+      "title": "Snabbkommandon",
+      "description": "Tryck på {{shortcut}} för att söka kommandon, inställningar och mer."
+    },
+    "modelSettings": {
+      "title": "Justera modellparametrar",
+      "description": "Finjustera temperatur, kontextlängd och andra modellinställningar."
+    }
+  },
+  "chatSidebar": {
+    "title": "Chattar",
+    "newChat": "Ny chatt",
+    "collapse": "Fäll ihop sidofält",
+    "expand": "Expandera sidofält",
+    "search": "Sök chattar...",
+    "modeLabel": "Läge",
+    "modeCasual": "Avslappnat",
+    "modePro": "Proffsläge",
+    "ingest": "Importera sida",
+    "media": "Medier",
+    "notes": "Anteckningar",
+    "flashcards": "Minneskort",
+    "prompts": "Prompter",
+    "multiItem": "Flera objekt",
+    "shortcuts": "Genvägar",
+    "settings": "Inställningar",
+    "loadError": "Kunde inte läsa in chattar",
+    "localTab": "Lokal",
+    "serverTab": "Server",
+    "foldersTab": "Mappar",
+    "tabs": {
+      "local": "Lokal",
+      "server": "Server",
+      "folders": "Mappar"
+    },
+    "noServerChats": "Inga serverchattar ännu",
+    "foldersRequireConnection": "Mappar kräver en serveranslutning"
+  },
+  "extName": "tldw-assistenten",
+  "extDescription": "Använd dina lokalt körande AI-modeller för att hjälpa dig i din webbsurfning.",
+  "openSidePanelToChat": "Öppna sidopanelen för att chatta",
+  "openOptionToChat": "Öppna Web UI för att chatta",
+  "contextSummarize": "Sammanfatta",
+  "contextExplain": "Förklara",
+  "contextRephrase": "Skriv om",
+  "contextTranslate": "Översätt",
+  "contextCustom": "Anpassad",
+  "contextNarrateSelection": "Narrate selection",
+  "contextNarrateSelectionNoSelection": "Select text first to narrate.",
+  "contextSendToTldw": "Skicka till tldw_server",
+  "contextProcessLocalTldw": "Bearbeta med tldw_server (spara inte)",
+  "contextTranscribeMedia": "Transkribera video/ljud",
+  "contextTranscribeAndSummarizeMedia": "Transkribera + sammanfatta video/ljud",
+  "contextSaveToNotes": "Spara i anteckningar",
+  "contextSaveToNotesNoSelection": "Markera text först för att spara i anteckningar.",
+  "contextSidebarOpening": "Öppnar sidopanelen...",
+  "contextSaveToNotesOpeningSidebar": "Öppnar sidopanelen för att spara anteckningen...",
+  "contextSaveToNotesDeliveryFailed": "Kunde inte öppna sidopanelen för att spara den här anteckningen. Kontrollera att tldw Assistant-sidopanelen är tillåten på den här sidan och försök igen.",
+  "hfSendPageRejected": "[tldw] Begäran att skicka sidan avvisades av tldw_server",
+  "hfSendPageErrorWithDetail": "[tldw] Kunde inte skicka den här sidan till tldw_server: $1. Kontrollera Inställningar → tldw-server och försök igen.",
+  "hfSendPageError": "[tldw] Kunde inte skicka den här sidan till tldw_server. Kontrollera Inställningar → tldw-server och försök igen.",
+  "hfSendPageSuccess": "[tldw] Skickade sidan till tldw_server för bearbetning",
+  "hfSendPageException": "[tldw] Något gick fel när sidan skickades till tldw_server. Kontrollera att tldw_server och tillägget körs och försök igen.",
+  "hfPullInProgress": "[tldw Assistant] En modellhämtning pågår redan. Vänta tills den är klar innan du startar en ny.",
+  "hfPullConfirm": "[tldw Assistant] Vill du skicka en begäran till din tldw_server om att hämta modellen \"$1\"? Detta är oberoende av webbplatsen huggingface.co. Din server börjar hämta modellen när du bekräftar.",
+  "hfPullSending": "[tldw Assistant] Skickar en begäran till din tldw_server om att hämta \"$1\". Kontrollera tilläggsikonen eller tldw_server-loggarna för status.",
+  "hfPullErrorWithDetail": "[tldw Assistant] Kunde inte skicka en hämtningsbegäran för \"$1\": $2. Kontrollera Inställningar → tldw-server och försök igen.",
+  "hfPullError": "[tldw Assistant] Kunde inte skicka en hämtningsbegäran för \"$1\". Kontrollera Inställningar → tldw-server och försök igen.",
+  "hfPullSuccess": "[tldw Assistant] Begäran skickades till din tldw_server för att hämta \"$1\". Håll koll på tilläggsikonen eller tldw_server-loggarna för status.",
+  "hfPullException": "[tldw Assistant] Något gick fel när en hämtningsbegäran för \"$1\" skickades till din tldw_server. Kontrollera att tldw_server och tillägget körs och försök igen.",
+  "stepLabel": "Välkommen",
+  "path": "Hur vill du komma igång?",
+  "nextSteps": "Du är redo att börja",
+  "restartOnboardingLabel": "Starta om onboarding från början",
+  "restartOnboardingButton": "Starta om onboarding",
+  "restartOnboardingConfirmTitle": "Starta om onboarding?",
+  "restartOnboardingConfirmMessage": "Detta återställer din onboarding‑status och tar dig tillbaka till installationsflödet.",
+  "relativeTime": {
+    "unknown": "Okänd",
+    "justNow": "Just nu",
+    "agoShort": "sedan",
+    "minutesAgoShort": "{{count}}m sedan",
+    "hoursAgoShort": "{{count}}h sedan",
+    "daysAgoShort": "{{count}}d sedan"
+  }
+}

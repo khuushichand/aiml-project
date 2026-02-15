@@ -3295,10 +3295,77 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   const {
     actionBarVisible,
-    composerFocusWithin,
     actionBarVisibilityClass,
     handlers: actionBarHandlers
   } = useActionBarVisibility({ externalPinSources })
+  const composerShellRef = React.useRef<HTMLDivElement>(null)
+
+  const keepComposerBottomInView = React.useCallback(() => {
+    if (typeof window === "undefined") return
+    const composerEl = composerShellRef.current
+    if (!composerEl) return
+
+    const bottomPadding = 8
+    const scrollingElement = document.scrollingElement as HTMLElement | null
+
+    const adjustAncestor = (ancestor: HTMLElement | null) => {
+      if (!ancestor) return
+      const composerRect = composerEl.getBoundingClientRect()
+
+      if (ancestor === scrollingElement) {
+        const viewportBottom = window.innerHeight - bottomPadding
+        const overflow = composerRect.bottom - viewportBottom
+        if (overflow > 0) {
+          window.scrollBy({ top: overflow, behavior: "auto" })
+        }
+        return
+      }
+
+      const ancestorRect = ancestor.getBoundingClientRect()
+      const overflow = composerRect.bottom - (ancestorRect.bottom - bottomPadding)
+      if (overflow > 0) {
+        ancestor.scrollTop += overflow
+      }
+    }
+
+    let parent = composerEl.parentElement
+    while (parent) {
+      const style = window.getComputedStyle(parent)
+      const allowsVerticalScroll = /(auto|scroll|overlay)/.test(
+        `${style.overflowY} ${style.overflow}`
+      )
+      if (allowsVerticalScroll && parent.scrollHeight > parent.clientHeight + 1) {
+        adjustAncestor(parent)
+      }
+      parent = parent.parentElement
+    }
+
+    adjustAncestor(scrollingElement)
+  }, [])
+
+  const previousActionBarVisibleRef = React.useRef(actionBarVisible)
+
+  React.useEffect(() => {
+    const wasVisible = previousActionBarVisibleRef.current
+    previousActionBarVisibleRef.current = actionBarVisible
+
+    if (!actionBarVisible || wasVisible) return
+
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    const rafId = window.requestAnimationFrame(() => {
+      keepComposerBottomInView()
+      timeoutId = window.setTimeout(() => {
+        keepComposerBottomInView()
+      }, 220)
+    })
+
+    return () => {
+      window.cancelAnimationFrame(rafId)
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId)
+      }
+    }
+  }, [actionBarVisible, keepComposerBottomInView])
 
   const mcpControlContent = (
     <div className="flex w-64 flex-col gap-2 p-2">
@@ -3660,6 +3727,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         className="relative z-10 flex w-full max-w-[52rem] flex-col items-center justify-center gap-2 text-base data-[checkwidemode='true']:max-w-none">
         <div className="relative flex w-full flex-row justify-center">
           <div
+            ref={composerShellRef}
             data-istemporary-chat={temporaryChat}
             onMouseEnter={actionBarHandlers.onMouseEnter}
             onMouseLeave={actionBarHandlers.onMouseLeave}

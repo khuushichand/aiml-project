@@ -1,0 +1,1244 @@
+{
+  "tooltip_embed": {
+    "message": "ممکن است چند دقیقه طول بکشد تا صفحه جاسازی شود. لطفاً منتظر بمانید..."
+  },
+  "tooltip_clear": {
+    "message": "پاک کردن تاریخچه گپ"
+  },
+  "tooltip_history": {
+    "message": "تاریخچه گپ"
+  },
+  "tooltip_openwebui": {
+    "message": "باز کردن رابط کاربری وب"
+  },
+  "toolbar_ragSearch": {
+    "message": "جستجوی RAG"
+  },
+  "errors_privateModeTitle": {
+    "message": "tldw Assistant نمی‌تواند داده‌ها را ذخیره کند"
+  },
+  "errors_privateModeDescription": {
+    "message": "حالت خصوصی فایرفاکس از ذخیره تاریخچه چت پشتیبانی نمی‌کند. چت موقت به‌صورت پیش‌فرض فعال است. به‌زودی بهبود می‌یابد."
+  },
+  "connectionBanner_connecting": {
+    "message": "در حال اتصال به سرور tldw شما..."
+  },
+  "connectionBanner_authErrorTitle": {
+    "message": "کلید API نیاز به توجه دارد"
+  },
+  "connectionBanner_authErrorBody": {
+    "message": "سرور در دسترس است، اما کلید API نادرست است یا وجود ندارد."
+  },
+  "connectionBanner_unreachableTitle": {
+    "message": "دسترسی به سرور tldw ممکن نیست"
+  },
+  "connectionBanner_unreachableBody": {
+    "message": "بررسی کنید که سرور در حال اجرا و قابل دسترسی باشد."
+  },
+  "connectionBanner_noUrlBody": {
+    "message": "برای شروع، نشانی سرور را در تنظیمات اضافه کنید."
+  },
+  "connectionBanner_disconnectedTitle": {
+    "message": "به سرور tldw متصل نیستید"
+  },
+  "connectionBanner_disconnectedBody": {
+    "message": "برای پیکربندی اتصال سرور، تنظیمات را باز کنید."
+  },
+  "connectionBanner_setupTitle": {
+    "message": "برای شروع گفتگو، راه‌اندازی را کامل کنید"
+  },
+  "connectionBanner_setupBody": {
+    "message": "برای اتصال، جادوگر راه‌اندازی را در تنظیمات کامل کنید."
+  },
+  "connectionBanner_openSettings": {
+    "message": "باز کردن تنظیمات"
+  },
+  "temporaryBadge_title": {
+    "message": "گفتگوی موقت"
+  },
+  "temporaryBadge_label": {
+    "message": "موقت"
+  },
+  "temporaryBadge_description": {
+    "message": "این گفتگو ذخیره نمی‌شود. پیام‌ها هنگام بستن یا شروع گفتگوی جدید پاک می‌شوند."
+  },
+  "temporaryBadge_clickHint": {
+    "message": "برای غیرفعال کردن کلیک کنید"
+  },
+  "temporaryBadge_ariaLabel": {
+    "message": "حالت گفتگوی موقت فعال است. برای تغییر کلیک کنید."
+  },
+  "temporaryBadge_indicatorTooltip": {
+    "message": "پیام‌های این گفتگو ذخیره نمی‌شود"
+  },
+  "temporaryBadge_indicatorAria": {
+    "message": "گفتگوی موقت"
+  },
+  "header_ingest": {
+    "message": "درون‌ریزی"
+  },
+  "header_saveCurrent": {
+    "message": "ذخیره صفحه فعلی روی سرور"
+  },
+  "header_processLocal": {
+    "message": "پردازش صفحه فعلی به‌صورت محلی"
+  },
+  "header_viewProcessed": {
+    "message": "مشاهده پردازش‌شده‌ها"
+  },
+  "header_timeoutLabel": {
+    "message": "زمان انتظار (ثانیه)"
+  },
+  "header_toggleSidebar": {
+    "message": "نمایش/تمام‌صفحه کردن نوار کناری"
+  },
+  "header_shortcuts": {
+    "message": "میانبرها"
+  },
+  "header_showDebug": {
+    "message": "نمایش اشکال‌زدایی استریم"
+  },
+  "header_hideDebug": {
+    "message": "پنهان کردن اشکال‌زدایی استریم"
+  },
+  "header_moreOptionsAria": {
+    "message": "گزینه‌های بیشتر"
+  },
+  "header_moreOptionsTitle": {
+    "message": "درون‌ریزی و بیشتر"
+  },
+  "header_openWebuiAria": {
+    "message": "باز کردن رابط وب"
+  },
+  "header_newChatAria": {
+    "message": "گفتگوی جدید"
+  },
+  "header_tempChatAria": {
+    "message": "تغییر حالت گفتگوی موقت"
+  },
+  "header_clearHistoryAria": {
+    "message": "پاک کردن تاریخچه"
+  },
+  "header_openHistoryAria": {
+    "message": "باز کردن تاریخچه"
+  },
+  "header_openModelSettingsAria": {
+    "message": "باز کردن تنظیمات مدل"
+  },
+  "header_openSettingsAria": {
+    "message": "باز کردن تنظیمات"
+  },
+  "header_tempPill": {
+    "message": "موقت"
+  },
+  "header_modesLabel": {
+    "message": "باز کردن حالت‌ها در رابط وب"
+  },
+  "header_modePlayground": {
+    "message": "چت"
+  },
+  "header_modeReview": {
+    "message": "بازبینی چندموردی"
+  },
+  "header_modeMedia": {
+    "message": "رسانه"
+  },
+  "header_modeKnowledge": {
+    "message": "دانش"
+  },
+  "header_modeNotes": {
+    "message": "یادداشت‌ها"
+  },
+  "header_modePrompts": {
+    "message": "پرامپت‌ها"
+  },
+  "header_modeFlashcards": {
+    "message": "فلش‌کارت‌ها"
+  },
+  "controlRow_saveMode": {
+    "message": "حالت ذخیره‌سازی"
+  },
+  "controlRow_ephemeral": {
+    "message": "گفتگوی موقت"
+  },
+  "controlRow_searchSection": {
+    "message": "جستجو و بینایی"
+  },
+  "controlRow_webSearch": {
+    "message": "جستجوی وب"
+  },
+  "controlRow_vision": {
+    "message": "بینایی"
+  },
+  "controlRow_uploadImage": {
+    "message": "بارگذاری تصویر"
+  },
+  "controlRow_quickIngest": {
+    "message": "دریافت سریع صفحه"
+  },
+  "controlRow_openInFullUI": {
+    "message": "باز کردن در رابط کامل"
+  },
+  "controlRow_modeChat": {
+    "message": "چت"
+  },
+  "controlRow_modeMedia": {
+    "message": "رسانه"
+  },
+  "controlRow_modeNotes": {
+    "message": "یادداشت‌ها"
+  },
+  "controlRow_modeFlashcards": {
+    "message": "فلش‌کارت‌ها"
+  },
+  "controlRow_ragSearch": {
+    "message": "جستجوی RAG"
+  },
+  "controlRow_moreTools": {
+    "message": "ابزارهای بیشتر"
+  },
+  "composer_connectHint": {
+    "message": "برای ارسال پیام، در تنظیمات به سرور tldw خود متصل شوید."
+  },
+  "composer_connectingPlaceholder": {
+    "message": "در حال اتصال..."
+  },
+  "composer_disconnectedPlaceholder": {
+    "message": "برای ارسال پیام و مشاهده رسانه‌ها، در تنظیمات به سرور tldw خود متصل شوید."
+  },
+  "notification_ingestSent": {
+    "message": "به سرور tldw ارسال شد"
+  },
+  "notification_ingestSentDesc": {
+    "message": "صفحه فعلی برای درون‌ریزی ارسال شد."
+  },
+  "notification_processedLocal": {
+    "message": "به‌صورت محلی پردازش شد"
+  },
+  "notification_processedLocalDesc": {
+    "message": "محتوای پردازش‌شده به‌صورت محلی در تنظیمات > پردازش‌شده ذخیره شد."
+  },
+  "notification_transcriptionTitle": {
+    "message": "رونویسی"
+  },
+  "notification_transcriptionSummaryTitle": {
+    "message": "رونویسی + خلاصه"
+  },
+  "notification_transcriptionFallback": {
+    "message": "رونویسی کامل شد. برای مشاهده، Media را در رابط وب باز کنید."
+  },
+  "notification_sourceLabel": {
+    "message": "منبع"
+  },
+  "notification_transcriptLabel": {
+    "message": "رونویسی"
+  },
+  "notification_summaryLabel": {
+    "message": "خلاصه"
+  },
+  "saveStatus_ephemeral": {
+    "message": "موقتی: ذخیره نمی‌شود، با بستن پاک می‌شود"
+  },
+  "saveStatus_local": {
+    "message": "به‌صورت محلی در این مرورگر ذخیره شد"
+  },
+  "saveStatus_server": {
+    "message": "در سرور ذخیره شد"
+  },
+  "saveStatus_saveFailed": {
+    "message": "ذخیره گفتگو روی سرور ناموفق بود"
+  },
+  "saveStatus_saveFailedDescription": {
+    "message": "اکنون گفتگو فقط به‌صورت محلی ذخیره می‌شود. اتصال خود را بررسی کرده و دوباره تلاش کنید."
+  },
+  "rag_searchPlaceholder": {
+    "message": "جستجوی دانش شما…"
+  },
+  "rag_search": {
+    "message": "جستجو"
+  },
+  "rag_show": {
+    "message": "نمایش جستجوی دانش"
+  },
+  "rag_hide": {
+    "message": "پنهان کردن جستجوی دانش"
+  },
+  "rag_addTagPlaceholder": {
+    "message": "افزودن برچسب (Enter)"
+  },
+  "rag_add": {
+    "message": "افزودن"
+  },
+  "rag_noResults": {
+    "message": "نتیجه‌ای یافت نشد"
+  },
+  "rag_timeout_message": {
+    "message": "درخواست زمان‌بر شد."
+  },
+  "rag_timeout_increase": {
+    "message": "افزایش زمان انتظار"
+  },
+  "rag_timeout_checkHealth": {
+    "message": "بررسی سلامت سرور"
+  },
+  "rag_actions_insert": {
+    "message": "درج"
+  },
+  "rag_actions_ask": {
+    "message": "پرسش"
+  },
+  "rag_actions_open": {
+    "message": "باز کردن"
+  },
+  "rag_actions_copy": {
+    "message": "کپی"
+  },
+  "rag_hint_message": {
+    "message": "در پایگاه دانش خود جستجو کنید و نتایج را در پیام خود درج کنید."
+  },
+  "rag_hint_dismiss": {
+    "message": "بستن"
+  },
+  "tabs_newChat": {
+    "message": "چت جدید"
+  },
+  "tabs_newTabAria": {
+    "message": "زبانه چت جدید"
+  },
+  "tabs_closeTabAria": {
+    "message": "بستن زبانه چت"
+  },
+  "characterSelect_label": {
+    "message": "شخصیت"
+  },
+  "characterSelect_tooltip": {
+    "message": "انتخاب شخصیت"
+  },
+  "characterSelect_search": {
+    "message": "جستجوی شخصیت‌ها..."
+  },
+  "characterSelect_noMatches": {
+    "message": "شخصیت مطابقی یافت نشد"
+  },
+  "characterSelect_noCharacters": {
+    "message": "شخصیتی در دسترس نیست"
+  },
+  "characterSelect_none": {
+    "message": "بدون شخصیت"
+  },
+  "characterSelect_createNewCharacter": {
+    "message": "ایجاد شخصیت جدید+"
+  },
+  "characterSelect_importCharacter": {
+    "message": "وارد کردن شخصیت"
+  },
+  "rag_attachedContext": {
+    "message": "زمینه پیوست‌شده"
+  },
+  "rag_initialState": {
+    "message": "هنوز نتیجه‌ای نیست"
+  },
+  "characterSelect_favorites": {
+    "message": "علاقه‌مندی‌ها"
+  },
+  "characterSelect_favoriteAdd": {
+    "message": "افزودن به علاقه‌مندی‌ها"
+  },
+  "characterSelect_favoriteRemove": {
+    "message": "حذف از علاقه‌مندی‌ها"
+  },
+  "characterSelect_sort_favorites": {
+    "message": "علاقه‌مندی‌ها"
+  },
+  "characterSelect_sort_az": {
+    "message": "الف-ی"
+  },
+  "knowledge_tabs_qaSearch": {
+    "message": "جستجوی پرسش و پاسخ"
+  },
+  "knowledge_tabs_fileSearch": {
+    "message": "جستجوی فایل"
+  },
+  "knowledge_tabs_label": {
+    "message": "بخش‌های پنل دانش"
+  },
+  "knowledge_tabs_contextBadge": {
+    "message": "{{count}} مورد پیوست شده"
+  },
+  "qaSearch_searching": {
+    "message": "در حال جستجو در پایگاه دانش..."
+  },
+  "qaSearch_generatedAnswer": {
+    "message": "پاسخ تولیدشده"
+  },
+  "qaSearch_cached": {
+    "message": "ذخیره‌شده"
+  },
+  "qaSearch_copyAnswer": {
+    "message": "کپی پاسخ"
+  },
+  "qaSearch_copied": {
+    "message": "کپی شد"
+  },
+  "qaSearch_copy": {
+    "message": "کپی"
+  },
+  "qaSearch_insertAnswer": {
+    "message": "درج پاسخ"
+  },
+  "qaSearch_copyChunk": {
+    "message": "کپی قطعه"
+  },
+  "qaSearch_insertChunk": {
+    "message": "درج قطعه"
+  },
+  "qaSearch_sourceChunks": {
+    "message": "قطعات منبع ({{count}})"
+  },
+  "qaSearch_sourceChunksList": {
+    "message": "قطعات منبع"
+  },
+  "qaSearch_strategy_standard": {
+    "message": "استاندارد"
+  },
+  "qaSearch_strategy_agentic": {
+    "message": "عاملی"
+  },
+  "qaSearch_sort_label": {
+    "message": "مرتب‌سازی قطعات منبع"
+  },
+  "qaSearch_sort_relevance": {
+    "message": "مرتبط‌بودن"
+  },
+  "qaSearch_sort_source": {
+    "message": "منبع"
+  },
+  "fileSearch_filterByType": {
+    "message": "فیلتر بر اساس نوع"
+  },
+  "fileSearch_resultsList": {
+    "message": "نتایج جستجوی فایل"
+  },
+  "fileSearch_attached": {
+    "message": "پیوست شده"
+  },
+  "fileSearch_alreadyAttached": {
+    "message": "قبلاً پیوست شده"
+  },
+  "fileSearch_attach": {
+    "message": "پیوست"
+  },
+  "fileSearch_openExternal": {
+    "message": "باز کردن"
+  },
+  "fileSearch_open": {
+    "message": "باز کردن"
+  },
+  "fileSearch_mediaType_video": {
+    "message": "ویدیو"
+  },
+  "fileSearch_mediaType_audio": {
+    "message": "صوت"
+  },
+  "fileSearch_mediaType_pdf": {
+    "message": "PDF"
+  },
+  "fileSearch_mediaType_article": {
+    "message": "مقاله"
+  },
+  "fileSearch_mediaType_note": {
+    "message": "یادداشت"
+  },
+  "fileSearch_mediaType_document": {
+    "message": "سند"
+  },
+  "fileSearch_mediaType_epub": {
+    "message": "EPUB"
+  },
+  "fileSearch_mediaType_html": {
+    "message": "HTML"
+  },
+  "fileSearch_mediaType_xml": {
+    "message": "XML"
+  },
+  "controlRow_ephemeralBadge": {
+    "message": "موقتی"
+  },
+  "controlRow_ephemeralModeActive": {
+    "message": "حالت موقتی: گفتگو ذخیره نخواهد شد"
+  },
+  "controlRow_visionDisabledKnowledge": {
+    "message": "برای استفاده از بینایی، جستجوی دانش را غیرفعال کنید"
+  },
+  "controlRow_visionTooltip": {
+    "message": "فعال‌سازی بینایی برای تحلیل تصاویر"
+  },
+  "controlRow_toolChoiceLabel": {
+    "message": "انتخاب ابزار"
+  },
+  "controlRow_toolChoiceAuto": {
+    "message": "خودکار"
+  },
+  "controlRow_toolChoiceRequired": {
+    "message": "اجباری"
+  },
+  "controlRow_toolChoiceNone": {
+    "message": "هیچ‌کدام"
+  },
+  "controlRow_mcpToolsLabel": {
+    "message": "ابزارهای MCP"
+  },
+  "controlRow_mcpToolsLoading": {
+    "message": "در حال بارگذاری ابزارها..."
+  },
+  "controlRow_mcpToolsUnavailable": {
+    "message": "ابزارهای MCP در دسترس نیست"
+  },
+  "controlRow_mcpToolsUnhealthy": {
+    "message": "ابزارهای MCP آفلاین هستند"
+  },
+  "controlRow_mcpToolsEmpty": {
+    "message": "ابزار MCP موجود نیست"
+  },
+  "controlRow_quickActions": {
+    "message": "دسترسی سریع"
+  },
+  "controlRow_knowledgeSearch": {
+    "message": "باز کردن جستجوی دانش"
+  },
+  "controlRow_knowledge": {
+    "message": "جستجوی دانش"
+  },
+  "toolbar_knowledgeSearch": {
+    "message": "جستجوی دانش"
+  },
+  "composer_generateImage": {
+    "message": "تولید تصویر"
+  },
+  "composer_generateImageDesc": {
+    "message": "تولید تصویر از طریق /generate-image:<provider>"
+  },
+  "composer_generateImageDescDefault": {
+    "message": "تولید تصویر (پیش‌فرض: {{backend}}). برای تغییر از /generate-image:<provider> استفاده کنید."
+  },
+  "composer_tempChatConfirmTitle": {
+    "message": "فعال‌سازی حالت موقت؟"
+  },
+  "composer_tempChatConfirmContent": {
+    "message": "این کار گفتگوی فعلی شما را پاک می‌کند. پیام‌ها ذخیره نخواهند شد."
+  },
+  "composer_tempChatDisableConfirmTitle": {
+    "message": "غیرفعال‌سازی حالت موقت؟"
+  },
+  "composer_tempChatDisableConfirmContent": {
+    "message": "این کار گفتگوی فعلی شما را پاک می‌کند. پیام‌ها دوباره ذخیره خواهند شد."
+  },
+  "composer_tempChatDisabledClearedMessages": {
+    "message": "چت موقت غیرفعال شد. پیام‌های قبلی پاک شدند."
+  },
+  "composer_tempChatClearedMessages": {
+    "message": "چت موقت فعال شد. پیام‌های قبلی پاک شدند."
+  },
+  "composer_clearQueueConfirmTitle": {
+    "message": "پاک کردن صف پیام‌ها؟"
+  },
+  "composer_clearQueueConfirmContent": {
+    "message": "این کار {{count}} پیام در صف که هنوز ارسال نشده‌اند را حذف می‌کند."
+  },
+  "knowledge_title": {
+    "message": "جستجوی دانش"
+  },
+  "knowledge_tabs_search": {
+    "message": "جستجو"
+  },
+  "knowledge_tabs_settings": {
+    "message": "تنظیمات"
+  },
+  "knowledge_tabs_context": {
+    "message": "زمینه"
+  },
+  "rag_searchAllSettings": {
+    "message": "جستجو در همه تنظیمات"
+  },
+  "rag_searchSettings": {
+    "message": "جستجوی تنظیمات..."
+  },
+  "rag_noResultsHint": {
+    "message": "کلمات کلیدی دیگری را امتحان کنید یا فیلترهای خود را تنظیم کنید."
+  },
+  "rag_disconnected": {
+    "message": "برای جستجو در پایگاه دانش به سرور متصل شوید"
+  },
+  "rag_enterQuery": {
+    "message": "عبارت جستجو را وارد کنید"
+  },
+  "rag_enterQueryHint": {
+    "message": "عبارتی در بالا تایپ کنید یا «استفاده از پیام فعلی» را فعال کنید."
+  },
+  "rag_timeout_retry": {
+    "message": "تلاش مجدد"
+  },
+  "rag_actions_preview": {
+    "message": "پیش‌نمایش"
+  },
+  "rag_actions_pin": {
+    "message": "سنجاق"
+  },
+  "rag_actions_unpin": {
+    "message": "برداشتن سنجاق"
+  },
+  "rag_sources_all": {
+    "message": "همه"
+  },
+  "rag_sources_media": {
+    "message": "رسانه"
+  },
+  "rag_sources_notes": {
+    "message": "یادداشت‌ها"
+  },
+  "rag_sources_characters": {
+    "message": "شخصیت‌ها"
+  },
+  "rag_sources_chats": {
+    "message": "گفتگوها"
+  },
+  "rag_preset": {
+    "message": "پیش‌تنظیم"
+  },
+  "rag_presets_fast": {
+    "message": "سریع"
+  },
+  "rag_presets_balanced": {
+    "message": "متعادل"
+  },
+  "rag_presets_thorough": {
+    "message": "دقیق"
+  },
+  "rag_presets_custom": {
+    "message": "سفارشی"
+  },
+  "rag_useCurrentMessage": {
+    "message": "استفاده از پیام فعلی"
+  },
+  "rag_sortBy": {
+    "message": "مرتب‌سازی"
+  },
+  "rag_sortRelevance": {
+    "message": "مرتبط‌بودن"
+  },
+  "rag_sortDate": {
+    "message": "تاریخ"
+  },
+  "rag_sortTitle": {
+    "message": "عنوان"
+  },
+  "rag_results": {
+    "message": "نتایج"
+  },
+  "rag_pinnedResults": {
+    "message": "نتایج ذخیره‌شده"
+  },
+  "rag_clearPins": {
+    "message": "پاک کردن همه ذخیره‌شده‌ها"
+  },
+  "rag_preview": {
+    "message": "پیش‌نمایش"
+  },
+  "rag_source": {
+    "message": "منبع"
+  },
+  "rag_askConfirmTitle": {
+    "message": "درباره این مورد بپرسید؟"
+  },
+  "rag_askConfirmContent": {
+    "message": "نتایج ذخیره‌شده در این پرسش نادیده گرفته می‌شوند."
+  },
+  "rag_savedResultsCount": {
+    "message": "نتایج ذخیره‌شده ({{count}})"
+  },
+  "rag_manageSavedResults": {
+    "message": "مدیریت در زمینه"
+  },
+  "rag_quality": {
+    "message": "کیفیت"
+  },
+  "rag_searchMode": {
+    "message": "حالت جستجو"
+  },
+  "rag_ftsLevel": {
+    "message": "سطح FTS"
+  },
+  "rag_hybridAlpha": {
+    "message": "آلفای ترکیبی"
+  },
+  "rag_hybridAlphaHelper": {
+    "message": "۰ = کاملاً FTS، ۱ = کاملاً برداری"
+  },
+  "rag_intentRouting": {
+    "message": "مسیریابی هدف"
+  },
+  "rag_topK": {
+    "message": "تعداد نتایج برتر"
+  },
+  "rag_minScore": {
+    "message": "حداقل مرتبط‌بودن"
+  },
+  "rag_reranking": {
+    "message": "بازرتبه‌بندی"
+  },
+  "rag_enableReranking": {
+    "message": "فعال‌سازی بازرتبه‌بندی"
+  },
+  "rag_rerankStrategy": {
+    "message": "استراتژی"
+  },
+  "rag_rerankTopK": {
+    "message": "تعداد بازرتبه‌بندی"
+  },
+  "rag_rerankingModel": {
+    "message": "مدل بازرتبه‌بندی"
+  },
+  "rag_rerankMinProb": {
+    "message": "حداقل احتمال مرتبط‌بودن"
+  },
+  "rag_rerankSentinel": {
+    "message": "حاشیه نگهبان"
+  },
+  "rag_generation": {
+    "message": "تولید پاسخ"
+  },
+  "rag_enableGeneration": {
+    "message": "فعال‌سازی تولید"
+  },
+  "rag_enableGenerationHelper": {
+    "message": "تولید پاسخ از زمینه بازیابی‌شده"
+  },
+  "rag_strictExtractive": {
+    "message": "استخراجی دقیق"
+  },
+  "rag_strictExtractiveHelper": {
+    "message": "فقط از نقل‌قول‌های عین منابع استفاده شود"
+  },
+  "rag_generationModel": {
+    "message": "مدل تولید"
+  },
+  "rag_generationModelPlaceholder": {
+    "message": "پیش‌فرض"
+  },
+  "rag_generationPrompt": {
+    "message": "پرامپت تولید"
+  },
+  "rag_generationPromptPlaceholder": {
+    "message": "قالب پرامپت سفارشی..."
+  },
+  "rag_maxGenerationTokens": {
+    "message": "حداکثر توکن‌ها"
+  },
+  "rag_abstention": {
+    "message": "امتناع"
+  },
+  "rag_enableAbstention": {
+    "message": "فعال‌سازی امتناع"
+  },
+  "rag_enableAbstentionHelper": {
+    "message": "اجازه خودداری در صورت عدم اطمینان"
+  },
+  "rag_abstentionBehavior": {
+    "message": "رفتار"
+  },
+  "rag_abstentionBehaviorContinue": {
+    "message": "ادامه"
+  },
+  "rag_abstentionBehaviorAskUser": {
+    "message": "پرسش از کاربر"
+  },
+  "rag_abstentionBehaviorDecline": {
+    "message": "خودداری"
+  },
+  "rag_synthesis": {
+    "message": "ترکیب چندمرحله‌ای"
+  },
+  "rag_enableSynthesis": {
+    "message": "فعال‌سازی ترکیب"
+  },
+  "rag_enableSynthesisHelper": {
+    "message": "پیش‌نویس و اصلاح پاسخ در چند مرحله"
+  },
+  "rag_synthesisTimeBudget": {
+    "message": "بودجه زمانی (ثانیه)"
+  },
+  "rag_synthesisDraftTokens": {
+    "message": "توکن‌های پیش‌نویس"
+  },
+  "rag_synthesisRefineTokens": {
+    "message": "توکن‌های اصلاح"
+  },
+  "rag_citations": {
+    "message": "ارجاعات"
+  },
+  "rag_enableCitations": {
+    "message": "فعال‌سازی ارجاعات"
+  },
+  "rag_enableCitationsHelper": {
+    "message": "درج ارجاعات منبع در پاسخ‌ها"
+  },
+  "rag_citationStyle": {
+    "message": "سبک ارجاع"
+  },
+  "rag_includePageNumbers": {
+    "message": "درج شماره صفحه"
+  },
+  "rag_enableChunkCitations": {
+    "message": "ارجاعات سطح قطعه"
+  },
+  "rag_enableChunkCitationsHelper": {
+    "message": "ارجاع به قطعات متنی خاص به‌جای کل سند"
+  },
+  "rag_requireHardCitations": {
+    "message": "الزام ارجاعات قطعی"
+  },
+  "rag_requireHardCitationsHelper": {
+    "message": "رد پاسخ‌های بدون ارجاع قابل تأیید"
+  },
+  "rag_safety": {
+    "message": "ایمنی و یکپارچگی"
+  },
+  "rag_enableSecurityFilter": {
+    "message": "فیلتر امنیتی"
+  },
+  "rag_enableSecurityFilterHelper": {
+    "message": "فیلتر محتوای بالقوه مضر"
+  },
+  "rag_contentFilter": {
+    "message": "فیلتر محتوا"
+  },
+  "rag_sensitivityLevel": {
+    "message": "سطح حساسیت"
+  },
+  "rag_sensitivity_public": {
+    "message": "عمومی"
+  },
+  "rag_sensitivity_internal": {
+    "message": "داخلی"
+  },
+  "rag_sensitivity_confidential": {
+    "message": "محرمانه"
+  },
+  "rag_sensitivity_restricted": {
+    "message": "محدود"
+  },
+  "rag_piiHandling": {
+    "message": "مدیریت اطلاعات شخصی"
+  },
+  "rag_detectPii": {
+    "message": "شناسایی اطلاعات شخصی"
+  },
+  "rag_redactPii": {
+    "message": "حذف اطلاعات شخصی"
+  },
+  "rag_redactPiiHelper": {
+    "message": "جایگزینی اطلاعات شخصی شناسایی‌شده با متغیرهای جایگزین"
+  },
+  "rag_contentPolicy": {
+    "message": "سیاست محتوا"
+  },
+  "rag_enableContentPolicy": {
+    "message": "فعال‌سازی فیلتر سیاست"
+  },
+  "rag_contentPolicyTypes": {
+    "message": "انواع سیاست"
+  },
+  "rag_contentPolicyTypeOptions_pii": {
+    "message": "اطلاعات شخصی"
+  },
+  "rag_contentPolicyTypeOptions_phi": {
+    "message": "اطلاعات سلامت"
+  },
+  "rag_contentPolicyMode": {
+    "message": "حالت سیاست"
+  },
+  "rag_contentPolicyModeOptions_redact": {
+    "message": "حذف"
+  },
+  "rag_contentPolicyModeOptions_drop": {
+    "message": "رد کردن"
+  },
+  "rag_contentPolicyModeOptions_annotate": {
+    "message": "حاشیه‌نویسی"
+  },
+  "rag_injectionProtection": {
+    "message": "محافظت از تزریق"
+  },
+  "rag_enableInjectionFilter": {
+    "message": "فعال‌سازی فیلتر"
+  },
+  "rag_enableInjectionFilterHelper": {
+    "message": "شناسایی تلاش‌های تزریق پرامپت"
+  },
+  "rag_injectionFilterStrength": {
+    "message": "قدرت فیلتر"
+  },
+  "rag_numericFidelity": {
+    "message": "دقت عددی"
+  },
+  "rag_enableNumericFidelity": {
+    "message": "فعال‌سازی بررسی"
+  },
+  "rag_enableNumericFidelityHelper": {
+    "message": "تأیید دقت اعداد در پاسخ‌ها"
+  },
+  "rag_numericFidelityBehavior": {
+    "message": "در صورت خطا"
+  },
+  "rag_numericFidelityBehaviorOptions_continue": {
+    "message": "ادامه"
+  },
+  "rag_numericFidelityBehaviorOptions_ask": {
+    "message": "پرسش از کاربر"
+  },
+  "rag_numericFidelityBehaviorOptions_decline": {
+    "message": "خودداری"
+  },
+  "rag_numericFidelityBehaviorOptions_retry": {
+    "message": "تلاش مجدد"
+  },
+  "rag_advanced": {
+    "message": "پیشرفته"
+  },
+  "rag_advancedHelper": {
+    "message": "تنظیمات تخصصی برای تنظیم دقیق رفتار RAG"
+  },
+  "rag_queryExpansion": {
+    "message": "گسترش پرس‌وجو"
+  },
+  "rag_expandQuery": {
+    "message": "گسترش پرس‌وجو"
+  },
+  "rag_expansionStrategies": {
+    "message": "استراتژی‌ها"
+  },
+  "rag_spellCheck": {
+    "message": "بررسی املا"
+  },
+  "rag_caching": {
+    "message": "حافظه پنهان"
+  },
+  "rag_enableCache": {
+    "message": "فعال‌سازی حافظه پنهان"
+  },
+  "rag_cacheThreshold": {
+    "message": "آستانه حافظه پنهان"
+  },
+  "rag_adaptiveCache": {
+    "message": "حافظه پنهان تطبیقی"
+  },
+  "rag_useEmbeddingCache": {
+    "message": "حافظه پنهان بردار"
+  },
+  "rag_contextConstruction": {
+    "message": "ساخت زمینه"
+  },
+  "rag_chunkTypeFilter": {
+    "message": "انواع قطعه"
+  },
+  "rag_enableParentExpansion": {
+    "message": "گسترش والد"
+  },
+  "rag_parentContextSize": {
+    "message": "اندازه زمینه والد"
+  },
+  "rag_includeSiblingChunks": {
+    "message": "شامل قطعات همسایه"
+  },
+  "rag_siblingWindow": {
+    "message": "پنجره همسایه"
+  },
+  "rag_includeParentDocument": {
+    "message": "شامل سند والد"
+  },
+  "rag_parentMaxTokens": {
+    "message": "حداکثر توکن والد"
+  },
+  "rag_tableProcessing": {
+    "message": "پردازش جدول"
+  },
+  "rag_enableTableProcessing": {
+    "message": "فعال‌سازی جداول"
+  },
+  "rag_tableMethod": {
+    "message": "روش جدول"
+  },
+  "rag_enableNumericTableBoost": {
+    "message": "تقویت عددی"
+  },
+  "rag_vlm": {
+    "message": "تقطیع تأخیری VLM"
+  },
+  "rag_enableVlmLateChunking": {
+    "message": "فعال‌سازی VLM"
+  },
+  "rag_vlmBackend": {
+    "message": "بک‌اند VLM"
+  },
+  "rag_vlmDetectTablesOnly": {
+    "message": "فقط جداول"
+  },
+  "rag_vlmMaxPages": {
+    "message": "حداکثر صفحات"
+  },
+  "rag_vlmLateChunkTopK": {
+    "message": "تعداد تقطیع تأخیری"
+  },
+  "rag_claims": {
+    "message": "تأیید ادعاها"
+  },
+  "rag_enableClaims": {
+    "message": "فعال‌سازی ادعاها"
+  },
+  "rag_claimExtractor": {
+    "message": "استخراج‌کننده"
+  },
+  "rag_claimVerifier": {
+    "message": "تأییدکننده"
+  },
+  "rag_claimsTopK": {
+    "message": "تعداد ادعاهای برتر"
+  },
+  "rag_claimsConfThreshold": {
+    "message": "اطمینان"
+  },
+  "rag_claimsMax": {
+    "message": "حداکثر ادعاها"
+  },
+  "rag_claimsConcurrency": {
+    "message": "هم‌زمانی"
+  },
+  "rag_nliModel": {
+    "message": "مدل NLI"
+  },
+  "rag_adaptiveVerification": {
+    "message": "تأیید تطبیقی"
+  },
+  "rag_enablePostVerification": {
+    "message": "تأیید پس از پردازش"
+  },
+  "rag_lowConfidenceBehavior": {
+    "message": "اطمینان پایین"
+  },
+  "rag_adaptiveMaxRetries": {
+    "message": "حداکثر تلاش مجدد"
+  },
+  "rag_adaptiveTimeBudget": {
+    "message": "بودجه زمانی (ثانیه)"
+  },
+  "rag_adaptiveRerunOnLowConf": {
+    "message": "اجرای مجدد با اطمینان پایین"
+  },
+  "rag_adaptiveAdvancedRewrites": {
+    "message": "بازنویسی پیشرفته"
+  },
+  "rag_monitoring": {
+    "message": "نظارت و تحلیل"
+  },
+  "rag_enableMonitoring": {
+    "message": "فعال‌سازی نظارت"
+  },
+  "rag_enableAnalytics": {
+    "message": "فعال‌سازی تحلیل"
+  },
+  "rag_enableObservability": {
+    "message": "مشاهده‌پذیری"
+  },
+  "rag_traceId": {
+    "message": "شناسه ردیابی"
+  },
+  "rag_traceIdPlaceholder": {
+    "message": "تولید خودکار"
+  },
+  "rag_performance": {
+    "message": "عملکرد"
+  },
+  "rag_useConnectionPool": {
+    "message": "استخر اتصال"
+  },
+  "rag_enablePerfAnalysis": {
+    "message": "تحلیل عملکرد"
+  },
+  "rag_timeoutSeconds": {
+    "message": "زمان انتظار (ثانیه)"
+  },
+  "rag_resilience": {
+    "message": "تاب‌آوری"
+  },
+  "rag_enableResilience": {
+    "message": "فعال‌سازی تاب‌آوری"
+  },
+  "rag_retryAttempts": {
+    "message": "تعداد تلاش مجدد"
+  },
+  "rag_circuitBreaker": {
+    "message": "قطع‌کننده مدار"
+  },
+  "rag_debugDisplay": {
+    "message": "اشکال‌زدایی و نمایش"
+  },
+  "rag_highlightResults": {
+    "message": "برجسته‌سازی نتایج"
+  },
+  "rag_highlightQueryTerms": {
+    "message": "برجسته‌سازی عبارات جستجو"
+  },
+  "rag_trackCost": {
+    "message": "ردیابی هزینه"
+  },
+  "rag_debugMode": {
+    "message": "حالت اشکال‌زدایی"
+  },
+  "rag_explainOnly": {
+    "message": "فقط توضیح"
+  },
+  "rag_explainOnlyHelper": {
+    "message": "بازگرداندن طرح پرس‌وجو بدون اجرا"
+  },
+  "rag_reset": {
+    "message": "بازنشانی"
+  },
+  "rag_resetToDefaults": {
+    "message": "بازنشانی به پیش‌فرض‌ها"
+  },
+  "rag_apply": {
+    "message": "اعمال"
+  },
+  "rag_applyAndSearch": {
+    "message": "اعمال و جستجو"
+  },
+  "rag_noSettingsMatch": {
+    "message": "تنظیماتی مطابقت ندارد"
+  },
+  "rag_clearSearch": {
+    "message": "پاک کردن جستجو"
+  },
+  "rag_contextExplanation": {
+    "message": "این موارد در پرس‌وجوی بعدی شما گنجانده خواهند شد."
+  },
+  "rag_browserTabs": {
+    "message": "صفحات وب"
+  },
+  "rag_refreshTabs": {
+    "message": "بازخوانی زبانه‌ها"
+  },
+  "rag_clearTabs": {
+    "message": "پاک کردن همه زبانه‌ها"
+  },
+  "rag_removeTab": {
+    "message": "حذف زبانه"
+  },
+  "rag_addFromOpenTabs": {
+    "message": "+ افزودن از زبانه‌های باز..."
+  },
+  "rag_noMoreTabs": {
+    "message": "زبانه دیگری موجود نیست"
+  },
+  "rag_files": {
+    "message": "فایل‌های بارگذاری‌شده"
+  },
+  "rag_addFile": {
+    "message": "افزودن فایل"
+  },
+  "rag_clearFiles": {
+    "message": "پاک کردن همه فایل‌ها"
+  },
+  "rag_removeFile": {
+    "message": "حذف فایل"
+  },
+  "rag_clickToAddFile": {
+    "message": "برای افزودن فایل کلیک کنید..."
+  },
+  "rag_unpinResult": {
+    "message": "برداشتن سنجاق نتیجه"
+  },
+  "rag_noPinnedResults": {
+    "message": "نتیجه ذخیره‌شده‌ای نیست. موارد را از زبانه جستجو ذخیره کنید."
+  },
+  "rag_pinnedFromSearch": {
+    "message": "ذخیره‌شده از جستجو"
+  },
+  "rag_noContextItems": {
+    "message": "هنوز موردی به زمینه پیوست نشده است."
+  },
+  "rag_contextHint": {
+    "message": "نتایج جستجو را ذخیره کنید یا صفحات وب و فایل‌ها را پیوست کنید تا در پرس‌وجوهای شما گنجانده شوند."
+  },
+  "multiSelect_enter": {
+    "message": "انتخاب گفتگوها"
+  },
+  "multiSelect_exit": {
+    "message": "خروج از انتخاب"
+  },
+  "multiSelect_toggle": {
+    "message": "تغییر انتخاب"
+  },
+  "multiSelect_count": {
+    "message": "{{count}} انتخاب‌شده"
+  },
+  "multiSelect_selectAll": {
+    "message": "انتخاب همه"
+  },
+  "multiSelect_clear": {
+    "message": "پاک کردن"
+  },
+  "multiSelect_addToFolder": {
+    "message": "افزودن به پوشه‌ها"
+  },
+  "multiSelect_addTags": {
+    "message": "افزودن برچسب‌ها"
+  },
+  "multiSelect_folderApplySuccess": {
+    "message": "پوشه‌ها روی گفتگوهای انتخاب‌شده اعمال شد."
+  },
+  "multiSelect_folderApplyError": {
+    "message": "برخی گفتگوها به پوشه‌ها اضافه نشدند."
+  },
+  "multiSelect_tagsApplySuccess": {
+    "message": "برچسب‌ها روی گفتگوهای انتخاب‌شده اعمال شد."
+  },
+  "multiSelect_tagsApplyError": {
+    "message": "برخی گفتگوها برچسب‌گذاری نشدند."
+  },
+  "multiSelect_tagsUnavailable": {
+    "message": "برچسب‌ها در این سرور در دسترس نیست"
+  },
+  "multiSelect_tagsHint": {
+    "message": "برچسب‌ها را به گفتگوهای انتخاب‌شده اضافه کنید."
+  },
+  "multiSelect_tagsPlaceholder": {
+    "message": "افزودن برچسب‌ها..."
+  },
+  "multiSelect_serverOnlyWarning": {
+    "message": "برای اعمال این عملیات، گفتگوهای ذخیره‌شده در سرور را انتخاب کنید."
+  },
+  "multiSelect_deleteConfirmTitle": {
+    "message": "انتقال گفتگوها به سطل زباله؟"
+  },
+  "multiSelect_deleteConfirmBody": {
+    "message": "با برچسب‌گذاری به‌عنوان زباله، گفتگوهای انتخاب‌شده پنهان می‌شوند."
+  },
+  "multiSelect_deleteConfirmOk": {
+    "message": "انتقال به سطل زباله"
+  },
+  "multiSelect_deleteFailed": {
+    "message": "انتقال گفتگوها به سطل زباله ممکن نبود."
+  },
+  "multiSelect_deletePartial": {
+    "message": "برخی گفتگوها به سطل زباله منتقل نشدند."
+  },
+  "multiSelect_deleteSuccess": {
+    "message": "گفتگوها به سطل زباله منتقل شدند."
+  },
+  "multiSelect_localOnlyClosed": {
+    "message": "{{count}} گفتگوی محلی بسته شد."
+  },
+  "contextMenu_status": {
+    "message": "وضعیت"
+  }
+}

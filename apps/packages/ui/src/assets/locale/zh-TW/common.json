@@ -1,0 +1,559 @@
+{
+  "pageAssist": "tldw 小幫手",
+  "titles": {
+    "options": "tldw Assistant — Options",
+    "sidepanel": "tldw Assistant — Sidepanel"
+  },
+  "dismiss": "關閉",
+  "confirmTitle": "請確認",
+  "pdf": {
+    "passwordTitle": "輸入 PDF 密碼",
+    "unlock": "解鎖"
+  },
+  "loading": {
+    "title": "正在載入…",
+    "description": "請稍候，我們正在為您準備。",
+    "content": "正在載入內容…"
+  },
+  "selectAModel": "選擇一個模型",
+  "modelSelect": {
+    "label": "模型",
+    "tooltip": "切換下一則訊息的模型",
+    "searchPlaceholder": "Search models",
+    "noMatches": "No models match your search.",
+    "favoriteAdd": "Add to favorites",
+    "favoriteRemove": "Remove from favorites",
+    "sort": {
+      "favorites": "Favorites",
+      "az": "A-Z",
+      "provider": "Provider",
+      "localFirst": "Local-first"
+    }
+  },
+  "save": "儲存",
+  "saved": "已儲存",
+  "cancel": "取消",
+  "saving": "正在儲存...",
+  "retry": "重試",
+  "close": "關閉",
+  "loadMore": "載入更多...",
+  "share": {
+    "tooltip": {
+      "share": "分享"
+    },
+    "modal": {
+      "title": "為聊天建立分享連結"
+    },
+    "form": {
+      "defaultValue": {
+        "name": "匿名",
+        "title": "未命名聊天"
+      },
+      "title": {
+        "label": "聊天標題",
+        "placeholder": "輸入聊天標題",
+        "required": "聊天標題是必填的"
+      },
+      "name": {
+        "label": "您的名字",
+        "placeholder": "輸入您的名字",
+        "required": "您的名字是必填的"
+      },
+      "btn": {
+        "save": "生成連結",
+        "saving": "正在產生連結..."
+      }
+    },
+    "notification": {
+      "successGenerate": "連結已複製到剪貼簿",
+      "failGenerate": "產生連結失敗"
+    }
+  },
+  "copyToClipboard": "複製到剪貼簿",
+  "table": {
+    "copyCsv": "複製為 CSV",
+    "downloadCsv": "下載 CSV"
+  },
+  "webSearch": "搜尋網絡",
+  "regenerate": "重新生成",
+  "edit": "編輯",
+  "generate": "生成",
+  "view": "檢視",
+  "previewMaxHeight": "最大高度",
+  "previewFitHeight": "調整高度",
+  "previewToggleExpand": "展開預覽",
+  "previewToggleClamp": "限制預覽",
+  "delete": "刪除",
+  "deleteMessageConfirm": "刪除這則訊息？",
+  "deleteFailed": "刪除失敗",
+  "continue": "繼續回應",
+  "saveAndSubmit": "儲存並送出",
+  "editMessage": {
+    "placeholder": "輸入一則訊息..."
+  },
+  "submit": "送出",
+  "send": "送出",
+  "startChat": "開始聊天",
+  "connectToServer": "連線到伺服器",
+  "previous": "上一頁",
+  "next": "下一頁",
+  "noData": "沒有資料",
+  "noHistory": "無聊天記錄",
+  "chatWithCurrentPage": "與目前頁面聊天",
+  "chatWithCharacter": "與角色聊天",
+  "beta": "測試版",
+  "tts": "朗讀",
+  "ttsShort": "語音",
+  "reply": "回覆",
+  "replyShort": "回覆",
+  "replyingTo": "回覆中",
+  "clearReply": "清除回覆目標",
+  "replyTargetFallback": "訊息",
+  "artifactsTitle": "產物",
+  "artifactsDefaultTitle": "程式碼",
+  "artifactsView": "檢視程式碼",
+  "artifactsPin": "釘選",
+  "artifactsUnpin": "取消釘選",
+  "artifactsClose": "關閉",
+  "artifactsCopy": "複製",
+  "artifactsDownload": "下載",
+  "artifactsRun": "執行",
+  "copyShort": "複製",
+  "branchShort": "分支",
+  "infoShort": "資訊",
+  "saveToNotes": "儲存到筆記",
+  "saveToFlashcards": "儲存到抽認卡",
+  "generateDocument": "生成文件",
+  "documentShort": "文件",
+  "documentCard": {
+    "removeAria": "移除 {{name}}"
+  },
+  "saveNoteShort": "筆記",
+  "saveFlashcardShort": "卡片",
+  "savedToNotes": "已儲存到筆記",
+  "savedToFlashcards": "已儲存到抽認卡",
+  "saveToNotesEmpty": "目前沒有可儲存內容。",
+  "regenShort": "重試",
+  "continueShort": "更多",
+  "fileChanges": "檔案變更",
+  "deletions": "刪除作業",
+  "gitOperations": "Git 操作",
+  "commands": "指令",
+  "otherOperations": "其他作業",
+  "fileAccess": "檔案存取",
+  "notebookEdits": "筆記本編輯",
+  "applyPatch": "套用補丁",
+  "recursive": "(遞迴)",
+  "complexArguments": "[複雜參數]",
+  "currentChatModelSettings": "目前聊天模型設定",
+  "modelSettings": {
+    "label": "模型設定",
+    "description": "全域設定所有聊天的模型選項",
+    "form": {
+      "keepAlive": {
+        "label": "保留時間",
+        "help": "控制請求後模型在記憶體中保持的時間（預設：5分鐘）",
+        "placeholder": "例如：5m、10m、1h"
+      },
+      "temperature": {
+        "label": "溫度",
+        "placeholder": "例如：0.7、1.0"
+      },
+      "numCtx": {
+        "label": "上下文窗口大小 (num_ctx)",
+        "placeholder": "預設：2048"
+      },
+      "numPredict": {
+        "label": "最大 Token 數 (num_predict)",
+        "placeholder": "例如：2048、4096"
+      },
+      "thinking": {
+        "label": "思考模式"
+      },
+      "seed": {
+        "label": "隨機種子",
+        "placeholder": "例如：1234",
+        "help": "模型輸出的可重複性"
+      },
+      "topK": {
+        "label": "Top K（前 K 個）",
+        "placeholder": "例如：40、100"
+      },
+      "topP": {
+        "label": "Top P（累計機率）",
+        "placeholder": "例如：0.9、0.95"
+      },
+      "useMMap": {
+        "label": "useMmap（記憶體對映）"
+      },
+      "tfsZ": {
+        "label": "TFS-Z（TFS 參數）",
+        "placeholder": "例如：1.0、1.1"
+      },
+      "numKeep": {
+        "label": "Num Keep（保留數量）",
+        "placeholder": "例如：256、512"
+      },
+      "numThread": {
+        "label": "Num Thread（執行緒數）",
+        "placeholder": "例如：8、16"
+      },
+      "useMlock": {
+        "label": "useMlock（鎖定記憶體）"
+      },
+      "reasoningEffort": {
+        "label": "推理強度",
+        "placeholder": "低、中、高"
+      },
+      "minP": {
+        "label": "Min P（最小 P）",
+        "placeholder": "例如：0.05"
+      },
+      "repeatPenalty": {
+        "label": "重複懲罰",
+        "placeholder": "例如：1.1、1.2"
+      },
+      "repeatLastN": {
+        "label": "重複最近 N",
+        "placeholder": "例如：64、128"
+      },
+      "numGpu": {
+        "label": "Num GPU（GPU 數量）",
+        "placeholder": "輸入要傳送到 GPU 的層數"
+      },
+      "systemPrompt": {
+        "label": "臨時系統提示詞",
+        "placeholder": "輸入系統提示詞",
+        "help": "這是一種在當前聊天中設置系統提示詞的快捷方法，如果已存在選定的系統提示詞將會覆蓋它。"
+      },
+      "historyMessageLimit": {
+        "label": "歷史訊息上限",
+        "placeholder": "例如：10",
+        "help": "限制每次請求傳送的歷史訊息數量。"
+      },
+      "historyMessageOrder": {
+        "label": "歷史訊息順序",
+        "placeholder": "選擇順序",
+        "help": "選擇先傳送最新或最舊的訊息。",
+        "options": {
+          "desc": "最新優先",
+          "asc": "最舊優先"
+        }
+      },
+      "slashCommandInjectionMode": {
+        "label": "斜線指令注入",
+        "placeholder": "選擇注入模式",
+        "help": "選擇斜線指令插入請求的方式。",
+        "options": {
+          "system": "系統訊息",
+          "preface": "前置使用者訊息",
+          "replace": "取代使用者訊息"
+        }
+      },
+      "apiProvider": {
+        "label": "API 提供者覆寫",
+        "placeholder": "選擇提供者（選填）",
+        "help": "為此聊天強制指定提供者（例如 openai、anthropic）。"
+      },
+      "extraHeaders": {
+        "label": "額外標頭（JSON）",
+        "placeholder": "{ \"X-API-Key\": \"...\" }",
+        "help": "JSON 物件會合併到請求標頭。"
+      },
+      "extraBody": {
+        "label": "額外請求內容（JSON）",
+        "placeholder": "{ \"user\": \"...\" }",
+        "help": "JSON 物件會合併到請求內容。"
+      },
+      "guardrails": {
+        "invalidJson": "請輸入有效的 JSON 物件。"
+      }
+    },
+    "advanced": "更多模型設定",
+    "requestOverrides": "請求覆寫",
+    "tabs": {
+      "model": "模型",
+      "conversation": "對話",
+      "advanced": "進階",
+      "actor": "場景導演"
+    }
+  },
+  "copilot": {
+    "summary": "總結",
+    "explain": "解釋",
+    "rephrase": "重述",
+    "translate": "翻譯",
+    "custom": "自訂"
+  },
+  "citations": "引用",
+  "segmented": {
+    "available": "伺服器模型",
+    "custom": "自訂模型"
+  },
+  "downloadCode": "下載程式碼",
+  "success": "成功",
+  "created": "已建立",
+  "updated": "已更新",
+  "deleted": "已刪除",
+  "create": "建立",
+  "reset": "重設",
+  "serverOffline": "伺服器離線或尚未設定",
+  "serverChats": "伺服器聊天",
+  "serverChatLoadError": "無法載入伺服器聊天。請檢查連線後再試一次。",
+  "serverChatSourceLabel": "伺服器來源",
+  "serverChatForkedLabel": "分叉聊天",
+  "serverChatForkedTooltip": "從聊天 {{chatId}} 分叉",
+  "serverChatsUnavailableNotConnected": "連線到 tldw 伺服器後即可使用伺服器聊天。",
+  "serverChatsUnavailableServerError": "目前無法使用伺服器聊天。請檢查伺服器記錄或稍後再試。",
+  "date": {
+    "pinned": "已置頂",
+    "today": "今天",
+    "yesterday": "昨天",
+    "last7Days": "最近7天",
+    "older": "更早以前"
+  },
+  "range": {
+    "deleteConfirm": {
+      "pinned": "確定要刪除所有置頂的紀錄嗎？",
+      "today": "確定要刪除今天的所有紀錄嗎？",
+      "yesterday": "確定要刪除昨天的所有紀錄嗎？",
+      "last7Days": "確定要刪除最近7天的所有紀錄嗎？",
+      "older": "確定要刪除所有較舊的紀錄嗎？"
+    },
+    "tooltip": {
+      "pinned": "刪除所有置頂的紀錄",
+      "today": "刪除今天的所有紀錄",
+      "yesterday": "刪除昨天的所有紀錄",
+      "last7Days": "刪除最近7天的所有紀錄",
+      "older": "刪除所有較舊的紀錄"
+    }
+  },
+  "historiesDeleted": "{{count}} 條紀錄已刪除",
+  "deleteHistoriesError": "紀錄刪除錯誤",
+  "pin": "置頂",
+  "unpin": "取消置頂",
+  "generationInfo": "生成資訊",
+  "sidebarChat": "側邊面板聊天",
+  "reasoning": {
+    "thinking": "思考中....",
+    "loading": "正在載入推理....",
+    "thought": "思考了 {{time}}"
+  },
+  "mermaid": "Mermaid 圖表",
+  "search": "搜尋",
+  "searchResults": "搜尋結果",
+  "embeddingGen": "正在建立嵌入向量，這可能需要一些時間",
+  "semanticSearch": "正在執行語意搜尋",
+  "newBranch": "新分支",
+  "downloading": "正在下載",
+  "cancelPullingModel": {
+    "confirm": "確定要取消下載嗎？這將會停止下載過程。根據 Ollama 說明文件，您可以從中斷處重新開始下載。"
+  },
+  "privateModeSaveErrorTitle": "tldw Assistant 無法儲存資料",
+  "error": {
+    "label": "錯誤",
+    "friendlyApiKeySummary": "無法連線到您的 tldw 伺服器。",
+    "friendlyApiKeyHint": "您的 API 金鑰可能無效。開啟「設定」→「tldw 伺服器」檢查 URL 與 API 金鑰，然後再試一次。",
+    "friendlyTimeoutSummary": "您的聊天已逾時。",
+    "friendlyTimeoutHint": "伺服器停止串流回應。請重試，或開啟 Health & diagnostics 查看伺服器狀態。",
+    "friendlyGenericSummary": "與您的 tldw 伺服器通訊時發生問題。",
+    "friendlyGenericHint": "請稍後再試，或開啟 Health & diagnostics 檢查伺服器狀態。",
+    "showDetails": "顯示技術詳細資訊",
+    "hideDetails": "隱藏技術詳細資訊",
+    "createFolder": "建立資料夾失敗"
+  },
+  "folders": "資料夾",
+  "folderView": "資料夾檢視",
+  "dateView": "日期檢視",
+  "newFolder": "新資料夾",
+  "folderName": "資料夾名稱",
+  "selectFolder": "選擇資料夾",
+  "noFolders": "無資料夾",
+  "expandAll": "全部展開",
+  "collapseAll": "全部收合",
+  "refresh": "重新整理",
+  "confirm": "確認",
+  "untitled": "未命名",
+  "moveToFolder": "移至資料夾",
+  "timeline": {
+    "title": "對話時間軸",
+    "searchPlaceholder": "搜尋訊息...（空白鍵 = AND）",
+    "searchMatches": "筆相符",
+    "searchNoMatches": "無相符",
+    "searchMode": {
+      "fragments": "片段",
+      "substring": "子字串",
+      "regex": "正則"
+    },
+    "layout": {
+      "horizontal": "水平",
+      "vertical": "垂直"
+    },
+    "refreshGraph": "重新整理圖表",
+    "switchLayout": "切換為 {{layout}} 版面",
+    "expandAllAlternatives": "展開所有替代項目",
+    "collapseAllAlternatives": "收合所有替代項目",
+    "hideLegend": "隱藏圖例",
+    "showLegend": "顯示圖例",
+    "zoomIn": "放大",
+    "zoomOut": "縮小",
+    "unableLocateMessage": "找不到此操作對應的訊息。",
+    "actionFailed": "無法執行時間軸操作，請再試一次。"
+  },
+  "noToolCalls": "尚未有工具呼叫",
+  "sourceLabel": "來源",
+  "sourceOpen": "開啟來源",
+  "status": {
+    "pending": "待處理",
+    "running": "處理中",
+    "complete": "已完成",
+    "error": "錯誤"
+  },
+  "arguments": "參數",
+  "invalidJson": "JSON 無效；顯示原始值",
+  "result": "結果",
+  "tools": {
+    "fs_list": "列出目錄",
+    "fs_read": "讀取檔案",
+    "fs_write": "寫入檔案",
+    "fs_apply_patch": "套用補丁",
+    "fs_mkdir": "建立目錄",
+    "fs_delete": "刪除",
+    "search_grep": "搜尋內容",
+    "search_glob": "尋找檔案",
+    "git_status": "Git 狀態",
+    "git_diff": "Git 差異",
+    "git_log": "Git 日誌",
+    "git_branch": "Git 分支",
+    "git_add": "暫存檔案",
+    "git_commit": "提交",
+    "exec_run": "執行命令"
+  },
+  "markdown": {
+    "unableToRender": "無法呈現內容",
+    "couldNotDisplay": "訊息內容無法顯示。可能是格式無效所致。",
+    "showRawContent": "顯示原始內容"
+  },
+  "commandPalette": {
+    "goToChat": "前往聊天",
+    "goToMedia": "前往媒體",
+    "goToNotes": "前往筆記",
+    "goToFlashcards": "前往抽認卡",
+    "goToSettings": "前往設定",
+    "goToHealth": "前往 健康狀況與診斷",
+    "newChat": "新聊天",
+    "toggleKnowledgeSearch": "切換知識搜尋",
+    "toggleKnowledgeSearchDesc": "在你的知識庫中搜尋",
+    "toggleWebSearch": "切換網路搜尋",
+    "toggleWebDesc": "在網際網路上搜尋",
+    "ingestPage": "擷取目前頁面",
+    "ingestDesc": "將此頁面儲存到你的知識庫",
+    "switchModel": "切換模型",
+    "toggleSidebar": "切換側邊欄",
+    "toggleSidebarDesc": "顯示或隱藏聊天側邊欄",
+    "placeholder": "輸入指令或搜尋…",
+    "noResults": "找不到結果",
+    "title": "指令選單",
+    "navigate": "瀏覽",
+    "select": "選取",
+    "toOpen": "以開啟",
+    "categoryActions": "動作",
+    "categoryNavigation": "導覽",
+    "categorySettings": "設定",
+    "categoryRecent": "最近使用"
+  },
+  "featureHints": {
+    "knowledge": {
+      "title": "搜尋你的知識",
+      "description": "開啟知識搜尋面板，尋找片段並插入到聊天中。"
+    },
+    "moreTools": {
+      "title": "更多工具可用",
+      "description": "使用視覺模式、圖片上傳、快速匯入和完整應用程式。"
+    },
+    "commandPalette": {
+      "title": "快速指令",
+      "description": "按下 {{shortcut}} 搜尋指令、設定等。"
+    },
+    "modelSettings": {
+      "title": "調整模型參數",
+      "description": "微調溫度、上下文長度和其他模型設定。"
+    }
+  },
+  "chatSidebar": {
+    "title": "聊天",
+    "newChat": "新聊天",
+    "collapse": "收合側邊欄",
+    "expand": "展開側邊欄",
+    "search": "搜尋聊天...",
+    "modeLabel": "模式",
+    "modeCasual": "休閒",
+    "modePro": "專業",
+    "ingest": "匯入頁面",
+    "media": "媒體",
+    "notes": "筆記",
+    "flashcards": "閃卡",
+    "prompts": "提示詞",
+    "multiItem": "多項目",
+    "shortcuts": "捷徑",
+    "settings": "設定",
+    "loadError": "無法載入聊天",
+    "localTab": "本機",
+    "serverTab": "伺服器",
+    "foldersTab": "資料夾",
+    "tabs": {
+      "local": "本機",
+      "server": "伺服器",
+      "folders": "資料夾"
+    },
+    "noServerChats": "尚無伺服器聊天",
+    "foldersRequireConnection": "資料夾需要伺服器連線"
+  },
+  "extName": "tldw 助手",
+  "extDescription": "tldw_server 的瀏覽器擴充功能 - 你的統一 AI 助手 支援 RAG, 媒體處理, 以及更多.",
+  "openSidePanelToChat": "開啟側邊欄開始聊天",
+  "openOptionToChat": "開啟 Web UI 開始聊天",
+  "contextSummarize": "總結",
+  "contextExplain": "解釋",
+  "contextRephrase": "改寫",
+  "contextTranslate": "翻譯",
+  "contextCustom": "自訂",
+  "contextNarrateSelection": "Narrate selection",
+  "contextNarrateSelectionNoSelection": "Select text first to narrate.",
+  "contextSendToTldw": "傳送到 tldw_server",
+  "contextProcessLocalTldw": "使用 tldw_server 處理 (不儲存)",
+  "contextTranscribeMedia": "轉錄影片/音訊",
+  "contextTranscribeAndSummarizeMedia": "轉錄 + 總結 影片/音訊",
+  "contextSaveToNotes": "儲存到筆記",
+  "contextSaveToNotesNoSelection": "請先選取文字再儲存到筆記.",
+  "contextSidebarOpening": "正在開啟側邊欄...",
+  "contextSaveToNotesOpeningSidebar": "正在開啟側邊欄以儲存筆記...",
+  "contextSaveToNotesDeliveryFailed": "無法開啟側邊欄以儲存此筆記. 請確認此網站允許 tldw Assistant 側邊欄並再試一次.",
+  "hfSendPageRejected": "[tldw] 頁面傳送請求已被 tldw_server 拒絕",
+  "hfSendPageErrorWithDetail": "[tldw] 傳送此頁面到 tldw_server 失敗: $1. 請檢查 設定 → tldw server 並再試一次.",
+  "hfSendPageError": "[tldw] 傳送此頁面到 tldw_server 失敗. 請檢查 設定 → tldw server 並再試一次.",
+  "hfSendPageSuccess": "[tldw] 已將頁面送至 tldw_server 進行處理",
+  "hfSendPageException": "[tldw] 傳送此頁面到 tldw_server 時發生問題. 請確認 tldw_server 與擴充功能正在執行, 然後再試一次.",
+  "hfPullInProgress": "[tldw Assistant] 已有模型拉取請求正在進行中. 請等待完成後再開始新的請求.",
+  "hfPullConfirm": "[tldw Assistant] 是否要向 tldw_server 發送請求以拉取 \"$1\" 模型? 這與 huggingface.co 網站無關. 確認後伺服器將開始拉取模型.",
+  "hfPullSending": "[tldw Assistant] 正在向 tldw_server 發送拉取 \"$1\" 的請求. 請查看擴充功能圖示或 tldw_server 日誌以了解進度.",
+  "hfPullErrorWithDetail": "[tldw Assistant] 傳送 \"$1\" 的拉取請求失敗: $2. 請檢查 設定 → tldw server 並再試一次.",
+  "hfPullError": "[tldw Assistant] 傳送 \"$1\" 的拉取請求失敗. 請檢查 設定 → tldw server 並再試一次.",
+  "hfPullSuccess": "[tldw Assistant] 已向 tldw_server 發送拉取 \"$1\" 的請求. 請透過擴充功能圖示或 tldw_server 日誌查看狀態.",
+  "hfPullException": "[tldw Assistant] 向 tldw_server 發送 \"$1\" 的拉取請求時發生問題. 請確認 tldw_server 與擴充功能正在執行, 然後再試一次.",
+  "stepLabel": "歡迎",
+  "path": "你想如何開始?",
+  "nextSteps": "你已準備好開始了",
+  "restartOnboardingLabel": "從頭重新開始引導設定",
+  "restartOnboardingButton": "重新開始引導",
+  "restartOnboardingConfirmTitle": "重新開始引導?",
+  "restartOnboardingConfirmMessage": "這將重設你的引導狀態並帶你回到設定流程.",
+  "relativeTime": {
+    "unknown": "未知",
+    "justNow": "剛剛",
+    "agoShort": "前",
+    "minutesAgoShort": "{{count}}分鐘前",
+    "hoursAgoShort": "{{count}}小時前",
+    "daysAgoShort": "{{count}}天前"
+  }
+}

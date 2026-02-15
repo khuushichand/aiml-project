@@ -210,7 +210,7 @@ export function MessageActionsBar({
         />
       )
     }
-    if (isBot && onNewBranch && !temporaryChat) {
+    if (isBot && onNewBranch) {
       items.push(
         <OverflowMenuItem
           key="branch"

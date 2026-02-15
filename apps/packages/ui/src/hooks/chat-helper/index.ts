@@ -9,9 +9,31 @@ import {
 } from "@/db/dexie/helpers"
 import { ChatDocuments } from "@/models/ChatTypes"
 import { generateTitle } from "@/services/title"
-import { ChatHistory } from "@/store/option"
+import { ChatHistory, useStoreMessageOption } from "@/store/option"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { buildAssistantErrorContent } from "@/utils/chat-error-message"
+
+const resolveHistorySetter = (
+  candidate: unknown
+): ((history: ChatHistory) => void) | null => {
+  if (typeof candidate === "function") {
+    return candidate as (history: ChatHistory) => void
+  }
+
+  const fallback = useStoreMessageOption.getState().setHistory
+  if (typeof fallback === "function") {
+    console.error(
+      "[chat] saveMessageOnError received non-callable setHistory; using store fallback",
+      { setHistoryType: typeof candidate }
+    )
+    return fallback
+  }
+
+  console.error("[chat] saveMessageOnError could not resolve setHistory setter", {
+    setHistoryType: typeof candidate
+  })
+  return null
+}
 
 export const saveMessageOnError = async ({
   e,
@@ -77,9 +99,10 @@ export const saveMessageOnError = async ({
   )
 
   const assistantContent = buildAssistantErrorContent(botMessage, e)
+  const safeSetHistory = resolveHistorySetter(setHistory)
 
   if (isAbort) {
-    setHistory([
+    safeSetHistory?.([
       ...history,
       {
         role: "user",
@@ -188,7 +211,7 @@ export const saveMessageOnError = async ({
   }
 
   // Non-abort errors: append user + assistant with error content as well
-  setHistory([
+  safeSetHistory?.([
     ...history,
     {
       role: "user",

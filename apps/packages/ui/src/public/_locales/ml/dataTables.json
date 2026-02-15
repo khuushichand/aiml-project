@@ -1,0 +1,416 @@
+{
+  "title": {
+    "message": "ഡാറ്റാ ടേബിള്‍സ് സ്റ്റുഡിയോ"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "betaNotice": {
+    "message": "ബീറ്റാ സവിശേഷത"
+  },
+  "betaDescription": {
+    "message": "ഡാറ്റാ ടേബിള്‍സ് ഇപ്പോള്‍ ബീറ്റയിലാണ്. പട്ടിക സൃഷ്ടിക്കാൻ ബാക്ക്‌എൻഡ് പിന്തുണ ആവശ്യമാണ്."
+  },
+  "offline": {
+    "message": "സെർവർ ഓഫ്‌ലൈനാണ്. ഡാറ്റാ ടേബിള്‍സ് ഉപയോഗിക്കാൻ ബന്ധിപ്പിക്കുക."
+  },
+  "tabs_tables": {
+    "message": "എന്റെ പട്ടികകൾ"
+  },
+  "tabs_create": {
+    "message": "പട്ടിക സൃഷ്ടിക്കുക"
+  },
+  "wizard_sources": {
+    "message": "സ്രോതസ്സുകൾ തിരഞ്ഞെടുക്കുക"
+  },
+  "wizard_sourcesDesc": {
+    "message": "ഡാറ്റാ സ്രോതസ്സുകൾ തിരഞ്ഞെടുക്കുക"
+  },
+  "wizard_prompt": {
+    "message": "പട്ടികയെ വിശദീകരിക്കുക"
+  },
+  "wizard_promptDesc": {
+    "message": "നിങ്ങളുടെ പ്രോംപ്റ്റ് എഴുതുക"
+  },
+  "wizard_preview": {
+    "message": "പ്രിവ്യൂ"
+  },
+  "wizard_previewDesc": {
+    "message": "സൃഷ്ടിച്ച പട്ടിക പരിശോധിക്കുക"
+  },
+  "wizard_save": {
+    "message": "സേവ് ചെയ്യുക"
+  },
+  "wizard_saveDesc": {
+    "message": "ലൈബ്രറിയിൽ സേവ് ചെയ്യുക"
+  },
+  "wizard_tip": {
+    "message": "ടിപ്പ്"
+  },
+  "wizard_tipText": {
+    "message": "ഘടനയുള്ള ഡാറ്റ എടുക്കാൻ ചാറ്റുകൾ, ഡോക്യുമെന്റുകൾ തിരഞ്ഞെടുക്കുക അല്ലെങ്കിൽ നോളജ് ബേസ് തിരയുക. സ്രോതസ്സുകൾ കൂടുതൽ വ്യക്തമാകുമ്പോൾ ഫലവും മികച്ചതാണ്."
+  },
+  "wizard_reset": {
+    "message": "വീണ്ടും ആരംഭിക്കുക"
+  },
+  "sourceTypes_chat": {
+    "message": "ചാറ്റുകൾ"
+  },
+  "sourceTypes_document": {
+    "message": "ഡോക്യുമെന്റുകൾ"
+  },
+  "sourceTypes_rag": {
+    "message": "RAG തിരയൽ"
+  },
+  "selectedSources": {
+    "message": "തിരഞ്ഞെടുത്ത സ്രോതസ്സുകൾ"
+  },
+  "sourcesSelected": {
+    "message": "തിരഞ്ഞെടുത്ത സ്രോതസ്സുകൾ"
+  },
+  "searchPlaceholder": {
+    "message": "തിരയുക..."
+  },
+  "ragPlaceholder": {
+    "message": "നിങ്ങളുടെ നോളജ് ബേസിനായി തിരച്ചിൽ ക്വറി നൽകുക..."
+  },
+  "ragQuerySnippet": {
+    "message": "നോളജ് ബേസ് തിരച്ചിൽ ക്വറി"
+  },
+  "ragAdded": {
+    "message": "RAG ക്വറി സ്രോതസായി ചേർത്തു"
+  },
+  "ragTip": {
+    "message": "നോളജ് ബേസിലെ ബന്ധപ്പെട്ട ഉള്ളടക്കം കണ്ടെത്താൻ തിരച്ചിൽ ക്വറികൾ നൽകുക. ഓരോ ക്വറിയും പ്രത്യേകം സ്രോതസായി ചേർക്കും."
+  },
+  "fetchError": {
+    "message": "ഇനങ്ങൾ ലോഡ് ചെയ്യുന്നതിൽ പരാജയപ്പെട്ടു"
+  },
+  "promptLabel": {
+    "message": "നിങ്ങൾ സൃഷ്ടിക്കാൻ ആഗ്രഹിക്കുന്ന പട്ടികയെ വിവരിക്കുക"
+  },
+  "promptPlaceholder": {
+    "message": "ഉദാ., ചർച്ച ചെയ്ത പ്രധാന വിഷയങ്ങളെ താരതമ്യം ചെയ്യുന്ന പട്ടിക സൃഷ്ടിക്കുക; വിഷയം, പ്രധാന പോയിന്റുകൾ, പ്രസക്തി സ്‌കോർ എന്നിവയ്ക്കായി കോളങ്ങൾ ഉൾപ്പെടുത്തുക..."
+  },
+  "examplePrompts": {
+    "message": "ഉദാഹരണ പ്രോംപ്റ്റുകൾ:"
+  },
+  "advancedOptions": {
+    "message": "അഡ്വാൻസ്ഡ് ഓപ്ഷനുകൾ"
+  },
+  "columnHints": {
+    "message": "കോളം സൂചനകൾ (ഐച്ഛികം)"
+  },
+  "columnHintsDesc": {
+    "message": "LLM നെ നയിക്കാൻ കോളത്തിന്റെ പേരുകളും തരങ്ങളും നിർദ്ദേശിക്കുക. നിർദ്ദേശിച്ചില്ലെങ്കിൽ, നിങ്ങളുടെ പ്രോംപ്റ്റിൽ നിന്ന് കോളങ്ങൾ അനുമാനിക്കും."
+  },
+  "newColumnName": {
+    "message": "കോളം പേര്"
+  },
+  "modelSelection": {
+    "message": "മോഡൽ"
+  },
+  "selectModel": {
+    "message": "ഡീഫാൾട്ട് മോഡൽ ഉപയോഗിക്കുക"
+  },
+  "maxRows": {
+    "message": "പരമാവധി വരികൾ"
+  },
+  "maxRowsHint": {
+    "message": "(1-1000)"
+  },
+  "generating": {
+    "message": "നിങ്ങളുടെ സ്രോതസ്സുകളിൽ നിന്ന് പട്ടിക സൃഷ്ടിക്കുന്നു..."
+  },
+  "generatingNote": {
+    "message": "ഡാറ്റയുടെ അളവിനെ ആശ്രയിച്ച് കുറച്ച് സമയം എടുക്കാം."
+  },
+  "generateSuccess": {
+    "message": "പട്ടിക വിജയകരമായി സൃഷ്ടിച്ചു!"
+  },
+  "generationFailed": {
+    "message": "സൃഷ്ടിക്കൽ പരാജയപ്പെട്ടു"
+  },
+  "tryAgain": {
+    "message": "വീണ്ടും ശ്രമിക്കുക"
+  },
+  "warnings": {
+    "message": "മുന്നറിയിപ്പുകൾ"
+  },
+  "noPreview": {
+    "message": "പ്രിവ്യൂ ലഭ്യമല്ല"
+  },
+  "promptUsed": {
+    "message": "ഉപയോഗിച്ച പ്രോംപ്റ്റ്:"
+  },
+  "previewModified": {
+    "message": "നിങ്ങൾ പ്രിവ്യൂ മാറ്റിയിരിക്കുന്നു. മാറ്റങ്ങൾ പട്ടികയ്‌ക്കൊപ്പം സേവ് ചെയ്യും."
+  },
+  "addRow": {
+    "message": "വരി ചേർക്കുക"
+  },
+  "addColumn": {
+    "message": "കോളം ചേർക്കുക"
+  },
+  "deleteRow": {
+    "message": "വരി ഇല്ലാതാക്കണോ?"
+  },
+  "deleteRowConfirm": {
+    "message": "ഈ നടപടി തിരിച്ചു കൊണ്ടുവരാനാകില്ല."
+  },
+  "deleteColumn": {
+    "message": "കോളം ഇല്ലാതാക്കണോ?"
+  },
+  "deleteColumnConfirm": {
+    "message": "ഈ നടപടി തിരിച്ചു കൊണ്ടുവരാനാകില്ല."
+  },
+  "discard": {
+    "message": "ഉപേക്ഷിക്കുക"
+  },
+  "changesDiscarded": {
+    "message": "മാറ്റങ്ങൾ ഉപേക്ഷിച്ചു"
+  },
+  "save": {
+    "message": "സേവ് ചെയ്യുക"
+  },
+  "saveSuccess": {
+    "message": "മാറ്റങ്ങൾ വിജയകരമായി സേവ് ചെയ്തു!"
+  },
+  "unsavedChanges": {
+    "message": "സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്"
+  },
+  "columnAdded": {
+    "message": "കോളം '{{name}}' ചേർത്തു"
+  },
+  "rows": {
+    "message": "വരികൾ"
+  },
+  "columnsLabel": {
+    "message": "കോളങ്ങൾ"
+  },
+  "showingRows": {
+    "message": "{{total}} വരികൾ കാണിക്കുന്നു"
+  },
+  "tableSummary": {
+    "message": "പട്ടിക സംഗ്രഹം"
+  },
+  "tableName": {
+    "message": "പട്ടികയുടെ പേര്"
+  },
+  "tableNamePlaceholder": {
+    "message": "നിങ്ങളുടെ പട്ടികയ്ക്ക് പേര് നൽകുക"
+  },
+  "tableDescription": {
+    "message": "വിവരണം (ഐച്ഛികം)"
+  },
+  "tableDescPlaceholder": {
+    "message": "ഈ പട്ടികയിൽ എന്താണ് ഉള്ളതെന്ന് ഓർമ്മിക്കാൻ സഹായിക്കുന്ന ഒരു വിവരണം ചേർക്കുക"
+  },
+  "saveToLibrary": {
+    "message": "ലൈബ്രറിയിൽ സേവ് ചെയ്യുക"
+  },
+  "tableSaved": {
+    "message": "പട്ടിക സേവ് ചെയ്തു!"
+  },
+  "tableSavedDesc": {
+    "message": "നിങ്ങളുടെ പട്ടിക ലൈബ്രറിയിൽ സേവ് ചെയ്തു. നിങ്ങൾക്ക് ഏത് സമയത്തും ഇത് കാണാനും എക്സ്പോർട്ട് ചെയ്യാനും കഴിയും."
+  },
+  "viewTables": {
+    "message": "എന്റെ പട്ടികകൾ കാണുക"
+  },
+  "createAnother": {
+    "message": "മറ്റൊന്ന് സൃഷ്ടിക്കുക"
+  },
+  "orExport": {
+    "message": "അല്ലെങ്കിൽ നേരിട്ട് എക്സ്പോർട്ട് ചെയ്യുക:"
+  },
+  "export": {
+    "message": "എക്സ്പോർട്ട്"
+  },
+  "exportCSV": {
+    "message": "CSV ആയി എക്സ്പോർട്ട് ചെയ്യുക"
+  },
+  "exportExcel": {
+    "message": "Excel ആയി എക്സ്പോർട്ട് ചെയ്യുക"
+  },
+  "exportJSON": {
+    "message": "JSON ആയി എക്സ്പോർട്ട് ചെയ്യുക"
+  },
+  "exportSuccess": {
+    "message": "പട്ടിക {{format}} ആയി എക്സ്പോർട്ട് ചെയ്തു"
+  },
+  "noTableToSave": {
+    "message": "സേവ് ചെയ്യാനുള്ള പട്ടിക ഇല്ല"
+  },
+  "goBackToGenerate": {
+    "message": "ആദ്യം പട്ടിക സൃഷ്ടിക്കാൻ മുൻ ഘട്ടത്തിലേക്ക് തിരികെ പോകുക."
+  },
+  "tableDetails": {
+    "message": "പട്ടിക വിശദാംശങ്ങൾ"
+  },
+  "tableNotFound": {
+    "message": "പട്ടിക കണ്ടെത്താനായില്ല"
+  },
+  "noData": {
+    "message": "ഡാറ്റ ഇല്ല"
+  },
+  "data": {
+    "message": "ഡാറ്റ"
+  },
+  "editMode": {
+    "message": "എഡിറ്റ് മോഡ്"
+  },
+  "editModeActive": {
+    "message": "എഡിറ്റ് ചെയ്യാൻ സെല്ലുകൾ ക്ലിക്ക് ചെയ്യുക"
+  },
+  "regenerate": {
+    "message": "വീണ്ടും സൃഷ്ടിക്കുക"
+  },
+  "regenerateSuccess": {
+    "message": "പട്ടിക വിജയകരമായി വീണ്ടും സൃഷ്ടിച്ചു!"
+  },
+  "model": {
+    "message": "മോഡൽ"
+  },
+  "prompt": {
+    "message": "സൃഷ്ടിക്കൽ പ്രോംപ്റ്റ്"
+  },
+  "sources": {
+    "message": "സ്രോതസ്സുകൾ"
+  },
+  "created": {
+    "message": "സൃഷ്ടിച്ചത്"
+  },
+  "updated": {
+    "message": "അപ്‌ഡേറ്റ് ചെയ്തത്"
+  },
+  "noTables": {
+    "message": "ഇതുവരെ പട്ടികകളില്ല. നിങ്ങളുടെ ആദ്യ പട്ടിക സൃഷ്ടിക്കുക!"
+  },
+  "noSearchResults": {
+    "message": "നിങ്ങളുടെ തിരച്ചിലിനൊപ്പം പൊരുത്തപ്പെടുന്ന പട്ടികകൾ കണ്ടെത്താനായില്ല"
+  },
+  "totalTables": {
+    "message": "{{total}} പട്ടികകൾ"
+  },
+  "view": {
+    "message": "കാണുക"
+  },
+  "delete": {
+    "message": "ഇല്ലാതാക്കുക"
+  },
+  "deleteConfirmTitle": {
+    "message": "പട്ടിക ഇല്ലാതാക്കുക"
+  },
+  "deleteConfirmMessage": {
+    "message": "ഈ പട്ടിക ഇല്ലാതാക്കണമെന്ന് ഉറപ്പാണോ? ഈ നടപടി തിരിച്ച് കൊണ്ടുവരാനാകില്ല."
+  },
+  "noTable": {
+    "message": "പട്ടിക ഡാറ്റ ഇല്ല"
+  },
+  "add": {
+    "message": "ചേർക്കുക"
+  },
+  "columnName": {
+    "message": "കോളം പേര്"
+  },
+  "columnNamePlaceholder": {
+    "message": "ഉദാ., വില, നില, തീയതി"
+  },
+  "columnNameRequired": {
+    "message": "ദയവായി ഒരു കോളം പേര് നൽകുക"
+  },
+  "columnNameTooLong": {
+    "message": "കോളം പേര് 50 അക്ഷരങ്ങളിലോ അതിൽ കുറവിലോ ആയിരിക്കണം"
+  },
+  "columnNameExists": {
+    "message": "ഈ പേരിൽ ഒരു കോളം ഇതിനകം ഉണ്ട്"
+  },
+  "columnType": {
+    "message": "കോളം തരം"
+  },
+  "columnTypeRequired": {
+    "message": "ദയവായി ഒരു കോളം തരം തിരഞ്ഞെടുക്കുക"
+  },
+  "columnDescription": {
+    "message": "വിവരണം (ഐച്ഛികം)"
+  },
+  "columnDescriptionHint": {
+    "message": "ഈ കോളത്തിൽ ഉള്ളതിന്റെ ചുരുക്ക വിവരണം"
+  },
+  "columnDescriptionPlaceholder": {
+    "message": "ഉദാ., വസ്തുവിന്റെ വില USD ൽ"
+  },
+  "discardUnsavedChanges": {
+    "message": "സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. അടയ്ക്കണമെന്ന് ഉറപ്പാണോ?"
+  },
+  "createFromChat": {
+    "message": "ചാറ്റിൽ നിന്ന് പട്ടിക സൃഷ്ടിക്കുക"
+  },
+  "saveFromArtifact": {
+    "message": "ഡാറ്റാ ടേബിള്‍സിലേക്ക് സേവ് ചെയ്യുക"
+  },
+  "importedPrompt": {
+    "message": "ടേബിൾ ആർട്ടിഫാക്റ്റിൽ നിന്ന് ഇറക്കുമതി ചെയ്തത്"
+  },
+  "columns_name": {
+    "message": "പേര്"
+  },
+  "columns_rows": {
+    "message": "വരികൾ"
+  },
+  "columns_columns": {
+    "message": "കോളങ്ങൾ"
+  },
+  "columns_sources": {
+    "message": "സ്രോതസ്സുകൾ"
+  },
+  "columns_created": {
+    "message": "സൃഷ്ടിച്ചത്"
+  },
+  "columns_actions": {
+    "message": "പ്രവർത്തനങ്ങൾ"
+  },
+  "dataTablesDescription": {
+    "message": "സ്വാഭാവിക ഭാഷയിലെ പ്രോംപ്റ്റുകൾ ഉപയോഗിച്ച് നിങ്ങളുടെ ചാറ്റുകൾ, ഡോക്യുമെന്റുകൾ, നോളജ് ബേസ് എന്നിവയിൽ നിന്ന് ഘടനയുള്ള പട്ടികകൾ സൃഷ്ടിക്കുക."
+  },
+  "descriptionLabel": {
+    "message": "വിവരണം"
+  },
+  "examplePromptCompare": {
+    "message": "ഈ സ്രോതസ്സുകളിൽ നിന്നുള്ള പ്രധാന സവിശേഷതകൾ, വിലനിർണ്ണയം, റേറ്റിങ്ങുകൾ എന്നിവ താരതമ്യം ചെയ്യുന്ന പട്ടിക സൃഷ്ടിക്കുക"
+  },
+  "examplePromptEntities": {
+    "message": "പരാമർശിച്ച എല്ലാ എന്റിറ്റികളും അവയുടെ തരം, വിവരണം, ആദ്യ പ്രത്യക്ഷം എന്നിവയോടെ പുറത്തെടുക്കുക"
+  },
+  "examplePromptActions": {
+    "message": "ഏൽപ്പിച്ചയാൾ, അവസാന തീയതി, നില എന്നിവയോടെ എല്ലാ പ്രവർത്തന ഇനങ്ങളും പട്ടികപ്പെടുത്തുക"
+  },
+  "examplePromptSummary": {
+    "message": "വിഷയം, പ്രധാന പോയിന്റുകൾ, സ്രോതസ് റഫറൻസ് എന്നിവയോടെ ഒരു സംഗ്രഹ പട്ടിക സൃഷ്ടിക്കുക"
+  },
+  "examplePromptProduct": {
+    "message": "പേര്, വില, സവിശേഷതകൾ ഉൾപ്പെടുന്ന ഉൽപ്പന്ന വിവരങ്ങൾ പുറത്തെടുക്കുക"
+  },
+  "existingColumnName": {
+    "message": "കോളം പേര്"
+  },
+  "columnTypes_text": {
+    "message": "ടെക്സ്റ്റ്"
+  },
+  "columnTypes_number": {
+    "message": "സംഖ്യ"
+  },
+  "columnTypes_date": {
+    "message": "തീയതി"
+  },
+  "columnTypes_url": {
+    "message": "യുആർഎൽ"
+  },
+  "columnTypes_boolean": {
+    "message": "ബൂളിയൻ"
+  },
+  "columnTypes_currency": {
+    "message": "കറൻസി"
+  }
+}

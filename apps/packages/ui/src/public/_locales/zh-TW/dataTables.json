@@ -1,0 +1,380 @@
+{
+  "title": {
+    "message": "資料表工作室"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "betaNotice": {
+    "message": "Beta 功能"
+  },
+  "betaDescription": {
+    "message": "Data Tables 目前為 Beta 版。產生資料表需要後端支援。"
+  },
+  "offline": {
+    "message": "伺服器離線。請連線以使用 Data Tables。"
+  },
+  "tabs_tables": {
+    "message": "我的資料表"
+  },
+  "tabs_create": {
+    "message": "建立資料表"
+  },
+  "wizard_sources": {
+    "message": "選擇來源"
+  },
+  "wizard_sourcesDesc": {
+    "message": "選擇資料來源"
+  },
+  "wizard_prompt": {
+    "message": "描述資料表"
+  },
+  "wizard_promptDesc": {
+    "message": "撰寫提示"
+  },
+  "wizard_preview": {
+    "message": "預覽"
+  },
+  "wizard_previewDesc": {
+    "message": "檢視產生的資料表"
+  },
+  "wizard_save": {
+    "message": "儲存"
+  },
+  "wizard_saveDesc": {
+    "message": "儲存到庫"
+  },
+  "wizard_tip": {
+    "message": "提示"
+  },
+  "wizard_tipText": {
+    "message": "選擇聊天、文件或搜尋你的知識庫以擷取結構化資料。來源越具體，結果越好。"
+  },
+  "wizard_reset": {
+    "message": "重新開始"
+  },
+  "sourceTypes_chat": {
+    "message": "聊天"
+  },
+  "sourceTypes_document": {
+    "message": "文件"
+  },
+  "sourceTypes_rag": {
+    "message": "RAG 搜尋"
+  },
+  "selectedSources": {
+    "message": "已選來源"
+  },
+  "sourcesSelected": {
+    "message": "已選來源"
+  },
+  "searchPlaceholder": {
+    "message": "搜尋..."
+  },
+  "ragPlaceholder": {
+    "message": "輸入知識庫搜尋查詢..."
+  },
+  "ragQuerySnippet": {
+    "message": "知識庫搜尋查詢"
+  },
+  "ragAdded": {
+    "message": "已將 RAG 查詢新增為來源"
+  },
+  "ragTip": {
+    "message": "輸入搜尋查詢以尋找知識庫中的相關內容。每個查詢都會作為獨立來源加入。"
+  },
+  "fetchError": {
+    "message": "載入項目失敗"
+  },
+  "promptLabel": {
+    "message": "描述你要建立的資料表"
+  },
+  "promptPlaceholder": {
+    "message": "例如：建立一個比較主要討論主題的資料表，包含主題、重點與相關性分數等欄位..."
+  },
+  "examplePrompts": {
+    "message": "範例提示："
+  },
+  "advancedOptions": {
+    "message": "進階選項"
+  },
+  "columnHints": {
+    "message": "欄位提示（選用）"
+  },
+  "columnHintsDesc": {
+    "message": "建議欄位名稱與型別以引導 LLM。若未指定，將從你的提示推斷欄位。"
+  },
+  "newColumnName": {
+    "message": "欄位名稱"
+  },
+  "modelSelection": {
+    "message": "模型"
+  },
+  "selectModel": {
+    "message": "使用預設模型"
+  },
+  "maxRows": {
+    "message": "最大列數"
+  },
+  "maxRowsHint": {
+    "message": "(1-1000)"
+  },
+  "generating": {
+    "message": "正在根據來源產生資料表..."
+  },
+  "generatingNote": {
+    "message": "視資料量而定，可能需要一些時間。"
+  },
+  "generateSuccess": {
+    "message": "資料表產生成功！"
+  },
+  "generationFailed": {
+    "message": "產生失敗"
+  },
+  "tryAgain": {
+    "message": "再試一次"
+  },
+  "warnings": {
+    "message": "警告"
+  },
+  "noPreview": {
+    "message": "沒有可用的預覽"
+  },
+  "promptUsed": {
+    "message": "使用的提示："
+  },
+  "previewModified": {
+    "message": "你已修改預覽。變更將與資料表一起儲存。"
+  },
+  "addRow": {
+    "message": "新增列"
+  },
+  "addColumn": {
+    "message": "新增欄"
+  },
+  "deleteRow": {
+    "message": "刪除列？"
+  },
+  "deleteRowConfirm": {
+    "message": "此操作無法復原。"
+  },
+  "deleteColumn": {
+    "message": "刪除欄？"
+  },
+  "deleteColumnConfirm": {
+    "message": "此操作無法復原。"
+  },
+  "discard": {
+    "message": "捨棄"
+  },
+  "changesDiscarded": {
+    "message": "已捨棄變更"
+  },
+  "save": {
+    "message": "儲存"
+  },
+  "saveSuccess": {
+    "message": "變更已成功儲存！"
+  },
+  "unsavedChanges": {
+    "message": "你有未儲存的變更"
+  },
+  "columnAdded": {
+    "message": "已新增欄位「{{name}}」"
+  },
+  "rows": {
+    "message": "列"
+  },
+  "columnsLabel": {
+    "message": "欄"
+  },
+  "showingRows": {
+    "message": "顯示 {{total}} 列"
+  },
+  "tableSummary": {
+    "message": "資料表摘要"
+  },
+  "tableName": {
+    "message": "資料表名稱"
+  },
+  "tableNamePlaceholder": {
+    "message": "輸入資料表名稱"
+  },
+  "tableDescription": {
+    "message": "描述（選用）"
+  },
+  "tableDescPlaceholder": {
+    "message": "新增描述以協助你記住此資料表的內容"
+  },
+  "saveToLibrary": {
+    "message": "儲存到庫"
+  },
+  "tableSaved": {
+    "message": "資料表已儲存！"
+  },
+  "tableSavedDesc": {
+    "message": "你的資料表已儲存到庫中。你可以隨時檢視並匯出。"
+  },
+  "viewTables": {
+    "message": "查看我的資料表"
+  },
+  "createAnother": {
+    "message": "再建立一個"
+  },
+  "orExport": {
+    "message": "或直接匯出："
+  },
+  "export": {
+    "message": "匯出"
+  },
+  "exportCSV": {
+    "message": "匯出為 CSV"
+  },
+  "exportExcel": {
+    "message": "匯出為 Excel"
+  },
+  "exportJSON": {
+    "message": "匯出為 JSON"
+  },
+  "exportSuccess": {
+    "message": "資料表已匯出為 {{format}}"
+  },
+  "noTableToSave": {
+    "message": "沒有可儲存的資料表"
+  },
+  "goBackToGenerate": {
+    "message": "返回上一步先產生資料表。"
+  },
+  "tableDetails": {
+    "message": "資料表詳細資料"
+  },
+  "tableNotFound": {
+    "message": "找不到資料表"
+  },
+  "noData": {
+    "message": "沒有資料"
+  },
+  "data": {
+    "message": "資料"
+  },
+  "editMode": {
+    "message": "編輯模式"
+  },
+  "editModeActive": {
+    "message": "點擊儲存格以編輯"
+  },
+  "regenerate": {
+    "message": "重新產生"
+  },
+  "regenerateSuccess": {
+    "message": "資料表重新產生成功！"
+  },
+  "model": {
+    "message": "模型"
+  },
+  "prompt": {
+    "message": "產生提示"
+  },
+  "sources": {
+    "message": "來源"
+  },
+  "created": {
+    "message": "建立"
+  },
+  "updated": {
+    "message": "更新"
+  },
+  "noTables": {
+    "message": "尚無資料表。建立你的第一個資料表！"
+  },
+  "noSearchResults": {
+    "message": "找不到符合搜尋的資料表"
+  },
+  "totalTables": {
+    "message": "{{total}} 個資料表"
+  },
+  "view": {
+    "message": "檢視"
+  },
+  "delete": {
+    "message": "刪除"
+  },
+  "deleteConfirmTitle": {
+    "message": "刪除資料表"
+  },
+  "deleteConfirmMessage": {
+    "message": "確定要刪除此資料表嗎？此操作無法復原。"
+  },
+  "noTable": {
+    "message": "沒有資料表資料"
+  },
+  "add": {
+    "message": "新增"
+  },
+  "columnName": {
+    "message": "欄位名稱"
+  },
+  "columnNamePlaceholder": {
+    "message": "例如：價格、狀態、日期"
+  },
+  "columnNameRequired": {
+    "message": "請輸入欄位名稱"
+  },
+  "columnNameTooLong": {
+    "message": "欄位名稱須為 50 個字元以內"
+  },
+  "columnNameExists": {
+    "message": "已有同名欄位"
+  },
+  "columnType": {
+    "message": "欄位類型"
+  },
+  "columnTypeRequired": {
+    "message": "請選擇欄位類型"
+  },
+  "columnDescription": {
+    "message": "描述（選用）"
+  },
+  "columnDescriptionHint": {
+    "message": "此欄位內容的簡短說明"
+  },
+  "columnDescriptionPlaceholder": {
+    "message": "例如：商品價格（USD）"
+  },
+  "discardUnsavedChanges": {
+    "message": "你有未儲存的變更。確定要關閉嗎？"
+  },
+  "createFromChat": {
+    "message": "從聊天建立資料表"
+  },
+  "saveFromArtifact": {
+    "message": "儲存到 Data Tables"
+  },
+  "importedPrompt": {
+    "message": "從資料表工件匯入"
+  },
+  "columns_name": {
+    "message": "名稱"
+  },
+  "columns_rows": {
+    "message": "列"
+  },
+  "columns_columns": {
+    "message": "欄"
+  },
+  "columns_sources": {
+    "message": "來源"
+  },
+  "columns_created": {
+    "message": "建立"
+  },
+  "columns_actions": {
+    "message": "操作"
+  },
+  "dataTablesDescription": {
+    "message": "使用自然語言提示，從你的聊天、文件和知識庫產生結構化資料表。"
+  },
+  "descriptionLabel": {
+    "message": "描述"
+  }
+}

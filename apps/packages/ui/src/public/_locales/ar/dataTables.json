@@ -1,0 +1,380 @@
+{
+  "title": {
+    "message": "استوديو جداول البيانات"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "betaNotice": {
+    "message": "ميزة بيتا"
+  },
+  "betaDescription": {
+    "message": "Data Tables في وضع بيتا حاليًا. يتطلب إنشاء الجداول دعم الخادم الخلفي."
+  },
+  "offline": {
+    "message": "الخادم غير متصل. يُرجى الاتصال لاستخدام Data Tables."
+  },
+  "tabs_tables": {
+    "message": "جداولي"
+  },
+  "tabs_create": {
+    "message": "إنشاء جدول"
+  },
+  "wizard_sources": {
+    "message": "اختر المصادر"
+  },
+  "wizard_sourcesDesc": {
+    "message": "اختر مصادر البيانات"
+  },
+  "wizard_prompt": {
+    "message": "صف الجدول"
+  },
+  "wizard_promptDesc": {
+    "message": "اكتب المطالبة"
+  },
+  "wizard_preview": {
+    "message": "معاينة"
+  },
+  "wizard_previewDesc": {
+    "message": "راجع الجدول المُنشأ"
+  },
+  "wizard_save": {
+    "message": "حفظ"
+  },
+  "wizard_saveDesc": {
+    "message": "احفظ في المكتبة"
+  },
+  "wizard_tip": {
+    "message": "نصيحة"
+  },
+  "wizard_tipText": {
+    "message": "اختر المحادثات أو المستندات أو ابحث في قاعدة المعرفة لاستخراج بيانات منظمة. كلما كانت مصادرك أكثر تحديدًا كانت النتائج أفضل."
+  },
+  "wizard_reset": {
+    "message": "ابدأ من جديد"
+  },
+  "sourceTypes_chat": {
+    "message": "المحادثات"
+  },
+  "sourceTypes_document": {
+    "message": "المستندات"
+  },
+  "sourceTypes_rag": {
+    "message": "بحث RAG"
+  },
+  "selectedSources": {
+    "message": "المصادر المحددة"
+  },
+  "sourcesSelected": {
+    "message": "تم اختيار المصادر"
+  },
+  "searchPlaceholder": {
+    "message": "بحث..."
+  },
+  "ragPlaceholder": {
+    "message": "أدخل استعلام بحث لقاعدة المعرفة..."
+  },
+  "ragQuerySnippet": {
+    "message": "استعلام بحث قاعدة المعرفة"
+  },
+  "ragAdded": {
+    "message": "تمت إضافة استعلام RAG كمصدر"
+  },
+  "ragTip": {
+    "message": "أدخل استعلامات بحث للعثور على محتوى ذي صلة في قاعدة المعرفة. سيتم إضافة كل استعلام كمصدر منفصل."
+  },
+  "fetchError": {
+    "message": "تعذر تحميل العناصر"
+  },
+  "promptLabel": {
+    "message": "صف الجدول الذي تريد إنشاءه"
+  },
+  "promptPlaceholder": {
+    "message": "مثال: أنشئ جدولًا يقارن الموضوعات الرئيسية التي نوقشت، مع أعمدة للموضوع والنقاط الرئيسية ودرجة الصلة..."
+  },
+  "examplePrompts": {
+    "message": "أمثلة للمطالبات:"
+  },
+  "advancedOptions": {
+    "message": "خيارات متقدمة"
+  },
+  "columnHints": {
+    "message": "تلميحات الأعمدة (اختياري)"
+  },
+  "columnHintsDesc": {
+    "message": "اقترح أسماء وأنواع الأعمدة لإرشاد نموذج اللغة. إذا لم يتم تحديدها، فسيتم استنتاج الأعمدة من مطالبتك."
+  },
+  "newColumnName": {
+    "message": "اسم العمود"
+  },
+  "modelSelection": {
+    "message": "النموذج"
+  },
+  "selectModel": {
+    "message": "استخدم النموذج الافتراضي"
+  },
+  "maxRows": {
+    "message": "الحد الأقصى للصفوف"
+  },
+  "maxRowsHint": {
+    "message": "(1-1000)"
+  },
+  "generating": {
+    "message": "جارٍ إنشاء الجدول من مصادرك..."
+  },
+  "generatingNote": {
+    "message": "قد يستغرق ذلك لحظة حسب كمية البيانات."
+  },
+  "generateSuccess": {
+    "message": "تم إنشاء الجدول بنجاح!"
+  },
+  "generationFailed": {
+    "message": "فشل الإنشاء"
+  },
+  "tryAgain": {
+    "message": "أعد المحاولة"
+  },
+  "warnings": {
+    "message": "تحذيرات"
+  },
+  "noPreview": {
+    "message": "لا تتوفر معاينة"
+  },
+  "promptUsed": {
+    "message": "المطالبة المستخدمة:"
+  },
+  "previewModified": {
+    "message": "لقد عدلت المعاينة. سيتم حفظ التغييرات مع الجدول."
+  },
+  "addRow": {
+    "message": "إضافة صف"
+  },
+  "addColumn": {
+    "message": "إضافة عمود"
+  },
+  "deleteRow": {
+    "message": "حذف الصف؟"
+  },
+  "deleteRowConfirm": {
+    "message": "لا يمكن التراجع عن هذا الإجراء."
+  },
+  "deleteColumn": {
+    "message": "حذف العمود؟"
+  },
+  "deleteColumnConfirm": {
+    "message": "لا يمكن التراجع عن هذا الإجراء."
+  },
+  "discard": {
+    "message": "تجاهل"
+  },
+  "changesDiscarded": {
+    "message": "تم تجاهل التغييرات"
+  },
+  "save": {
+    "message": "حفظ"
+  },
+  "saveSuccess": {
+    "message": "تم حفظ التغييرات بنجاح!"
+  },
+  "unsavedChanges": {
+    "message": "لديك تغييرات غير محفوظة"
+  },
+  "columnAdded": {
+    "message": "تمت إضافة العمود '{{name}}'"
+  },
+  "rows": {
+    "message": "صفوف"
+  },
+  "columnsLabel": {
+    "message": "أعمدة"
+  },
+  "showingRows": {
+    "message": "عرض {{total}} صفًا"
+  },
+  "tableSummary": {
+    "message": "ملخص الجدول"
+  },
+  "tableName": {
+    "message": "اسم الجدول"
+  },
+  "tableNamePlaceholder": {
+    "message": "أدخل اسمًا لجدولك"
+  },
+  "tableDescription": {
+    "message": "الوصف (اختياري)"
+  },
+  "tableDescPlaceholder": {
+    "message": "أضف وصفًا يساعدك على تذكر ما يحتويه هذا الجدول"
+  },
+  "saveToLibrary": {
+    "message": "احفظ في المكتبة"
+  },
+  "tableSaved": {
+    "message": "تم حفظ الجدول!"
+  },
+  "tableSavedDesc": {
+    "message": "تم حفظ جدولك في المكتبة. يمكنك عرضه وتصديره في أي وقت."
+  },
+  "viewTables": {
+    "message": "عرض جداولي"
+  },
+  "createAnother": {
+    "message": "إنشاء آخر"
+  },
+  "orExport": {
+    "message": "أو صدّر مباشرةً:"
+  },
+  "export": {
+    "message": "تصدير"
+  },
+  "exportCSV": {
+    "message": "تصدير كـ CSV"
+  },
+  "exportExcel": {
+    "message": "تصدير كـ Excel"
+  },
+  "exportJSON": {
+    "message": "تصدير كـ JSON"
+  },
+  "exportSuccess": {
+    "message": "تم تصدير الجدول بصيغة {{format}}"
+  },
+  "noTableToSave": {
+    "message": "لا يوجد جدول للحفظ"
+  },
+  "goBackToGenerate": {
+    "message": "ارجع إلى الخطوة السابقة لإنشاء جدول أولًا."
+  },
+  "tableDetails": {
+    "message": "تفاصيل الجدول"
+  },
+  "tableNotFound": {
+    "message": "لم يتم العثور على الجدول"
+  },
+  "noData": {
+    "message": "لا توجد بيانات"
+  },
+  "data": {
+    "message": "البيانات"
+  },
+  "editMode": {
+    "message": "وضع التحرير"
+  },
+  "editModeActive": {
+    "message": "انقر على الخلايا للتحرير"
+  },
+  "regenerate": {
+    "message": "إعادة الإنشاء"
+  },
+  "regenerateSuccess": {
+    "message": "تمت إعادة إنشاء الجدول بنجاح!"
+  },
+  "model": {
+    "message": "النموذج"
+  },
+  "prompt": {
+    "message": "مطالبة التوليد"
+  },
+  "sources": {
+    "message": "المصادر"
+  },
+  "created": {
+    "message": "تم الإنشاء"
+  },
+  "updated": {
+    "message": "تم التحديث"
+  },
+  "noTables": {
+    "message": "لا توجد جداول بعد. أنشئ جدولك الأول!"
+  },
+  "noSearchResults": {
+    "message": "لم يتم العثور على جداول تطابق بحثك"
+  },
+  "totalTables": {
+    "message": "{{total}} جداول"
+  },
+  "view": {
+    "message": "عرض"
+  },
+  "delete": {
+    "message": "حذف"
+  },
+  "deleteConfirmTitle": {
+    "message": "حذف الجدول"
+  },
+  "deleteConfirmMessage": {
+    "message": "هل أنت متأكد أنك تريد حذف هذا الجدول؟ لا يمكن التراجع عن هذا الإجراء."
+  },
+  "noTable": {
+    "message": "لا توجد بيانات جدول"
+  },
+  "add": {
+    "message": "إضافة"
+  },
+  "columnName": {
+    "message": "اسم العمود"
+  },
+  "columnNamePlaceholder": {
+    "message": "مثال: السعر، الحالة، التاريخ"
+  },
+  "columnNameRequired": {
+    "message": "يرجى إدخال اسم العمود"
+  },
+  "columnNameTooLong": {
+    "message": "يجب ألا يزيد اسم العمود عن 50 حرفًا"
+  },
+  "columnNameExists": {
+    "message": "يوجد عمود بهذا الاسم بالفعل"
+  },
+  "columnType": {
+    "message": "نوع العمود"
+  },
+  "columnTypeRequired": {
+    "message": "يرجى اختيار نوع العمود"
+  },
+  "columnDescription": {
+    "message": "الوصف (اختياري)"
+  },
+  "columnDescriptionHint": {
+    "message": "وصف موجز لما يحتويه هذا العمود"
+  },
+  "columnDescriptionPlaceholder": {
+    "message": "مثال: سعر العنصر بالدولار الأمريكي"
+  },
+  "discardUnsavedChanges": {
+    "message": "لديك تغييرات غير محفوظة. هل أنت متأكد أنك تريد الإغلاق؟"
+  },
+  "createFromChat": {
+    "message": "إنشاء جدول من المحادثة"
+  },
+  "saveFromArtifact": {
+    "message": "حفظ في Data Tables"
+  },
+  "importedPrompt": {
+    "message": "تم الاستيراد من أثر الجدول"
+  },
+  "columns_name": {
+    "message": "الاسم"
+  },
+  "columns_rows": {
+    "message": "الصفوف"
+  },
+  "columns_columns": {
+    "message": "الأعمدة"
+  },
+  "columns_sources": {
+    "message": "المصادر"
+  },
+  "columns_created": {
+    "message": "تاريخ الإنشاء"
+  },
+  "columns_actions": {
+    "message": "الإجراءات"
+  },
+  "dataTablesDescription": {
+    "message": "أنشئ جداول منظمة من محادثاتك ومستنداتك وقاعدة المعرفة باستخدام مطالبات باللغة الطبيعية."
+  },
+  "descriptionLabel": {
+    "message": "الوصف"
+  }
+}

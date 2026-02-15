@@ -1,0 +1,559 @@
+{
+  "pageAssist": "tldw-assistenten",
+  "titles": {
+    "options": "tldw Assistant — Options",
+    "sidepanel": "tldw Assistant — Sidepanel"
+  },
+  "dismiss": "Afvis",
+  "confirmTitle": "Bekræft venligst",
+  "pdf": {
+    "passwordTitle": "Indtast PDF-adgangskode",
+    "unlock": "Lås op"
+  },
+  "loading": {
+    "title": "Indlæser…",
+    "description": "Vent venligst, mens vi gør alting klar.",
+    "content": "Indlæser indhold…"
+  },
+  "selectAModel": "Vælg en Model",
+  "modelSelect": {
+    "label": "Model",
+    "tooltip": "Skifter model for næste besked",
+    "searchPlaceholder": "Search models",
+    "noMatches": "No models match your search.",
+    "favoriteAdd": "Add to favorites",
+    "favoriteRemove": "Remove from favorites",
+    "sort": {
+      "favorites": "Favorites",
+      "az": "A-Z",
+      "provider": "Provider",
+      "localFirst": "Local-first"
+    }
+  },
+  "save": "Gem",
+  "saved": "Gemt",
+  "cancel": "Fortryd",
+  "saving": "Gemmer…",
+  "retry": "Prøv igen",
+  "close": "Luk",
+  "loadMore": "Indlæs flere…",
+  "share": {
+    "tooltip": {
+      "share": "Del"
+    },
+    "modal": {
+      "title": "Del link til Chatten"
+    },
+    "form": {
+      "defaultValue": {
+        "name": "Anonym",
+        "title": "Unavngivet chat"
+      },
+      "title": {
+        "label": "Chattitel",
+        "placeholder": "Indtast chattitel",
+        "required": "Chattitel er nødvendig"
+      },
+      "name": {
+        "label": "Dit navn",
+        "placeholder": "Indtast dit navn",
+        "required": "Dit navn er nødvendig"
+      },
+      "btn": {
+        "save": "Generer et Link",
+        "saving": "Generering af link..."
+      }
+    },
+    "notification": {
+      "successGenerate": "Link kopied til udklipsholder",
+      "failGenerate": "Kunne ikke generere link"
+    }
+  },
+  "copyToClipboard": "Kopier til udklipsholder",
+  "table": {
+    "copyCsv": "Kopiér som CSV",
+    "downloadCsv": "Download CSV-fil"
+  },
+  "webSearch": "Søger på internettet",
+  "regenerate": "Regenerer",
+  "edit": "Ændre",
+  "generate": "Generer",
+  "view": "Vis",
+  "previewMaxHeight": "Maks. højde",
+  "previewFitHeight": "Tilpas højde",
+  "previewToggleExpand": "Udvid forhåndsvisning",
+  "previewToggleClamp": "Begræns forhåndsvisning",
+  "delete": "Slet",
+  "deleteMessageConfirm": "Slet denne besked?",
+  "deleteFailed": "Sletning mislykkedes",
+  "continue": "Fortsæt svar",
+  "saveAndSubmit": "Gem & Indsend",
+  "editMessage": {
+    "placeholder": "Skriv en besked..."
+  },
+  "submit": "Indsend",
+  "send": "Indsend",
+  "startChat": "Start chat",
+  "connectToServer": "Opret forbindelse til server",
+  "previous": "Forrige",
+  "next": "Næste",
+  "noData": "Ingen data",
+  "noHistory": "Ingen chat-historik",
+  "chatWithCurrentPage": "Chat med nuværende side",
+  "chatWithCharacter": "Chat med figur",
+  "beta": "Beta-version",
+  "tts": "Læs op",
+  "ttsShort": "Tale",
+  "reply": "Svar",
+  "replyShort": "Svar",
+  "replyingTo": "Svarer til",
+  "clearReply": "Ryd svarmål",
+  "replyTargetFallback": "Besked",
+  "artifactsTitle": "Artefakt",
+  "artifactsDefaultTitle": "Kode",
+  "artifactsView": "Vis kode",
+  "artifactsPin": "Fastgør",
+  "artifactsUnpin": "Frigør",
+  "artifactsClose": "Luk",
+  "artifactsCopy": "Kopiér",
+  "artifactsDownload": "Download",
+  "artifactsRun": "Kør",
+  "copyShort": "Kopiér",
+  "branchShort": "Gren",
+  "infoShort": "Info",
+  "saveToNotes": "Gem i noter",
+  "saveToFlashcards": "Gem i huskekort",
+  "generateDocument": "Generer dokument",
+  "documentShort": "Dok",
+  "documentCard": {
+    "removeAria": "Fjern {{name}}"
+  },
+  "saveNoteShort": "Notat",
+  "saveFlashcardShort": "Kort",
+  "savedToNotes": "Gemt i noter",
+  "savedToFlashcards": "Gemt i huskekort",
+  "saveToNotesEmpty": "Intet at gemme endnu.",
+  "regenShort": "Gentag",
+  "continueShort": "Mere",
+  "fileChanges": "Filændringer",
+  "deletions": "Sletninger",
+  "gitOperations": "Git-handlinger",
+  "commands": "Kommandoer",
+  "otherOperations": "Andre handlinger",
+  "fileAccess": "Filadgang",
+  "notebookEdits": "Redigeringer i notatbog",
+  "applyPatch": "Anvend patch",
+  "recursive": "(rekursiv)",
+  "complexArguments": "[Komplekse argumenter]",
+  "currentChatModelSettings": "Nuværende chat model indstillinger",
+  "modelSettings": {
+    "label": "Modelindstillinger",
+    "description": "Sæt modelindstillinger globalt for alle chats",
+    "form": {
+      "keepAlive": {
+        "label": "Hold i live",
+        "help": "styrer hvor længe modellen forbliver i hukommelsen efter en forespørgsel (standard: 5m)",
+        "placeholder": "f.eks. 5m, 10m, 1t"
+      },
+      "temperature": {
+        "label": "Temperatur",
+        "placeholder": "f.eks. 0.7, 1.0"
+      },
+      "numCtx": {
+        "label": "Kontekstvinduesstørrelse (num_ctx)",
+        "placeholder": "Angiv værdi for kontekstvindue (standard: 2048)"
+      },
+      "numPredict": {
+        "label": "Maks tokens (num_predict)",
+        "placeholder": "f.eks. 2048, 4096"
+      },
+      "thinking": {
+        "label": "Tænke-tilstand"
+      },
+      "seed": {
+        "label": "Seed (frø)",
+        "placeholder": "f.eks. 1234",
+        "help": "Reproducerbarhed af modeloutput"
+      },
+      "topK": {
+        "label": "Top K (øverste K)",
+        "placeholder": "f.eks. 40, 100"
+      },
+      "topP": {
+        "label": "Top P (øverste P)",
+        "placeholder": "f.eks. 0.9, 0.95"
+      },
+      "useMMap": {
+        "label": "Brug mmap"
+      },
+      "tfsZ": {
+        "label": "TFS-Z (TFS-parameter)",
+        "placeholder": "f.eks. 1.0, 1.1"
+      },
+      "numKeep": {
+        "label": "Antal bevarede (Num Keep)",
+        "placeholder": "f.eks. 256, 512"
+      },
+      "numThread": {
+        "label": "Antal tråde",
+        "placeholder": "f.eks. 8, 16"
+      },
+      "useMlock": {
+        "label": "Brug mlock"
+      },
+      "reasoningEffort": {
+        "label": "Ræsonnementsindsats",
+        "placeholder": "lav, medium, høj"
+      },
+      "minP": {
+        "label": "Min P (minimum P)",
+        "placeholder": "f.eks. 0.05"
+      },
+      "repeatPenalty": {
+        "label": "Repeat-penalty",
+        "placeholder": "f.eks. 1.1, 1.2"
+      },
+      "repeatLastN": {
+        "label": "Gentag sidste N",
+        "placeholder": "f.eks. 64, 128"
+      },
+      "numGpu": {
+        "label": "Antal GPU'er",
+        "placeholder": "Angiv antal lag, der skal sendes til GPU"
+      },
+      "systemPrompt": {
+        "label": "Midlertidig systemprompt",
+        "placeholder": "Indtast systemprompt",
+        "help": "En hurtig måde at sætte systemprompten i den aktuelle chat, som tilsidesætter den valgte systemprompt, hvis den findes."
+      },
+      "historyMessageLimit": {
+        "label": "Grænse for historikbeskeder",
+        "placeholder": "f.eks. 10",
+        "help": "Begræns hvor mange tidligere beskeder der sendes med hver forespørgsel."
+      },
+      "historyMessageOrder": {
+        "label": "Rækkefølge for historikbeskeder",
+        "placeholder": "Vælg rækkefølge",
+        "help": "Vælg om de nyeste eller ældste beskeder sendes først.",
+        "options": {
+          "desc": "Nyeste først",
+          "asc": "Ældste først"
+        }
+      },
+      "slashCommandInjectionMode": {
+        "label": "Indsættelse af slash-kommandoer",
+        "placeholder": "Vælg indsættelsestilstand",
+        "help": "Vælg hvordan slash-kommandoer indsættes i forespørgslen.",
+        "options": {
+          "system": "Systemmeddelelse",
+          "preface": "Indled brugermeddelelse",
+          "replace": "Erstat brugermeddelelse"
+        }
+      },
+      "apiProvider": {
+        "label": "Tilsidesæt API-udbyder",
+        "placeholder": "Vælg udbyder (valgfrit)",
+        "help": "Tving en bestemt udbyder for denne chat (f.eks. openai, anthropic)."
+      },
+      "extraHeaders": {
+        "label": "Ekstra HTTP-headere (JSON)",
+        "placeholder": "{ \"X-API-Key\": \"...\" }",
+        "help": "JSON-objekt der flettes ind i anmodningens headere."
+      },
+      "extraBody": {
+        "label": "Ekstra request-body (JSON)",
+        "placeholder": "{ \"user\": \"...\" }",
+        "help": "JSON-objekt der flettes ind i anmodningens body."
+      },
+      "guardrails": {
+        "invalidJson": "Indtast et gyldigt JSON-objekt."
+      }
+    },
+    "advanced": "Flere modelindstillinger",
+    "requestOverrides": "Tilsidesættelser af anmodning",
+    "tabs": {
+      "model": "Model",
+      "conversation": "Samtale",
+      "advanced": "Avanceret",
+      "actor": "Sceneregissør"
+    }
+  },
+  "copilot": {
+    "summary": "Opsummer",
+    "explain": "Forklar",
+    "rephrase": "Omskriv",
+    "translate": "Oversæt",
+    "custom": "Brugerdefineret"
+  },
+  "citations": "Citater",
+  "segmented": {
+    "available": "Servermodeller",
+    "custom": "Brugertilpassede modeller"
+  },
+  "downloadCode": "Download kode",
+  "success": "Succes",
+  "created": "Oprettet",
+  "updated": "Opdateret",
+  "deleted": "Slettet",
+  "create": "Opret",
+  "reset": "Nulstil",
+  "serverOffline": "Server offline eller ikke konfigureret",
+  "serverChats": "Serverchats",
+  "serverChatLoadError": "Kunne ikke indlæse serverchat. Kontroller din forbindelse og prøv igen.",
+  "serverChatSourceLabel": "Serverkilde",
+  "serverChatForkedLabel": "Forgrenet chat",
+  "serverChatForkedTooltip": "Forgrenet fra chat {{chatId}}",
+  "serverChatsUnavailableNotConnected": "Serverchats er tilgængelige, når du opretter forbindelse til din tldw-server.",
+  "serverChatsUnavailableServerError": "Serverchats er ikke tilgængelige lige nu. Tjek serverloggene, eller prøv igen.",
+  "date": {
+    "pinned": "Fastgjort",
+    "today": "I dag",
+    "yesterday": "I går",
+    "last7Days": "Sidste 7 dage",
+    "older": "Ældre"
+  },
+  "range": {
+    "deleteConfirm": {
+      "pinned": "Er du sikker på, at du vil slette alle fastgjorte beskeder?",
+      "today": "Er du sikker på, at du vil slette alle beskeder fra i dag?",
+      "yesterday": "Er du sikker på, at du vil slette alle beskeder fra i går?",
+      "last7Days": "Er du sikker på, at du vil slette alle beskeder fra de sidste 7 dage?",
+      "older": "Er du sikker på, at du vil slette alle ældre beskeder?"
+    },
+    "tooltip": {
+      "pinned": "Slet alle fastgjorte beskeder",
+      "today": "Slet alle beskeder fra i dag",
+      "yesterday": "Slet alle beskeder fra i går",
+      "last7Days": "Slet alle beskeder fra de sidste 7 dage",
+      "older": "Slet alle ældre beskeder"
+    }
+  },
+  "historiesDeleted": "{{count}} historikker slettet",
+  "deleteHistoriesError": "Fejl ved sletning af historik",
+  "pin": "Fastgør",
+  "unpin": "Frigør",
+  "generationInfo": "Genereringsinfo",
+  "sidebarChat": "Sidepanelchat",
+  "reasoning": {
+    "thinking": "Tænker…",
+    "loading": "Indlæser ræsonnement…",
+    "thought": "Modellens ræsonnement (valgfrit)"
+  },
+  "mermaid": "Mermaid-diagrammer",
+  "search": "Søg",
+  "searchResults": "Søgeresultater",
+  "embeddingGen": "Opretter embeddings; dette kan tage lidt tid",
+  "semanticSearch": "Udfører semantisk søgning",
+  "newBranch": "Ny gren",
+  "downloading": "Downloader",
+  "cancelPullingModel": {
+    "confirm": "Er du sikker på, at du vil annullere downloadet? Dette stopper downloadprocessen. Ifølge Ollama-dokumentationen kan du genoptage, hvor du slap."
+  },
+  "privateModeSaveErrorTitle": "tldw Assistant kan ikke gemme data",
+  "error": {
+    "label": "Fejl",
+    "friendlyApiKeySummary": "Vi kunne ikke nå din tldw-server.",
+    "friendlyApiKeyHint": "Din API-nøgle er muligvis ugyldig. Åbn Indstillinger → tldw-server for at tjekke din URL og API-nøgle, og prøv igen.",
+    "friendlyTimeoutSummary": "Din chat fik timeout.",
+    "friendlyTimeoutHint": "Serveren stoppede med at sende svar. Prøv igen, eller åbn Sundhed og diagnostik for at tjekke serverstatus.",
+    "friendlyGenericSummary": "Noget gik galt under kommunikationen med din tldw-server.",
+    "friendlyGenericHint": "Prøv igen om lidt, eller åbn Sundhed og diagnostik for at kontrollere serverens status.",
+    "showDetails": "Vis tekniske detaljer",
+    "hideDetails": "Skjul tekniske detaljer",
+    "createFolder": "Kunne ikke oprette mappe"
+  },
+  "folders": "Mapper",
+  "folderView": "Mappevisning",
+  "dateView": "Datovisning",
+  "newFolder": "Ny mappe",
+  "folderName": "Mappenavn",
+  "selectFolder": "Vælg mappe",
+  "noFolders": "Ingen mapper",
+  "expandAll": "Udvid alle",
+  "collapseAll": "Skjul alle",
+  "refresh": "Opdater",
+  "confirm": "Bekræft",
+  "untitled": "Unavngivet",
+  "moveToFolder": "Flyt til mappe",
+  "timeline": {
+    "title": "Samtaletidslinje",
+    "searchPlaceholder": "Søg i beskeder... (mellemrum = OG)",
+    "searchMatches": "træffere",
+    "searchNoMatches": "ingen træffere",
+    "searchMode": {
+      "fragments": "Fragmenter",
+      "substring": "Delstreng",
+      "regex": "Regulære udtryk"
+    },
+    "layout": {
+      "horizontal": "vandret",
+      "vertical": "lodret"
+    },
+    "refreshGraph": "Opdater graf",
+    "switchLayout": "Skift til {{layout}}-layout",
+    "expandAllAlternatives": "Udvid alle alternativer",
+    "collapseAllAlternatives": "Sammenfold alle alternativer",
+    "hideLegend": "Skjul forklaring",
+    "showLegend": "Vis forklaring",
+    "zoomIn": "Zoom ind",
+    "zoomOut": "Zoom ud",
+    "unableLocateMessage": "Kunne ikke finde beskeden til denne handling.",
+    "actionFailed": "Kunne ikke udføre tidslinjehandling. Prøv igen."
+  },
+  "noToolCalls": "Ingen værktøjskald endnu",
+  "sourceLabel": "Kilde",
+  "sourceOpen": "Åbn kilde",
+  "status": {
+    "pending": "Venter",
+    "running": "Processerer",
+    "complete": "Færdig",
+    "error": "Fejl"
+  },
+  "arguments": "Argumenter",
+  "invalidJson": "Ugyldig JSON; viser rå værdi",
+  "result": "Resultat",
+  "tools": {
+    "fs_list": "List mappe",
+    "fs_read": "Læs fil",
+    "fs_write": "Skriv fil",
+    "fs_apply_patch": "Anvend patch",
+    "fs_mkdir": "Opret mappe",
+    "fs_delete": "Slet",
+    "search_grep": "Søg i indhold",
+    "search_glob": "Find filer",
+    "git_status": "Git-status",
+    "git_diff": "Git-diff",
+    "git_log": "Git-log",
+    "git_branch": "Git-branch",
+    "git_add": "Stage filer",
+    "git_commit": "Commit",
+    "exec_run": "Kør kommando"
+  },
+  "markdown": {
+    "unableToRender": "Kunne ikke gengive indhold",
+    "couldNotDisplay": "Beskedindholdet kunne ikke vises. Dette kan skyldes ugyldig formatering.",
+    "showRawContent": "Vis rå indhold"
+  },
+  "commandPalette": {
+    "goToChat": "Gå til chat",
+    "goToMedia": "Gå til medier",
+    "goToNotes": "Gå til noter",
+    "goToFlashcards": "Gå til flashcards",
+    "goToSettings": "Gå til indstillinger",
+    "goToHealth": "Gå til sundhed og diagnosticering",
+    "newChat": "Ny chat",
+    "toggleKnowledgeSearch": "Skift videnssøgning",
+    "toggleKnowledgeSearchDesc": "Søg i din vidensbase",
+    "toggleWebSearch": "Skift websøgning",
+    "toggleWebDesc": "Søg på internettet",
+    "ingestPage": "Indlæs aktuel side",
+    "ingestDesc": "Gem denne side i din vidensbase",
+    "switchModel": "Skift model",
+    "toggleSidebar": "Skift sidepanel",
+    "toggleSidebarDesc": "Vis eller skjul chatsidepanelet",
+    "placeholder": "Skriv en kommando eller søg...",
+    "noResults": "Ingen resultater fundet",
+    "title": "Kommandopalet",
+    "navigate": "naviger",
+    "select": "vælg",
+    "toOpen": "for at åbne",
+    "categoryActions": "Handlinger",
+    "categoryNavigation": "Navigering",
+    "categorySettings": "Indstillinger",
+    "categoryRecent": "Seneste"
+  },
+  "featureHints": {
+    "knowledge": {
+      "title": "Søg i din viden",
+      "description": "Åbn videnssøgningspanelet for at finde uddrag og indsætte dem i din chat."
+    },
+    "moreTools": {
+      "title": "Flere værktøjer tilgængelige",
+      "description": "Få adgang til vision-tilstand, billedupload, hurtig indlæsning og hele appen."
+    },
+    "commandPalette": {
+      "title": "Hurtige kommandoer",
+      "description": "Tryk på {{shortcut}} for at søge efter kommandoer, indstillinger og mere."
+    },
+    "modelSettings": {
+      "title": "Juster modelparametre",
+      "description": "Finjuster temperatur, kontekstlængde og andre modelindstillinger."
+    }
+  },
+  "chatSidebar": {
+    "title": "Samtaler",
+    "newChat": "Ny chat",
+    "collapse": "Skjul sidepanelet",
+    "expand": "Vis sidepanelet",
+    "search": "Søg i chats...",
+    "modeLabel": "Tilstand",
+    "modeCasual": "Afslappet",
+    "modePro": "Professionel",
+    "ingest": "Indlæs side",
+    "media": "Medier",
+    "notes": "Noter",
+    "flashcards": "Huskekort",
+    "prompts": "Prompter",
+    "multiItem": "Flere elementer",
+    "shortcuts": "Genveje",
+    "settings": "Indstillinger",
+    "loadError": "Kunne ikke indlæse chats",
+    "localTab": "Lokal",
+    "serverTab": "Server",
+    "foldersTab": "Mapper",
+    "tabs": {
+      "local": "Lokal",
+      "server": "Server",
+      "folders": "Mapper"
+    },
+    "noServerChats": "Ingen serverchats endnu",
+    "foldersRequireConnection": "Mapper kræver en serverforbindelse"
+  },
+  "extName": "tldw-assistenten",
+  "extDescription": "Brug dine lokalt kørende AI-modeller til at hjælpe dig med at surfe på nettet.",
+  "openSidePanelToChat": "Åbn sidepanel for at chatte",
+  "openOptionToChat": "Åben Web UI for at Chatte",
+  "contextSummarize": "Opsummer",
+  "contextExplain": "Forklar",
+  "contextRephrase": "Omskriv",
+  "contextTranslate": "Oversæt",
+  "contextCustom": "Tilpasset",
+  "contextNarrateSelection": "Læs markeringen op",
+  "contextNarrateSelectionNoSelection": "Vælg tekst først for at få den læst op.",
+  "contextSendToTldw": "Send til tldw_server",
+  "contextProcessLocalTldw": "Behandl med tldw_server (gem ikke)",
+  "contextTranscribeMedia": "Transskriber video/lyd",
+  "contextTranscribeAndSummarizeMedia": "Transskriber + opsummer video/lyd",
+  "contextSaveToNotes": "Gem i noter",
+  "contextSaveToNotesNoSelection": "Markér tekst først for at gemme i noter.",
+  "contextSidebarOpening": "Åbner sidepanel...",
+  "contextSaveToNotesOpeningSidebar": "Åbner sidepanel for at gemme noten...",
+  "contextSaveToNotesDeliveryFailed": "Kunne ikke åbne sidepanelet for at gemme denne note. Sørg for, at tldw Assistant-sidepanelet er tilladt på dette websted, og prøv igen.",
+  "hfSendPageRejected": "[tldw] Anmodning om at sende siden blev afvist af tldw_server",
+  "hfSendPageErrorWithDetail": "[tldw] Det lykkedes ikke at sende denne side til tldw_server: $1. Tjek \"Settings → tldw server\" og prøv igen.",
+  "hfSendPageError": "[tldw] Det lykkedes ikke at sende denne side til tldw_server. Tjek \"Settings → tldw server\" og prøv igen.",
+  "hfSendPageSuccess": "[tldw] Siden blev sendt til tldw_server til behandling",
+  "hfSendPageException": "[tldw] Noget gik galt, da siden skulle sendes til tldw_server. Kontrollér, at din tldw_server og udvidelse kører, og prøv igen.",
+  "hfPullInProgress": "[tldw Assistant] En model-download er allerede i gang. Vent venligst, til den er færdig, før du starter en ny.",
+  "hfPullConfirm": "[tldw Assistant] Vil du sende en anmodning til din tldw_server om at hente modellen \"$1\"? Dette er uafhængigt af websitet huggingface.co. Din server begynder at hente modellen, når du bekræfter.",
+  "hfPullSending": "[tldw Assistant] Sender en anmodning til din tldw_server om at hente \"$1\". Tjek udvidelsesikonet eller loggene fra tldw_server for at se status.",
+  "hfPullErrorWithDetail": "[tldw Assistant] Det lykkedes ikke at sende en henteanmodning for \"$1\": $2. Tjek \"Settings → tldw server\" og prøv igen.",
+  "hfPullError": "[tldw Assistant] Det lykkedes ikke at sende en henteanmodning for \"$1\". Tjek \"Settings → tldw server\" og prøv igen.",
+  "hfPullSuccess": "[tldw Assistant] Anmodning om at hente \"$1\" er sendt til din tldw_server. Følg status via udvidelsesikonet eller loggene fra tldw_server.",
+  "hfPullException": "[tldw Assistant] Noget gik galt, da en henteanmodning for \"$1\" blev sendt til din tldw_server. Kontrollér, at din tldw_server og udvidelsen kører, og prøv igen.",
+  "stepLabel": "Velkommen",
+  "path": "Hvordan vil du gerne starte?",
+  "nextSteps": "Du er klar til at gå i gang",
+  "restartOnboardingLabel": "Genstart onboarding fra begyndelsen",
+  "restartOnboardingButton": "Genstart onboarding",
+  "restartOnboardingConfirmTitle": "Genstart onboarding?",
+  "restartOnboardingConfirmMessage": "Dette nulstiller din onboarding-status og fører dig tilbage til opsætningsflowet.",
+  "relativeTime": {
+    "unknown": "Ukendt",
+    "justNow": "Lige nu",
+    "agoShort": "siden",
+    "minutesAgoShort": "{{count}}m siden",
+    "hoursAgoShort": "{{count}}t siden",
+    "daysAgoShort": "{{count}}d siden"
+  }
+}

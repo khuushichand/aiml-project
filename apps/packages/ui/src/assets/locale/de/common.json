@@ -1,0 +1,559 @@
+{
+  "pageAssist": "tldw-Assistent",
+  "titles": {
+    "options": "tldw Assistant — Options",
+    "sidepanel": "tldw Assistant — Sidepanel"
+  },
+  "dismiss": "Ausblenden",
+  "confirmTitle": "Bitte bestätigen",
+  "pdf": {
+    "passwordTitle": "PDF-Passwort eingeben",
+    "unlock": "Entsperren"
+  },
+  "loading": {
+    "title": "Wird geladen…",
+    "description": "Bitte warten Sie, während wir alles vorbereiten.",
+    "content": "Inhalt wird geladen…"
+  },
+  "selectAModel": "Modell auswählen",
+  "modelSelect": {
+    "label": "Modell",
+    "tooltip": "Ändert das Modell für die nächste Nachricht",
+    "searchPlaceholder": "Search models",
+    "noMatches": "No models match your search.",
+    "favoriteAdd": "Add to favorites",
+    "favoriteRemove": "Remove from favorites",
+    "sort": {
+      "favorites": "Favorites",
+      "az": "A-Z",
+      "provider": "Provider",
+      "localFirst": "Local-first"
+    }
+  },
+  "save": "Speichern",
+  "saved": "Gespeichert",
+  "cancel": "Abbrechen",
+  "saving": "Speichern...",
+  "retry": "Erneut versuchen",
+  "close": "Schließen",
+  "loadMore": "Mehr laden...",
+  "share": {
+    "tooltip": {
+      "share": "Teilen"
+    },
+    "modal": {
+      "title": "Link zum Chat teilen"
+    },
+    "form": {
+      "defaultValue": {
+        "name": "Anonym",
+        "title": "Unbenannter Chat"
+      },
+      "title": {
+        "label": "Chat-Titel",
+        "placeholder": "Chat-Titel eingeben",
+        "required": "Chat-Titel ist erforderlich"
+      },
+      "name": {
+        "label": "Ihr Name",
+        "placeholder": "Geben Sie Ihren Namen ein",
+        "required": "Ihr Name ist erforderlich"
+      },
+      "btn": {
+        "save": "Link generieren",
+        "saving": "Link wird generiert..."
+      }
+    },
+    "notification": {
+      "successGenerate": "Link in die Zwischenablage kopiert",
+      "failGenerate": "Link konnte nicht generiert werden"
+    }
+  },
+  "copyToClipboard": "In die Zwischenablage kopieren",
+  "table": {
+    "copyCsv": "Als CSV kopieren",
+    "downloadCsv": "CSV herunterladen"
+  },
+  "webSearch": "Web durchsuchen",
+  "regenerate": "Neu generieren",
+  "edit": "Bearbeiten",
+  "generate": "Generieren",
+  "view": "Anzeigen",
+  "previewMaxHeight": "Maximale Höhe",
+  "previewFitHeight": "Höhe anpassen",
+  "previewToggleExpand": "Vorschau erweitern",
+  "previewToggleClamp": "Vorschau begrenzen",
+  "delete": "Löschen",
+  "deleteMessageConfirm": "Diese Nachricht löschen?",
+  "deleteFailed": "Löschen fehlgeschlagen",
+  "continue": "Antwort fortsetzen",
+  "saveAndSubmit": "Speichern & Absenden",
+  "editMessage": {
+    "placeholder": "Nachricht eingeben..."
+  },
+  "submit": "Absenden",
+  "send": "Absenden",
+  "startChat": "Chat starten",
+  "connectToServer": "Mit Server verbinden",
+  "previous": "Zurück",
+  "next": "Weiter",
+  "noData": "Keine Daten",
+  "noHistory": "Kein Chat-Verlauf",
+  "chatWithCurrentPage": "Mit aktueller Seite chatten",
+  "chatWithCharacter": "Mit Charakter chatten",
+  "beta": "Beta-Version",
+  "tts": "Vorlesen",
+  "ttsShort": "Ton",
+  "reply": "Antworten",
+  "replyShort": "Antworten",
+  "replyingTo": "Antwort auf",
+  "clearReply": "Antwortziel löschen",
+  "replyTargetFallback": "Nachricht",
+  "artifactsTitle": "Artefakt",
+  "artifactsDefaultTitle": "Code",
+  "artifactsView": "Code anzeigen",
+  "artifactsPin": "Anheften",
+  "artifactsUnpin": "Loslösen",
+  "artifactsClose": "Schließen",
+  "artifactsCopy": "Kopieren",
+  "artifactsDownload": "Herunterladen",
+  "artifactsRun": "Ausführen",
+  "copyShort": "Kopieren",
+  "branchShort": "Zweig",
+  "infoShort": "Info",
+  "saveToNotes": "In Notizen speichern",
+  "saveToFlashcards": "In Karteikarten speichern",
+  "generateDocument": "Dokument generieren",
+  "documentShort": "Dok.",
+  "documentCard": {
+    "removeAria": "Entferne {{name}}"
+  },
+  "saveNoteShort": "Notiz",
+  "saveFlashcardShort": "Karte",
+  "savedToNotes": "In Notizen gespeichert",
+  "savedToFlashcards": "In Karteikarten gespeichert",
+  "saveToNotesEmpty": "Noch nichts zu speichern.",
+  "regenShort": "Neu",
+  "continueShort": "Mehr",
+  "fileChanges": "Dateiänderungen",
+  "deletions": "Löschvorgänge",
+  "gitOperations": "Git-Operationen",
+  "commands": "Befehle",
+  "otherOperations": "Andere Vorgänge",
+  "fileAccess": "Dateizugriff",
+  "notebookEdits": "Notizbuchänderungen",
+  "applyPatch": "Patch anwenden",
+  "recursive": "(rekursiv)",
+  "complexArguments": "[Komplexe Argumente]",
+  "currentChatModelSettings": "Aktuelle Chat-Modell-Einstellungen",
+  "modelSettings": {
+    "label": "Modell-Einstellungen",
+    "description": "Legen Sie die Modelloptionen global für alle Chats fest",
+    "form": {
+      "keepAlive": {
+        "label": "Aktiv halten",
+        "help": "Steuert, wie lange das Modell nach der Anfrage im Speicher geladen bleibt (Standard: 5m)",
+        "placeholder": "Geben Sie die Dauer für Aktiv halten ein (z.B. 5m, 10m, 1h)"
+      },
+      "temperature": {
+        "label": "Temperatur",
+        "placeholder": "Geben Sie den Temperaturwert ein (z.B. 0.7, 1.0)"
+      },
+      "numCtx": {
+        "label": "Kontextfenstergröße (num_ctx)",
+        "placeholder": "Geben Sie die Kontextfenstergröße ein (Standard: 2048)"
+      },
+      "numPredict": {
+        "label": "Maximale Tokens (num_predict)",
+        "placeholder": "Geben Sie den Max-Tokens-Wert ein (z.B. 2048, 4096)"
+      },
+      "thinking": {
+        "label": "Denkmodus"
+      },
+      "seed": {
+        "label": "Seed (Startwert)",
+        "placeholder": "Geben Sie den Seed-Wert ein (z.B. 1234)",
+        "help": "Reproduzierbarkeit der Modellausgabe"
+      },
+      "topK": {
+        "label": "Top K (oberste K)",
+        "placeholder": "Geben Sie den Top-K-Wert ein (z.B. 40, 100)"
+      },
+      "topP": {
+        "label": "Top P (oberste P)",
+        "placeholder": "Geben Sie den Top-P-Wert ein (z.B. 0.9, 0.95)"
+      },
+      "useMMap": {
+        "label": "useMmap (Speicherabbildung)"
+      },
+      "tfsZ": {
+        "label": "TFS-Z (TFS-Parameter)",
+        "placeholder": "z.B. 1.0, 1.1"
+      },
+      "numKeep": {
+        "label": "Anzahl beibehalten (Num Keep)",
+        "placeholder": "z.B. 256, 512"
+      },
+      "numThread": {
+        "label": "Anzahl Threads (Num Thread)",
+        "placeholder": "z.B. 8, 16"
+      },
+      "useMlock": {
+        "label": "useMlock (Speicher sperren)"
+      },
+      "reasoningEffort": {
+        "label": "Reasoning-Aufwand",
+        "placeholder": "niedrig, mittel, hoch"
+      },
+      "minP": {
+        "label": "Min P (minimales P)",
+        "placeholder": "z.B. 0.05"
+      },
+      "repeatPenalty": {
+        "label": "Wiederholungsstrafe",
+        "placeholder": "z.B. 1.1, 1.2"
+      },
+      "repeatLastN": {
+        "label": "Letzte N wiederholen",
+        "placeholder": "z.B. 64, 128"
+      },
+      "numGpu": {
+        "label": "Anzahl GPUs",
+        "placeholder": "Geben Sie die Anzahl der Ebenen ein, die an GPU(s) gesendet werden sollen"
+      },
+      "systemPrompt": {
+        "label": "Temporärer System-Prompt",
+        "placeholder": "System-Prompt eingeben",
+        "help": "Dies ist eine schnelle Möglichkeit, den System-Prompt im aktuellen Chat festzulegen, der den ausgewählten System-Prompt überschreibt, falls vorhanden."
+      },
+      "historyMessageLimit": {
+        "label": "Limit für Verlaufsnachrichten",
+        "placeholder": "z. B. 10",
+        "help": "Begrenzt, wie viele vorherige Nachrichten mit jeder Anfrage gesendet werden."
+      },
+      "historyMessageOrder": {
+        "label": "Reihenfolge der Verlaufsnachrichten",
+        "placeholder": "Reihenfolge auswählen",
+        "help": "Wähle, ob die neuesten oder ältesten Nachrichten zuerst gesendet werden.",
+        "options": {
+          "desc": "Neueste zuerst",
+          "asc": "Älteste zuerst"
+        }
+      },
+      "slashCommandInjectionMode": {
+        "label": "Slash-Command-Injektion",
+        "placeholder": "Injektionsmodus auswählen",
+        "help": "Wähle, wie Slash-Commands in die Anfrage eingefügt werden.",
+        "options": {
+          "system": "Systemnachricht",
+          "preface": "Benutzernachricht voranstellen",
+          "replace": "Benutzernachricht ersetzen"
+        }
+      },
+      "apiProvider": {
+        "label": "API-Provider überschreiben",
+        "placeholder": "Provider auswählen (optional)",
+        "help": "Einen bestimmten Provider für diesen Chat erzwingen (z. B. openai, anthropic)."
+      },
+      "extraHeaders": {
+        "label": "Zusätzliche Header (JSON)",
+        "placeholder": "{ \"X-API-Key\": \"...\" }",
+        "help": "JSON-Objekt, das in die Anfrage-Header gemischt wird."
+      },
+      "extraBody": {
+        "label": "Zusätzlicher Body (JSON)",
+        "placeholder": "{ \"user\": \"...\" }",
+        "help": "JSON-Objekt, das in den Anfrage-Body gemischt wird."
+      },
+      "guardrails": {
+        "invalidJson": "Gib ein gültiges JSON-Objekt ein."
+      }
+    },
+    "advanced": "Weitere Modell-Einstellungen",
+    "requestOverrides": "Anfrage-Überschreibungen",
+    "tabs": {
+      "model": "Modell",
+      "conversation": "Unterhaltung",
+      "advanced": "Erweitert",
+      "actor": "Szenenregie"
+    }
+  },
+  "copilot": {
+    "summary": "Zusammenfassen",
+    "explain": "Erklären",
+    "rephrase": "Umformulieren",
+    "translate": "Übersetzen",
+    "custom": "Benutzerdefiniert"
+  },
+  "citations": "Zitate",
+  "segmented": {
+    "available": "Server-Modelle",
+    "custom": "Benutzerdefinierte Modelle"
+  },
+  "downloadCode": "Code herunterladen",
+  "success": "Erfolg",
+  "created": "Erstellt",
+  "updated": "Aktualisiert",
+  "deleted": "Gelöscht",
+  "create": "Erstellen",
+  "reset": "Zurücksetzen",
+  "serverOffline": "Server offline oder nicht konfiguriert",
+  "serverChats": "Server-Chats",
+  "serverChatLoadError": "Server-Chat konnte nicht geladen werden. Überprüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
+  "serverChatSourceLabel": "Serverquelle",
+  "serverChatForkedLabel": "Abgezweigter Chat",
+  "serverChatForkedTooltip": "Abgezweigt von Chat {{chatId}}",
+  "serverChatsUnavailableNotConnected": "Server-Chats sind verfügbar, sobald Sie eine Verbindung zu Ihrem tldw-Server hergestellt haben.",
+  "serverChatsUnavailableServerError": "Server-Chats sind derzeit nicht verfügbar. Prüfen Sie die Serverprotokolle oder versuchen Sie es erneut.",
+  "date": {
+    "pinned": "Angepinnt",
+    "today": "Heute",
+    "yesterday": "Gestern",
+    "last7Days": "Letzte 7 Tage",
+    "older": "Älter"
+  },
+  "range": {
+    "deleteConfirm": {
+      "pinned": "Sind Sie sicher, dass Sie alle angepinnten Nachrichten löschen möchten?",
+      "today": "Sind Sie sicher, dass Sie alle Nachrichten von heute löschen möchten?",
+      "yesterday": "Sind Sie sicher, dass Sie alle Nachrichten von gestern löschen möchten?",
+      "last7Days": "Sind Sie sicher, dass Sie alle Nachrichten der letzten 7 Tage löschen möchten?",
+      "older": "Sind Sie sicher, dass Sie alle älteren Nachrichten löschen möchten?"
+    },
+    "tooltip": {
+      "pinned": "Alle angepinnten Nachrichten löschen",
+      "today": "Alle Nachrichten von heute löschen",
+      "yesterday": "Alle Nachrichten von gestern löschen",
+      "last7Days": "Alle Nachrichten der letzten 7 Tage löschen",
+      "older": "Alle älteren Nachrichten löschen"
+    }
+  },
+  "historiesDeleted": "{{count}} Verläufe gelöscht",
+  "deleteHistoriesError": "Fehler beim Löschen der Verläufe",
+  "pin": "Anheften",
+  "unpin": "Losheften",
+  "generationInfo": "Generierungsinformationen",
+  "sidebarChat": "Seitenleisten-Chat",
+  "reasoning": {
+    "thinking": "Denke nach....",
+    "loading": "Lade Begründung....",
+    "thought": "Gedanke für {{time}}"
+  },
+  "mermaid": "Mermaid-Diagramme",
+  "search": "Suchen",
+  "searchResults": "Suchergebnisse",
+  "embeddingGen": "Erstelle Embeddings, dies kann eine Weile dauern",
+  "semanticSearch": "Führe semantische Suche durch",
+  "newBranch": "Neuer Zweig",
+  "downloading": "Herunterladen",
+  "cancelPullingModel": {
+    "confirm": "Sind Sie sicher, dass Sie den Download abbrechen möchten? Dadurch wird der Downloadvorgang gestoppt. Laut der Ollama-Dokumentation können Sie dort weitermachen, wo Sie aufgehört haben."
+  },
+  "privateModeSaveErrorTitle": "tldw Assistant kann keine Daten speichern",
+  "error": {
+    "label": "Fehler",
+    "friendlyApiKeySummary": "Wir konnten Ihren tldw-Server nicht erreichen.",
+    "friendlyApiKeyHint": "Ihr API-Schlüssel ist möglicherweise ungültig. Öffnen Sie Einstellungen → tldw-Server, um URL und API-Schlüssel zu prüfen, und versuchen Sie es erneut.",
+    "friendlyTimeoutSummary": "Ihr Chat hat das Zeitlimit überschritten.",
+    "friendlyTimeoutHint": "Der Server hat aufgehört, Antworten zu senden. Versuchen Sie es erneut oder öffnen Sie Status & Diagnose, um den Serverstatus zu prüfen.",
+    "friendlyGenericSummary": "Beim Kontakt mit Ihrem tldw-Server ist ein Fehler aufgetreten.",
+    "friendlyGenericHint": "Versuchen Sie es in einem Moment erneut oder öffnen Sie Status & Diagnose, um den Serverzustand zu prüfen.",
+    "showDetails": "Technische Details anzeigen",
+    "hideDetails": "Technische Details ausblenden",
+    "createFolder": "Ordner konnte nicht erstellt werden"
+  },
+  "folders": "Ordner",
+  "folderView": "Ordneransicht",
+  "dateView": "Datumsansicht",
+  "newFolder": "Neuer Ordner",
+  "folderName": "Ordnername",
+  "selectFolder": "Ordner auswählen",
+  "noFolders": "Keine Ordner",
+  "expandAll": "Alle erweitern",
+  "collapseAll": "Alle einklappen",
+  "refresh": "Aktualisieren",
+  "confirm": "Bestätigen",
+  "untitled": "Unbenannt",
+  "moveToFolder": "In Ordner verschieben",
+  "timeline": {
+    "title": "Gesprächs-Zeitleiste",
+    "searchPlaceholder": "Nachrichten suchen... (Leerzeichen = UND)",
+    "searchMatches": "Treffer",
+    "searchNoMatches": "keine Treffer",
+    "searchMode": {
+      "fragments": "Fragmente",
+      "substring": "Teilstring",
+      "regex": "Regex"
+    },
+    "layout": {
+      "horizontal": "horizontal",
+      "vertical": "vertikal"
+    },
+    "refreshGraph": "Diagramm aktualisieren",
+    "switchLayout": "Zum {{layout}}-Layout wechseln",
+    "expandAllAlternatives": "Alle Alternativen erweitern",
+    "collapseAllAlternatives": "Alle Alternativen einklappen",
+    "hideLegend": "Legende ausblenden",
+    "showLegend": "Legende anzeigen",
+    "zoomIn": "Heranzoomen",
+    "zoomOut": "Herauszoomen",
+    "unableLocateMessage": "Die Nachricht für diese Aktion konnte nicht gefunden werden.",
+    "actionFailed": "Zeitleistenaktion fehlgeschlagen. Bitte erneut versuchen."
+  },
+  "noToolCalls": "Noch keine Tool-Aufrufe",
+  "sourceLabel": "Quelle",
+  "sourceOpen": "Quelle öffnen",
+  "status": {
+    "pending": "Ausstehend",
+    "running": "In Bearbeitung",
+    "complete": "Abgeschlossen",
+    "error": "Fehler"
+  },
+  "arguments": "Argumente",
+  "invalidJson": "Ungültiges JSON; Rohwert wird angezeigt",
+  "result": "Ergebnis",
+  "tools": {
+    "fs_list": "Verzeichnis auflisten",
+    "fs_read": "Datei lesen",
+    "fs_write": "Datei schreiben",
+    "fs_apply_patch": "Patch anwenden",
+    "fs_mkdir": "Verzeichnis erstellen",
+    "fs_delete": "Löschen",
+    "search_grep": "Inhalt durchsuchen",
+    "search_glob": "Dateien finden",
+    "git_status": "Git-Status",
+    "git_diff": "Git-Diff",
+    "git_log": "Git-Log",
+    "git_branch": "Git-Branch",
+    "git_add": "Dateien stagen",
+    "git_commit": "Commit",
+    "exec_run": "Befehl ausführen"
+  },
+  "markdown": {
+    "unableToRender": "Inhalt kann nicht gerendert werden",
+    "couldNotDisplay": "Der Nachrichteninhalt konnte nicht angezeigt werden. Dies kann an ungültiger Formatierung liegen.",
+    "showRawContent": "Rohinhalt anzeigen"
+  },
+  "commandPalette": {
+    "goToChat": "Zum Chat wechseln",
+    "goToMedia": "Zu Medien wechseln",
+    "goToNotes": "Zu Notizen wechseln",
+    "goToFlashcards": "Zu Karteikarten wechseln",
+    "goToSettings": "Zu Einstellungen wechseln",
+    "goToHealth": "Zu Status & Diagnose wechseln",
+    "newChat": "Neuer Chat",
+    "toggleKnowledgeSearch": "Wissenssuche umschalten",
+    "toggleKnowledgeSearchDesc": "In deiner Wissensbasis suchen",
+    "toggleWebSearch": "Websuche umschalten",
+    "toggleWebDesc": "Im Internet suchen",
+    "ingestPage": "Aktuelle Seite erfassen",
+    "ingestDesc": "Diese Seite in deiner Wissensbasis speichern",
+    "switchModel": "Modell wechseln",
+    "toggleSidebar": "Seitenleiste ein-/ausblenden",
+    "toggleSidebarDesc": "Chat-Seitenleiste ein- oder ausblenden",
+    "placeholder": "Befehl eingeben oder suchen...",
+    "noResults": "Keine Ergebnisse gefunden",
+    "title": "Befehlspalette",
+    "navigate": "navigieren",
+    "select": "auswählen",
+    "toOpen": "zum Öffnen",
+    "categoryActions": "Aktionen",
+    "categoryNavigation": "Navigation",
+    "categorySettings": "Einstellungen",
+    "categoryRecent": "Zuletzt verwendet"
+  },
+  "featureHints": {
+    "knowledge": {
+      "title": "Durchsuche dein Wissen",
+      "description": "Öffne die Wissenssuche, um Ausschnitte zu finden und sie in deinen Chat einzufügen."
+    },
+    "moreTools": {
+      "title": "Weitere Tools verfügbar",
+      "description": "Greife auf Vision-Modus, Bild-Upload, Schnellimport und die vollständige App zu."
+    },
+    "commandPalette": {
+      "title": "Schnellbefehle",
+      "description": "Drücke {{shortcut}}, um Befehle, Einstellungen und mehr zu durchsuchen."
+    },
+    "modelSettings": {
+      "title": "Modellparameter anpassen",
+      "description": "Optimiere Temperatur, Kontextlänge und weitere Modelleinstellungen."
+    }
+  },
+  "chatSidebar": {
+    "title": "Chats",
+    "newChat": "Neuer Chat",
+    "collapse": "Seitenleiste einklappen",
+    "expand": "Seitenleiste ausklappen",
+    "search": "Chats durchsuchen...",
+    "modeLabel": "Modus",
+    "modeCasual": "Locker",
+    "modePro": "Profi",
+    "ingest": "Seite erfassen",
+    "media": "Medien",
+    "notes": "Notizen",
+    "flashcards": "Lernkarten",
+    "prompts": "Prompts",
+    "multiItem": "Mehrere Elemente",
+    "shortcuts": "Kurzbefehle",
+    "settings": "Einstellungen",
+    "loadError": "Chats konnten nicht geladen werden",
+    "localTab": "Lokal",
+    "serverTab": "Server",
+    "foldersTab": "Ordner",
+    "tabs": {
+      "local": "Lokal",
+      "server": "Server",
+      "folders": "Ordner"
+    },
+    "noServerChats": "Noch keine Server-Chats",
+    "foldersRequireConnection": "Ordner erfordern eine Serververbindung"
+  },
+  "extName": "tldw-Assistent",
+  "extDescription": "Nutzen Sie Ihre lokal laufenden KI-Modelle, um Sie beim Surfen im Web zu unterstützen.",
+  "openSidePanelToChat": "Seitenleiste zum Chatten öffnen",
+  "openOptionToChat": "Weboberfläche zum Chatten öffnen",
+  "contextSummarize": "Zusammenfassen",
+  "contextExplain": "Erklären",
+  "contextRephrase": "Umformulieren",
+  "contextTranslate": "Übersetzen",
+  "contextCustom": "Benutzerdefiniert",
+  "contextNarrateSelection": "Narrate selection",
+  "contextNarrateSelectionNoSelection": "Select text first to narrate.",
+  "contextSendToTldw": "An tldw_server senden",
+  "contextProcessLocalTldw": "Mit tldw_server verarbeiten (nicht speichern)",
+  "contextTranscribeMedia": "Video/Audio transkribieren",
+  "contextTranscribeAndSummarizeMedia": "Video/Audio transkribieren und zusammenfassen",
+  "contextSaveToNotes": "In Notizen speichern",
+  "contextSaveToNotesNoSelection": "Markieren Sie zuerst Text, um ihn in Notizen zu speichern.",
+  "contextSidebarOpening": "Seitenleiste wird geöffnet...",
+  "contextSaveToNotesOpeningSidebar": "Seitenleiste wird zum Speichern der Notiz geöffnet...",
+  "contextSaveToNotesDeliveryFailed": "Die Seitenleiste konnte nicht geöffnet werden, um diese Notiz zu speichern. Prüfen Sie, ob die tldw Assistant-Seitenleiste auf dieser Seite erlaubt ist, und versuchen Sie es erneut.",
+  "hfSendPageRejected": "[tldw] Seiten-Sendeanforderung wurde von tldw_server abgelehnt",
+  "hfSendPageErrorWithDetail": "[tldw] Diese Seite konnte nicht an tldw_server gesendet werden: $1. Prüfen Sie unter \"Settings → tldw server\" und versuchen Sie es erneut.",
+  "hfSendPageError": "[tldw] Diese Seite konnte nicht an tldw_server gesendet werden. Prüfen Sie unter \"Settings → tldw server\" und versuchen Sie es erneut.",
+  "hfSendPageSuccess": "[tldw] Seite zur Verarbeitung an tldw_server gesendet",
+  "hfSendPageException": "[tldw] Beim Senden dieser Seite an tldw_server ist ein Fehler aufgetreten. Stellen Sie sicher, dass Ihr tldw_server und die Erweiterung ausgeführt werden, und versuchen Sie es erneut.",
+  "hfPullInProgress": "[tldw Assistant] Eine Modell-Abrufanforderung läuft bereits. Bitte warten Sie, bis sie abgeschlossen ist, bevor Sie eine weitere starten.",
+  "hfPullConfirm": "[tldw Assistant] Möchten Sie eine Anfrage an Ihren tldw_server senden, um das Modell \"$1\" abzurufen? Dies ist unabhängig von der Website huggingface.co. Ihr Server beginnt mit dem Abruf des Modells, nachdem Sie bestätigt haben.",
+  "hfPullSending": "[tldw Assistant] Anfrage an Ihren tldw_server zum Abruf von \"$1\" wird gesendet. Überprüfen Sie das Erweiterungssymbol oder die Protokolle Ihres tldw_server, um den Fortschritt zu sehen.",
+  "hfPullErrorWithDetail": "[tldw Assistant] Senden der Abrufanforderung für \"$1\" ist fehlgeschlagen: $2. Prüfen Sie unter \"Settings → tldw server\" und versuchen Sie es erneut.",
+  "hfPullError": "[tldw Assistant] Senden der Abrufanforderung für \"$1\" ist fehlgeschlagen. Prüfen Sie unter \"Settings → tldw server\" und versuchen Sie es erneut.",
+  "hfPullSuccess": "[tldw Assistant] Anfrage an Ihren tldw_server zum Abruf von \"$1\" wurde gesendet. Überwachen Sie das Erweiterungssymbol oder die Protokolle von tldw_server, um den Status zu verfolgen.",
+  "hfPullException": "[tldw Assistant] Beim Senden einer Abrufanforderung für \"$1\" an Ihren tldw_server ist ein Fehler aufgetreten. Stellen Sie sicher, dass Ihr tldw_server und die Erweiterung ausgeführt werden, und versuchen Sie es erneut.",
+  "stepLabel": "Willkommen",
+  "path": "Wie möchtest du loslegen?",
+  "nextSteps": "Du bist startklar",
+  "restartOnboardingLabel": "Onboarding von vorne starten",
+  "restartOnboardingButton": "Onboarding neu starten",
+  "restartOnboardingConfirmTitle": "Onboarding neu starten?",
+  "restartOnboardingConfirmMessage": "Dadurch wird dein Onboarding-Status zurückgesetzt und du kehrst zum Einrichtungsablauf zurück.",
+  "relativeTime": {
+    "unknown": "Unbekannt",
+    "justNow": "Gerade eben",
+    "agoShort": "vor",
+    "minutesAgoShort": "vor {{count}}m",
+    "hoursAgoShort": "vor {{count}}h",
+    "daysAgoShort": "vor {{count}}d"
+  }
+}

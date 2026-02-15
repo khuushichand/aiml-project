@@ -1,0 +1,380 @@
+{
+  "title": {
+    "message": "Datatabellstudio"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "betaNotice": {
+    "message": "Betafunksjon"
+  },
+  "betaDescription": {
+    "message": "Datatabeller er for øyeblikket i beta. Tabellgenerering krever støtte i backend."
+  },
+  "offline": {
+    "message": "Serveren er frakoblet. Koble til for å bruke Datatabeller."
+  },
+  "tabs_tables": {
+    "message": "Mine tabeller"
+  },
+  "tabs_create": {
+    "message": "Opprett tabell"
+  },
+  "wizard_sources": {
+    "message": "Velg kilder"
+  },
+  "wizard_sourcesDesc": {
+    "message": "Velg datakilder"
+  },
+  "wizard_prompt": {
+    "message": "Beskriv tabell"
+  },
+  "wizard_promptDesc": {
+    "message": "Skriv prompten"
+  },
+  "wizard_preview": {
+    "message": "Forhåndsvisning"
+  },
+  "wizard_previewDesc": {
+    "message": "Se gjennom generert tabell"
+  },
+  "wizard_save": {
+    "message": "Lagre"
+  },
+  "wizard_saveDesc": {
+    "message": "Lagre i biblioteket"
+  },
+  "wizard_tip": {
+    "message": "Tips"
+  },
+  "wizard_tipText": {
+    "message": "Velg chatter, dokumenter eller søk i kunnskapsbasen for å hente ut strukturert data. Jo mer spesifikke kildene er, desto bedre blir resultatene."
+  },
+  "wizard_reset": {
+    "message": "Start på nytt"
+  },
+  "sourceTypes_chat": {
+    "message": "Chatter"
+  },
+  "sourceTypes_document": {
+    "message": "Dokumenter"
+  },
+  "sourceTypes_rag": {
+    "message": "RAG-søk"
+  },
+  "selectedSources": {
+    "message": "Valgte kilder"
+  },
+  "sourcesSelected": {
+    "message": "Kilder valgt"
+  },
+  "searchPlaceholder": {
+    "message": "Søk..."
+  },
+  "ragPlaceholder": {
+    "message": "Skriv inn et søk for kunnskapsbasen..."
+  },
+  "ragQuerySnippet": {
+    "message": "Søk i kunnskapsbase"
+  },
+  "ragAdded": {
+    "message": "RAG-søk lagt til som kilde"
+  },
+  "ragTip": {
+    "message": "Skriv inn søk for å finne relevant innhold i kunnskapsbasen. Hvert søk legges til som en egen kilde."
+  },
+  "fetchError": {
+    "message": "Kunne ikke laste inn elementer"
+  },
+  "promptLabel": {
+    "message": "Beskriv tabellen du vil opprette"
+  },
+  "promptPlaceholder": {
+    "message": "F.eks. lag en tabell som sammenligner hovedtemaene som ble diskutert, med kolonner for tema, nøkkelpunkter og relevansscore..."
+  },
+  "examplePrompts": {
+    "message": "Eksempelprompter:"
+  },
+  "advancedOptions": {
+    "message": "Avanserte alternativer"
+  },
+  "columnHints": {
+    "message": "Kolonnetips (valgfritt)"
+  },
+  "columnHintsDesc": {
+    "message": "Foreslå kolonnenavn og -typer for å veilede LLM-en. Hvis det ikke er angitt, blir kolonnene utledet fra prompten."
+  },
+  "newColumnName": {
+    "message": "Kolonnenavn"
+  },
+  "modelSelection": {
+    "message": "Modell"
+  },
+  "selectModel": {
+    "message": "Bruk standardmodell"
+  },
+  "maxRows": {
+    "message": "Maksimalt antall rader"
+  },
+  "maxRowsHint": {
+    "message": "(1-1000)"
+  },
+  "generating": {
+    "message": "Genererer tabell fra kildene dine..."
+  },
+  "generatingNote": {
+    "message": "Dette kan ta litt tid avhengig av datamengden."
+  },
+  "generateSuccess": {
+    "message": "Tabellen ble generert!"
+  },
+  "generationFailed": {
+    "message": "Generering mislyktes"
+  },
+  "tryAgain": {
+    "message": "Prøv igjen"
+  },
+  "warnings": {
+    "message": "Advarsler"
+  },
+  "noPreview": {
+    "message": "Ingen forhåndsvisning tilgjengelig"
+  },
+  "promptUsed": {
+    "message": "Brukt prompt:"
+  },
+  "previewModified": {
+    "message": "Du har endret forhåndsvisningen. Endringene lagres sammen med tabellen."
+  },
+  "addRow": {
+    "message": "Legg til rad"
+  },
+  "addColumn": {
+    "message": "Legg til kolonne"
+  },
+  "deleteRow": {
+    "message": "Slette rad?"
+  },
+  "deleteRowConfirm": {
+    "message": "Denne handlingen kan ikke angres."
+  },
+  "deleteColumn": {
+    "message": "Slette kolonne?"
+  },
+  "deleteColumnConfirm": {
+    "message": "Denne handlingen kan ikke angres."
+  },
+  "discard": {
+    "message": "Forkast"
+  },
+  "changesDiscarded": {
+    "message": "Endringer forkastet"
+  },
+  "save": {
+    "message": "Lagre"
+  },
+  "saveSuccess": {
+    "message": "Endringene ble lagret!"
+  },
+  "unsavedChanges": {
+    "message": "Du har ulagrede endringer"
+  },
+  "columnAdded": {
+    "message": "Kolonnen '{{name}}' er lagt til"
+  },
+  "rows": {
+    "message": "rader"
+  },
+  "columnsLabel": {
+    "message": "kolonner"
+  },
+  "showingRows": {
+    "message": "Viser {{total}} rader"
+  },
+  "tableSummary": {
+    "message": "Tabelloppsummering"
+  },
+  "tableName": {
+    "message": "Tabellnavn"
+  },
+  "tableNamePlaceholder": {
+    "message": "Skriv inn et navn på tabellen"
+  },
+  "tableDescription": {
+    "message": "Beskrivelse (valgfritt)"
+  },
+  "tableDescPlaceholder": {
+    "message": "Legg til en beskrivelse for å huske hva tabellen inneholder"
+  },
+  "saveToLibrary": {
+    "message": "Lagre i biblioteket"
+  },
+  "tableSaved": {
+    "message": "Tabellen er lagret!"
+  },
+  "tableSavedDesc": {
+    "message": "Tabellen er lagret i biblioteket. Du kan se og eksportere den når som helst."
+  },
+  "viewTables": {
+    "message": "Vis mine tabeller"
+  },
+  "createAnother": {
+    "message": "Opprett en til"
+  },
+  "orExport": {
+    "message": "Eller eksporter direkte:"
+  },
+  "export": {
+    "message": "Eksporter"
+  },
+  "exportCSV": {
+    "message": "Eksporter som CSV"
+  },
+  "exportExcel": {
+    "message": "Eksporter som Excel"
+  },
+  "exportJSON": {
+    "message": "Eksporter som JSON"
+  },
+  "exportSuccess": {
+    "message": "Tabellen ble eksportert som {{format}}"
+  },
+  "noTableToSave": {
+    "message": "Ingen tabell å lagre"
+  },
+  "goBackToGenerate": {
+    "message": "Gå tilbake til forrige steg for å generere en tabell først."
+  },
+  "tableDetails": {
+    "message": "Tabelldetaljer"
+  },
+  "tableNotFound": {
+    "message": "Tabellen ble ikke funnet"
+  },
+  "noData": {
+    "message": "Ingen data"
+  },
+  "data": {
+    "message": "Data"
+  },
+  "editMode": {
+    "message": "Redigeringsmodus"
+  },
+  "editModeActive": {
+    "message": "Klikk på celler for å redigere"
+  },
+  "regenerate": {
+    "message": "Regenerer"
+  },
+  "regenerateSuccess": {
+    "message": "Tabellen ble regenerert!"
+  },
+  "model": {
+    "message": "Modell"
+  },
+  "prompt": {
+    "message": "Genereringsprompt"
+  },
+  "sources": {
+    "message": "Kilder"
+  },
+  "created": {
+    "message": "Opprettet"
+  },
+  "updated": {
+    "message": "Oppdatert"
+  },
+  "noTables": {
+    "message": "Ingen tabeller ennå. Opprett din første tabell!"
+  },
+  "noSearchResults": {
+    "message": "Fant ingen tabeller som samsvarer med søket ditt"
+  },
+  "totalTables": {
+    "message": "{{total}} tabeller"
+  },
+  "view": {
+    "message": "Vis"
+  },
+  "delete": {
+    "message": "Slett"
+  },
+  "deleteConfirmTitle": {
+    "message": "Slett tabell"
+  },
+  "deleteConfirmMessage": {
+    "message": "Er du sikker på at du vil slette denne tabellen? Denne handlingen kan ikke angres."
+  },
+  "noTable": {
+    "message": "Ingen tabelldata"
+  },
+  "add": {
+    "message": "Legg til"
+  },
+  "columnName": {
+    "message": "Kolonnenavn"
+  },
+  "columnNamePlaceholder": {
+    "message": "f.eks. Pris, Status, Dato"
+  },
+  "columnNameRequired": {
+    "message": "Skriv inn et kolonnenavn"
+  },
+  "columnNameTooLong": {
+    "message": "Kolonnenavnet må være 50 tegn eller færre"
+  },
+  "columnNameExists": {
+    "message": "En kolonne med dette navnet finnes allerede"
+  },
+  "columnType": {
+    "message": "Kolonnetype"
+  },
+  "columnTypeRequired": {
+    "message": "Velg en kolonnetype"
+  },
+  "columnDescription": {
+    "message": "Beskrivelse (valgfritt)"
+  },
+  "columnDescriptionHint": {
+    "message": "En kort beskrivelse av hva denne kolonnen inneholder"
+  },
+  "columnDescriptionPlaceholder": {
+    "message": "f.eks. Prisen på varen i USD"
+  },
+  "discardUnsavedChanges": {
+    "message": "Du har ulagrede endringer. Er du sikker på at du vil lukke?"
+  },
+  "createFromChat": {
+    "message": "Opprett tabell fra chat"
+  },
+  "saveFromArtifact": {
+    "message": "Lagre i datatabeller"
+  },
+  "importedPrompt": {
+    "message": "Importert fra tabellartefakt"
+  },
+  "columns_name": {
+    "message": "Navn"
+  },
+  "columns_rows": {
+    "message": "Rader"
+  },
+  "columns_columns": {
+    "message": "Kolonner"
+  },
+  "columns_sources": {
+    "message": "Kilder"
+  },
+  "columns_created": {
+    "message": "Opprettet"
+  },
+  "columns_actions": {
+    "message": "Handlinger"
+  },
+  "dataTablesDescription": {
+    "message": "Generer strukturerte tabeller fra chatter, dokumenter og kunnskapsbasen din ved hjelp av naturlige språkprompter."
+  },
+  "descriptionLabel": {
+    "message": "Beskrivelse"
+  }
+}

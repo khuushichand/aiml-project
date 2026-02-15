@@ -3,6 +3,7 @@ import { PlaygroundForm } from "./PlaygroundForm"
 import { PlaygroundChat } from "./PlaygroundChat"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { usePlaygroundSessionPersistence } from "@/hooks/usePlaygroundSessionPersistence"
+import { shouldRestorePersistedPlaygroundSession } from "@/hooks/playground-session-restore"
 import { webUIResumeLastChat } from "@/services/app"
 import {
   formatToChatHistory,
@@ -206,14 +207,27 @@ export const Playground = () => {
   }, [])
 
   // Session persistence for draft restoration
-  const { restoreSession, hasPersistedSession } = usePlaygroundSessionPersistence()
+  const {
+    restoreSession,
+    hasPersistedSession,
+    persistedHistoryId,
+    persistedServerChatId
+  } = usePlaygroundSessionPersistence()
 
   const initializePlayground = React.useCallback(async () => {
-    if (serverChatId) {
-      return
-    }
     // 1. Try session persistence first (restores exact state from nav-away)
-    if (hasPersistedSession && messages.length === 0) {
+    const shouldRestorePersistedSession =
+      shouldRestorePersistedPlaygroundSession({
+        hasPersistedSession,
+        persistedHistoryId,
+        persistedServerChatId,
+        currentHistoryId: historyId ?? null,
+        currentServerChatId: serverChatId ?? null,
+        currentMessagesLength: messages.length,
+        currentHistoryLength: history.length
+      })
+
+    if (shouldRestorePersistedSession) {
       const restored = await restoreSession()
       if (restored) return
     }
@@ -222,7 +236,7 @@ export const Playground = () => {
     const isEnabled = await webUIResumeLastChat()
     if (!isEnabled) return
 
-    if (messages.length === 0) {
+    if (messages.length === 0 && history.length === 0) {
       const recentChat = await getRecentChatFromWebUI()
       if (recentChat) {
         setHistoryId(recentChat.history.id)
@@ -247,8 +261,12 @@ export const Playground = () => {
       }
     }
   }, [
+    history.length,
+    historyId,
     hasPersistedSession,
     messages.length,
+    persistedHistoryId,
+    persistedServerChatId,
     restoreSession,
     serverChatId,
     setHistory,

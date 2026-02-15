@@ -1,0 +1,1328 @@
+{
+  "reviewPage_searchPlaceholder": {
+    "message": "メディア、ノートを検索..."
+  },
+  "reviewPage_search": {
+    "message": "検索"
+  },
+  "reviewPage_filters": {
+    "message": "フィルター"
+  },
+  "reviewPage_media": {
+    "message": "メディア"
+  },
+  "reviewPage_notes": {
+    "message": "ノート"
+  },
+  "reviewPage_useReview": {
+    "message": "レビューを使用"
+  },
+  "reviewPage_useSummary": {
+    "message": "要約を使用"
+  },
+  "reviewPage_mediaTypes": {
+    "message": "メディアタイプ"
+  },
+  "reviewPage_keywords": {
+    "message": "キーワード"
+  },
+  "reviewPage_clear": {
+    "message": "クリア"
+  },
+  "reviewPage_resetFilters": {
+    "message": "フィルターをリセット"
+  },
+  "reviewPage_results": {
+    "message": "結果"
+  },
+  "reviewPage_noResults": {
+    "message": "結果なし"
+  },
+  "reviewPage_analyze_none": {
+    "message": "分析する内容がありません"
+  },
+  "reviewPage_analyze_saved": {
+    "message": "分析をノートとして保存しました"
+  },
+  "reviewPage_analyze_failed": {
+    "message": "分析とノート保存に失敗しました"
+  },
+  "reviewPage_searchPrompts": {
+    "message": "プロンプトを検索"
+  },
+  "reviewPage_includeLocal": {
+    "message": "ローカル"
+  },
+  "reviewPage_includeServer": {
+    "message": "サーバー"
+  },
+  "reviewPage_presets": {
+    "message": "プリセット"
+  },
+  "reviewPage_presetsCritical": {
+    "message": "批判的"
+  },
+  "reviewPage_presetsQaAudit": {
+    "message": "QA監査"
+  },
+  "reviewPage_presetsBulletReview": {
+    "message": "箇条書きレビュー"
+  },
+  "reviewPage_reviewSystemPrompt": {
+    "message": "レビュー：システムプロンプト"
+  },
+  "reviewPage_reviewUserPrefix": {
+    "message": "レビュー：ユーザープロンプトの前置き"
+  },
+  "reviewPage_saveAsDefault": {
+    "message": "既定として保存"
+  },
+  "reviewPage_reviewPrompt": {
+    "message": "レビュープロンプト"
+  },
+  "reviewPage_summarySystemPrompt": {
+    "message": "要約：システムプロンプト"
+  },
+  "reviewPage_summaryUserPrefix": {
+    "message": "要約：ユーザープロンプトの前置き"
+  },
+  "reviewPage_summaryPrompt": {
+    "message": "要約プロンプト"
+  },
+  "reviewPage_customizePrompts": {
+    "message": "プロンプトをカスタマイズ"
+  },
+  "reviewPage_showRawJson": {
+    "message": "生のJSONを表示"
+  },
+  "reviewPage_noDetailLoaded": {
+    "message": "詳細が読み込まれていません"
+  },
+  "reviewPage_resetToDefaults": {
+    "message": "既定に戻す"
+  },
+  "reviewPage_usingReviewPrompts": {
+    "message": "レビュープロンプトを使用中"
+  },
+  "reviewPage_usingSummaryPrompts": {
+    "message": "要約プロンプトを使用中"
+  },
+  "reviewPage_selectItemFirst": {
+    "message": "まず項目を選択してください"
+  },
+  "reviewPage_selectMediaFirst": {
+    "message": "まずメディア項目を選択してください"
+  },
+  "reviewPage_selectItemEmpty": {
+    "message": "レビューと分析を行う項目を選択してください"
+  },
+  "reviewPage_selectMediaEmpty": {
+    "message": "分析を表示するメディア項目を選択してください"
+  },
+  "reviewPage_generationMode": {
+    "message": "生成モード"
+  },
+  "reviewPage_resultTypes": {
+    "message": "結果の種類"
+  },
+  "reviewPage_advancedTools": {
+    "message": "高度なツール"
+  },
+  "reviewPage_moreActions": {
+    "message": "その他の操作"
+  },
+  "reviewPage_toggleSidebar": {
+    "message": "結果サイドバーの切り替え"
+  },
+  "reviewPage_autoReviewLabel": {
+    "message": "項目を選択したら自動でレビューを生成"
+  },
+  "reviewPage_demoMode": {
+    "message": "デモモード"
+  },
+  "reviewPage_mediaOnlySearchPlaceholder": {
+    "message": "メディアを検索（タイトル/内容）"
+  },
+  "reviewPage_showSidebar": {
+    "message": "結果サイドバーを表示"
+  },
+  "reviewPage_hideSidebar": {
+    "message": "結果サイドバーを非表示"
+  },
+  "reviewPage_selectedBadge": {
+    "message": "選択中"
+  },
+  "reviewPage_bulkToolbar": {
+    "message": "レビューコントロール"
+  },
+  "reviewPage_loadedCount": {
+    "message": "{{count}}件読み込み済み"
+  },
+  "reviewPage_viewLabel": {
+    "message": "内容ビュー"
+  },
+  "reviewPage_navigateLabel": {
+    "message": "項目"
+  },
+  "reviewPage_mediaModeHint": {
+    "message": "一度に1つのメディア項目を検索して確認します。結果を選択すると右側に内容と分析が表示されます。"
+  },
+  "reviewPage_resultsHelp": {
+    "message": "キーボード：Tabで結果リストに移動し、EnterまたはSpaceで行を選択、分析ツールバーの前/次ボタンで項目を移動します。"
+  },
+  "reviewPage_resultsHelpLabel": {
+    "message": "レビュー結果のキーボードショートカット"
+  },
+  "reviewPage_review": {
+    "message": "レビューを取得"
+  },
+  "reviewPage_reviewHint": {
+    "message": "この項目をレビューするようアシスタントに依頼します。"
+  },
+  "reviewPage_summary": {
+    "message": "要約を取得"
+  },
+  "reviewPage_summaryHint": {
+    "message": "短い要約を依頼します。"
+  },
+  "reviewPage_attachGeneratedHint": {
+    "message": "アシスタントを実行し、結果をこのメディア項目に添付します。"
+  },
+  "reviewPage_attachReview": {
+    "message": "レビューをメディアに添付"
+  },
+  "reviewPage_attachSummary": {
+    "message": "要約をメディアに添付"
+  },
+  "reviewPage_saveGeneratedNoteHint": {
+    "message": "アシスタントを実行して結果をノートに保存します。"
+  },
+  "reviewPage_saveReviewNote": {
+    "message": "レビューをノートとして保存"
+  },
+  "reviewPage_saveSummaryNote": {
+    "message": "要約をノートとして保存"
+  },
+  "reviewPage_saveToMediaHint": {
+    "message": "エディタの現在のテキストをこのメディア項目に添付します。"
+  },
+  "reviewPage_saveToMedia": {
+    "message": "現在のテキストをメディアに添付"
+  },
+  "reviewPage_saveAnalysisHint": {
+    "message": "現在の分析からノートを作成します。"
+  },
+  "reviewPage_saveAnalysis": {
+    "message": "ノートに保存"
+  },
+  "reviewPage_askAssistantLabel": {
+    "message": "アシスタントに質問"
+  },
+  "reviewPage_saveResultsLabel": {
+    "message": "結果を保存"
+  },
+  "reviewPage_moreSaveNewVersion": {
+    "message": "新しいバージョンとして保存"
+  },
+  "reviewPage_moreDuplicateVersion": {
+    "message": "バージョンを複製"
+  },
+  "reviewPage_moreRestoreVersion": {
+    "message": "選択したバージョンを復元"
+  },
+  "reviewPage_modeReview": {
+    "message": "レビューを使用"
+  },
+  "reviewPage_modeSummary": {
+    "message": "要約を使用"
+  },
+  "reviewPage_resultsHint": {
+    "message": "結果をクリックして右側に内容と分析を読み込みます。"
+  },
+  "reviewPage_paginationHint": {
+    "message": "読み込み件数が多い場合はフィルターやページネーションで絞り込みます。"
+  },
+  "reviewPage_offlineHint": {
+    "message": "設定でtldwサーバーに接続するとメッセージ送信やメディア閲覧ができます。接続後、このページからメディアを検索できます。"
+  },
+  "reviewPage_chatWithMedia": {
+    "message": "このメディアとチャット"
+  },
+  "reviewPage_chatWithMediaHint": {
+    "message": "チャットを開き、このメディア内容を入力欄に事前入力します。"
+  },
+  "reviewPage_chatPrepared": {
+    "message": "このメディアの内容をチャット入力欄に準備しました。"
+  },
+  "reviewPage_chatAboutMediaHint": {
+    "message": "このメディアに限定したRAGチャットを開きます。"
+  },
+  "reviewPage_chatAboutMediaRagSent": {
+    "message": "このメディア範囲のRAGチャットを開きました。"
+  },
+  "reviewPage_chatAboutMediaInvalidId": {
+    "message": "このメディア項目にはまだ数値 ID がありません。"
+  },
+  "reviewPage_demoBadge": {
+    "message": "デモ"
+  },
+  "reviewPage_notConnectedBadge": {
+    "message": "未接続"
+  },
+  "reviewPage_prevItem": {
+    "message": "前へ"
+  },
+  "reviewPage_nextItem": {
+    "message": "次へ"
+  },
+  "reviewPage_noContent": {
+    "message": "利用可能なコンテンツがありません"
+  },
+  "reviewPage_showMore": {
+    "message": "もっと表示"
+  },
+  "reviewPage_showLess": {
+    "message": "折りたたむ"
+  },
+  "reviewPage_showRaw": {
+    "message": "生の内容を表示"
+  },
+  "reviewPage_hideRaw": {
+    "message": "生の内容を非表示"
+  },
+  "reviewPage_noAnalysis": {
+    "message": "まだ分析はありません"
+  },
+  "reviewPage_mediaContent": {
+    "message": "メディアコンテンツ"
+  },
+  "reviewPage_copyContent": {
+    "message": "コンテンツをコピー"
+  },
+  "reviewPage_analysisTitle": {
+    "message": "分析"
+  },
+  "reviewPage_copyAnalysis": {
+    "message": "分析をコピー"
+  },
+  "reviewPage_sendAnalysisToChat": {
+    "message": "分析をチャットに送信"
+  },
+  "reviewPage_copyAllPlain": {
+    "message": "すべてをプレーンテキストでコピー"
+  },
+  "reviewPage_copyAllMarkdown": {
+    "message": "すべてをMarkdownでコピー"
+  },
+  "reviewPage_openInMulti": {
+    "message": "複数アイテムレビューで開く"
+  },
+  "reviewPage_analysisFailed": {
+    "message": "分析に失敗しました"
+  },
+  "reviewPage_analysisAttached": {
+    "message": "分析をメディアに添付しました"
+  },
+  "reviewPage_analyzeSaveFailed": {
+    "message": "分析と保存に失敗しました"
+  },
+  "reviewPage_nothingToSave": {
+    "message": "保存するものがありません"
+  },
+  "reviewPage_savedToNotes": {
+    "message": "ノートに保存しました"
+  },
+  "reviewPage_saveFailed": {
+    "message": "保存に失敗しました"
+  },
+  "reviewPage_saveToMediaFailed": {
+    "message": "メディアへの保存に失敗しました"
+  },
+  "reviewPage_sentToChat": {
+    "message": "チャットに送信しました"
+  },
+  "reviewPage_sendFailed": {
+    "message": "送信に失敗しました"
+  },
+  "reviewPage_analysisEditorPlaceholder": {
+    "message": "レビューまたは要約を実行してから、ここで編集してください..."
+  },
+  "reviewPage_createdNewVersion": {
+    "message": "新しいバージョンを作成しました"
+  },
+  "reviewPage_createVersionFailed": {
+    "message": "バージョンの作成に失敗しました"
+  },
+  "reviewPage_selectVersionFirst": {
+    "message": "まずバージョンを選択してください"
+  },
+  "reviewPage_noVersionNumber": {
+    "message": "バージョン番号がありません"
+  },
+  "reviewPage_selectedVersionNoContent": {
+    "message": "選択したバージョンに内容がありません"
+  },
+  "reviewPage_clonedVersionCreated": {
+    "message": "複製版を作成しました"
+  },
+  "reviewPage_cloneFailed": {
+    "message": "複製に失敗しました"
+  },
+  "reviewPage_confirmTitle": {
+    "message": "確認してください"
+  },
+  "reviewPage_restoreConfirm": {
+    "message": "このバージョンを現在のものとして復元しますか？"
+  },
+  "reviewPage_restoreAction": {
+    "message": "復元"
+  },
+  "reviewPage_cancelAction": {
+    "message": "キャンセル"
+  },
+  "reviewPage_versionRestored": {
+    "message": "バージョンを復元しました"
+  },
+  "reviewPage_restoreFailed": {
+    "message": "復元に失敗しました"
+  },
+  "reviewPage_existingAnalysesTitle": {
+    "message": "既存の分析"
+  },
+  "reviewPage_onlyWithAnalysis": {
+    "message": "分析ありのみ"
+  },
+  "reviewPage_copyAllLabel": {
+    "message": "すべてコピー"
+  },
+  "reviewPage_copyMdLabel": {
+    "message": "MDをコピー"
+  },
+  "reviewPage_copiedAllNotes": {
+    "message": "すべてのノートをコピーしました"
+  },
+  "reviewPage_copiedAllNotesMarkdown": {
+    "message": "すべてのノートをMarkdownでコピーしました"
+  },
+  "reviewPage_loadSelectedAnalysis": {
+    "message": "選択した分析をエディタに読み込む"
+  },
+  "reviewPage_loadLabel": {
+    "message": "読み込み"
+  },
+  "reviewPage_loadVersionPrompt": {
+    "message": "バージョンのプロンプトをエディタに読み込む"
+  },
+  "reviewPage_noPromptFound": {
+    "message": "プロンプトが見つかりません"
+  },
+  "reviewPage_copyVersionPrompt": {
+    "message": "選択したバージョンのプロンプトをコピー"
+  },
+  "reviewPage_promptCopied": {
+    "message": "プロンプトをコピーしました"
+  },
+  "reviewPage_diffSelectedCurrent": {
+    "message": "選択中と現在の差分"
+  },
+  "reviewPage_versionDeleted": {
+    "message": "バージョンを削除しました"
+  },
+  "reviewPage_versionDeletedDescription": {
+    "message": "バージョン v{{version}} を削除しました。"
+  },
+  "reviewPage_undoRolledBack": {
+    "message": "元に戻す：削除したバージョンに戻しました"
+  },
+  "reviewPage_undoFailed": {
+    "message": "元に戻すのに失敗しました"
+  },
+  "reviewPage_undoLabel": {
+    "message": "元に戻す"
+  },
+  "reviewPage_deleteFailed": {
+    "message": "削除に失敗しました"
+  },
+  "reviewPage_deleteSelectedVersion": {
+    "message": "選択したバージョンを削除"
+  },
+  "reviewPage_noSavedAnalyses": {
+    "message": "この項目に保存された分析はまだありません。"
+  },
+  "reviewPage_currentTag": {
+    "message": "現在"
+  },
+  "reviewPage_promptLabel": {
+    "message": "プロンプト"
+  },
+  "reviewPage_showLabel": {
+    "message": "表示"
+  },
+  "reviewPage_hideLabel": {
+    "message": "非表示"
+  },
+  "reviewPage_copyAnalysisPlainTooltip": {
+    "message": "分析をコピー（プレーンテキスト）"
+  },
+  "reviewPage_copyLabel": {
+    "message": "コピー"
+  },
+  "reviewPage_copyAnalysisMarkdownTooltip": {
+    "message": "Markdownとしてコピー"
+  },
+  "reviewPage_copiedAnalysisMarkdown": {
+    "message": "分析をMarkdownでコピーしました"
+  },
+  "reviewPage_markdownLabel": {
+    "message": "Markdown"
+  },
+  "reviewPage_copyPromptTooltip": {
+    "message": "プロンプトをコピー"
+  },
+  "reviewPage_diffUnified": {
+    "message": "統合表示"
+  },
+  "reviewPage_diffSideBySide": {
+    "message": "並列"
+  },
+  "reviewPage_diffCopied": {
+    "message": "差分をコピーしました"
+  },
+  "reviewPage_copyDiffLabel": {
+    "message": "差分をコピー"
+  },
+  "reviewPage_closeLabel": {
+    "message": "閉じる"
+  },
+  "reviewPage_diffTitle": {
+    "message": "差分：選択中 vs 現在"
+  },
+  "reviewPage_diffSelectedVersion": {
+    "message": "選択したバージョン"
+  },
+  "reviewPage_diffCurrentEditor": {
+    "message": "現在のエディタ"
+  },
+  "reviewPage_noDifferences": {
+    "message": "差分はありません"
+  },
+  "reviewPage_chatAboutMedia": {
+    "message": "このメディアについてチャット"
+  },
+  "reviewPage_statusProcessing": {
+    "message": "処理中"
+  },
+  "reviewPage_statusQueued": {
+    "message": "待機中"
+  },
+  "reviewPage_statusError": {
+    "message": "エラー"
+  },
+  "reviewPage_statusReady": {
+    "message": "準備完了"
+  },
+  "reviewPage_loadedOf": {
+    "message": "{{count}}件読み込み済み"
+  },
+  "reviewPage_expandAllContent": {
+    "message": "全文表示"
+  },
+  "reviewPage_collapseAllContent": {
+    "message": "短く表示"
+  },
+  "reviewPage_expandContent": {
+    "message": "展開"
+  },
+  "reviewPage_collapseContent": {
+    "message": "折りたたむ"
+  },
+  "reviewPage_expandAnalysis": {
+    "message": "展開"
+  },
+  "reviewPage_collapseAnalysis": {
+    "message": "折りたたむ"
+  },
+  "reviewPage_jumpTo": {
+    "message": "移動"
+  },
+  "reviewPage_presetsExecutive": {
+    "message": "エグゼクティブ"
+  },
+  "reviewPage_presetsDetailed": {
+    "message": "詳細"
+  },
+  "reviewPage_presetsBullets": {
+    "message": "箇条書き"
+  },
+  "mediaPage_searchPlaceholder": {
+    "message": "メディアを検索（タイトル/内容）"
+  },
+  "mediaPage_search": {
+    "message": "検索"
+  },
+  "mediaPage_clear": {
+    "message": "クリア"
+  },
+  "mediaPage_types": {
+    "message": "Types"
+  },
+  "mediaPage_keywords": {
+    "message": "キーワード"
+  },
+  "mediaPage_moreTags": {
+    "message": "+{{count}} 件のタグ"
+  },
+  "mediaPage_resetFilters": {
+    "message": "Reset Filters"
+  },
+  "mediaPage_clearAll": {
+    "message": "すべてクリア"
+  },
+  "mediaPage_content": {
+    "message": "内容"
+  },
+  "mediaPage_vertical": {
+    "message": "垂直"
+  },
+  "mediaPage_horizontal": {
+    "message": "水平"
+  },
+  "mediaPage_results": {
+    "message": "結果"
+  },
+  "mediaPage_noResults": {
+    "message": "No results"
+  },
+  "mediaPage_showSidebar": {
+    "message": "Show sidebar"
+  },
+  "mediaPage_hideSidebar": {
+    "message": "Hide sidebar"
+  },
+  "mediaPage_viewer": {
+    "message": "ビューア"
+  },
+  "mediaPage_selectItemsHint": {
+    "message": "左側で項目を選択するとここに表示されます。"
+  },
+  "mediaPage_mediaContent": {
+    "message": "メディア内容"
+  },
+  "mediaPage_copyContent": {
+    "message": "内容をコピー"
+  },
+  "mediaPage_contentCopied": {
+    "message": "内容をコピーしました"
+  },
+  "mediaPage_metadataCopied": {
+    "message": "メタデータをコピーしました"
+  },
+  "mediaPage_analysisCopied": {
+    "message": "分析をコピーしました"
+  },
+  "mediaPage_copyFailed": {
+    "message": "コピーに失敗しました"
+  },
+  "mediaPage_noContent": {
+    "message": "利用可能な内容がありません"
+  },
+  "mediaPage_collapse": {
+    "message": "折りたたむ"
+  },
+  "mediaPage_expand": {
+    "message": "展開"
+  },
+  "mediaPage_media": {
+    "message": "メディア"
+  },
+  "mediaPage_searchingBanner": {
+    "message": "メディアを検索中…"
+  },
+  "mediaPage_filterHelp": {
+    "message": "検索はタイトルと内容に一致します。タイプとキーワードで結果をさらに絞り込みます。"
+  },
+  "mediaPage_noMediaTypes": {
+    "message": "利用可能なメディアタイプはありません"
+  },
+  "mediaPage_resultsCount": {
+    "message": "{{selected}} 件選択 · {{open}} 件表示"
+  },
+  "mediaPage_clearSelection": {
+    "message": "全選択解除"
+  },
+  "mediaPage_itemsLabel": {
+    "message": "項目"
+  },
+  "mediaPage_contentLabel": {
+    "message": "内容ビュー"
+  },
+  "mediaPage_filterByKeyword": {
+    "message": "キーワードで絞り込む"
+  },
+  "mediaPage_keywordHelper": {
+    "message": "左側のキーワードフィルターを使うと、このメディアを見つけやすくなります"
+  },
+  "mediaPage_modeHint": {
+    "message": "複数のメディア項目を検索してスタックし、右側のビューアで比較します。"
+  },
+  "mediaPage_viewerHelp": {
+    "message": "キーボード: Tab で結果リストに移動し、Enter または Space でメディア項目をスタック／解除し、前へ／次へボタンやレイアウトコントロールでビューア内の項目を移動します。"
+  },
+  "mediaPage_viewerHelpLabel": {
+    "message": "複数アイテムレビューのキーボードショートカット"
+  },
+  "mediaPage_mediaInspector": {
+    "message": "メディアインスペクター"
+  },
+  "mediaPage_actionsLabel": {
+    "message": "アクション"
+  },
+  "mediaPage_keywordsPlaceholder": {
+    "message": "キーワードを追加..."
+  },
+  "mediaPage_noSelectionTitle": {
+    "message": "メディア項目が選択されていません"
+  },
+  "mediaPage_noSelectionDescription": {
+    "message": "左側のサイドバーからメディア項目を選択すると、その内容と分析がここに表示されます。"
+  },
+  "mediaPage_generateAnalysis": {
+    "message": "分析を生成"
+  },
+  "mediaPage_generateAnalysisHint": {
+    "message": "新しい分析を生成"
+  },
+  "mediaPage_editAnalysis": {
+    "message": "分析を編集"
+  },
+  "mediaPage_createNoteWithContent": {
+    "message": "コンテンツからノートを作成"
+  },
+  "mediaPage_createNoteWithContentAnalysis": {
+    "message": "コンテンツ + 分析からノートを作成"
+  },
+  "mediaPage_untitled": {
+    "message": "無題"
+  },
+  "mediaPage_copyMetadata": {
+    "message": "メタデータをコピー"
+  },
+  "mediaPage_statistics": {
+    "message": "統計"
+  },
+  "mediaPage_words": {
+    "message": "単語数"
+  },
+  "mediaPage_characters": {
+    "message": "文字数"
+  },
+  "mediaPage_paragraphs": {
+    "message": "段落数"
+  },
+  "mediaPage_metadata": {
+    "message": "メタデータ"
+  },
+  "mediaPage_idLabel": {
+    "message": "識別子"
+  },
+  "mediaPage_typeLabel": {
+    "message": "タイプ"
+  },
+  "mediaPage_titleLabel": {
+    "message": "タイトル"
+  },
+  "mediaPage_source": {
+    "message": "ソース"
+  },
+  "mediaPage_notAvailable": {
+    "message": "該当なし"
+  },
+  "mediaPage_developerTools": {
+    "message": "開発者ツール"
+  },
+  "mediaPage_nothingToSend": {
+    "message": "送信する内容がありません"
+  },
+  "mediaPage_emptyAnalysis": {
+    "message": "分析は空にできません"
+  },
+  "mediaPage_noMediaId": {
+    "message": "メディア ID がありません"
+  },
+  "mediaPage_versionSaved": {
+    "message": "新しいバージョンとして保存しました"
+  },
+  "mediaPage_saveFailed": {
+    "message": "バージョンの保存に失敗しました"
+  },
+  "mediaPage_sendToChat": {
+    "message": "チャットに送信"
+  },
+  "mediaPage_saveAsVersion": {
+    "message": "新しいバージョンとして保存"
+  },
+  "mediaPage_analysisPlaceholder": {
+    "message": "分析テキストを入力してください..."
+  },
+  "mediaPage_wordCount": {
+    "message": "{{count}}語"
+  },
+  "mediaPage_charCount": {
+    "message": "{{count}}文字"
+  },
+  "mediaPage_pageRangeError": {
+    "message": "ページは1〜{{max}}でなければなりません"
+  },
+  "mediaPage_pageRangeClamped": {
+    "message": "ページ{{page}}へ移動しています"
+  },
+  "mediaPage_saveUnauthorized": {
+    "message": "保存する権限がありません"
+  },
+  "mediaPage_spreadMode": {
+    "message": "比較"
+  },
+  "mediaPage_listMode": {
+    "message": "フォーカス"
+  },
+  "mediaPage_allMode": {
+    "message": "スタック"
+  },
+  "mediaPage_spreadModeTooltip": {
+    "message": "選択した項目を並べて比較表示"
+  },
+  "mediaPage_listModeTooltip": {
+    "message": "ナビゲーションで1件ずつ表示"
+  },
+  "mediaPage_allModeTooltip": {
+    "message": "選択した項目をスクロール可能な一覧で表示"
+  },
+  "mediaPage_copyContentLabel": {
+    "message": "コンテンツをコピー"
+  },
+  "mediaPage_copyAnalysisLabel": {
+    "message": "分析をコピー"
+  },
+  "mediaPage_copyContentTooltip": {
+    "message": "コンテンツをクリップボードにコピー"
+  },
+  "mediaPage_copyAnalysisTooltip": {
+    "message": "分析をクリップボードにコピー"
+  },
+  "mediaPage_prevItemTooltip": {
+    "message": "前の項目 (←)"
+  },
+  "mediaPage_nextItemTooltip": {
+    "message": "次の項目 (→)"
+  },
+  "mediaPage_viewerOptions": {
+    "message": "オプション"
+  },
+  "mediaPage_expandAllDropdown": {
+    "message": "展開/折りたたみ"
+  },
+  "mediaPage_itemPosition": {
+    "message": "{{total}} 件中 {{current}} 件目"
+  },
+  "mediaPage_noItemSelected": {
+    "message": "項目が選択されていません"
+  },
+  "mediaPage_firstUseTitle": {
+    "message": "クイックガイド: 複数アイテムレビュー"
+  },
+  "mediaPage_firstUseStep1": {
+    "message": "項目を選択"
+  },
+  "mediaPage_firstUseStep1Desc": {
+    "message": "左側のパネルで項目をクリックしてビューアに追加します。"
+  },
+  "mediaPage_firstUseStep2": {
+    "message": "表示を選択"
+  },
+  "mediaPage_firstUseStep2Desc": {
+    "message": "「比較」は並べて表示、「フォーカス」は1件ずつ、「スタック」はすべて表示します。"
+  },
+  "mediaPage_firstUseStep3": {
+    "message": "移動"
+  },
+  "mediaPage_firstUseStep3Desc": {
+    "message": "前へ/次へボタンまたはキーボード (Tab + Enter) で項目を移動します。"
+  },
+  "mediaPage_gotIt": {
+    "message": "了解"
+  },
+  "mediaPage_model": {
+    "message": "モデル"
+  },
+  "mediaPage_selectModel": {
+    "message": "モデルを選択"
+  },
+  "mediaPage_noModelsAvailable": {
+    "message": "利用可能なモデルがありません"
+  },
+  "mediaPage_promptPresets": {
+    "message": "プロンプトプリセット"
+  },
+  "mediaPage_showPresets": {
+    "message": "プリセットを表示"
+  },
+  "mediaPage_hidePresets": {
+    "message": "プリセットを非表示"
+  },
+  "mediaPage_systemPromptLabel": {
+    "message": "システムプロンプト"
+  },
+  "mediaPage_systemPromptPlaceholder": {
+    "message": "システムプロンプトを入力..."
+  },
+  "mediaPage_userPromptPrefixLabel": {
+    "message": "ユーザープロンプトのプレフィックス"
+  },
+  "mediaPage_prependedBeforeContent": {
+    "message": "(コンテンツの前に追加)"
+  },
+  "mediaPage_userPrefixPlaceholder": {
+    "message": "任意: メディアコンテンツの前に追加するテキストを入力..."
+  },
+  "mediaPage_presetComprehensiveAnalysis": {
+    "message": "包括的な分析"
+  },
+  "mediaPage_presetExecutiveSummary": {
+    "message": "エグゼクティブサマリー"
+  },
+  "mediaPage_presetCriticalReview": {
+    "message": "批判的レビュー"
+  },
+  "mediaPage_presetQAAnalysis": {
+    "message": "Q&A 分析"
+  },
+  "empty_connectTitle": {
+    "message": "レビューを使用するには接続してください"
+  },
+  "empty_connectDescription": {
+    "message": "設定で tldw サーバーに接続してメッセージの送信やメディアの表示を行います。接続後、この場所でメディアとノートをレビューできます。"
+  },
+  "empty_connectExample1": {
+    "message": "設定 → tldw server を開いてサーバー URL を追加します。"
+  },
+  "empty_connectExample2": {
+    "message": "接続後、メディアとノートを閲覧し、構造化されたレビューと要約を生成できます。"
+  },
+  "empty_demoTitle": {
+    "message": "デモモードでレビューを試す"
+  },
+  "empty_demoDescription": {
+    "message": "このデモでは、tldw Assistant がメディアとノートを構造化されたレビューに変換する方法を示します。後で自分のサーバーに接続して内容を分析できます。"
+  },
+  "empty_demoExample1": {
+    "message": "選択したメディアとノートがレビューのワークスペースにどのように表示されるかを確認します。"
+  },
+  "empty_demoExample2": {
+    "message": "接続すると、自分の録音やノートから要約やアクション項目を生成できます。"
+  },
+  "mediaEmpty_demoTitle": {
+    "message": "デモモードでメディアを試す"
+  },
+  "mediaEmpty_demoDescription": {
+    "message": "このデモでは、tldw Assistant が処理済みメディアを表示して確認する方法を示します。後で自分のサーバーに接続して録音やドキュメントを閲覧できます。"
+  },
+  "mediaEmpty_demoExample1": {
+    "message": "処理済みのメディア項目がメディアビューアにどのように表示されるかを確認します。"
+  },
+  "mediaEmpty_demoExample2": {
+    "message": "接続すると、自分の録音やファイルから取り込んだメディアを閲覧・確認できます。"
+  },
+  "mediaEmpty_connectTitle": {
+    "message": "メディアを使用するには接続してください"
+  },
+  "mediaEmpty_connectDescription": {
+    "message": "設定で tldw サーバーに接続してメッセージの送信やメディアの表示を行います。接続後、処理済みの録音やドキュメントがここに表示されます。"
+  },
+  "mediaEmpty_connectExample1": {
+    "message": "設定 → tldw server を開いてサーバー URL を追加します。"
+  },
+  "mediaEmpty_connectExample2": {
+    "message": "接続後、ヘッダーの Quick ingest を使って自分の録音やファイルからメディアを追加します。"
+  },
+  "mediaEmpty_offlineTitle": {
+    "message": "このサーバーでは Media API を利用できません"
+  },
+  "mediaEmpty_offlineDescription": {
+    "message": "この tldw サーバーは Media エンドポイント（/api/v1/media や /api/v1/media/search など）を公開していません。Media ワークスペースを利用するには、Media を含むバージョンにサーバーをアップグレードしてください。"
+  },
+  "mediaEmpty_offlineExample1": {
+    "message": "Diagnostics を開いてサーバーのバージョンと利用可能な API を確認します。"
+  },
+  "mediaEmpty_offlineExample2": {
+    "message": "アップグレード後に拡張機能を再読み込みし、メディアに戻ってください。"
+  },
+  "mediaEmpty_featureUnavailableBadge": {
+    "message": "機能は利用できません"
+  },
+  "mediaEmpty_demoExample3": {
+    "message": "メディアとレビューを組み合わせて録音を要約または分析します。"
+  },
+  "mediaEmpty_demoPreviewHeading": {
+    "message": "サンプルメディア項目（プレビューのみ）"
+  },
+  "mediaEmpty_demoSample1Title": {
+    "message": "デモメディア：チーム通話の録音"
+  },
+  "mediaEmpty_demoSample1Meta": {
+    "message": "動画 · 25 分 · キーワード：スタンドアップ、計画"
+  },
+  "mediaEmpty_demoSample2Title": {
+    "message": "デモメディア：プロダクトのウォークスルー"
+  },
+  "mediaEmpty_demoSample2Meta": {
+    "message": "画面録画 · 12 分 · キーワード：オンボーディング"
+  },
+  "mediaEmpty_demoSample3Title": {
+    "message": "デモメディア：研究論文 PDF"
+  },
+  "mediaEmpty_demoSample3Meta": {
+    "message": "PDF · 6 ページ · キーワード：要約"
+  },
+  "mediaEmpty_offlineTechnicalDetails": {
+    "message": "技術的な詳細：この tldw サーバーは Media のエンドポイント（例：/api/v1/media と /api/v1/media/search）を公開していません。"
+  },
+  "noToolCalls": {
+    "message": "ツール呼び出しはまだありません"
+  },
+  "arguments": {
+    "message": "引数"
+  },
+  "invalidJson": {
+    "message": "無効な JSON です。生の値を表示しています"
+  },
+  "result": {
+    "message": "結果"
+  },
+  "reviewDraftsFailedTitle": {
+    "message": "レビュー用下書きを作成できませんでした。"
+  },
+  "reviewDraftsFailedFallback": {
+    "message": "レビュー用下書きの作成に失敗しました。"
+  },
+  "reviewDraftsRetry": {
+    "message": "下書き作成を再試行"
+  },
+  "reviewDraftsStoreWithoutReview": {
+    "message": "レビューせずに保存"
+  },
+  "reviewNavigationFailed": {
+    "message": "コンテンツレビューを開けませんでした。もう一度お試しください。"
+  },
+  "reviewNavigationRetry": {
+    "message": "コンテンツレビューを再度開く"
+  },
+  "contentReview_title": {
+    "message": "コンテンツレビュー"
+  },
+  "contentReview_readyToSubmit": {
+    "message": "{{count}} 件の下書きが準備完了"
+  },
+  "contentReview_committedCount": {
+    "message": "{{count}} 件を確定済み"
+  },
+  "contentReview_totalCount": {
+    "message": "合計 {{count}} 件"
+  },
+  "contentReview_commitAll": {
+    "message": "すべて確定"
+  },
+  "contentReview_clearDrafts": {
+    "message": "下書きをクリア"
+  },
+  "contentReview_emptyDescription": {
+    "message": "まだ下書きはありません。[保存前にレビュー] をオンにした Quick Ingest を使って下書きを作成できます。"
+  },
+  "contentReview_openQuickIngest": {
+    "message": "Quick Ingest を開く"
+  },
+  "contentReview_storeAfterReview": {
+    "message": "レビュー後に保存"
+  },
+  "contentReview_reviewBeforeStorage": {
+    "message": "保存前にレビュー"
+  },
+  "contentReview_reviewBeforeStorageHint": {
+    "message": "今すぐ処理し、サーバーに保存する前にローカルで下書きを編集します。"
+  },
+  "contentReview_reviewEnabled": {
+    "message": "レビューモード"
+  },
+  "contentReview_reviewStorageCap": {
+    "message": "ローカル下書きは {{cap}} 件までです。"
+  },
+  "contentReview_reviewWarningTitle": {
+    "message": "下書きをローカルに保存しますか？"
+  },
+  "contentReview_reviewWarningBody": {
+    "message": "下書きはこのブラウザに保存され、機密データを含む可能性があります。コンテンツレビューのページからいつでも下書きを消去できます。"
+  },
+  "contentReview_reviewWarningBodySecondary": {
+    "message": "レビューモードでは、サーバーに保存するまで内容をクライアント側に保持します。"
+  },
+  "contentReview_reviewWarningConfirm": {
+    "message": "レビューを有効にする"
+  },
+  "contentReview_reviewWarningCancel": {
+    "message": "キャンセル"
+  },
+  "contentReview_reviewRunLabel": {
+    "message": "レビュー"
+  },
+  "contentReview_reviewDraftsCreated": {
+    "message": "レビュー用下書きの準備ができました。"
+  },
+  "contentReview_reviewStorageCapWarning_one": {
+    "message": "{{count}} 件のファイルがローカル下書き上限 ({{cap}}) を超えています。音声/動画を保存する前にソースを添付してください。"
+  },
+  "contentReview_reviewStorageCapWarning_other": {
+    "message": "{{count}} 件のファイルがローカル下書き上限 ({{cap}}) を超えています。音声/動画を保存する前にソースを添付してください。"
+  },
+  "contentReview_openContentReview": {
+    "message": "コンテンツレビューを開く"
+  },
+  "contentReview_batchLabel": {
+    "message": "バッチ"
+  },
+  "contentReview_batchName": {
+    "message": "バッチ {{index}}"
+  },
+  "contentReview_draftsLabel": {
+    "message": "下書き"
+  },
+  "contentReview_selectDraft": {
+    "message": "レビューを始める下書きを選択してください。"
+  },
+  "contentReview_titlePlaceholder": {
+    "message": "下書きのタイトル"
+  },
+  "contentReview_lastSaved": {
+    "message": "{{time}} に保存"
+  },
+  "contentReview_resetTitle": {
+    "message": "下書きをリセットしますか？"
+  },
+  "contentReview_resetBody": {
+    "message": "この下書きの内容を元の状態に戻します。"
+  },
+  "contentReview_resetConfirm": {
+    "message": "リセット"
+  },
+  "contentReview_resetCancel": {
+    "message": "キャンセル"
+  },
+  "contentReview_resetContent": {
+    "message": "リセット"
+  },
+  "contentReview_diffView": {
+    "message": "差分ビュー"
+  },
+  "contentReview_saveDraft": {
+    "message": "下書きを保存"
+  },
+  "contentReview_editorLabel": {
+    "message": "コンテンツ"
+  },
+  "contentReview_wordCount": {
+    "message": "{{words}} 語"
+  },
+  "contentReview_charCount": {
+    "message": "{{chars}} 文字"
+  },
+  "contentReview_aiFix": {
+    "message": "AI で修正"
+  },
+  "contentReview_aiHint": {
+    "message": "下書きの内容をサーバーに送信し、AI で処理します。"
+  },
+  "contentReview_modelPlaceholder": {
+    "message": "サーバー既定"
+  },
+  "contentReview_aiConsentTitle": {
+    "message": "下書きをサーバーに送信しますか？"
+  },
+  "contentReview_aiConsentBody": {
+    "message": "下書きの内容が tldw サーバーに送信され、AI で処理されます。確定するまでは下書きはローカルにのみ保存されます。"
+  },
+  "contentReview_aiConsentConfirm": {
+    "message": "続行"
+  },
+  "contentReview_aiConsentCancel": {
+    "message": "キャンセル"
+  },
+  "contentReview_aiApplied": {
+    "message": "AI の修正を適用しました。"
+  },
+  "contentReview_aiNoChange": {
+    "message": "変更は返されませんでした。"
+  },
+  "contentReview_aiEmpty": {
+    "message": "AI からコンテンツが返されませんでした。"
+  },
+  "contentReview_aiUnavailable": {
+    "message": "チャット補完を利用できません。"
+  },
+  "contentReview_templatePlaceholder": {
+    "message": "テンプレートを選択"
+  },
+  "contentReview_applyTemplate": {
+    "message": "テンプレートを適用"
+  },
+  "contentReview_templateApplied": {
+    "message": "テンプレートを適用しました。"
+  },
+  "contentReview_templateMissing": {
+    "message": "先にテンプレートを選択してください。"
+  },
+  "contentReview_detectSections": {
+    "message": "セクションを検出"
+  },
+  "contentReview_detectSectionsTitle": {
+    "message": "セクションを再検出しますか？"
+  },
+  "contentReview_detectSectionsBody": {
+    "message": "既存のセクションを置き換え、選択内容をリセットします。"
+  },
+  "contentReview_detectSectionsConfirm": {
+    "message": "再検出"
+  },
+  "contentReview_detectSectionsCancel": {
+    "message": "キャンセル"
+  },
+  "contentReview_detectSectionsEmpty": {
+    "message": "セクションが検出されませんでした。"
+  },
+  "contentReview_sectionsLabel": {
+    "message": "セクションフィルター"
+  },
+  "contentReview_templates_transcript_clean_label": {
+    "message": "トランスクリプトを整形"
+  },
+  "contentReview_templates_transcript_clean_description": {
+    "message": "行構造を保ったまま、句読点と大文字・小文字を正規化します。"
+  },
+  "contentReview_templates_speaker_turns_label": {
+    "message": "話者ごとのターン"
+  },
+  "contentReview_templates_speaker_turns_description": {
+    "message": "各話者のターンが、わかりやすいラベル付きで 1 行ずつになるようにします。"
+  },
+  "contentReview_templates_chapter_headings_label": {
+    "message": "章見出し"
+  },
+  "contentReview_templates_chapter_headings_description": {
+    "message": "コンテンツを削除せずにトピックをまとめる Markdown 見出しを挿入します。"
+  },
+  "contentReview_metadataLabel": {
+    "message": "メタデータ"
+  },
+  "contentReview_mediaType": {
+    "message": "メディア種別"
+  },
+  "contentReview_keywords": {
+    "message": "キーワード"
+  },
+  "contentReview_keywordsPlaceholder": {
+    "message": "キーワードを追加"
+  },
+  "contentReview_reviewNotes": {
+    "message": "レビュー用メモ"
+  },
+  "contentReview_missingSource": {
+    "message": "元のファイルが見つかりません"
+  },
+  "contentReview_missingSourceBody": {
+    "message": "この下書きを確定するには元のファイルを添付してください。"
+  },
+  "contentReview_attachSource": {
+    "message": "ファイルを添付"
+  },
+  "contentReview_actionsLabel": {
+    "message": "アクション"
+  },
+  "contentReview_commit": {
+    "message": "確定"
+  },
+  "contentReview_commitDisabled": {
+    "message": "確定する前に元の音声/動画ファイルを添付してください。"
+  },
+  "contentReview_markReviewed": {
+    "message": "レビュー済みにする"
+  },
+  "contentReview_skipNext": {
+    "message": "スキップ"
+  },
+  "contentReview_discard": {
+    "message": "破棄"
+  },
+  "contentReview_discardTitle": {
+    "message": "下書きを破棄しますか？"
+  },
+  "contentReview_discardBody": {
+    "message": "この下書きは破棄済みとしてマークされ、レビュー一覧から削除されます。"
+  },
+  "contentReview_discardConfirm": {
+    "message": "破棄"
+  },
+  "contentReview_discardCancel": {
+    "message": "キャンセル"
+  },
+  "contentReview_commitSuccess": {
+    "message": "下書きを確定しました。"
+  },
+  "contentReview_commitAllTitle": {
+    "message": "レビュー済みの下書きをすべて確定しますか？"
+  },
+  "contentReview_commitAllBody": {
+    "message": "レビュー済みとマークされた下書きのみが確定されます。"
+  },
+  "contentReview_commitAllConfirm": {
+    "message": "すべて確定"
+  },
+  "contentReview_commitAllCancel": {
+    "message": "キャンセル"
+  },
+  "contentReview_commitAllResult": {
+    "message": "{{success}} 件を確定 · {{failed}} 件に失敗"
+  },
+  "contentReview_storageCapWarning": {
+    "message": "このファイルはローカルの下書き上限 ({{cap}}) を超えています。"
+  },
+  "contentReview_clearTitle": {
+    "message": "すべての下書きをクリアしますか？"
+  },
+  "contentReview_clearBody": {
+    "message": "ローカルのコンテンツレビュー用下書きと関連ファイルをすべて削除します。"
+  },
+  "contentReview_clearConfirm": {
+    "message": "下書きをクリア"
+  },
+  "contentReview_clearCancel": {
+    "message": "キャンセル"
+  },
+  "contentReview_clearSuccess": {
+    "message": "下書きを削除しました。"
+  },
+  "contentReview_originalLabel": {
+    "message": "元の内容"
+  },
+  "contentReview_editedLabel": {
+    "message": "編集済み"
+  },
+  "mediaEmpty_apiOfflineTitle": {
+    "message": "メディアAPIはオフラインでは利用できません"
+  },
+  "mediaEmpty_serverOfflineTitle": {
+    "message": "サーバーがオフラインです"
+  },
+  "mediaPage_analysisPending": {
+    "message": "Pending save"
+  },
+  "mediaPage_presetBulletedNotes": {
+    "message": "Bulleted Notes"
+  }
+}

@@ -1,0 +1,103 @@
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import type { ChatHistory } from "@/store/option"
+import { saveMessageOnError } from "../index"
+
+const mocks = vi.hoisted(() => ({
+  fallbackSetHistory: vi.fn(),
+  saveMessage: vi.fn(async () => undefined),
+  getLastChatHistory: vi.fn(async () => ({ id: "last-message-id" })),
+  saveHistory: vi.fn(async () => ({ id: "new-history-id" })),
+  updateMessage: vi.fn(async () => undefined),
+  setLastUsedChatModel: vi.fn(async () => undefined),
+  setLastUsedChatSystemPrompt: vi.fn(async () => undefined),
+  updateChatHistoryCreatedAt: vi.fn(async () => undefined),
+  generateTitle: vi.fn(async () => "Generated title"),
+  updatePageTitle: vi.fn(),
+  buildAssistantErrorContent: vi.fn((_botMessage: string, error: unknown) =>
+    error instanceof Error ? `ERR: ${error.message}` : "ERR"
+  )
+}))
+
+vi.mock("@/store/option", () => ({
+  useStoreMessageOption: {
+    getState: () => ({
+      setHistory: mocks.fallbackSetHistory
+    })
+  }
+}))
+
+vi.mock("@/db/dexie/helpers", () => ({
+  getLastChatHistory: mocks.getLastChatHistory,
+  saveHistory: mocks.saveHistory,
+  saveMessage: mocks.saveMessage,
+  updateMessage: mocks.updateMessage,
+  updateLastUsedModel: mocks.setLastUsedChatModel,
+  updateLastUsedPrompt: mocks.setLastUsedChatSystemPrompt,
+  updateChatHistoryCreatedAt: mocks.updateChatHistoryCreatedAt
+}))
+
+vi.mock("@/services/title", () => ({
+  generateTitle: mocks.generateTitle
+}))
+
+vi.mock("@/utils/update-page-title", () => ({
+  updatePageTitle: mocks.updatePageTitle
+}))
+
+vi.mock("@/utils/chat-error-message", () => ({
+  buildAssistantErrorContent: mocks.buildAssistantErrorContent
+}))
+
+describe("saveMessageOnError", () => {
+  beforeEach(() => {
+    mocks.fallbackSetHistory.mockClear()
+    mocks.saveMessage.mockClear()
+    mocks.getLastChatHistory.mockClear()
+    mocks.saveHistory.mockClear()
+    mocks.updateMessage.mockClear()
+    mocks.setLastUsedChatModel.mockClear()
+    mocks.setLastUsedChatSystemPrompt.mockClear()
+    mocks.updateChatHistoryCreatedAt.mockClear()
+    mocks.generateTitle.mockClear()
+    mocks.updatePageTitle.mockClear()
+    mocks.buildAssistantErrorContent.mockClear()
+  })
+
+  it("falls back to store setter when setHistory is not callable", async () => {
+    const history: ChatHistory = [
+      {
+        role: "assistant",
+        content: "Earlier assistant response"
+      }
+    ]
+
+    await expect(
+      saveMessageOnError({
+        e: new Error("provider failed"),
+        history,
+        setHistory: null as unknown as (history: ChatHistory) => void,
+        image: "",
+        userMessage: "Hi there",
+        botMessage: "",
+        historyId: "history-1",
+        selectedModel: "kimi-k2",
+        setHistoryId: vi.fn(),
+        isRegenerating: false
+      })
+    ).resolves.toBe("history-1")
+
+    expect(mocks.fallbackSetHistory).toHaveBeenCalledTimes(1)
+    expect(mocks.fallbackSetHistory).toHaveBeenCalledWith([
+      ...history,
+      {
+        role: "user",
+        content: "Hi there",
+        image: ""
+      },
+      {
+        role: "assistant",
+        content: "ERR: provider failed"
+      }
+    ])
+  })
+})

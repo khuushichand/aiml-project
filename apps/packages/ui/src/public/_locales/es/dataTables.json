@@ -1,0 +1,380 @@
+{
+  "title": {
+    "message": "Estudio de tablas de datos"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "betaNotice": {
+    "message": "Función beta"
+  },
+  "betaDescription": {
+    "message": "Las Tablas de Datos están actualmente en beta. La generación de tablas requiere soporte del backend."
+  },
+  "offline": {
+    "message": "El servidor está desconectado. Conéctate para usar Tablas de Datos."
+  },
+  "tabs_tables": {
+    "message": "Mis tablas"
+  },
+  "tabs_create": {
+    "message": "Crear tabla"
+  },
+  "wizard_sources": {
+    "message": "Seleccionar fuentes"
+  },
+  "wizard_sourcesDesc": {
+    "message": "Elige fuentes de datos"
+  },
+  "wizard_prompt": {
+    "message": "Describir tabla"
+  },
+  "wizard_promptDesc": {
+    "message": "Escribe tu indicación"
+  },
+  "wizard_preview": {
+    "message": "Vista previa"
+  },
+  "wizard_previewDesc": {
+    "message": "Revisar la tabla generada"
+  },
+  "wizard_save": {
+    "message": "Guardar"
+  },
+  "wizard_saveDesc": {
+    "message": "Guardar en la biblioteca"
+  },
+  "wizard_tip": {
+    "message": "Consejo"
+  },
+  "wizard_tipText": {
+    "message": "Selecciona chats, documentos o busca en tu base de conocimientos para extraer datos estructurados. Cuanto más específicas sean tus fuentes, mejores serán los resultados."
+  },
+  "wizard_reset": {
+    "message": "Empezar de nuevo"
+  },
+  "sourceTypes_chat": {
+    "message": "Chats"
+  },
+  "sourceTypes_document": {
+    "message": "Documentos"
+  },
+  "sourceTypes_rag": {
+    "message": "Búsqueda RAG"
+  },
+  "selectedSources": {
+    "message": "Fuentes seleccionadas"
+  },
+  "sourcesSelected": {
+    "message": "Fuentes seleccionadas"
+  },
+  "searchPlaceholder": {
+    "message": "Buscar..."
+  },
+  "ragPlaceholder": {
+    "message": "Introduce una consulta de búsqueda para tu base de conocimientos..."
+  },
+  "ragQuerySnippet": {
+    "message": "Consulta de búsqueda de la base de conocimientos"
+  },
+  "ragAdded": {
+    "message": "Consulta RAG añadida como fuente"
+  },
+  "ragTip": {
+    "message": "Introduce consultas de búsqueda para encontrar contenido relevante en tu base de conocimientos. Cada consulta se añadirá como una fuente independiente."
+  },
+  "fetchError": {
+    "message": "No se pudieron cargar los elementos"
+  },
+  "promptLabel": {
+    "message": "Describe la tabla que quieres crear"
+  },
+  "promptPlaceholder": {
+    "message": "Ej.: Crea una tabla que compare los temas principales tratados, con columnas para tema, puntos clave y puntuación de relevancia..."
+  },
+  "examplePrompts": {
+    "message": "Ejemplos de indicaciones:"
+  },
+  "advancedOptions": {
+    "message": "Opciones avanzadas"
+  },
+  "columnHints": {
+    "message": "Sugerencias de columnas (opcional)"
+  },
+  "columnHintsDesc": {
+    "message": "Sugiere nombres y tipos de columnas para guiar al LLM. Si no se especifica, las columnas se inferirán a partir de tu indicación."
+  },
+  "newColumnName": {
+    "message": "Nombre de la columna"
+  },
+  "modelSelection": {
+    "message": "Modelo"
+  },
+  "selectModel": {
+    "message": "Usar modelo predeterminado"
+  },
+  "maxRows": {
+    "message": "Máximo de filas"
+  },
+  "maxRowsHint": {
+    "message": "(1-1000)"
+  },
+  "generating": {
+    "message": "Generando tabla a partir de tus fuentes..."
+  },
+  "generatingNote": {
+    "message": "Esto puede tardar un momento según la cantidad de datos."
+  },
+  "generateSuccess": {
+    "message": "¡Tabla generada correctamente!"
+  },
+  "generationFailed": {
+    "message": "Error en la generación"
+  },
+  "tryAgain": {
+    "message": "Intentar de nuevo"
+  },
+  "warnings": {
+    "message": "Advertencias"
+  },
+  "noPreview": {
+    "message": "No hay vista previa disponible"
+  },
+  "promptUsed": {
+    "message": "Indicación usada:"
+  },
+  "previewModified": {
+    "message": "Has modificado la vista previa. Los cambios se guardarán con la tabla."
+  },
+  "addRow": {
+    "message": "Añadir fila"
+  },
+  "addColumn": {
+    "message": "Añadir columna"
+  },
+  "deleteRow": {
+    "message": "¿Eliminar fila?"
+  },
+  "deleteRowConfirm": {
+    "message": "Esta acción no se puede deshacer."
+  },
+  "deleteColumn": {
+    "message": "¿Eliminar columna?"
+  },
+  "deleteColumnConfirm": {
+    "message": "Esta acción no se puede deshacer."
+  },
+  "discard": {
+    "message": "Descartar"
+  },
+  "changesDiscarded": {
+    "message": "Cambios descartados"
+  },
+  "save": {
+    "message": "Guardar"
+  },
+  "saveSuccess": {
+    "message": "¡Cambios guardados correctamente!"
+  },
+  "unsavedChanges": {
+    "message": "Tienes cambios sin guardar"
+  },
+  "columnAdded": {
+    "message": "Columna '{{name}}' añadida"
+  },
+  "rows": {
+    "message": "filas"
+  },
+  "columnsLabel": {
+    "message": "columnas"
+  },
+  "showingRows": {
+    "message": "Mostrando {{total}} filas"
+  },
+  "tableSummary": {
+    "message": "Resumen de la tabla"
+  },
+  "tableName": {
+    "message": "Nombre de la tabla"
+  },
+  "tableNamePlaceholder": {
+    "message": "Introduce un nombre para tu tabla"
+  },
+  "tableDescription": {
+    "message": "Descripción (opcional)"
+  },
+  "tableDescPlaceholder": {
+    "message": "Añade una descripción para ayudarte a recordar qué contiene esta tabla"
+  },
+  "saveToLibrary": {
+    "message": "Guardar en la biblioteca"
+  },
+  "tableSaved": {
+    "message": "¡Tabla guardada!"
+  },
+  "tableSavedDesc": {
+    "message": "Tu tabla se ha guardado en la biblioteca. Puedes verla y exportarla cuando quieras."
+  },
+  "viewTables": {
+    "message": "Ver mis tablas"
+  },
+  "createAnother": {
+    "message": "Crear otra"
+  },
+  "orExport": {
+    "message": "O exportar directamente:"
+  },
+  "export": {
+    "message": "Exportar"
+  },
+  "exportCSV": {
+    "message": "Exportar como CSV"
+  },
+  "exportExcel": {
+    "message": "Exportar como Excel"
+  },
+  "exportJSON": {
+    "message": "Exportar como JSON"
+  },
+  "exportSuccess": {
+    "message": "Tabla exportada como {{format}}"
+  },
+  "noTableToSave": {
+    "message": "No hay tabla para guardar"
+  },
+  "goBackToGenerate": {
+    "message": "Vuelve al paso anterior para generar primero una tabla."
+  },
+  "tableDetails": {
+    "message": "Detalles de la tabla"
+  },
+  "tableNotFound": {
+    "message": "Tabla no encontrada"
+  },
+  "noData": {
+    "message": "Sin datos"
+  },
+  "data": {
+    "message": "Datos"
+  },
+  "editMode": {
+    "message": "Modo de edición"
+  },
+  "editModeActive": {
+    "message": "Haz clic en las celdas para editar"
+  },
+  "regenerate": {
+    "message": "Regenerar"
+  },
+  "regenerateSuccess": {
+    "message": "¡Tabla regenerada correctamente!"
+  },
+  "model": {
+    "message": "Modelo"
+  },
+  "prompt": {
+    "message": "Indicación de generación"
+  },
+  "sources": {
+    "message": "Fuentes"
+  },
+  "created": {
+    "message": "Creado"
+  },
+  "updated": {
+    "message": "Actualizado"
+  },
+  "noTables": {
+    "message": "Aún no hay tablas. ¡Crea tu primera tabla!"
+  },
+  "noSearchResults": {
+    "message": "No se encontraron tablas que coincidan con tu búsqueda"
+  },
+  "totalTables": {
+    "message": "{{total}} tablas"
+  },
+  "view": {
+    "message": "Ver"
+  },
+  "delete": {
+    "message": "Eliminar"
+  },
+  "deleteConfirmTitle": {
+    "message": "Eliminar tabla"
+  },
+  "deleteConfirmMessage": {
+    "message": "¿Seguro que quieres eliminar esta tabla? Esta acción no se puede deshacer."
+  },
+  "noTable": {
+    "message": "No hay datos de la tabla"
+  },
+  "add": {
+    "message": "Añadir"
+  },
+  "columnName": {
+    "message": "Nombre de la columna"
+  },
+  "columnNamePlaceholder": {
+    "message": "p. ej., Precio, Estado, Fecha"
+  },
+  "columnNameRequired": {
+    "message": "Por favor, introduce un nombre de columna"
+  },
+  "columnNameTooLong": {
+    "message": "El nombre de la columna debe tener 50 caracteres o menos"
+  },
+  "columnNameExists": {
+    "message": "Ya existe una columna con este nombre"
+  },
+  "columnType": {
+    "message": "Tipo de columna"
+  },
+  "columnTypeRequired": {
+    "message": "Por favor, selecciona un tipo de columna"
+  },
+  "columnDescription": {
+    "message": "Descripción (opcional)"
+  },
+  "columnDescriptionHint": {
+    "message": "Una breve descripción de lo que contiene esta columna"
+  },
+  "columnDescriptionPlaceholder": {
+    "message": "p. ej., El precio del artículo en USD"
+  },
+  "discardUnsavedChanges": {
+    "message": "Tienes cambios sin guardar. ¿Seguro que quieres cerrar?"
+  },
+  "createFromChat": {
+    "message": "Crear tabla desde el chat"
+  },
+  "saveFromArtifact": {
+    "message": "Guardar en Tablas de Datos"
+  },
+  "importedPrompt": {
+    "message": "Importado desde el artefacto de la tabla"
+  },
+  "columns_name": {
+    "message": "Nombre"
+  },
+  "columns_rows": {
+    "message": "Filas"
+  },
+  "columns_columns": {
+    "message": "Columnas"
+  },
+  "columns_sources": {
+    "message": "Fuentes"
+  },
+  "columns_created": {
+    "message": "Creado"
+  },
+  "columns_actions": {
+    "message": "Acciones"
+  },
+  "dataTablesDescription": {
+    "message": "Genera tablas estructuradas a partir de tus chats, documentos y base de conocimientos usando indicaciones en lenguaje natural."
+  },
+  "descriptionLabel": {
+    "message": "Descripción"
+  }
+}

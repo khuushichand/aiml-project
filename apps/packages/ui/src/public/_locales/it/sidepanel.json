@@ -1,0 +1,464 @@
+{
+  "tooltip_embed": {
+    "message": "L'inserimento della pagina potrebbe richiedere alcuni minuti. Attendere prego..."
+  },
+  "tooltip_clear": {
+    "message": "Cancella la cronologia della chat"
+  },
+  "tooltip_history": {
+    "message": "Cronologia della chat"
+  },
+  "tooltip_openwebui": {
+    "message": "Apri WebUI"
+  },
+  "toolbar_ragSearch": {
+    "message": "Ricerca RAG"
+  },
+  "errors_privateModeTitle": {
+    "message": "tldw Assistant non può salvare i dati"
+  },
+  "errors_privateModeDescription": {
+    "message": "La modalità privata di Firefox non consente di salvare la cronologia della chat. La chat temporanea è attiva per impostazione predefinita. Altri miglioramenti arriveranno presto."
+  },
+  "connectionBanner_connecting": {
+    "message": "Connessione al server tldw..."
+  },
+  "connectionBanner_authErrorTitle": {
+    "message": "La chiave API richiede attenzione"
+  },
+  "connectionBanner_authErrorBody": {
+    "message": "Il server è raggiungibile, ma la chiave API è errata o mancante."
+  },
+  "connectionBanner_unreachableTitle": {
+    "message": "Impossibile raggiungere il server tldw"
+  },
+  "connectionBanner_unreachableBody": {
+    "message": "Verifica che il server sia in esecuzione e accessibile."
+  },
+  "connectionBanner_noUrlBody": {
+    "message": "Aggiungi l'URL del server nelle Impostazioni per iniziare."
+  },
+  "connectionBanner_disconnectedTitle": {
+    "message": "Non connesso al server tldw"
+  },
+  "connectionBanner_disconnectedBody": {
+    "message": "Apri le Impostazioni per configurare la connessione al server."
+  },
+  "connectionBanner_setupTitle": {
+    "message": "Completa la configurazione per iniziare a chattare"
+  },
+  "connectionBanner_setupBody": {
+    "message": "Completa la procedura guidata nelle Impostazioni per connetterti."
+  },
+  "connectionBanner_openSettings": {
+    "message": "Apri Impostazioni"
+  },
+  "temporaryBadge_title": {
+    "message": "Chat temporanea"
+  },
+  "temporaryBadge_label": {
+    "message": "Temp"
+  },
+  "temporaryBadge_description": {
+    "message": "Questa chat non verrà salvata. I messaggi verranno cancellati quando chiudi o inizi una nuova chat."
+  },
+  "temporaryBadge_clickHint": {
+    "message": "Clicca per disattivare"
+  },
+  "temporaryBadge_ariaLabel": {
+    "message": "La modalità chat temporanea è attiva. Clicca per attivare/disattivare."
+  },
+  "temporaryBadge_indicatorTooltip": {
+    "message": "I messaggi in questa chat non verranno salvati"
+  },
+  "temporaryBadge_indicatorAria": {
+    "message": "Chat temporanea"
+  },
+  "header_ingest": {
+    "message": "Ingesta"
+  },
+  "header_saveCurrent": {
+    "message": "Salva la pagina corrente sul server"
+  },
+  "header_processLocal": {
+    "message": "Elabora la pagina corrente localmente"
+  },
+  "header_viewProcessed": {
+    "message": "Vedi elaborati"
+  },
+  "header_timeoutLabel": {
+    "message": "Timeout (s)"
+  },
+  "header_toggleSidebar": {
+    "message": "Attiva/disattiva barra laterale / schermo intero"
+  },
+  "header_shortcuts": {
+    "message": "Scorciatoie"
+  },
+  "header_showDebug": {
+    "message": "Mostra debug dello stream"
+  },
+  "header_hideDebug": {
+    "message": "Nascondi debug dello stream"
+  },
+  "header_moreOptionsAria": {
+    "message": "Altre opzioni"
+  },
+  "header_moreOptionsTitle": {
+    "message": "Ingesta e altro"
+  },
+  "header_openWebuiAria": {
+    "message": "Apri Web UI"
+  },
+  "header_newChatAria": {
+    "message": "Nuova chat"
+  },
+  "header_tempChatAria": {
+    "message": "Attiva/disattiva chat temporanea"
+  },
+  "header_clearHistoryAria": {
+    "message": "Cancella cronologia"
+  },
+  "header_openHistoryAria": {
+    "message": "Apri cronologia"
+  },
+  "header_openModelSettingsAria": {
+    "message": "Apri impostazioni del modello"
+  },
+  "header_openSettingsAria": {
+    "message": "Apri impostazioni"
+  },
+  "header_tempPill": {
+    "message": "Temp"
+  },
+  "header_modesLabel": {
+    "message": "Apri le modalità nella Web UI"
+  },
+  "header_modePlayground": {
+    "message": "Chat"
+  },
+  "header_modeReview": {
+    "message": "Revisione multi-elemento"
+  },
+  "header_modeMedia": {
+    "message": "Contenuti multimediali"
+  },
+  "header_modeKnowledge": {
+    "message": "Q&A conoscenza"
+  },
+  "header_modeNotes": {
+    "message": "Note"
+  },
+  "header_modePrompts": {
+    "message": "Prompt"
+  },
+  "header_modeFlashcards": {
+    "message": "Flashcard"
+  },
+  "controlRow_saveMode": {
+    "message": "Modalità di salvataggio"
+  },
+  "controlRow_ephemeral": {
+    "message": "Effimero"
+  },
+  "controlRow_searchSection": {
+    "message": "Ricerca e Visione"
+  },
+  "controlRow_webSearch": {
+    "message": "Ricerca sul Web"
+  },
+  "controlRow_vision": {
+    "message": "Visione"
+  },
+  "controlRow_uploadImage": {
+    "message": "Carica immagine"
+  },
+  "controlRow_quickIngest": {
+    "message": "Inserimento rapido"
+  },
+  "controlRow_openInFullUI": {
+    "message": "Apri nell'interfaccia completa"
+  },
+  "controlRow_modeChat": {
+    "message": "Chat"
+  },
+  "controlRow_modeMedia": {
+    "message": "Media"
+  },
+  "controlRow_modeNotes": {
+    "message": "Note"
+  },
+  "controlRow_modeFlashcards": {
+    "message": "Flashcard"
+  },
+  "controlRow_ragSearch": {
+    "message": "Ricerca RAG"
+  },
+  "controlRow_moreTools": {
+    "message": "Altri strumenti"
+  },
+  "composer_connectHint": {
+    "message": "Connettiti al tuo server tldw nelle Impostazioni per inviare messaggi."
+  },
+  "composer_connectingPlaceholder": {
+    "message": "Connessione..."
+  },
+  "composer_disconnectedPlaceholder": {
+    "message": "Connettiti al tuo server tldw nelle Impostazioni per inviare messaggi e vedere i contenuti multimediali."
+  },
+  "notification_ingestSent": {
+    "message": "Inviato al server tldw"
+  },
+  "notification_ingestSentDesc": {
+    "message": "La pagina corrente è stata inviata per l’ingestione."
+  },
+  "notification_processedLocal": {
+    "message": "Elaborato localmente"
+  },
+  "notification_processedLocalDesc": {
+    "message": "I contenuti elaborati sono salvati localmente in Impostazioni > Elaborati."
+  },
+  "notification_transcriptionTitle": {
+    "message": "Trascrizione"
+  },
+  "notification_transcriptionSummaryTitle": {
+    "message": "Trascrizione + riepilogo"
+  },
+  "notification_transcriptionFallback": {
+    "message": "Trascrizione completata. Apri Contenuti multimediali nella Web UI per visualizzarla."
+  },
+  "notification_sourceLabel": {
+    "message": "Fonte"
+  },
+  "notification_transcriptLabel": {
+    "message": "Trascrizione"
+  },
+  "notification_summaryLabel": {
+    "message": "Riepilogo"
+  },
+  "saveStatus_ephemeral": {
+    "message": "Temporaneo: non salvato, cancellato alla chiusura"
+  },
+  "saveStatus_local": {
+    "message": "Salvato localmente in questo browser"
+  },
+  "saveStatus_server": {
+    "message": "Salvato sul server"
+  },
+  "saveStatus_saveFailed": {
+    "message": "Impossibile salvare la chat sul server"
+  },
+  "saveStatus_saveFailedDescription": {
+    "message": "La chat ora viene salvata solo localmente. Controlla la connessione e riprova."
+  },
+  "rag_searchPlaceholder": {
+    "message": "Cerca nella tua base di conoscenza..."
+  },
+  "rag_search": {
+    "message": "Cerca"
+  },
+  "rag_show": {
+    "message": "Mostra ricerca RAG"
+  },
+  "rag_hide": {
+    "message": "Nascondi ricerca RAG"
+  },
+  "rag_addTagPlaceholder": {
+    "message": "Aggiungi tag (Invio)"
+  },
+  "rag_add": {
+    "message": "Aggiungi"
+  },
+  "rag_noResults": {
+    "message": "Nessun risultato"
+  },
+  "rag_timeout_message": {
+    "message": "Richiesta scaduta."
+  },
+  "rag_timeout_increase": {
+    "message": "Aumenta timeout"
+  },
+  "rag_timeout_checkHealth": {
+    "message": "Verifica stato del server"
+  },
+  "rag_actions_insert": {
+    "message": "Inserisci"
+  },
+  "rag_actions_ask": {
+    "message": "Chiedi"
+  },
+  "rag_actions_open": {
+    "message": "Apri"
+  },
+  "rag_actions_copy": {
+    "message": "Copia"
+  },
+  "rag_hint_message": {
+    "message": "Cerca nella tua base di conoscenza e inserisci i risultati nel messaggio."
+  },
+  "rag_hint_dismiss": {
+    "message": "Chiudi"
+  },
+  "tabs_newChat": {
+    "message": "Nuova chat"
+  },
+  "tabs_newTabAria": {
+    "message": "Nuova scheda chat"
+  },
+  "tabs_closeTabAria": {
+    "message": "Chiudi scheda chat"
+  },
+  "characterSelect_label": {
+    "message": "Personaggio"
+  },
+  "characterSelect_tooltip": {
+    "message": "Seleziona un personaggio"
+  },
+  "characterSelect_search": {
+    "message": "Cerca personaggi..."
+  },
+  "characterSelect_noMatches": {
+    "message": "Nessun personaggio corrispondente"
+  },
+  "characterSelect_noCharacters": {
+    "message": "Nessun personaggio disponibile"
+  },
+  "characterSelect_none": {
+    "message": "Nessun personaggio"
+  },
+  "characterSelect_createNewCharacter": {
+    "message": "Crea un nuovo personaggio+"
+  },
+  "characterSelect_importCharacter": {
+    "message": "Importa personaggio"
+  },
+  "rag_attachedContext": {
+    "message": "Contesto allegato"
+  },
+  "rag_initialState": {
+    "message": "Nessun risultato"
+  },
+  "characterSelect_favorites": {
+    "message": "Favorites"
+  },
+  "characterSelect_favoriteAdd": {
+    "message": "Add to favorites"
+  },
+  "characterSelect_favoriteRemove": {
+    "message": "Remove from favorites"
+  },
+  "characterSelect_sort_favorites": {
+    "message": "Favorites"
+  },
+  "characterSelect_sort_az": {
+    "message": "A-Z"
+  },
+  "knowledge_tabs_qaSearch": {
+    "message": "QA Search"
+  },
+  "knowledge_tabs_fileSearch": {
+    "message": "File Search"
+  },
+  "knowledge_tabs_label": {
+    "message": "Knowledge panel sections"
+  },
+  "knowledge_tabs_contextBadge": {
+    "message": "{{count}} items attached"
+  },
+  "qaSearch_searching": {
+    "message": "Searching knowledge base..."
+  },
+  "qaSearch_generatedAnswer": {
+    "message": "Generated Answer"
+  },
+  "qaSearch_cached": {
+    "message": "Cached"
+  },
+  "qaSearch_copyAnswer": {
+    "message": "Copy answer"
+  },
+  "qaSearch_copied": {
+    "message": "Copied"
+  },
+  "qaSearch_copy": {
+    "message": "Copy"
+  },
+  "qaSearch_insertAnswer": {
+    "message": "Insert answer"
+  },
+  "qaSearch_copyChunk": {
+    "message": "Copy chunk"
+  },
+  "qaSearch_insertChunk": {
+    "message": "Insert chunk"
+  },
+  "qaSearch_sourceChunks": {
+    "message": "Source Chunks ({{count}})"
+  },
+  "qaSearch_sourceChunksList": {
+    "message": "Source chunks"
+  },
+  "qaSearch_strategy_standard": {
+    "message": "Standard"
+  },
+  "qaSearch_strategy_agentic": {
+    "message": "Agentic"
+  },
+  "qaSearch_sort_label": {
+    "message": "Sort source chunks"
+  },
+  "qaSearch_sort_relevance": {
+    "message": "Relevance"
+  },
+  "qaSearch_sort_source": {
+    "message": "Source"
+  },
+  "fileSearch_filterByType": {
+    "message": "Filter by type"
+  },
+  "fileSearch_resultsList": {
+    "message": "File search results"
+  },
+  "fileSearch_attached": {
+    "message": "Attached"
+  },
+  "fileSearch_alreadyAttached": {
+    "message": "Already attached"
+  },
+  "fileSearch_attach": {
+    "message": "Attach"
+  },
+  "fileSearch_openExternal": {
+    "message": "Open"
+  },
+  "fileSearch_open": {
+    "message": "Open"
+  },
+  "fileSearch_mediaType_video": {
+    "message": "Video"
+  },
+  "fileSearch_mediaType_audio": {
+    "message": "Audio"
+  },
+  "fileSearch_mediaType_pdf": {
+    "message": "PDF"
+  },
+  "fileSearch_mediaType_article": {
+    "message": "Article"
+  },
+  "fileSearch_mediaType_note": {
+    "message": "Note"
+  },
+  "fileSearch_mediaType_document": {
+    "message": "Document"
+  },
+  "fileSearch_mediaType_epub": {
+    "message": "EPUB"
+  },
+  "fileSearch_mediaType_html": {
+    "message": "HTML"
+  },
+  "fileSearch_mediaType_xml": {
+    "message": "XML"
+  }
+}

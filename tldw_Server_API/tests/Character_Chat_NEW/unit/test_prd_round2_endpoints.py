@@ -54,6 +54,26 @@ class TestGreetingHelpers:
         assert result.count("Hello!") == 1
 
     @pytest.mark.unit
+    def test_collect_greeting_texts_parses_json_string_lists(self):
+        """Stringified JSON list greetings are expanded."""
+        character = {
+            "first_message": "Hello!",
+            "alternate_greetings": '["Hi there!", "Welcome!"]',
+        }
+        result = _collect_character_greeting_texts(character)
+        assert result == ["Hello!", "Hi there!", "Welcome!"]
+
+    @pytest.mark.unit
+    def test_collect_greeting_texts_keeps_multiline_primary_message(self):
+        """Multiline single greeting text is preserved as one entry."""
+        character = {
+            "first_message": "Line one.\nLine two.",
+            "alternate_greetings": ["Alt hello"],
+        }
+        result = _collect_character_greeting_texts(character)
+        assert result == ["Line one.\nLine two.", "Alt hello"]
+
+    @pytest.mark.unit
     def test_compute_greetings_checksum_stable(self):
         """Checksum is stable for same greetings."""
         character = {"greeting": "Hello!", "alternate_greetings": ["Hi!"]}

@@ -1,4 +1,9 @@
-import { tldwClient, ChatMessage, ChatCompletionRequest } from "./TldwApiClient"
+import {
+  tldwClient,
+  ChatMessage,
+  ChatCompletionRequest,
+  type ChatCompletionContentPart
+} from "./TldwApiClient"
 import { extractTokenFromChunk } from "@/utils/extract-token-from-chunk"
 
 type ToolFunctionSchema = Record<string, unknown>
@@ -40,6 +45,105 @@ const normalizeMessagesForProvider = (
     }
     return msg
   })
+}
+
+const normalizeSystemPrompt = (value?: string): string | undefined => {
+  if (typeof value !== "string") return undefined
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+const sanitizeUserContent = (
+  content: string | ChatCompletionContentPart[]
+): string | ChatCompletionContentPart[] | null => {
+  if (typeof content === "string") {
+    const trimmed = content.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+  if (!Array.isArray(content)) return null
+
+  const cleaned = content
+    .map((part) => {
+      if (!part || typeof part !== "object") return null
+      if (part.type === "text") {
+        const text = typeof part.text === "string" ? part.text.trim() : ""
+        return text.length > 0 ? { type: "text", text } : null
+      }
+      if (part.type === "image_url") {
+        const candidate = part.image_url
+        const url = typeof candidate?.url === "string" ? candidate.url.trim() : ""
+        if (!url) return null
+        const detail = candidate?.detail
+        if (detail === "auto" || detail === "low" || detail === "high" || detail === null) {
+          return { type: "image_url", image_url: { url, detail } }
+        }
+        return { type: "image_url", image_url: { url } }
+      }
+      return null
+    })
+    .filter(Boolean) as ChatCompletionContentPart[]
+
+  return cleaned.length > 0 ? cleaned : null
+}
+
+const sanitizeMessages = (messages: ChatMessage[]): ChatMessage[] => {
+  return messages
+    .map((message) => {
+      if (message.role === "system") {
+        const content = message.content.trim()
+        if (!content) return null
+        return { ...message, content }
+      }
+
+      if (message.role === "user") {
+        const content = sanitizeUserContent(message.content)
+        if (content == null) return null
+        return { ...message, content } as ChatMessage
+      }
+
+      if (message.role === "assistant") {
+        const content =
+          typeof message.content === "string"
+            ? message.content.trim()
+            : message.content
+        const hasToolCalls =
+          Array.isArray(message.tool_calls) && message.tool_calls.length > 0
+        const hasFunctionCall =
+          typeof message.function_call?.name === "string" &&
+          message.function_call.name.trim().length > 0
+        if (typeof content === "string" && content.length > 0) {
+          return { ...message, content }
+        }
+        if (hasToolCalls || hasFunctionCall) {
+          return { ...message, content: null }
+        }
+        return null
+      }
+
+      const toolCallId = message.tool_call_id.trim()
+      const content = message.content.trim()
+      if (!toolCallId || !content) return null
+      return { ...message, tool_call_id: toolCallId, content }
+    })
+    .filter(Boolean) as ChatMessage[]
+}
+
+const buildRequestMessages = (
+  messages: ChatMessage[],
+  options: TldwChatOptions
+): ChatMessage[] => {
+  const sanitizedMessages = sanitizeMessages(messages)
+  const systemPrompt = normalizeSystemPrompt(options.systemPrompt)
+  const withSystemPrompt =
+    systemPrompt && sanitizedMessages[0]?.role !== "system"
+      ? [{ role: "system", content: systemPrompt } as ChatMessage, ...sanitizedMessages]
+      : sanitizedMessages
+
+  return normalizeMessagesForProvider(
+    withSystemPrompt,
+    options.apiProvider,
+    options.model
+  )
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -182,13 +286,15 @@ export class TldwChatService {
       await tldwClient.initialize()
       const normalizedTools = normalizeChatTools(options.tools)
       const toolChoice = normalizedTools ? options.toolChoice : undefined
+      const requestMessages = buildRequestMessages(messages, options)
+      if (requestMessages.length === 0) {
+        throw new Error(
+          "Cannot send chat request without any messages. Add a user message or a system prompt."
+        )
+      }
 
       const request: ChatCompletionRequest = {
-        messages: normalizeMessagesForProvider(
-          messages,
-          options.apiProvider,
-          options.model
-        ),
+        messages: requestMessages,
         model: options.model,
         stream: false,
         temperature: options.temperature,
@@ -208,14 +314,6 @@ export class TldwChatService {
         extra_headers: options.extraHeaders,
         extra_body: options.extraBody,
         response_format: options.jsonMode ? { type: "json_object" } : undefined
-      }
-
-      // Add system prompt if provided
-      if (options.systemPrompt && messages[0]?.role !== 'system') {
-        request.messages = [
-          { role: 'system', content: options.systemPrompt },
-          ...messages
-        ]
       }
 
       const response = await tldwClient.createChatCompletion(request)
@@ -243,6 +341,12 @@ export class TldwChatService {
       await tldwClient.initialize()
       const normalizedTools = normalizeChatTools(options.tools)
       const toolChoice = normalizedTools ? options.toolChoice : undefined
+      const requestMessages = buildRequestMessages(messages, options)
+      if (requestMessages.length === 0) {
+        throw new Error(
+          "Cannot send chat request without any messages. Add a user message or a system prompt."
+        )
+      }
 
       // Cancel any existing stream
       this.cancelStream()
@@ -251,11 +355,7 @@ export class TldwChatService {
       this.currentController = new AbortController()
 
       const request: ChatCompletionRequest = {
-        messages: normalizeMessagesForProvider(
-          messages,
-          options.apiProvider,
-          options.model
-        ),
+        messages: requestMessages,
         model: options.model,
         stream: true,
         temperature: options.temperature,
@@ -275,14 +375,6 @@ export class TldwChatService {
         extra_headers: options.extraHeaders,
         extra_body: options.extraBody,
         response_format: options.jsonMode ? { type: "json_object" } : undefined
-      }
-
-      // Add system prompt if provided
-      if (options.systemPrompt && messages[0]?.role !== 'system') {
-        request.messages = [
-          { role: 'system', content: options.systemPrompt },
-          ...messages
-        ]
       }
 
       const stream = tldwClient.streamChatCompletion(request, { signal: this.currentController.signal })

@@ -1,0 +1,380 @@
+{
+  "title": {
+    "message": "Datatabeller Studio"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "betaNotice": {
+    "message": "Betafunktion"
+  },
+  "betaDescription": {
+    "message": "Datatabeller är för närvarande i beta. Tabellgenerering kräver stöd från backend."
+  },
+  "offline": {
+    "message": "Servern är offline. Anslut för att använda Datatabeller."
+  },
+  "tabs_tables": {
+    "message": "Mina tabeller"
+  },
+  "tabs_create": {
+    "message": "Skapa tabell"
+  },
+  "wizard_sources": {
+    "message": "Välj källor"
+  },
+  "wizard_sourcesDesc": {
+    "message": "Välj datakällor"
+  },
+  "wizard_prompt": {
+    "message": "Beskriv tabell"
+  },
+  "wizard_promptDesc": {
+    "message": "Skriv din instruktion"
+  },
+  "wizard_preview": {
+    "message": "Förhandsgranskning"
+  },
+  "wizard_previewDesc": {
+    "message": "Granska genererad tabell"
+  },
+  "wizard_save": {
+    "message": "Spara"
+  },
+  "wizard_saveDesc": {
+    "message": "Spara i biblioteket"
+  },
+  "wizard_tip": {
+    "message": "Tips"
+  },
+  "wizard_tipText": {
+    "message": "Välj chattar, dokument eller sök i din kunskapsbas för att extrahera strukturerade data. Ju mer specifika dina källor är, desto bättre blir resultaten."
+  },
+  "wizard_reset": {
+    "message": "Börja om"
+  },
+  "sourceTypes_chat": {
+    "message": "Chattar"
+  },
+  "sourceTypes_document": {
+    "message": "Dokument"
+  },
+  "sourceTypes_rag": {
+    "message": "RAG-sökning"
+  },
+  "selectedSources": {
+    "message": "Valda källor"
+  },
+  "sourcesSelected": {
+    "message": "Valda källor"
+  },
+  "searchPlaceholder": {
+    "message": "Sök..."
+  },
+  "ragPlaceholder": {
+    "message": "Ange en sökfråga för din kunskapsbas..."
+  },
+  "ragQuerySnippet": {
+    "message": "Sökfråga för kunskapsbasen"
+  },
+  "ragAdded": {
+    "message": "RAG-fråga tillagd som källa"
+  },
+  "ragTip": {
+    "message": "Ange sökfrågor för att hitta relevant innehåll i din kunskapsbas. Varje fråga läggs till som en separat källa."
+  },
+  "fetchError": {
+    "message": "Misslyckades att läsa in objekt"
+  },
+  "promptLabel": {
+    "message": "Beskriv tabellen du vill skapa"
+  },
+  "promptPlaceholder": {
+    "message": "T.ex. Skapa en tabell som jämför de viktigaste ämnena som diskuterats, med kolumner för ämne, nyckelpunkter och relevanspoäng..."
+  },
+  "examplePrompts": {
+    "message": "Exempel på instruktioner:"
+  },
+  "advancedOptions": {
+    "message": "Avancerade alternativ"
+  },
+  "columnHints": {
+    "message": "Kolumnförslag (valfritt)"
+  },
+  "columnHintsDesc": {
+    "message": "Föreslå kolumnnamn och typer för att vägleda LLM. Om inget anges härleds kolumner från din instruktion."
+  },
+  "newColumnName": {
+    "message": "Kolumnnamn"
+  },
+  "modelSelection": {
+    "message": "Modell"
+  },
+  "selectModel": {
+    "message": "Använd standardmodell"
+  },
+  "maxRows": {
+    "message": "Maximalt antal rader"
+  },
+  "maxRowsHint": {
+    "message": "(1-1000)"
+  },
+  "generating": {
+    "message": "Genererar tabell från dina källor..."
+  },
+  "generatingNote": {
+    "message": "Detta kan ta en stund beroende på mängden data."
+  },
+  "generateSuccess": {
+    "message": "Tabellen genererades!"
+  },
+  "generationFailed": {
+    "message": "Generering misslyckades"
+  },
+  "tryAgain": {
+    "message": "Försök igen"
+  },
+  "warnings": {
+    "message": "Varningar"
+  },
+  "noPreview": {
+    "message": "Ingen förhandsgranskning tillgänglig"
+  },
+  "promptUsed": {
+    "message": "Använd instruktion:"
+  },
+  "previewModified": {
+    "message": "Du har ändrat förhandsgranskningen. Ändringarna sparas med tabellen."
+  },
+  "addRow": {
+    "message": "Lägg till rad"
+  },
+  "addColumn": {
+    "message": "Lägg till kolumn"
+  },
+  "deleteRow": {
+    "message": "Ta bort rad?"
+  },
+  "deleteRowConfirm": {
+    "message": "Den här åtgärden kan inte ångras."
+  },
+  "deleteColumn": {
+    "message": "Ta bort kolumn?"
+  },
+  "deleteColumnConfirm": {
+    "message": "Den här åtgärden kan inte ångras."
+  },
+  "discard": {
+    "message": "Kassera"
+  },
+  "changesDiscarded": {
+    "message": "Ändringar kasserade"
+  },
+  "save": {
+    "message": "Spara"
+  },
+  "saveSuccess": {
+    "message": "Ändringarna sparades!"
+  },
+  "unsavedChanges": {
+    "message": "Du har osparade ändringar"
+  },
+  "columnAdded": {
+    "message": "Kolumn '{{name}}' lades till"
+  },
+  "rows": {
+    "message": "rader"
+  },
+  "columnsLabel": {
+    "message": "kolumner"
+  },
+  "showingRows": {
+    "message": "Visar {{total}} rader"
+  },
+  "tableSummary": {
+    "message": "Tabellöversikt"
+  },
+  "tableName": {
+    "message": "Tabellnamn"
+  },
+  "tableNamePlaceholder": {
+    "message": "Ange ett namn för tabellen"
+  },
+  "tableDescription": {
+    "message": "Beskrivning (valfritt)"
+  },
+  "tableDescPlaceholder": {
+    "message": "Lägg till en beskrivning för att komma ihåg vad tabellen innehåller"
+  },
+  "saveToLibrary": {
+    "message": "Spara i biblioteket"
+  },
+  "tableSaved": {
+    "message": "Tabellen sparades!"
+  },
+  "tableSavedDesc": {
+    "message": "Din tabell har sparats i biblioteket. Du kan visa och exportera den när som helst."
+  },
+  "viewTables": {
+    "message": "Visa mina tabeller"
+  },
+  "createAnother": {
+    "message": "Skapa en till"
+  },
+  "orExport": {
+    "message": "Eller exportera direkt:"
+  },
+  "export": {
+    "message": "Exportera"
+  },
+  "exportCSV": {
+    "message": "Exportera som CSV"
+  },
+  "exportExcel": {
+    "message": "Exportera som Excel"
+  },
+  "exportJSON": {
+    "message": "Exportera som JSON"
+  },
+  "exportSuccess": {
+    "message": "Tabellen exporterades som {{format}}"
+  },
+  "noTableToSave": {
+    "message": "Ingen tabell att spara"
+  },
+  "goBackToGenerate": {
+    "message": "Gå tillbaka till föregående steg för att först generera en tabell."
+  },
+  "tableDetails": {
+    "message": "Tabelldetaljer"
+  },
+  "tableNotFound": {
+    "message": "Tabellen hittades inte"
+  },
+  "noData": {
+    "message": "Ingen data"
+  },
+  "data": {
+    "message": "Data"
+  },
+  "editMode": {
+    "message": "Redigeringsläge"
+  },
+  "editModeActive": {
+    "message": "Klicka på celler för att redigera"
+  },
+  "regenerate": {
+    "message": "Generera igen"
+  },
+  "regenerateSuccess": {
+    "message": "Tabellen genererades om!"
+  },
+  "model": {
+    "message": "Modell"
+  },
+  "prompt": {
+    "message": "Genereringsinstruktion"
+  },
+  "sources": {
+    "message": "Källor"
+  },
+  "created": {
+    "message": "Skapad"
+  },
+  "updated": {
+    "message": "Uppdaterad"
+  },
+  "noTables": {
+    "message": "Inga tabeller ännu. Skapa din första tabell!"
+  },
+  "noSearchResults": {
+    "message": "Inga tabeller hittades som matchar din sökning"
+  },
+  "totalTables": {
+    "message": "{{total}} tabeller"
+  },
+  "view": {
+    "message": "Visa"
+  },
+  "delete": {
+    "message": "Ta bort"
+  },
+  "deleteConfirmTitle": {
+    "message": "Ta bort tabell"
+  },
+  "deleteConfirmMessage": {
+    "message": "Är du säker på att du vill ta bort den här tabellen? Den här åtgärden kan inte ångras."
+  },
+  "noTable": {
+    "message": "Ingen tabelldata"
+  },
+  "add": {
+    "message": "Lägg till"
+  },
+  "columnName": {
+    "message": "Kolumnnamn"
+  },
+  "columnNamePlaceholder": {
+    "message": "t.ex. Pris, Status, Datum"
+  },
+  "columnNameRequired": {
+    "message": "Ange ett kolumnnamn"
+  },
+  "columnNameTooLong": {
+    "message": "Kolumnnamnet måste vara 50 tecken eller färre"
+  },
+  "columnNameExists": {
+    "message": "En kolumn med det här namnet finns redan"
+  },
+  "columnType": {
+    "message": "Kolumntyp"
+  },
+  "columnTypeRequired": {
+    "message": "Välj en kolumntyp"
+  },
+  "columnDescription": {
+    "message": "Beskrivning (valfritt)"
+  },
+  "columnDescriptionHint": {
+    "message": "En kort beskrivning av vad den här kolumnen innehåller"
+  },
+  "columnDescriptionPlaceholder": {
+    "message": "t.ex. Priset på varan i USD"
+  },
+  "discardUnsavedChanges": {
+    "message": "Du har osparade ändringar. Är du säker på att du vill stänga?"
+  },
+  "createFromChat": {
+    "message": "Skapa tabell från chatt"
+  },
+  "saveFromArtifact": {
+    "message": "Spara till Datatabeller"
+  },
+  "importedPrompt": {
+    "message": "Importerad från tabellartefakt"
+  },
+  "columns_name": {
+    "message": "Namn"
+  },
+  "columns_rows": {
+    "message": "Rader"
+  },
+  "columns_columns": {
+    "message": "Kolumner"
+  },
+  "columns_sources": {
+    "message": "Källor"
+  },
+  "columns_created": {
+    "message": "Skapad"
+  },
+  "columns_actions": {
+    "message": "Åtgärder"
+  },
+  "dataTablesDescription": {
+    "message": "Generera strukturerade tabeller från dina chattar, dokument och din kunskapsbas med hjälp av instruktioner på naturligt språk."
+  },
+  "descriptionLabel": {
+    "message": "Beskrivning"
+  }
+}

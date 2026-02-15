@@ -20,6 +20,7 @@ import {
   type StreamingChunk
 } from "@/utils/streaming-chunks"
 import { buildMessageSteeringSnippet } from "@/utils/message-steering"
+import { useStoreMessageOption } from "@/store/option"
 import type { ChatHistory, Message, ToolChoice } from "~/store/option"
 import type { ToolCall } from "@/types/tool-calls"
 import type { MessageSteeringFlags } from "@/types/message-steering"
@@ -204,22 +205,45 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
   let lastStreamingUpdateAt = 0
   let pendingStreamingText = ""
   let pendingReasoningTime = 0
+  const setMessagesWithTransition = (
+    messagesOrUpdater: Message[] | ((prev: Message[]) => Message[])
+  ) => {
+    startTransition(() => {
+      setMessages(messagesOrUpdater)
+    })
+  }
+  const setHistorySafely = (nextHistory: ChatHistory) => {
+    if (typeof setHistory === "function") {
+      setHistory(nextHistory)
+      return
+    }
+    const fallback = useStoreMessageOption.getState().setHistory
+    if (typeof fallback === "function") {
+      console.error(
+        "[chat] runChatPipeline received non-callable setHistory; using store fallback",
+        { setHistoryType: typeof setHistory }
+      )
+      fallback(nextHistory)
+      return
+    }
+    console.error("[chat] runChatPipeline could not resolve setHistory setter", {
+      setHistoryType: typeof setHistory
+    })
+  }
 
   const flushStreamingUpdate = () => {
     streamingTimer = null
     lastStreamingUpdateAt = Date.now()
-    startTransition(() => {
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === generateMessageId
-            ? updateActiveVariant(msg, {
-                message: pendingStreamingText,
-                reasoning_time_taken: pendingReasoningTime
-              })
-            : msg
-        )
+    setMessagesWithTransition((prev) =>
+      prev.map((msg) =>
+        msg.id === generateMessageId
+          ? updateActiveVariant(msg, {
+              message: pendingStreamingText,
+              reasoning_time_taken: pendingReasoningTime
+            })
+          : msg
       )
-    })
+    )
   }
 
   // Throttle streaming UI updates to keep the input responsive.
@@ -252,7 +276,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     if (!mode.buildAssistantMessage || !mode.buildUserMessage) {
       throw new Error(`Chat mode "${mode.id}" is missing message builders.`)
     }
-    setMessages((prev) => {
+    setMessagesWithTransition((prev) => {
       const assistantStub = mode.buildAssistantMessage!(context)
       if (!isRegenerate) {
         const userMessageEntry = mode.buildUserMessage!(context)
@@ -262,7 +286,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     })
 
     if (regenerateVariants.length > 0) {
-      setMessages((prev) => {
+      setMessagesWithTransition((prev) => {
         const next = [...prev]
         const lastIndex = next.findLastIndex(
           (msg) => msg.id === resolvedAssistantMessageId
@@ -300,7 +324,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
             { role: "assistant", content: fullText }
           ] as ChatHistory)
 
-      setMessages((prev) =>
+      setMessagesWithTransition((prev) =>
         prev.map((msg) =>
           msg.id === generateMessageId
             ? updateActiveVariant(msg, {
@@ -314,7 +338,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
             : msg
         )
       )
-      setHistory(nextHistory)
+      setHistorySafely(nextHistory)
 
       await saveMessageOnSuccess({
         historyId,
@@ -433,7 +457,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     cancelStreamingUpdate()
     const toolCalls = extractToolCalls(generationInfo)
     applyMcpModuleDisclosureFromToolCalls(toolCalls)
-    setMessages((prev) =>
+    setMessagesWithTransition((prev) =>
       prev.map((msg) =>
         msg.id === generateMessageId
           ? updateActiveVariant(msg, {
@@ -447,7 +471,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
       )
     )
 
-    setHistory(
+    setHistorySafely(
       mode.updateHistory
         ? mode.updateHistory(context, fullText)
         : ([
@@ -490,7 +514,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
   } catch (e) {
     cancelStreamingUpdate()
     const assistantContent = buildAssistantErrorContent(fullText, e)
-    setMessages((prev) =>
+    setMessagesWithTransition((prev) =>
       prev.map((msg) =>
         msg.id === generateMessageId
           ? updateActiveVariant(msg, { message: assistantContent })
@@ -505,7 +529,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
       historyId,
       image,
       selectedModel,
-      setHistory,
+      setHistory: setHistorySafely,
       setHistoryId,
       userMessage: message,
       isRegenerating: isRegenerate,

@@ -155,7 +155,7 @@ export const useMessage = () => {
     setSelectedSystemPrompt,
     useOCR,
     setUseOCR
-  } = useChatBaseState(useStoreMessage)
+  } = useChatBaseState(useStoreMessageOption)
   const { currentURL, setCurrentURL } = useStoreMessage()
   const {
     serverChatId,
@@ -2312,6 +2312,12 @@ export const useMessage = () => {
   )
 
   const regenerateLastMessage = async () => {
+    if (typeof setHistory !== "function") {
+      console.error("[chat] regenerate aborted: setHistory is not callable", {
+        setHistoryType: typeof setHistory
+      })
+      return
+    }
     const currentMessages = messages as ServerBackedMessage[]
     const lastAssistantIndex = (() => {
       for (let i = currentMessages.length - 1; i >= 0; i--) {

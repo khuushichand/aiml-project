@@ -28,6 +28,12 @@ export const createRegenerateLastMessage = ({
   onSubmit: (params: any) => Promise<void>
 }) => {
   return async () => {
+    if (typeof setHistory !== "function") {
+      console.error("[chat] regenerate aborted: setHistory is not callable", {
+        setHistoryType: typeof setHistory
+      })
+      return
+    }
     const isOk = validateBeforeSubmitFn()
 
     if (!isOk) {

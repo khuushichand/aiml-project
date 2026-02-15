@@ -442,7 +442,6 @@ export const PlaygroundMessage = (props: Props) => {
     Boolean(capabilities?.hasChatDocuments) &&
     Boolean(props.serverChatId) &&
     props.isBot &&
-    !props.temporaryChat &&
     !errorPayload
   const replyId = props.messageId ?? props.serverMessageId ?? null
   const canReply =

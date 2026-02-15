@@ -21,16 +21,40 @@ export type GreetingEntry = {
   sourceLabel: string
 }
 
+const normalizeStringEntries = (value: unknown[]): string[] =>
+  value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => entry.length > 0)
+
+const tryParseStringifiedGreetingList = (value: string): string[] | null => {
+  try {
+    const parsed = JSON.parse(value)
+    if (Array.isArray(parsed)) {
+      return normalizeStringEntries(parsed)
+    }
+    if (typeof parsed === "string") {
+      const nestedParsed = JSON.parse(parsed)
+      if (Array.isArray(nestedParsed)) {
+        return normalizeStringEntries(nestedParsed)
+      }
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
 export const normalizeGreetingValue = (value: unknown): string[] => {
   if (!value) return []
   if (Array.isArray(value)) {
-    return value
-      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-      .filter((entry) => entry.length > 0)
+    return normalizeStringEntries(value)
   }
   if (typeof value === "string") {
     const trimmed = value.trim()
-    return trimmed.length > 0 ? [trimmed] : []
+    if (trimmed.length === 0) return []
+    const parsedList = tryParseStringifiedGreetingList(trimmed)
+    if (parsedList) return parsedList
+    return [trimmed]
   }
   return []
 }

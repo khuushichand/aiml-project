@@ -1,0 +1,170 @@
+{
+  "controls_back": {
+    "message": "Back"
+  },
+  "controls_close": {
+    "message": "Close"
+  },
+  "controls_finish": {
+    "message": "Finish"
+  },
+  "controls_next": {
+    "message": "Next"
+  },
+  "controls_skip": {
+    "message": "Skip tour"
+  },
+  "controls_open": {
+    "message": "Open the dialog"
+  },
+  "status_completed": {
+    "message": "Completed"
+  },
+  "status_inProgress": {
+    "message": "In Progress"
+  },
+  "status_notStarted": {
+    "message": "Not Started"
+  },
+  "actions_start": {
+    "message": "Start"
+  },
+  "actions_replay": {
+    "message": "Replay"
+  },
+  "actions_resetProgress": {
+    "message": "Reset Progress"
+  },
+  "actions_resetProgressConfirm": {
+    "message": "This will clear all tutorial completion status. You'll see first-visit prompts again."
+  },
+  "steps": {
+    "message": "{count, plural, one {# step} other {# steps}}"
+  },
+  "empty_noTutorials": {
+    "message": "No tutorials available for this page."
+  },
+  "empty_noTutorialsDescription": {
+    "message": "Tutorials will appear here when you navigate to pages that have guided tours."
+  },
+  "prompt_title": {
+    "message": "New to this page?"
+  },
+  "prompt_description": {
+    "message": "Take a quick tour to learn the key features."
+  },
+  "prompt_dismiss": {
+    "message": "Not now"
+  },
+  "prompt_startTour": {
+    "message": "Start tour"
+  },
+  "playground_basics_label": {
+    "message": "Chat Basics"
+  },
+  "playground_basics_description": {
+    "message": "Learn how to select models and send your first message"
+  },
+  "playground_basics_modelTitle": {
+    "message": "Choose a Model"
+  },
+  "playground_basics_modelContent": {
+    "message": "Select an AI model to chat with. Different models have different capabilities - look for tags like 'Vision' or 'Fast'. Star your favorites for quick access."
+  },
+  "playground_basics_inputTitle": {
+    "message": "Start a Conversation"
+  },
+  "playground_basics_inputContent": {
+    "message": "Type your message here and press Enter to send. You can ask questions, request help with tasks, or have a conversation."
+  },
+  "playground_basics_slashTitle": {
+    "message": "Slash Commands"
+  },
+  "playground_basics_slashContent": {
+    "message": "Type / to see available commands. Try /search to find content in your knowledge base, or /web to search the internet."
+  },
+  "playground_basics_promptTitle": {
+    "message": "System Prompts"
+  },
+  "playground_basics_promptContent": {
+    "message": "Select a system prompt to guide how the AI responds. You can create custom prompts in the Prompts workspace."
+  },
+  "playground_basics_newChatTitle": {
+    "message": "Start Fresh"
+  },
+  "playground_basics_newChatContent": {
+    "message": "Click here to start a new conversation. Your previous chats are saved in the sidebar for easy access."
+  },
+  "playground_tools_label": {
+    "message": "Tools & Attachments"
+  },
+  "playground_tools_description": {
+    "message": "Discover knowledge search, file uploads, and advanced tools"
+  },
+  "playground_tools_toolsButtonTitle": {
+    "message": "Tools & Attachments"
+  },
+  "playground_tools_toolsButtonContent": {
+    "message": "Access knowledge search, upload files, configure MCP tools, and more advanced features here."
+  },
+  "playground_tools_knowledgeTitle": {
+    "message": "Knowledge Search"
+  },
+  "playground_tools_knowledgeContent": {
+    "message": "Enable knowledge search to let the AI reference your ingested documents, notes, and media. Great for research and fact-checking."
+  },
+  "playground_tools_webSearchTitle": {
+    "message": "Web Search"
+  },
+  "playground_tools_webSearchContent": {
+    "message": "Toggle web search to let the AI search the internet for current information. Perfect for recent news or topics not in your knowledge base."
+  },
+  "playground_tools_uploadTitle": {
+    "message": "Attach Files"
+  },
+  "playground_tools_uploadContent": {
+    "message": "Upload images or documents to discuss them with the AI. Vision-capable models can analyze images directly."
+  },
+  "playground_tools_ingestTitle": {
+    "message": "Quick Ingest"
+  },
+  "playground_tools_ingestContent": {
+    "message": "Use Quick Ingest to add web pages, PDFs, or other content to your knowledge base for later reference."
+  },
+  "playground_tools_mcpTitle": {
+    "message": "MCP Tools"
+  },
+  "playground_tools_mcpContent": {
+    "message": "MCP (Model Context Protocol) tools let the AI interact with external services and execute actions on your behalf."
+  },
+  "playground_voice_label": {
+    "message": "Voice Chat"
+  },
+  "playground_voice_description": {
+    "message": "Learn to use voice input and have spoken conversations"
+  },
+  "playground_voice_voiceChatTitle": {
+    "message": "Voice Chat"
+  },
+  "playground_voice_voiceChatContent": {
+    "message": "Start a hands-free voice conversation. Speak naturally and hear AI responses aloud."
+  },
+  "playground_voice_dictationTitle": {
+    "message": "Dictation"
+  },
+  "playground_voice_dictationContent": {
+    "message": "Use dictation to speak your messages instead of typing. Great for longer inputs or when your hands are busy."
+  },
+  "playground_voice_ttsTitle": {
+    "message": "Text-to-Speech"
+  },
+  "playground_voice_ttsContent": {
+    "message": "Click on any AI response to have it read aloud. Customize the voice and speed in Settings."
+  },
+  "playground_voice_settingsTitle": {
+    "message": "Voice Settings"
+  },
+  "playground_voice_settingsContent": {
+    "message": "Configure voice chat settings including the voice model, auto-send timing, and trigger phrases."
+  }
+}

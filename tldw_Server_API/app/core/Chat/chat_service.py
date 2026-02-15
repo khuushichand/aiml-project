@@ -78,7 +78,10 @@ from tldw_Server_API.app.core.testing import (
     is_test_mode as _shared_is_test_mode,
     is_truthy as _shared_is_truthy,
 )
-from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
+from tldw_Server_API.app.core.Usage.pricing_catalog import (
+    get_pricing_catalog,
+    list_provider_models,
+)
 from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
 from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_async
 
@@ -423,6 +426,114 @@ def _load_alias_overrides_cached() -> dict[str, dict[str, str]]:
     return {}
 
 
+@lru_cache(maxsize=2048)
+def _provider_has_model_cached(provider: str, model: str) -> bool:
+    """Return True when provider catalog contains the given model (exact, case-insensitive)."""
+    provider_key = (provider or "").strip().lower()
+    model_key = (model or "").strip().lower()
+    if not provider_key or not model_key:
+        return False
+    try:
+        for candidate in _load_models_with_case_cached(provider_key):
+            if str(candidate).strip().lower() == model_key:
+                return True
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        return False
+    return False
+
+
+@lru_cache(maxsize=4096)
+def _find_catalog_providers_for_model_cached(model: str) -> tuple[str, ...]:
+    """Return providers whose pricing catalog contains the model (exact, case-insensitive)."""
+    model_key = (model or "").strip().lower()
+    if not model_key:
+        return tuple()
+
+    matches: set[str] = set()
+    try:
+        catalog = getattr(get_pricing_catalog(), "_catalog", {})
+        if isinstance(catalog, dict):
+            for provider_name, provider_models in catalog.items():
+                if not isinstance(provider_models, dict):
+                    continue
+                for model_name, model_meta in provider_models.items():
+                    if str(model_name).strip().lower() != model_key:
+                        continue
+                    if isinstance(model_meta, dict) and model_meta.get("placeholder"):
+                        continue
+                    provider_key = str(provider_name).strip().lower()
+                    if provider_key:
+                        matches.add(provider_key)
+                    break
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        return tuple()
+
+    return tuple(sorted(matches))
+
+
+def infer_provider_from_model_catalog(
+    *,
+    provider: str,
+    model: str,
+    provider_explicit: bool,
+) -> tuple[str, dict[str, Any]]:
+    """Infer provider from model catalog when the current provider likely mismatches.
+
+    Safety rules:
+    - Never override an explicit provider.
+    - Only switch when the model has a unique provider match in catalog.
+    - Keep current provider on ambiguous matches.
+    """
+    current_provider = (provider or "").strip().lower()
+    model_value = (model or "").strip()
+    debug: dict[str, Any] = {
+        "attempted": False,
+        "provider_explicit": provider_explicit,
+        "current_provider": current_provider,
+        "model": model_value,
+        "current_provider_has_model": None,
+        "candidates": [],
+        "selected_provider": current_provider,
+        "reason": "skipped",
+    }
+
+    if provider_explicit:
+        debug["reason"] = "explicit_provider"
+        return current_provider, debug
+    if not current_provider or not model_value:
+        debug["reason"] = "missing_provider_or_model"
+        return current_provider, debug
+    if "/" in model_value:
+        debug["reason"] = "inline_model_namespace"
+        return current_provider, debug
+
+    debug["attempted"] = True
+    has_current_match = _provider_has_model_cached(current_provider, model_value)
+    debug["current_provider_has_model"] = has_current_match
+    if has_current_match:
+        debug["reason"] = "current_provider_match"
+        return current_provider, debug
+
+    candidates = list(_find_catalog_providers_for_model_cached(model_value))
+    debug["candidates"] = candidates
+    if not candidates:
+        debug["reason"] = "no_catalog_match"
+        return current_provider, debug
+
+    if len(candidates) == 1:
+        selected = candidates[0]
+        debug["selected_provider"] = selected
+        debug["reason"] = "unique_catalog_match"
+        return selected, debug
+
+    if current_provider in candidates:
+        debug["reason"] = "ambiguous_kept_current"
+        return current_provider, debug
+
+    debug["reason"] = "ambiguous_no_change"
+    return current_provider, debug
+
+
 def invalidate_model_alias_caches() -> None:
     """Invalidate cached model list and alias overrides for hot-reload.
 
@@ -434,6 +545,10 @@ def invalidate_model_alias_caches() -> None:
         _load_models_with_case_cached.cache_clear()
     with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
         _load_alias_overrides_cached.cache_clear()
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
+        _provider_has_model_cached.cache_clear()
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
+        _find_catalog_providers_for_model_cached.cache_clear()
 
 
 def queue_is_active(queue: Any) -> bool:
@@ -675,6 +790,7 @@ def resolve_provider_and_model(
     """
     raw_model = getattr(request_data, "model", None)
     raw_api_provider = getattr(request_data, "api_provider", None)
+    provider_explicit = bool(str(raw_api_provider or "").strip())
 
     # Step 1: derive metrics-facing provider/model without mutating the request
     metrics_provider, metrics_model = parse_provider_model_for_metrics(
@@ -702,10 +818,24 @@ def resolve_provider_and_model(
             exc,
         )
 
+    catalog_inference_debug: dict[str, Any] | None = None
+    try:
+        selected_provider, catalog_inference_debug = infer_provider_from_model_catalog(
+            provider=selected_provider,
+            model=selected_model,
+            provider_explicit=provider_explicit,
+        )
+    except _CHAT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(
+            "resolve_provider_and_model: catalog inference failed; keeping selected provider. Error={}",
+            exc,
+        )
+
     debug_info: dict[str, Any] = {
         "raw": {
             "api_provider": raw_api_provider,
             "model": raw_model,
+            "provider_explicit": provider_explicit,
         },
         "metrics": {
             "default_provider": metrics_default_provider,
@@ -721,6 +851,7 @@ def resolve_provider_and_model(
             "provider_changed": metrics_provider != selected_provider,
             "model_changed": metrics_model != selected_model,
         },
+        "catalog_inference": catalog_inference_debug,
     }
 
     return metrics_provider, metrics_model, selected_provider, selected_model, debug_info
