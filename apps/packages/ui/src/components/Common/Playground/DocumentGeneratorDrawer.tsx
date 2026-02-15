@@ -512,7 +512,7 @@ export const DocumentGeneratorDrawer: React.FC<DocumentGeneratorDrawerProps> = (
     <Drawer
       open={open}
       onClose={onClose}
-      width={480}
+      styles={{ wrapper: { width: 480 } }}
       title={t("playground:documentGenerator.title", "Document generator")}
       destroyOnHidden={false}
     >

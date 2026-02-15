@@ -398,7 +398,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       placement="right"
       onClose={onClose}
       open={open}
-      width={600}
+      styles={{ wrapper: { width: 600 } }}
     >
       {loading ? (
         <div className="flex items-center justify-center py-12">

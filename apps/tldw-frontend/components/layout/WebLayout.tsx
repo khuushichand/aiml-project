@@ -29,6 +29,7 @@ import { useMigration } from "@/hooks/useMigration"
 import { useStorageMigrations } from "@/hooks/useStorageMigrations"
 import { useLayoutEffectsOwner } from "@/hooks/useLayoutEffectsOwner"
 import { useChatSidebar } from "@/hooks/useFeatureFlags"
+import { useMobile } from "@/hooks/useMediaQuery"
 import { useSetting } from "@/hooks/useSetting"
 import { ChatSidebar } from "@/components/Common/ChatSidebar"
 import { EventOnlyHosts } from "@/components/Common/EventHosts"
@@ -92,6 +93,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { isLoading: migrationLoading } = useMigration()
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
+  const isMobileViewport = useMobile()
   const location = useLocation()
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const isChatScreen = location.pathname === "/chat"
@@ -243,7 +245,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
       {/* Persistent ChatSidebar when feature flag enabled */}
       {showChatSidebar && !hideHeader && !hideSidebar && (
         <ChatSidebar
-          collapsed={chatSidebarCollapsed}
+          collapsed={chatSidebarCollapsed || isMobileViewport}
           onToggleCollapse={() => setChatSidebarCollapsed((prev) => !prev)}
           className="sticky top-0 shrink-0 border-r border-border border-border"
         />

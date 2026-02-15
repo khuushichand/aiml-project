@@ -2300,14 +2300,17 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                               >
                                 Preview
                               </Button>
-                              <Button
-                                size="small"
-                                type="text"
-                                danger
-                                icon={<Trash2 className="h-3 w-3" />}
-                                onClick={() => handleRemoveVoiceCard(card.id)}
-                                disabled={voiceCards.length <= 1}
-                              />
+                              <Tooltip title={t("playground:speech.removeVoice", "Remove voice")}>
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  danger
+                                  aria-label={t("playground:speech.removeVoice", "Remove voice")}
+                                  icon={<Trash2 className="h-3 w-3" />}
+                                  onClick={() => handleRemoveVoiceCard(card.id)}
+                                  disabled={voiceCards.length <= 1}
+                                />
+                              </Tooltip>
                               {voicePreviewCardId === card.id && voicePreviewUrl && (
                                 <audio className="w-full" controls src={voicePreviewUrl} />
                               )}
@@ -2910,15 +2913,16 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   )
                 }
                 actions.push(
-                  <Button
-                    key="favorite"
-                    size="small"
-                    type={item.favorite ? "primary" : "default"}
-                    icon={<Star className="h-3 w-3" />}
-                    onClick={() => toggleHistoryFavorite(item.id)}
-                    aria-label={item.favorite ? "Unfavorite" : "Favorite"}
-                  >
-                  </Button>
+                  <Tooltip key="favorite" title={item.favorite ? "Unfavorite" : "Favorite"}>
+                    <Button
+                      size="small"
+                      type={item.favorite ? "primary" : "default"}
+                      icon={<Star className="h-3 w-3" />}
+                      onClick={() => toggleHistoryFavorite(item.id)}
+                      aria-label={item.favorite ? "Unfavorite" : "Favorite"}
+                    >
+                    </Button>
+                  </Tooltip>
                 )
                 if (item.type === "tts") {
                   actions.push(

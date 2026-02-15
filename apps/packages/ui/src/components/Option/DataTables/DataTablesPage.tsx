@@ -1,5 +1,6 @@
 import React, { useEffect } from "react"
-import { Alert, Empty, Tabs } from "antd"
+import { Empty, Tabs } from "antd"
+import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
 import { Table2, Plus } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -28,12 +29,14 @@ export const DataTablesPage: React.FC = () => {
   const resetStore = useDataTablesStore((s) => s.resetStore)
   const resetWizard = useDataTablesStore((s) => s.resetWizard)
 
-  // Reset store on unmount
+  // Reset store on unmount — use ref to avoid re-firing if selector returns new reference
+  const resetStoreRef = React.useRef(resetStore)
+  resetStoreRef.current = resetStore
   useEffect(() => {
     return () => {
-      resetStore()
+      resetStoreRef.current()
     }
-  }, [resetStore])
+  }, [])
 
   useEffect(() => {
     let isActive = true
@@ -115,14 +118,13 @@ export const DataTablesPage: React.FC = () => {
         </p>
       </div>
 
-      <Alert
+      <DismissibleBetaAlert
+        storageKey="beta-dismissed:dataTables"
         message={t("dataTables:betaNotice", "Beta Feature")}
         description={t(
           "dataTables:betaDescription",
           "Data Tables is currently in beta. Table generation requires backend support."
         )}
-        type="info"
-        showIcon
         className="mb-6"
       />
 

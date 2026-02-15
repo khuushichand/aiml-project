@@ -133,7 +133,7 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
     <>
     <Drawer
       placement="right"
-      width={520}
+      styles={{ wrapper: { width: 520 } }}
       open={open}
       onClose={handleAttemptClose}
       title={t("option:flashcards.editCard", { defaultValue: "Edit Flashcard" })}

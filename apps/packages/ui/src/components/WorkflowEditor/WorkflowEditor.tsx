@@ -240,6 +240,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
             <Button
               type="text"
               size="small"
+              aria-label="Undo"
               icon={<Undo2 className="w-4 h-4" />}
               disabled={!canUndo()}
               onClick={undo}
@@ -249,6 +250,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
             <Button
               type="text"
               size="small"
+              aria-label="Redo"
               icon={<Redo2 className="w-4 h-4" />}
               disabled={!canRedo()}
               onClick={redo}
@@ -264,6 +266,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
             <Button
               type={isGridVisible ? "primary" : "text"}
               size="small"
+              aria-label="Toggle Grid"
               icon={<Grid3X3 className="w-4 h-4" />}
               onClick={toggleGrid}
             />
@@ -272,6 +275,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
             <Button
               type={isMiniMapVisible ? "primary" : "text"}
               size="small"
+              aria-label="Toggle Minimap"
               icon={<Map className="w-4 h-4" />}
               onClick={toggleMiniMap}
             />
@@ -303,6 +307,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
               <Button
                 type="text"
                 size="small"
+                aria-label="Validation issues"
                 icon={
                   <AlertCircle
                     className={`w-4 h-4 ${
@@ -334,11 +339,14 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
           trigger={["click"]}
           placement="bottomRight"
         >
-          <Button
-            type="text"
-            size="small"
-            icon={<MoreVertical className="w-4 h-4" />}
-          />
+          <Tooltip title="More actions">
+            <Button
+              type="text"
+              size="small"
+              aria-label="More actions"
+              icon={<MoreVertical className="w-4 h-4" />}
+            />
+          </Tooltip>
         </Dropdown>
       </div>
 

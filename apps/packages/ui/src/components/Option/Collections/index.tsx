@@ -1,5 +1,6 @@
 import React, { useEffect } from "react"
-import { Alert, Empty, Tabs } from "antd"
+import { Empty, Tabs } from "antd"
+import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
 import { BookOpen, Highlighter, FileText, ArrowLeftRight, CalendarClock } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -27,12 +28,14 @@ export const CollectionsPlaygroundPage: React.FC = () => {
   const setActiveTab = useCollectionsStore((s) => s.setActiveTab)
   const resetStore = useCollectionsStore((s) => s.resetStore)
 
-  // Reset store on unmount
+  // Reset store on unmount — use ref to avoid re-firing if selector returns new reference
+  const resetStoreRef = React.useRef(resetStore)
+  resetStoreRef.current = resetStore
   useEffect(() => {
     return () => {
-      resetStore()
+      resetStoreRef.current()
     }
-  }, [resetStore])
+  }, [])
 
   const tabItems: TabsProps["items"] = [
     {
@@ -114,14 +117,13 @@ export const CollectionsPlaygroundPage: React.FC = () => {
         </p>
       </div>
 
-      <Alert
+      <DismissibleBetaAlert
+        storageKey="beta-dismissed:collections"
         message={t("collections:betaNotice", "Beta Feature")}
         description={t(
           "collections:betaDescription",
           "Collections is currently in beta. Some features may require backend support."
         )}
-        type="info"
-        showIcon
         className="mb-6"
       />
 

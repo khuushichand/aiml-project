@@ -507,29 +507,35 @@ export const ContentReviewPage: React.FC = () => {
     setIsDirty(true)
   }
 
+  // Use a ref for draftContent inside callbacks to break the circular dependency:
+  // saveDraftLocally depends on draftContent → effect depends on saveDraftLocally → loop
+  const draftContentRef = React.useRef(draftContent)
+  draftContentRef.current = draftContent
+
   const saveDraftLocally = React.useCallback(
     async (label?: string) => {
-      if (!draftContent) return
+      const current = draftContentRef.current
+      if (!current) return
       setIsSaving(true)
       const now = Date.now()
       const revisions =
-        label && draftContent.content !== draftContent.originalContent
+        label && current.content !== current.originalContent
           ? [
               {
                 id: crypto.randomUUID(),
-                content: draftContent.content,
+                content: current.content,
                 metadata: {
-                  title: draftContent.title,
-                  keywords: draftContent.keywords
+                  title: current.title,
+                  keywords: current.keywords
                 },
                 timestamp: now,
                 changeDescription: label
               },
-              ...(draftContent.revisions || [])
+              ...(current.revisions || [])
             ].slice(0, 10)
-          : draftContent.revisions || []
+          : current.revisions || []
       const updated: ContentDraft = {
-        ...draftContent,
+        ...current,
         revisions,
         updatedAt: now
       }
@@ -540,7 +546,7 @@ export const ContentReviewPage: React.FC = () => {
       setLastSavedAt(now)
       setIsSaving(false)
     },
-    [draftContent]
+    []
   )
 
   const applyDraftUpdate = React.useCallback(
@@ -549,26 +555,27 @@ export const ContentReviewPage: React.FC = () => {
       label: string,
       extras?: Partial<ContentDraft>
     ) => {
-      if (!draftContent) return
+      const current = draftContentRef.current
+      if (!current) return
       const now = Date.now()
       const revisions =
-        label && nextContent !== draftContent.originalContent
+        label && nextContent !== current.originalContent
           ? [
               {
                 id: crypto.randomUUID(),
                 content: nextContent,
                 metadata: {
-                  title: draftContent.title,
-                  keywords: draftContent.keywords
+                  title: current.title,
+                  keywords: current.keywords
                 },
                 timestamp: now,
                 changeDescription: label
               },
-              ...(draftContent.revisions || [])
+              ...(current.revisions || [])
             ].slice(0, 10)
-          : draftContent.revisions || []
+          : current.revisions || []
       const updated: ContentDraft = {
-        ...draftContent,
+        ...current,
         ...extras,
         content: nextContent,
         revisions,
@@ -580,11 +587,11 @@ export const ContentReviewPage: React.FC = () => {
       setIsDirty(false)
       setLastSavedAt(now)
     },
-    [draftContent]
+    []
   )
 
   React.useEffect(() => {
-    if (!draftContent || !isDirty) return
+    if (!draftContentRef.current || !isDirty) return
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current)
     }
@@ -594,7 +601,7 @@ export const ContentReviewPage: React.FC = () => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     }
-  }, [draftContent, isDirty, saveDraftLocally])
+  }, [isDirty, saveDraftLocally])
 
   const handleSectionToggle = (section: DraftSection, include: boolean) => {
     if (!draftContent || !draftContent.sections) return

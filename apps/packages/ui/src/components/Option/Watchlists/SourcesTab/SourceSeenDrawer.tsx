@@ -116,7 +116,7 @@ export const SourceSeenDrawer: React.FC<SourceSeenDrawerProps> = ({
       placement="right"
       onClose={onClose}
       open={open}
-      width={520}
+      styles={{ wrapper: { width: 520 } }}
     >
       {loading ? (
         <div className="flex items-center justify-center py-12">

@@ -48,12 +48,14 @@ export const WorkspacePlayground: React.FC = () => {
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
 
-  // Initialize workspace on mount if not already initialized
+  // Initialize workspace on mount if not already initialized — use ref to keep dep stable
+  const initRef = React.useRef(initializeWorkspace)
+  initRef.current = initializeWorkspace
   useEffect(() => {
     if (!workspaceId) {
-      initializeWorkspace()
+      initRef.current()
     }
-  }, [workspaceId, initializeWorkspace])
+  }, [workspaceId])
 
   const handleToggleLeftPane = () => {
     if (isMobile) {
@@ -172,9 +174,8 @@ export const WorkspacePlayground: React.FC = () => {
           placement="left"
           onClose={() => setLeftDrawerOpen(false)}
           open={leftDrawerOpen}
-          width={320}
           className="lg:hidden"
-          styles={{ body: { padding: 0 } }}
+          styles={{ wrapper: { width: 320 }, body: { padding: 0 } }}
         >
           <SourcesPane />
         </Drawer>
@@ -202,9 +203,8 @@ export const WorkspacePlayground: React.FC = () => {
           placement="right"
           onClose={() => setRightDrawerOpen(false)}
           open={rightDrawerOpen}
-          width={360}
           className="lg:hidden"
-          styles={{ body: { padding: 0 } }}
+          styles={{ wrapper: { width: 360 }, body: { padding: 0 } }}
         >
           <StudioPane />
         </Drawer>

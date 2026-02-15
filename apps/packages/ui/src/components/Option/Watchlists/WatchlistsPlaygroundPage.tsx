@@ -1,5 +1,6 @@
 import React, { useEffect } from "react"
-import { Alert, Empty, Tabs } from "antd"
+import { Empty, Tabs } from "antd"
+import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
 import {
   CalendarClock,
@@ -34,12 +35,14 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const resetStore = useWatchlistsStore((s) => s.resetStore)
 
-  // Reset store on unmount
+  // Reset store on unmount — use ref to avoid re-firing if selector returns new reference
+  const resetStoreRef = React.useRef(resetStore)
+  resetStoreRef.current = resetStore
   useEffect(() => {
     return () => {
-      resetStore()
+      resetStoreRef.current()
     }
-  }, [resetStore])
+  }, [])
 
   const tabItems: TabsProps["items"] = [
     {
@@ -131,14 +134,13 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         </p>
       </div>
 
-      <Alert
+      <DismissibleBetaAlert
+        storageKey="beta-dismissed:watchlists"
         message={t("watchlists:betaNotice", "Beta Feature")}
         description={t(
           "watchlists:betaDescription",
           "Watchlists is currently in beta. Some features may be incomplete or change."
         )}
-        type="info"
-        showIcon
         className="mb-6"
       />
 

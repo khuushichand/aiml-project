@@ -114,7 +114,7 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     }
   })
 
-  const { status, data } = useQuery({
+  const { status, data, refetch } = useQuery({
     queryKey: ["fetchTTSSettings"],
     queryFn: async () => {
       const data = await getTTSSettings()
@@ -405,8 +405,19 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     }
   }
 
-  if (status === "pending" || status === "error") {
+  if (status === "pending") {
     return <Skeleton active />
+  }
+  if (status === "error") {
+    return (
+      <Alert
+        type="warning"
+        showIcon
+        message={t("generalSettings.tts.loadError", "Unable to load TTS settings")}
+        description={t("generalSettings.tts.loadErrorDesc", "Check your server connection and try again.")}
+        action={<Button size="small" onClick={() => refetch()}>{t("common:retry", "Retry")}</Button>}
+      />
+    )
   }
 
   return (

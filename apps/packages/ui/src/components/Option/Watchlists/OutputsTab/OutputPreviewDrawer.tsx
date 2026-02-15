@@ -114,7 +114,7 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
       placement="right"
       onClose={onClose}
       open={open}
-      width={700}
+      styles={{ wrapper: { width: 700 } }}
       extra={
         <div className="flex items-center gap-2">
           {output?.format === "html" && (

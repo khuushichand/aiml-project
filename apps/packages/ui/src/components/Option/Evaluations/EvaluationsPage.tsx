@@ -7,6 +7,7 @@
 
 import React, { useEffect } from "react"
 import { Alert, Tabs } from "antd"
+import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
 import { BarChart3, Database, History, Play, Webhook } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -56,12 +57,14 @@ export const EvaluationsPage: React.FC = () => {
     }
   }, [searchParams, setActiveTab, setSelectedEvalId, setSelectedRunId])
 
-  // Reset store on unmount
+  // Reset store on unmount — use ref to avoid re-firing if selector returns new reference
+  const resetStoreRef = React.useRef(resetStore)
+  resetStoreRef.current = resetStore
   useEffect(() => {
     return () => {
-      resetStore()
+      resetStoreRef.current()
     }
-  }, [resetStore])
+  }, [])
 
   useEffect(() => {
     if (typeof document === "undefined") return
@@ -177,14 +180,13 @@ export const EvaluationsPage: React.FC = () => {
         </p>
       </div>
 
-      <Alert
+      <DismissibleBetaAlert
+        storageKey="beta-dismissed:evaluations"
         message={t("evaluations:betaNotice", "Beta Feature")}
         description={t(
           "evaluations:betaDescription",
           "Evaluations is currently in beta. Some features may be incomplete or change."
         )}
-        type="info"
-        showIcon
         className="mb-6"
       />
 

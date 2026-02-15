@@ -198,7 +198,7 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
               defaultValue: "Create Prompt"
             })
       }
-      width={640}
+      styles={{ wrapper: { width: 640 } }}
       destroyOnHidden
       footer={
         <div className="flex justify-end gap-2">

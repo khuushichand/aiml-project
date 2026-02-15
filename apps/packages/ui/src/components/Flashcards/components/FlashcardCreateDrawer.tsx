@@ -165,7 +165,7 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   return (
     <Drawer
       placement="right"
-      width={520}
+      styles={{ wrapper: { width: 520 } }}
       open={open}
       onClose={onClose}
       title={t("option:flashcards.createCard", { defaultValue: "Create Flashcard" })}

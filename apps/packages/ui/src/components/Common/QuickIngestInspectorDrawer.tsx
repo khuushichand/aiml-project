@@ -67,7 +67,7 @@ export const QuickIngestInspectorDrawer: React.FC<
       onClose={onClose}
       open={open}
       destroyOnHidden
-      width={380}>
+      styles={{ wrapper: { width: 380 } }}>
       <div className="space-y-3">
         {showIntro && (
           <div className="rounded-md border border-primary/20 bg-primary/10 p-3 text-sm text-text">

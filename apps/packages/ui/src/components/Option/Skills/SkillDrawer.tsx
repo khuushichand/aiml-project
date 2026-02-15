@@ -110,7 +110,7 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
       }
       open={open}
       onClose={onClose}
-      width={640}
+      styles={{ wrapper: { width: 640 } }}
       destroyOnClose
       extra={
         <Space>

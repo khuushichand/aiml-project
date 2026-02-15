@@ -232,7 +232,7 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
   return (
     <Drawer
       placement="right"
-      width={480}
+      styles={{ wrapper: { width: 480 } }}
       open={open}
       onClose={onClose}
       title={title}
