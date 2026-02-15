@@ -155,4 +155,42 @@ describe("TldwApiClient media ingest contract", () => {
       })
     )
   })
+
+  it("uploads character imports using binary payloads", async () => {
+    mocks.bgUpload.mockResolvedValue({
+      id: 123,
+      name: "Imported Character",
+      message: "Character imported successfully"
+    })
+
+    const client = new TldwApiClient()
+    ;(client as any).ensureConfigForRequest = vi.fn(async () => ({ ok: true }))
+    const rawBuffer = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer
+    const file = {
+      name: "card.png",
+      type: "image/png",
+      arrayBuffer: vi.fn(async () => rawBuffer)
+    } as unknown as File
+
+    await client.importCharacterFile(file, { allowImageOnly: true })
+
+    expect(mocks.bgUpload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/characters/import",
+        method: "POST",
+        fileFieldName: "character_file",
+        fields: { allow_image_only: true },
+        file: expect.objectContaining({
+          name: "card.png",
+          type: "image/png"
+        })
+      })
+    )
+
+    const callArg = mocks.bgUpload.mock.calls[0][0] as {
+      file?: { data?: unknown }
+    }
+    expect(callArg.file?.data).toBe(rawBuffer)
+    expect(Array.isArray(callArg.file?.data)).toBe(false)
+  })
 })

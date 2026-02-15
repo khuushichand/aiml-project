@@ -744,6 +744,27 @@ class WatchlistsDatabase:
                     )
         return self.get_source(sid)
 
+    def get_source_by_url(self, url: str) -> SourceRow | None:
+        row = self.backend.execute(
+            """
+            SELECT id, user_id, name, url, source_type, active, settings_json,
+                   last_scraped_at, etag, last_modified, status,
+                   created_at, updated_at, defer_until, consec_not_modified, consec_errors
+            FROM sources
+            WHERE user_id = ? AND url = ?
+            """,
+            (self.user_id, url),
+        ).first
+        if not row:
+            return None
+        sid = int(row.get("id"))
+        trows = self.backend.execute(
+            "SELECT t.name FROM source_tags st JOIN tags t ON st.tag_id = t.id WHERE st.source_id = ?",
+            (sid,),
+        ).rows
+        tags = [r.get("name") for r in trows if r.get("name")]
+        return SourceRow(tags=tags, **row)  # type: ignore[arg-type]
+
     def get_source(self, source_id: int) -> SourceRow:
         row = self.backend.execute(
             "SELECT id, user_id, name, url, source_type, active, settings_json, last_scraped_at, etag, last_modified, defer_until, status, consec_not_modified, consec_errors, created_at, updated_at FROM sources WHERE id = ? AND user_id = ?",
@@ -1006,7 +1027,7 @@ class WatchlistsDatabase:
             if not new_id:
                 raise RuntimeError("failed_to_create_group")
             return self.get_group(new_id)
-        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+        except (*_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS, _DatabaseError):
             # On UNIQUE violation, fetch existing
             row = self.backend.execute(
                 "SELECT id FROM groups WHERE user_id = ? AND name = ?",

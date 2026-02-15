@@ -66,6 +66,11 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     find_messages_in_conversation,
 )
 from tldw_Server_API.app.core.Character_Chat.constants import MAX_PNG_METADATA_BYTES
+from tldw_Server_API.app.core.Character_Chat.modules.character_io import (
+    MAX_IMPORT_AVATAR_BYTES,
+    _resolve_max_import_avatar_bytes,
+    _validate_import_avatar_bytes,
+)
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -1578,7 +1583,7 @@ def test_import_and_save_character_from_file_rejects_disallowed_script_payload(d
 
 
 def test_import_and_save_character_from_file_rejects_oversized_avatar_base64(db, tmp_path):
-    oversized_avatar = create_dummy_png_bytes() + (b"A" * (205 * 1024))
+    oversized_avatar = create_dummy_png_bytes() + (b"A" * (MAX_IMPORT_AVATAR_BYTES + 1024))
     payload = {
         **MINIMAL_V1_CARD_UNIT,
         "name": "OversizedAvatar",
@@ -1591,6 +1596,36 @@ def test_import_and_save_character_from_file_rejects_oversized_avatar_base64(db,
     assert not success
     assert char_id is None
     assert "exceeds max size" in message
+
+
+def test_resolve_max_import_avatar_bytes_enforces_multi_mb_floor(monkeypatch):
+    monkeypatch.setenv("MAX_CHARACTER_IMPORT_AVATAR_SIZE_MB", "0.1953125")
+    monkeypatch.delenv("MAX_CHARACTER_IMPORT_AVATAR_SIZE_BYTES", raising=False)
+
+    assert _resolve_max_import_avatar_bytes() == 5 * 1024 * 1024
+
+
+def test_resolve_max_import_avatar_bytes_honors_bytes_override(monkeypatch):
+    expected = 7 * 1024 * 1024
+    monkeypatch.setenv("MAX_CHARACTER_IMPORT_AVATAR_SIZE_BYTES", str(expected))
+    monkeypatch.delenv("MAX_CHARACTER_IMPORT_AVATAR_SIZE_MB", raising=False)
+
+    assert _resolve_max_import_avatar_bytes() == expected
+
+
+def test_validate_import_avatar_bytes_accepts_multi_mb_jpeg():
+    side = 1024
+    random_rgb = os.urandom(side * side * 3)
+    image = PILImageReal.frombytes("RGB", (side, side), random_rgb)
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=95)
+    image_bytes = buffer.getvalue()
+
+    # Regression guard: this should be comfortably above the previous 200KB cap.
+    assert len(image_bytes) > (250 * 1024)
+    assert len(image_bytes) < MAX_IMPORT_AVATAR_BYTES
+
+    assert _validate_import_avatar_bytes(image_bytes) is None
 
 
 def test_import_and_save_character_from_file_sanitizes_control_chars(db, tmp_path):

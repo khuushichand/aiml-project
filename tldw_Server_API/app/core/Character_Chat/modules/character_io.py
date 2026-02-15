@@ -62,7 +62,80 @@ _CHARACTER_IO_IMPORT_FAILURE_EXCEPTIONS = (
     InputError,
 ) + _CHARACTER_IO_NONCRITICAL_EXCEPTIONS
 
-MAX_IMPORT_AVATAR_BYTES = 200 * 1024
+_DEFAULT_IMPORT_AVATAR_BYTES = 5 * 1024 * 1024
+
+
+def _parse_avatar_size_env(raw_value: str, *, default_unit: str) -> Optional[int]:
+    value = raw_value.strip().lower()
+    if not value:
+        return None
+
+    multiplier = 1
+    if value.endswith("mb"):
+        value = value[:-2].strip()
+        multiplier = 1024 * 1024
+    elif value.endswith("kb"):
+        value = value[:-2].strip()
+        multiplier = 1024
+    elif value.endswith("b"):
+        value = value[:-1].strip()
+        multiplier = 1
+    elif default_unit == "mb":
+        multiplier = 1024 * 1024
+
+    with contextlib.suppress(TypeError, ValueError):
+        parsed = float(value)
+        if parsed > 0:
+            return int(parsed * multiplier)
+    return None
+
+def _resolve_max_import_avatar_bytes() -> int:
+    """Resolve avatar byte cap for character imports (defaults to 5MB)."""
+    # Keep a sane floor so image-based cards in the low-MB range import reliably.
+    minimum_bytes = _DEFAULT_IMPORT_AVATAR_BYTES
+
+    raw_bytes = os.getenv("MAX_CHARACTER_IMPORT_AVATAR_SIZE_BYTES")
+    if raw_bytes is not None:
+        parsed_bytes = _parse_avatar_size_env(raw_bytes, default_unit="bytes")
+        if parsed_bytes is not None:
+            if parsed_bytes < minimum_bytes:
+                logger.warning(
+                    "MAX_CHARACTER_IMPORT_AVATAR_SIZE_BYTES={} is below minimum {}; using {}.",
+                    raw_bytes,
+                    minimum_bytes,
+                    minimum_bytes,
+                )
+                return minimum_bytes
+            return parsed_bytes
+        logger.warning(
+            "Invalid MAX_CHARACTER_IMPORT_AVATAR_SIZE_BYTES={!r}; using default {}.",
+            raw_bytes,
+            minimum_bytes,
+        )
+
+    raw_mb = os.getenv("MAX_CHARACTER_IMPORT_AVATAR_SIZE_MB")
+    if raw_mb is not None:
+        parsed_mb_bytes = _parse_avatar_size_env(raw_mb, default_unit="mb")
+        if parsed_mb_bytes is not None:
+            if parsed_mb_bytes < minimum_bytes:
+                logger.warning(
+                    "MAX_CHARACTER_IMPORT_AVATAR_SIZE_MB={} resolves below minimum {}; using {}.",
+                    raw_mb,
+                    minimum_bytes,
+                    minimum_bytes,
+                )
+                return minimum_bytes
+            return parsed_mb_bytes
+        logger.warning(
+            "Invalid MAX_CHARACTER_IMPORT_AVATAR_SIZE_MB={!r}; using default {}.",
+            raw_mb,
+            minimum_bytes,
+        )
+
+    return minimum_bytes
+
+
+MAX_IMPORT_AVATAR_BYTES = _resolve_max_import_avatar_bytes()
 ALLOWED_IMPORT_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 _IMPORT_TEXT_FIELDS = (
     "name",

@@ -1245,6 +1245,17 @@ async def import_sources_opml(
                 errors += 1
                 continue
         try:
+            existing = None
+            try:
+                existing = db.get_source_by_url(url_str)
+            except (*_WATCHLISTS_NONCRITICAL_EXCEPTIONS, _DatabaseError):
+                existing = None
+            if existing is not None:
+                items.append(
+                    SourcesImportItem(url=url_str, name=existing.name, id=existing.id, status="skipped", error="duplicate_source")
+                )
+                skipped += 1
+                continue
             row = db.create_source(
                 name=e.name or e.url,
                 url=url_str,

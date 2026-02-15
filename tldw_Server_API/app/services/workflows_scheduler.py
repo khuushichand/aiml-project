@@ -81,6 +81,8 @@ class _WFRecurringScheduler:
         async with self._lock:
             if self._started:
                 return
+            # Rebuild DB handles on each cold start to pick up env/path changes.
+            self._db_cache.clear()
             # Start or reuse the global core job scheduler (workers)
             self._core_scheduler = await get_global_scheduler()
             # Start APScheduler for cron
@@ -129,6 +131,9 @@ class _WFRecurringScheduler:
             except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: rescan task cancel failed: {e}")
             self._rescan_task = None
+            # Ensure per-user DB handles are rebuilt on next start so tests/env
+            # changes (e.g. USER_DB_BASE_DIR) do not leak stale scheduler paths.
+            self._db_cache.clear()
             self._started = False
             logger.info("Workflows recurring scheduler stopped")
 

@@ -96,8 +96,8 @@ type FavoriteCharacter = {
   name: string
 }
 
-const MAX_PERSONA_IMAGE_BYTES = 3 * 1024 * 1024
-const MAX_MOOD_IMAGE_BYTES = 3 * 1024 * 1024
+const MAX_PERSONA_IMAGE_BYTES = 5 * 1024 * 1024
+const MAX_MOOD_IMAGE_BYTES = 5 * 1024 * 1024
 
 const normalizeCharacter = (
   character: CharacterSummary
@@ -292,6 +292,7 @@ export const CharacterSelect: React.FC<Props> = ({
       }),
       cancelText: t("common:cancel", { defaultValue: "Cancel" }),
       centered: true,
+      maskClosable: false,
       onOk: () => {
         setUserDisplayName(nextValue.trim())
       },
@@ -332,7 +333,7 @@ export const CharacterSelect: React.FC<Props> = ({
             }),
             description: t("common:upload.imageTooLarge", {
               defaultValue:
-                "Please choose a smaller image (around 3 MB or less)."
+                "Please choose a smaller image (around 5 MB or less)."
             })
           })
           return
@@ -442,7 +443,7 @@ export const CharacterSelect: React.FC<Props> = ({
             }),
             description: t("common:upload.imageTooLarge", {
               defaultValue:
-                "Please choose a smaller image (around 3 MB or less)."
+                "Please choose a smaller image (around 5 MB or less)."
             })
           })
           return

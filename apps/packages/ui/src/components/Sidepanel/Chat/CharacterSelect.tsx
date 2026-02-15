@@ -57,8 +57,8 @@ type ImageOnlyErrorDetail = {
 }
 
 const GREETING_RETRY_DELAY_MS = 800
-const MAX_PERSONA_IMAGE_BYTES = 3 * 1024 * 1024
-const MAX_MOOD_IMAGE_BYTES = 3 * 1024 * 1024
+const MAX_PERSONA_IMAGE_BYTES = 5 * 1024 * 1024
+const MAX_MOOD_IMAGE_BYTES = 5 * 1024 * 1024
 
 const delayWithAbort = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve) => {
@@ -376,6 +376,7 @@ export const CharacterSelect: React.FC<Props> = ({
       }),
       cancelText: t("common:cancel", { defaultValue: "Cancel" }),
       centered: true,
+      maskClosable: false,
       onOk: () => {
         setUserDisplayName(displayNameInputRef.current.trim())
       }
@@ -414,7 +415,7 @@ export const CharacterSelect: React.FC<Props> = ({
             }),
             description: t("common:upload.imageTooLarge", {
               defaultValue:
-                "Please choose a smaller image (around 3 MB or less)."
+                "Please choose a smaller image (around 5 MB or less)."
             })
           })
           return
@@ -526,7 +527,7 @@ export const CharacterSelect: React.FC<Props> = ({
             }),
             description: t("common:upload.imageTooLarge", {
               defaultValue:
-                "Please choose a smaller image (around 3 MB or less)."
+                "Please choose a smaller image (around 5 MB or less)."
             })
           })
           return

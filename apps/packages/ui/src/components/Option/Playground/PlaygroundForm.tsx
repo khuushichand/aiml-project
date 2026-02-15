@@ -3946,59 +3946,58 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         ) : null}
                       </div>
                     )}
-                    {actionBarVisible ? (
-                      <div
-                        className={`transition-all duration-200 overflow-hidden ${actionBarVisibilityClass}`}
-                      >
-                        <ComposerToolbar
-                          isProMode={isProMode}
-                          isMobile={isMobileViewport}
-                          isConnectionReady={isConnectionReady}
-                          isSending={isSending}
-                          modelSelectButton={modelSelectButton}
-                          mcpControl={mcpControl}
-                          sendControl={sendControl}
-                          attachmentButton={attachmentButton}
-                          toolsButton={toolsButton}
-                          voiceChatButton={voiceChatButton}
-                          modelUsageBadge={modelUsageBadge}
-                          selectedSystemPrompt={selectedSystemPrompt}
-                          setSelectedSystemPrompt={setSelectedSystemPrompt}
-                          setSelectedQuickPrompt={setSelectedQuickPrompt}
-                          temporaryChat={temporaryChat}
-                          onToggleTemporaryChat={handleToggleTemporaryChat}
-                          privateChatLocked={privateChatLocked}
-                          isFireFoxPrivateMode={isFireFoxPrivateMode}
-                          persistenceTooltip={persistenceTooltip}
-                          contextToolsOpen={contextToolsOpen}
-                          onToggleKnowledgePanel={toggleKnowledgePanel}
-                          webSearch={webSearch}
-                          onToggleWebSearch={handleToggleWebSearch}
-                          hasWebSearch={!!capabilities?.hasWebSearch}
-                          onOpenModelSettings={() => setOpenModelSettings(true)}
-                          modelSummaryLabel={modelSummaryLabel}
-                          promptSummaryLabel={promptSummaryLabel}
-                          hasDictation={!!(browserSupportsSpeechRecognition || hasServerAudio)}
-                          speechAvailable={speechAvailable}
-                          speechUsesServer={speechUsesServer}
-                          isListening={isListening}
-                          isServerDictating={isServerDictating}
-                          voiceChatEnabled={voiceChatEnabled}
-                          speechTooltip={speechTooltipText}
-                          onDictationToggle={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
-                          onTemplateSelect={handleTemplateSelect}
-                          selectedModel={selectedModel}
-                          resolvedProviderKey={resolvedProviderKey}
-                          messages={messages}
-                          selectedDocumentsCount={selectedDocuments.length}
-                          uploadedFilesCount={uploadedFiles.length}
-                          serverChatId={serverChatId}
-                          showServerPersistenceHint={showServerPersistenceHint}
-                          onDismissServerPersistenceHint={() => setShowServerPersistenceHint(false)}
-                          onFocusConnectionCard={focusConnectionCard}
-                        />
-                      </div>
-                    ) : null}
+                    <div
+                      aria-hidden={!actionBarVisible}
+                      className={`transition-all duration-200 overflow-hidden ${actionBarVisibilityClass}`}
+                    >
+                      <ComposerToolbar
+                        isProMode={isProMode}
+                        isMobile={isMobileViewport}
+                        isConnectionReady={isConnectionReady}
+                        isSending={isSending}
+                        modelSelectButton={modelSelectButton}
+                        mcpControl={mcpControl}
+                        sendControl={sendControl}
+                        attachmentButton={attachmentButton}
+                        toolsButton={toolsButton}
+                        voiceChatButton={voiceChatButton}
+                        modelUsageBadge={modelUsageBadge}
+                        selectedSystemPrompt={selectedSystemPrompt}
+                        setSelectedSystemPrompt={setSelectedSystemPrompt}
+                        setSelectedQuickPrompt={setSelectedQuickPrompt}
+                        temporaryChat={temporaryChat}
+                        onToggleTemporaryChat={handleToggleTemporaryChat}
+                        privateChatLocked={privateChatLocked}
+                        isFireFoxPrivateMode={isFireFoxPrivateMode}
+                        persistenceTooltip={persistenceTooltip}
+                        contextToolsOpen={contextToolsOpen}
+                        onToggleKnowledgePanel={toggleKnowledgePanel}
+                        webSearch={webSearch}
+                        onToggleWebSearch={handleToggleWebSearch}
+                        hasWebSearch={!!capabilities?.hasWebSearch}
+                        onOpenModelSettings={() => setOpenModelSettings(true)}
+                        modelSummaryLabel={modelSummaryLabel}
+                        promptSummaryLabel={promptSummaryLabel}
+                        hasDictation={!!(browserSupportsSpeechRecognition || hasServerAudio)}
+                        speechAvailable={speechAvailable}
+                        speechUsesServer={speechUsesServer}
+                        isListening={isListening}
+                        isServerDictating={isServerDictating}
+                        voiceChatEnabled={voiceChatEnabled}
+                        speechTooltip={speechTooltipText}
+                        onDictationToggle={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
+                        onTemplateSelect={handleTemplateSelect}
+                        selectedModel={selectedModel}
+                        resolvedProviderKey={resolvedProviderKey}
+                        messages={messages}
+                        selectedDocumentsCount={selectedDocuments.length}
+                        uploadedFilesCount={uploadedFiles.length}
+                        serverChatId={serverChatId}
+                        showServerPersistenceHint={showServerPersistenceHint}
+                        onDismissServerPersistenceHint={() => setShowServerPersistenceHint(false)}
+                        onFocusConnectionCard={focusConnectionCard}
+                      />
+                    </div>
                     {showConnectBanner && !isConnectionReady && (
                       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
                         <p className="max-w-xs text-left">

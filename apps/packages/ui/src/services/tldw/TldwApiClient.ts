@@ -2124,8 +2124,7 @@ export class TldwApiClient {
     file: File,
     options?: { allowImageOnly?: boolean }
   ): Promise<any> {
-    const buffer = await file.arrayBuffer()
-    const data = Array.from(new Uint8Array(buffer))
+    const data = await file.arrayBuffer()
     const name = file.name || "character-card"
     const type = file.type || "application/octet-stream"
     const path = await this.resolveApiPath("characters.import", [

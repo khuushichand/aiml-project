@@ -1,5 +1,4 @@
 import io
-from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -12,16 +11,20 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
-def client_with_user(monkeypatch):
+def client_with_user(monkeypatch, tmp_path):
     async def override_user():
         return User(id=779, username="wluser", email=None, is_active=True)
 
-    base_dir = Path.cwd() / "Databases" / "test_user_dbs_opml_nested"
+    base_dir = tmp_path / "user_dbs_opml_nested"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
 
-    mod = import_module("tldw_Server_API.app.main")
-    app = getattr(mod, "app")
+    from fastapi import FastAPI
+    from tldw_Server_API.app.core.config import API_V1_PREFIX
+    from tldw_Server_API.app.api.v1.endpoints.watchlists import router as watchlists_router
+
+    app = FastAPI()
+    app.include_router(watchlists_router, prefix=f"{API_V1_PREFIX}")
     app.dependency_overrides[get_request_user] = override_user
     with TestClient(app) as client:
         yield client
