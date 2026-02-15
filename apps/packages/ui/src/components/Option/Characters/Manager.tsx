@@ -2610,7 +2610,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                             })
                           })
                           if (ok) {
-                            handleDelete(record)
+                            await handleDelete(record)
                           }
                         }}>
                         <Trash2 className="w-4 h-4" />

@@ -175,6 +175,16 @@
       },
       "stickyChatInput": {
         "label": "إبقاء حقل إدخال الدردشة مرئيًا أثناء التمرير"
+      },
+      "chatRichTextMode": {
+        "label": "وضع عرض النص المنسّق",
+        "safe": "Markdown آمن (افتراضي)",
+        "stCompat": "متوافق مع SillyTavern",
+        "previewLabel": "معاينة العرض",
+        "previewDescription": "يتم عرض نفس العينة في كل وضع.",
+        "previewSafeTitle": "Markdown آمن",
+        "previewStCompatTitle": "متوافق مع SillyTavern",
+        "previewSample": "السطر الأول\nالسطر الثاني مع ||مفسد مضمن||\n\n[spoiler]محتوى مفسد كتلي[/spoiler]"
       }
     },
     "sidepanelRag": {

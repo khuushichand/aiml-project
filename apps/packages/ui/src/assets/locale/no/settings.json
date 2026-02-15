@@ -175,6 +175,16 @@
       },
       "stickyChatInput": {
         "label": "Hold chat-inndata synlig mens du blar"
+      },
+      "chatRichTextMode": {
+        "label": "Visningsmodus for rik tekst",
+        "safe": "Sikker Markdown (standard)",
+        "stCompat": "Kompatibel med SillyTavern",
+        "previewLabel": "Forhåndsvisning av rendering",
+        "previewDescription": "Det samme eksempelet vises i hver modus.",
+        "previewSafeTitle": "Sikker Markdown",
+        "previewStCompatTitle": "Kompatibel med SillyTavern",
+        "previewSample": "Linje én\nLinje to med ||inline-spoiler||\n\n[spoiler]Innhold i blokkspoiler[/spoiler]"
       }
     },
     "sidepanelRag": {

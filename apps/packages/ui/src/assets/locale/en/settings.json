@@ -643,6 +643,16 @@
         "confirmMessage": "This will reset your onboarding state and take you back to the setup flow.",
         "toast": "Onboarding has been reset",
         "toastBody": "We’ll take you back to the welcome step so you can review your server URL and API key."
+      },
+      "chatRichTextMode": {
+        "label": "Rich text rendering mode",
+        "safe": "Safe Markdown (default)",
+        "stCompat": "SillyTavern-compatible",
+        "previewLabel": "Rendering preview",
+        "previewDescription": "Same sample rendered in each mode.",
+        "previewSafeTitle": "Safe Markdown",
+        "previewStCompatTitle": "SillyTavern-compatible",
+        "previewSample": "Line one\nLine two with ||inline spoiler||\n\n[spoiler]Block spoiler content[/spoiler]"
       }
     },
     "systemBasics": {

@@ -3256,5 +3256,29 @@
   },
   "skillsNav": {
     "message": "المهارات"
+  },
+  "generalSettings_settings_chatRichTextMode_label": {
+    "message": "وضع عرض النص المنسّق"
+  },
+  "generalSettings_settings_chatRichTextMode_safe": {
+    "message": "Markdown آمن (افتراضي)"
+  },
+  "generalSettings_settings_chatRichTextMode_stCompat": {
+    "message": "متوافق مع SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewLabel": {
+    "message": "معاينة العرض"
+  },
+  "generalSettings_settings_chatRichTextMode_previewDescription": {
+    "message": "يتم عرض نفس العينة في كل وضع."
+  },
+  "generalSettings_settings_chatRichTextMode_previewSafeTitle": {
+    "message": "Markdown آمن"
+  },
+  "generalSettings_settings_chatRichTextMode_previewStCompatTitle": {
+    "message": "متوافق مع SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSample": {
+    "message": "السطر الأول\\nالسطر الثاني مع ||مفسد مضمن||\\n\\n[spoiler]محتوى مفسد كتلي[/spoiler]"
   }
 }

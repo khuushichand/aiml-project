@@ -3259,5 +3259,29 @@
   },
   "skillsNav": {
     "message": "Ferdigheter"
+  },
+  "generalSettings_settings_chatRichTextMode_label": {
+    "message": "Visningsmodus for rik tekst"
+  },
+  "generalSettings_settings_chatRichTextMode_safe": {
+    "message": "Sikker Markdown (standard)"
+  },
+  "generalSettings_settings_chatRichTextMode_stCompat": {
+    "message": "Kompatibel med SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewLabel": {
+    "message": "Forhåndsvisning av rendering"
+  },
+  "generalSettings_settings_chatRichTextMode_previewDescription": {
+    "message": "Det samme eksempelet vises i hver modus."
+  },
+  "generalSettings_settings_chatRichTextMode_previewSafeTitle": {
+    "message": "Sikker Markdown"
+  },
+  "generalSettings_settings_chatRichTextMode_previewStCompatTitle": {
+    "message": "Kompatibel med SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSample": {
+    "message": "Linje én\\nLinje to med ||inline-spoiler||\\n\\n[spoiler]Innhold i blokkspoiler[/spoiler]"
   }
 }

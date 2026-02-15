@@ -5461,5 +5461,29 @@
   },
   "splashSettings_secondsUnit": {
     "message": "seconds"
+  },
+  "generalSettings_settings_chatRichTextMode_label": {
+    "message": "Rich text rendering mode"
+  },
+  "generalSettings_settings_chatRichTextMode_safe": {
+    "message": "Safe Markdown (default)"
+  },
+  "generalSettings_settings_chatRichTextMode_stCompat": {
+    "message": "SillyTavern-compatible"
+  },
+  "generalSettings_settings_chatRichTextMode_previewLabel": {
+    "message": "Rendering preview"
+  },
+  "generalSettings_settings_chatRichTextMode_previewDescription": {
+    "message": "Same sample rendered in each mode."
+  },
+  "generalSettings_settings_chatRichTextMode_previewSafeTitle": {
+    "message": "Safe Markdown"
+  },
+  "generalSettings_settings_chatRichTextMode_previewStCompatTitle": {
+    "message": "SillyTavern-compatible"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSample": {
+    "message": "Line one\\nLine two with ||inline spoiler||\\n\\n[spoiler]Block spoiler content[/spoiler]"
   }
 }

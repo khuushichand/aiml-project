@@ -3259,5 +3259,29 @@
   },
   "skillsNav": {
     "message": "スキル"
+  },
+  "generalSettings_settings_chatRichTextMode_label": {
+    "message": "リッチテキストのレンダリングモード"
+  },
+  "generalSettings_settings_chatRichTextMode_safe": {
+    "message": "安全なMarkdown（既定）"
+  },
+  "generalSettings_settings_chatRichTextMode_stCompat": {
+    "message": "SillyTavern互換"
+  },
+  "generalSettings_settings_chatRichTextMode_previewLabel": {
+    "message": "レンダリングプレビュー"
+  },
+  "generalSettings_settings_chatRichTextMode_previewDescription": {
+    "message": "同じサンプルを各モードで表示します。"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSafeTitle": {
+    "message": "安全なMarkdown"
+  },
+  "generalSettings_settings_chatRichTextMode_previewStCompatTitle": {
+    "message": "SillyTavern互換"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSample": {
+    "message": "1行目\\n2行目（||インラインネタバレ|| を含む）\\n\\n[spoiler]ブロックネタバレの内容[/spoiler]"
   }
 }

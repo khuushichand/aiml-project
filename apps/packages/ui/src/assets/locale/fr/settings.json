@@ -175,6 +175,16 @@
       },
       "stickyChatInput": {
         "label": "Garder la saisie du chat visible pendant le défilement"
+      },
+      "chatRichTextMode": {
+        "label": "Mode de rendu du texte enrichi",
+        "safe": "Markdown sûr (par défaut)",
+        "stCompat": "Compatible SillyTavern",
+        "previewLabel": "Aperçu du rendu",
+        "previewDescription": "Le même exemple est rendu dans chaque mode.",
+        "previewSafeTitle": "Markdown sûr",
+        "previewStCompatTitle": "Compatible SillyTavern",
+        "previewSample": "Ligne un\nLigne deux avec ||spoiler en ligne||\n\n[spoiler]Contenu du spoiler en bloc[/spoiler]"
       }
     },
     "sidepanelRag": {

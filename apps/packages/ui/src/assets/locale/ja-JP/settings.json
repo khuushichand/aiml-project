@@ -178,6 +178,16 @@
       },
       "stickyChatInput": {
         "label": "スクロール中もチャット入力を表示する"
+      },
+      "chatRichTextMode": {
+        "label": "リッチテキストのレンダリングモード",
+        "safe": "安全なMarkdown（既定）",
+        "stCompat": "SillyTavern互換",
+        "previewLabel": "レンダリングプレビュー",
+        "previewDescription": "同じサンプルを各モードで表示します。",
+        "previewSafeTitle": "安全なMarkdown",
+        "previewStCompatTitle": "SillyTavern互換",
+        "previewSample": "1行目\n2行目（||インラインネタバレ|| を含む）\n\n[spoiler]ブロックネタバレの内容[/spoiler]"
       }
     },
     "sidepanelRag": {

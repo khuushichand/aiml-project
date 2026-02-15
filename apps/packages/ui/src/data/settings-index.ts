@@ -513,6 +513,17 @@ export const SETTINGS_INDEX: SettingDefinition[] = [
     storageKey: "useMarkdownForUserMessage",
     controlType: "switch",
   },
+  {
+    id: "setting-chat-rich-text-mode",
+    labelKey: "settings:generalSettings.settings.chatRichTextMode.label",
+    defaultLabel: "Rich text rendering mode",
+    defaultDescription: "Choose between safe markdown and SillyTavern-compatible rich text rendering",
+    route: "/settings/chat",
+    section: "Chat",
+    keywords: ["rich", "text", "markdown", "sillytavern", "rendering"],
+    storageKey: "chatRichTextMode",
+    controlType: "select",
+  },
 
   // ========================================
   // About

@@ -3259,5 +3259,29 @@
   },
   "skillsNav": {
     "message": "스킬"
+  },
+  "generalSettings_settings_chatRichTextMode_label": {
+    "message": "리치 텍스트 렌더링 모드"
+  },
+  "generalSettings_settings_chatRichTextMode_safe": {
+    "message": "안전한 마크다운(기본값)"
+  },
+  "generalSettings_settings_chatRichTextMode_stCompat": {
+    "message": "SillyTavern 호환"
+  },
+  "generalSettings_settings_chatRichTextMode_previewLabel": {
+    "message": "렌더링 미리보기"
+  },
+  "generalSettings_settings_chatRichTextMode_previewDescription": {
+    "message": "동일한 샘플이 각 모드에서 렌더링됩니다."
+  },
+  "generalSettings_settings_chatRichTextMode_previewSafeTitle": {
+    "message": "안전한 마크다운"
+  },
+  "generalSettings_settings_chatRichTextMode_previewStCompatTitle": {
+    "message": "SillyTavern 호환"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSample": {
+    "message": "첫 번째 줄\\n두 번째 줄 ||인라인 스포일러|| 포함\\n\\n[spoiler]블록 스포일러 내용[/spoiler]"
   }
 }

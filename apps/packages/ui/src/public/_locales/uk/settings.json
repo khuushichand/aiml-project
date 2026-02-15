@@ -3256,5 +3256,29 @@
   },
   "skillsNav": {
     "message": "Навички"
+  },
+  "generalSettings_settings_chatRichTextMode_label": {
+    "message": "Режим рендерингу форматованого тексту"
+  },
+  "generalSettings_settings_chatRichTextMode_safe": {
+    "message": "Безпечний Markdown (типово)"
+  },
+  "generalSettings_settings_chatRichTextMode_stCompat": {
+    "message": "Сумісно з SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewLabel": {
+    "message": "Попередній перегляд рендерингу"
+  },
+  "generalSettings_settings_chatRichTextMode_previewDescription": {
+    "message": "Той самий приклад відображається в кожному режимі."
+  },
+  "generalSettings_settings_chatRichTextMode_previewSafeTitle": {
+    "message": "Безпечний Markdown"
+  },
+  "generalSettings_settings_chatRichTextMode_previewStCompatTitle": {
+    "message": "Сумісно з SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSample": {
+    "message": "Рядок один\\nРядок два з ||вбудованим спойлером||\\n\\n[spoiler]Вміст блочного спойлера[/spoiler]"
   }
 }

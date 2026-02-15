@@ -175,6 +175,16 @@
       },
       "stickyChatInput": {
         "label": "Тримати поле введення чату видимим під час прокрутки"
+      },
+      "chatRichTextMode": {
+        "label": "Режим рендерингу форматованого тексту",
+        "safe": "Безпечний Markdown (типово)",
+        "stCompat": "Сумісно з SillyTavern",
+        "previewLabel": "Попередній перегляд рендерингу",
+        "previewDescription": "Той самий приклад відображається в кожному режимі.",
+        "previewSafeTitle": "Безпечний Markdown",
+        "previewStCompatTitle": "Сумісно з SillyTavern",
+        "previewSample": "Рядок один\nРядок два з ||вбудованим спойлером||\n\n[spoiler]Вміст блочного спойлера[/spoiler]"
       }
     },
     "sidepanelRag": {

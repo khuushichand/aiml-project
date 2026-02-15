@@ -86,6 +86,8 @@ const buildChatSettingsState = () => ({
   setAutoCopyResponseToClipboard: vi.fn(),
   useMarkdownForUserMessage: false,
   setUseMarkdownForUserMessage: vi.fn(),
+  chatRichTextMode: "safe_markdown" as const,
+  setChatRichTextMode: vi.fn(),
   copyAsFormattedText: false,
   setCopyAsFormattedText: vi.fn(),
   allowExternalImages: false,
@@ -187,5 +189,13 @@ describe("ChatSettings background image controls", () => {
     await waitFor(() => {
       expect(setChatBackgroundImageMock).toHaveBeenCalledWith(undefined)
     })
+  })
+
+  it("renders rich text mode preview cards", () => {
+    render(<ChatSettings />)
+
+    expect(screen.getByText("Rendering preview")).toBeInTheDocument()
+    expect(screen.getByText("Safe Markdown")).toBeInTheDocument()
+    expect(screen.getAllByText("SillyTavern-compatible").length).toBeGreaterThan(0)
   })
 })

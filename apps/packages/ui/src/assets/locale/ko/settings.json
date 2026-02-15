@@ -178,6 +178,16 @@
       },
       "stickyChatInput": {
         "label": "스크롤 중에도 채팅 입력창 표시"
+      },
+      "chatRichTextMode": {
+        "label": "리치 텍스트 렌더링 모드",
+        "safe": "안전한 마크다운(기본값)",
+        "stCompat": "SillyTavern 호환",
+        "previewLabel": "렌더링 미리보기",
+        "previewDescription": "동일한 샘플이 각 모드에서 렌더링됩니다.",
+        "previewSafeTitle": "안전한 마크다운",
+        "previewStCompatTitle": "SillyTavern 호환",
+        "previewSample": "첫 번째 줄\n두 번째 줄 ||인라인 스포일러|| 포함\n\n[spoiler]블록 스포일러 내용[/spoiler]"
       }
     },
     "sidepanelRag": {

@@ -3259,5 +3259,29 @@
   },
   "skillsNav": {
     "message": "നൈപുണ്യങ്ങൾ"
+  },
+  "generalSettings_settings_chatRichTextMode_label": {
+    "message": "റിച്ച് ടെക്സ്റ്റ് റെൻഡറിംഗ് മോഡ്"
+  },
+  "generalSettings_settings_chatRichTextMode_safe": {
+    "message": "സുരക്ഷിത Markdown (ഡിഫോൾട്ട്)"
+  },
+  "generalSettings_settings_chatRichTextMode_stCompat": {
+    "message": "SillyTavern-നോട് അനുയോജ്യം"
+  },
+  "generalSettings_settings_chatRichTextMode_previewLabel": {
+    "message": "റെൻഡറിംഗ് പ്രിവ്യൂ"
+  },
+  "generalSettings_settings_chatRichTextMode_previewDescription": {
+    "message": "ഓരോ മോഡിലും അതേ മാതൃക റെൻഡർ ചെയ്യും."
+  },
+  "generalSettings_settings_chatRichTextMode_previewSafeTitle": {
+    "message": "സുരക്ഷിത Markdown"
+  },
+  "generalSettings_settings_chatRichTextMode_previewStCompatTitle": {
+    "message": "SillyTavern-നോട് അനുയോജ്യം"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSample": {
+    "message": "ഒന്നാം വരി\\n||ഇൻലൈൻ സ്പോയിലർ|| ഉൾപ്പെട്ട രണ്ടാം വരി\\n\\n[spoiler]ബ്ലോക്ക് സ്പോയിലർ ഉള്ളടക്കം[/spoiler]"
   }
 }

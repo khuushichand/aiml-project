@@ -3277,5 +3277,29 @@
   },
   "skillsNav": {
     "message": "Competenze"
+  },
+  "generalSettings_settings_chatRichTextMode_label": {
+    "message": "Modalità di rendering del testo avanzato"
+  },
+  "generalSettings_settings_chatRichTextMode_safe": {
+    "message": "Markdown sicuro (predefinito)"
+  },
+  "generalSettings_settings_chatRichTextMode_stCompat": {
+    "message": "Compatibile con SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewLabel": {
+    "message": "Anteprima di rendering"
+  },
+  "generalSettings_settings_chatRichTextMode_previewDescription": {
+    "message": "Lo stesso esempio viene renderizzato in ogni modalità."
+  },
+  "generalSettings_settings_chatRichTextMode_previewSafeTitle": {
+    "message": "Markdown sicuro"
+  },
+  "generalSettings_settings_chatRichTextMode_previewStCompatTitle": {
+    "message": "Compatibile con SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSample": {
+    "message": "Riga uno\\nRiga due con ||spoiler in linea||\\n\\n[spoiler]Contenuto spoiler a blocco[/spoiler]"
   }
 }

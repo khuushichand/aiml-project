@@ -1,7 +1,13 @@
 import { useCallback, useMemo, useRef, type ChangeEvent } from "react"
 import { Select, Switch, Tooltip } from "antd"
 import { useTranslation } from "react-i18next"
-import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
+import {
+  DEFAULT_CHAT_SETTINGS,
+  type ChatRichTextColorOption,
+  type ChatRichTextFontOption,
+  type ChatRichTextMode,
+  type ChatRichTextStylePreset
+} from "@/types/chat-settings"
 import { BetaTag } from "@/components/Common/Beta"
 import { SettingRow } from "@/components/Common/SettingRow"
 import { useChatSettings } from "@/hooks/useChatSettings"
@@ -11,6 +17,11 @@ import { toBase64 } from "@/libs/to-base64"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 import { RotateCcw, Upload } from "lucide-react"
 import { DiscoSkillsSettings } from "./DiscoSkillsSettings"
+import Markdown from "@/components/Common/Markdown"
+import {
+  CHAT_RICH_TEXT_STYLE_PRESETS,
+  normalizeChatRichTextStylePreset
+} from "@/utils/chat-rich-text-style"
 
 const SELECT_CLASSNAME = "w-[200px]"
 const CHAT_BACKGROUND_MAX_BASE64_LENGTH = 3_000_000
@@ -52,6 +63,26 @@ export const ChatSettings = () => {
     setAutoCopyResponseToClipboard,
     useMarkdownForUserMessage,
     setUseMarkdownForUserMessage,
+    chatRichTextMode,
+    setChatRichTextMode,
+    chatRichTextStylePreset,
+    setChatRichTextStylePreset,
+    chatRichItalicColor,
+    setChatRichItalicColor,
+    chatRichItalicFont,
+    setChatRichItalicFont,
+    chatRichBoldColor,
+    setChatRichBoldColor,
+    chatRichBoldFont,
+    setChatRichBoldFont,
+    chatRichQuoteTextColor,
+    setChatRichQuoteTextColor,
+    chatRichQuoteFont,
+    setChatRichQuoteFont,
+    chatRichQuoteBorderColor,
+    setChatRichQuoteBorderColor,
+    chatRichQuoteBackgroundColor,
+    setChatRichQuoteBackgroundColor,
     copyAsFormattedText,
     setCopyAsFormattedText,
     allowExternalImages,
@@ -134,6 +165,128 @@ export const ChatSettings = () => {
     [t]
   )
 
+  const richTextModeOptions = useMemo(
+    () => [
+      {
+        value: "safe_markdown",
+        label: t(
+          "generalSettings.settings.chatRichTextMode.safe",
+          "Safe Markdown (default)"
+        )
+      },
+      {
+        value: "st_compat",
+        label: t(
+          "generalSettings.settings.chatRichTextMode.stCompat",
+          "SillyTavern-compatible"
+        )
+      }
+    ],
+    [t]
+  )
+
+  const richTextStylePresetOptions = useMemo(
+    () => [
+      {
+        value: "default",
+        label: t(
+          "generalSettings.settings.chatRichTextStyles.presets.default",
+          "Default (recommended)"
+        )
+      },
+      {
+        value: "muted",
+        label: t(
+          "generalSettings.settings.chatRichTextStyles.presets.muted",
+          "Muted"
+        )
+      },
+      {
+        value: "high_contrast",
+        label: t(
+          "generalSettings.settings.chatRichTextStyles.presets.highContrast",
+          "High contrast"
+        )
+      },
+      {
+        value: "custom",
+        label: t(
+          "generalSettings.settings.chatRichTextStyles.presets.custom",
+          "Custom"
+        )
+      }
+    ],
+    [t]
+  )
+
+  const richTextColorOptions = useMemo(
+    () => [
+      {
+        value: "default",
+        label: t("chatAppearance.color.default", "Default")
+      },
+      {
+        value: "text",
+        label: t(
+          "generalSettings.settings.chatRichTextStyles.colors.text",
+          "Text"
+        )
+      },
+      {
+        value: "muted",
+        label: t(
+          "generalSettings.settings.chatRichTextStyles.colors.muted",
+          "Muted"
+        )
+      },
+      {
+        value: "primary",
+        label: t(
+          "generalSettings.settings.chatRichTextStyles.colors.primary",
+          "Primary"
+        )
+      },
+      {
+        value: "accent",
+        label: t(
+          "generalSettings.settings.chatRichTextStyles.colors.accent",
+          "Accent"
+        )
+      },
+      {
+        value: "success",
+        label: t(
+          "generalSettings.settings.chatRichTextStyles.colors.success",
+          "Success"
+        )
+      },
+      {
+        value: "warn",
+        label: t(
+          "generalSettings.settings.chatRichTextStyles.colors.warn",
+          "Warning"
+        )
+      },
+      {
+        value: "danger",
+        label: t(
+          "generalSettings.settings.chatRichTextStyles.colors.danger",
+          "Danger"
+        )
+      }
+    ],
+    [t]
+  )
+
+  const richTextPreviewSample = useMemo(
+    () =>
+      t(
+        "generalSettings.settings.chatRichTextMode.previewSample",
+        "Line one\nLine two with ||inline spoiler||\n\n[spoiler]Block spoiler content[/spoiler]"
+      ),
+    [t]
+  )
+
   const handleMenuDensityChange = useCallback(
     (value: string) => setMenuDensity(value as "comfortable" | "compact"),
     [setMenuDensity]
@@ -143,6 +296,82 @@ export const ChatSettings = () => {
     (value: string) => setUserTextSize(value as "sm" | "md" | "lg"),
     [setUserTextSize]
   )
+
+  const handleRichTextModeChange = useCallback(
+    (value: string) => setChatRichTextMode(value as ChatRichTextMode),
+    [setChatRichTextMode]
+  )
+
+  const applyRichTextPreset = useCallback(
+    (preset: Exclude<ChatRichTextStylePreset, "custom">) => {
+      const tokens = CHAT_RICH_TEXT_STYLE_PRESETS[preset]
+      if (!tokens) return
+      setChatRichTextStylePreset(preset)
+      setChatRichItalicColor(tokens.chatRichItalicColor)
+      setChatRichItalicFont(tokens.chatRichItalicFont)
+      setChatRichBoldColor(tokens.chatRichBoldColor)
+      setChatRichBoldFont(tokens.chatRichBoldFont)
+      setChatRichQuoteTextColor(tokens.chatRichQuoteTextColor)
+      setChatRichQuoteFont(tokens.chatRichQuoteFont)
+      setChatRichQuoteBorderColor(tokens.chatRichQuoteBorderColor)
+      setChatRichQuoteBackgroundColor(tokens.chatRichQuoteBackgroundColor)
+    },
+    [
+      setChatRichBoldColor,
+      setChatRichBoldFont,
+      setChatRichItalicColor,
+      setChatRichItalicFont,
+      setChatRichQuoteBackgroundColor,
+      setChatRichQuoteBorderColor,
+      setChatRichQuoteFont,
+      setChatRichQuoteTextColor,
+      setChatRichTextStylePreset
+    ]
+  )
+
+  const handleRichTextPresetChange = useCallback(
+    (value: string) => {
+      const preset = normalizeChatRichTextStylePreset(value)
+      if (preset === "custom") {
+        setChatRichTextStylePreset("custom")
+        return
+      }
+      applyRichTextPreset(preset)
+    },
+    [applyRichTextPreset, setChatRichTextStylePreset]
+  )
+
+  const markRichTextStyleAsCustom = useCallback(() => {
+    if (chatRichTextStylePreset !== "custom") {
+      setChatRichTextStylePreset("custom")
+    }
+  }, [chatRichTextStylePreset, setChatRichTextStylePreset])
+
+  const handleRichTextColorChange = useCallback(
+    (
+      setter: (next: ChatRichTextColorOption) => void | Promise<void>,
+      value: string
+    ) => {
+      setter(value as ChatRichTextColorOption)
+      markRichTextStyleAsCustom()
+    },
+    [markRichTextStyleAsCustom]
+  )
+
+  const handleRichTextFontChange = useCallback(
+    (
+      setter: (next: ChatRichTextFontOption) => void | Promise<void>,
+      value: string
+    ) => {
+      setter(value as ChatRichTextFontOption)
+      markRichTextStyleAsCustom()
+    },
+    [markRichTextStyleAsCustom]
+  )
+
+  const resetRichTextStyles = useCallback(() => {
+    applyRichTextPreset("default")
+  }, [applyRichTextPreset])
 
   const handleAssistantTextSizeChange = useCallback(
     (value: string) => setAssistantTextSize(value as "sm" | "md" | "lg"),
@@ -446,6 +675,73 @@ export const ChatSettings = () => {
           />
         }
       />
+      <SettingRow
+        label={t(
+          "generalSettings.settings.chatRichTextMode.label",
+          "Rich text rendering mode"
+        )}
+        {...getResetProps(
+          chatRichTextMode,
+          DEFAULT_CHAT_SETTINGS.chatRichTextMode,
+          setChatRichTextMode
+        )}
+        control={
+          <Select
+            className={SELECT_CLASSNAME}
+            value={chatRichTextMode}
+            onChange={handleRichTextModeChange}
+            options={richTextModeOptions}
+            aria-label={t(
+              "generalSettings.settings.chatRichTextMode.label",
+              "Rich text rendering mode"
+            )}
+          />
+        }
+      />
+      <div className="rounded-md border border-border bg-surface2/40 p-3">
+        <p className="text-xs font-semibold text-text-muted">
+          {t(
+            "generalSettings.settings.chatRichTextMode.previewLabel",
+            "Rendering preview"
+          )}
+        </p>
+        <p className="mt-1 text-xs text-text-muted">
+          {t(
+            "generalSettings.settings.chatRichTextMode.previewDescription",
+            "Same sample rendered in each mode."
+          )}
+        </p>
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          <div className="rounded-md border border-border bg-surface p-2">
+            <p className="mb-1 text-[11px] font-semibold text-text-muted">
+              {t(
+                "generalSettings.settings.chatRichTextMode.previewSafeTitle",
+                "Safe Markdown"
+              )}
+            </p>
+            <Markdown
+              message={richTextPreviewSample}
+              richTextModeOverride="safe_markdown"
+              className="prose prose-sm break-words dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark max-w-none"
+              allowExternalImages={false}
+            />
+          </div>
+          <div className="rounded-md border border-border bg-surface p-2">
+            <p className="mb-1 text-[11px] font-semibold text-text-muted">
+              {t(
+                "generalSettings.settings.chatRichTextMode.previewStCompatTitle",
+                "SillyTavern-compatible"
+              )}
+            </p>
+            <Markdown
+              message={richTextPreviewSample}
+              richTextModeOverride="st_compat"
+              className="prose prose-sm break-words dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark max-w-none"
+              allowExternalImages={false}
+            />
+          </div>
+        </div>
+      </div>
       <SettingRow
         label={t(
           "generalSettings.settings.allowExternalImages.label",

@@ -3262,5 +3262,29 @@
   },
   "skillsNav": {
     "message": "技能"
+  },
+  "generalSettings_settings_chatRichTextMode_label": {
+    "message": "富文本渲染模式"
+  },
+  "generalSettings_settings_chatRichTextMode_safe": {
+    "message": "安全 Markdown（默认）"
+  },
+  "generalSettings_settings_chatRichTextMode_stCompat": {
+    "message": "兼容 SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewLabel": {
+    "message": "渲染预览"
+  },
+  "generalSettings_settings_chatRichTextMode_previewDescription": {
+    "message": "同一示例将在每种模式下渲染。"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSafeTitle": {
+    "message": "安全 Markdown"
+  },
+  "generalSettings_settings_chatRichTextMode_previewStCompatTitle": {
+    "message": "兼容 SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSample": {
+    "message": "第一行\\n第二行，包含 ||行内剧透||\\n\\n[spoiler]块级剧透内容[/spoiler]"
   }
 }

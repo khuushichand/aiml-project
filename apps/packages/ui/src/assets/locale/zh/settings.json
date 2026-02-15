@@ -178,6 +178,16 @@
       },
       "stickyChatInput": {
         "label": "滚动时保持聊天输入框可见"
+      },
+      "chatRichTextMode": {
+        "label": "富文本渲染模式",
+        "safe": "安全 Markdown（默认）",
+        "stCompat": "兼容 SillyTavern",
+        "previewLabel": "渲染预览",
+        "previewDescription": "同一示例将在每种模式下渲染。",
+        "previewSafeTitle": "安全 Markdown",
+        "previewStCompatTitle": "兼容 SillyTavern",
+        "previewSample": "第一行\n第二行，包含 ||行内剧透||\n\n[spoiler]块级剧透内容[/spoiler]"
       }
     },
     "sidepanelRag": {

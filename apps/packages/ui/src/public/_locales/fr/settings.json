@@ -3259,5 +3259,29 @@
   },
   "skillsNav": {
     "message": "Compétences"
+  },
+  "generalSettings_settings_chatRichTextMode_label": {
+    "message": "Mode de rendu du texte enrichi"
+  },
+  "generalSettings_settings_chatRichTextMode_safe": {
+    "message": "Markdown sûr (par défaut)"
+  },
+  "generalSettings_settings_chatRichTextMode_stCompat": {
+    "message": "Compatible SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewLabel": {
+    "message": "Aperçu du rendu"
+  },
+  "generalSettings_settings_chatRichTextMode_previewDescription": {
+    "message": "Le même exemple est rendu dans chaque mode."
+  },
+  "generalSettings_settings_chatRichTextMode_previewSafeTitle": {
+    "message": "Markdown sûr"
+  },
+  "generalSettings_settings_chatRichTextMode_previewStCompatTitle": {
+    "message": "Compatible SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSample": {
+    "message": "Ligne un\\nLigne deux avec ||spoiler en ligne||\\n\\n[spoiler]Contenu du spoiler en bloc[/spoiler]"
   }
 }

@@ -175,6 +175,16 @@
       },
       "stickyChatInput": {
         "label": "Показывать поле ввода чата при прокрутке"
+      },
+      "chatRichTextMode": {
+        "label": "Режим рендеринга форматированного текста",
+        "safe": "Безопасный Markdown (по умолчанию)",
+        "stCompat": "Совместимо с SillyTavern",
+        "previewLabel": "Предпросмотр рендеринга",
+        "previewDescription": "Один и тот же пример отображается в каждом режиме.",
+        "previewSafeTitle": "Безопасный Markdown",
+        "previewStCompatTitle": "Совместимо с SillyTavern",
+        "previewSample": "Строка один\nСтрока два с ||встроенным спойлером||\n\n[spoiler]Содержимое блочного спойлера[/spoiler]"
       }
     },
     "sidepanelRag": {

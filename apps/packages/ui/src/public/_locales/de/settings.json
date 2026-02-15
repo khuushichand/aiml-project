@@ -3274,5 +3274,29 @@
   },
   "skillsNav": {
     "message": "Fähigkeiten"
+  },
+  "generalSettings_settings_chatRichTextMode_label": {
+    "message": "Darstellungsmodus für Rich-Text"
+  },
+  "generalSettings_settings_chatRichTextMode_safe": {
+    "message": "Sicheres Markdown (Standard)"
+  },
+  "generalSettings_settings_chatRichTextMode_stCompat": {
+    "message": "Mit SillyTavern kompatibel"
+  },
+  "generalSettings_settings_chatRichTextMode_previewLabel": {
+    "message": "Rendering-Vorschau"
+  },
+  "generalSettings_settings_chatRichTextMode_previewDescription": {
+    "message": "Dasselbe Beispiel wird in jedem Modus gerendert."
+  },
+  "generalSettings_settings_chatRichTextMode_previewSafeTitle": {
+    "message": "Sicheres Markdown"
+  },
+  "generalSettings_settings_chatRichTextMode_previewStCompatTitle": {
+    "message": "Mit SillyTavern kompatibel"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSample": {
+    "message": "Zeile eins\\nZeile zwei mit ||Inline-Spoiler||\\n\\n[spoiler]Block-Spoiler-Inhalt[/spoiler]"
   }
 }

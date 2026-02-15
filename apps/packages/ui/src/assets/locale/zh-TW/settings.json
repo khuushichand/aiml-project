@@ -175,6 +175,16 @@
       },
       "stickyChatInput": {
         "label": "捲動時保持聊天輸入框可見"
+      },
+      "chatRichTextMode": {
+        "label": "富文字渲染模式",
+        "safe": "安全 Markdown（預設）",
+        "stCompat": "相容 SillyTavern",
+        "previewLabel": "渲染預覽",
+        "previewDescription": "相同範例會在各模式下渲染。",
+        "previewSafeTitle": "安全 Markdown",
+        "previewStCompatTitle": "相容 SillyTavern",
+        "previewSample": "第一行\n第二行，含有 ||行內劇透||\n\n[spoiler]區塊劇透內容[/spoiler]"
       }
     },
     "sidepanelRag": {

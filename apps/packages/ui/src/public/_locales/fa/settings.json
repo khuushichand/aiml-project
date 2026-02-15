@@ -3256,5 +3256,29 @@
   },
   "skillsNav": {
     "message": "مهارت‌ها"
+  },
+  "generalSettings_settings_chatRichTextMode_label": {
+    "message": "حالت رندر متن غنی"
+  },
+  "generalSettings_settings_chatRichTextMode_safe": {
+    "message": "Markdown امن (پیش‌فرض)"
+  },
+  "generalSettings_settings_chatRichTextMode_stCompat": {
+    "message": "سازگار با SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewLabel": {
+    "message": "پیش‌نمایش رندر"
+  },
+  "generalSettings_settings_chatRichTextMode_previewDescription": {
+    "message": "یک نمونه یکسان در هر حالت رندر می‌شود."
+  },
+  "generalSettings_settings_chatRichTextMode_previewSafeTitle": {
+    "message": "Markdown امن"
+  },
+  "generalSettings_settings_chatRichTextMode_previewStCompatTitle": {
+    "message": "سازگار با SillyTavern"
+  },
+  "generalSettings_settings_chatRichTextMode_previewSample": {
+    "message": "خط اول\\nخط دوم با ||اسپویلر درون‌خطی||\\n\\n[spoiler]محتوای اسپویلر بلوکی[/spoiler]"
   }
 }

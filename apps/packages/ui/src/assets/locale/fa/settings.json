@@ -175,6 +175,16 @@
       },
       "stickyChatInput": {
         "label": "هنگام پیمایش، ورودی چت را قابل مشاهده نگه دار"
+      },
+      "chatRichTextMode": {
+        "label": "حالت رندر متن غنی",
+        "safe": "Markdown امن (پیش‌فرض)",
+        "stCompat": "سازگار با SillyTavern",
+        "previewLabel": "پیش‌نمایش رندر",
+        "previewDescription": "یک نمونه یکسان در هر حالت رندر می‌شود.",
+        "previewSafeTitle": "Markdown امن",
+        "previewStCompatTitle": "سازگار با SillyTavern",
+        "previewSample": "خط اول\nخط دوم با ||اسپویلر درون‌خطی||\n\n[spoiler]محتوای اسپویلر بلوکی[/spoiler]"
       }
     },
     "sidepanelRag": {

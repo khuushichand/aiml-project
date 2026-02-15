@@ -175,6 +175,16 @@
       },
       "stickyChatInput": {
         "label": "Chat-Eingabe beim Scrollen sichtbar halten"
+      },
+      "chatRichTextMode": {
+        "label": "Darstellungsmodus für Rich-Text",
+        "safe": "Sicheres Markdown (Standard)",
+        "stCompat": "Mit SillyTavern kompatibel",
+        "previewLabel": "Rendering-Vorschau",
+        "previewDescription": "Dasselbe Beispiel wird in jedem Modus gerendert.",
+        "previewSafeTitle": "Sicheres Markdown",
+        "previewStCompatTitle": "Mit SillyTavern kompatibel",
+        "previewSample": "Zeile eins\nZeile zwei mit ||Inline-Spoiler||\n\n[spoiler]Block-Spoiler-Inhalt[/spoiler]"
       }
     },
     "sidepanelRag": {
