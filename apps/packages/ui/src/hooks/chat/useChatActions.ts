@@ -7,6 +7,7 @@ import {
   saveHistory,
   saveMessage,
   updateHistory,
+  updateMessage,
   removeMessageByIndex,
   formatToChatHistory,
   formatToMessage,
@@ -48,8 +49,11 @@ import { consumeStreamingChunk } from "@/utils/streaming-chunks"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeConversationState } from "@/utils/conversation-state"
 import {
+  DEFAULT_MESSAGE_STEERING_PROMPTS,
   hasActiveMessageSteering,
-  resolveMessageSteering
+  normalizeMessageSteeringPrompts,
+  resolveMessageSteering,
+  toMessageSteeringPromptPayload
 } from "@/utils/message-steering"
 import {
   SELECTED_CHARACTER_STORAGE_KEY,
@@ -64,7 +68,11 @@ import { trackCompareMetric } from "@/utils/compare-metrics"
 import { MAX_COMPARE_MODELS } from "@/hooks/chat/compare-constants"
 import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
 import type { Character } from "@/types/character"
-import type { MessageSteeringMode } from "@/types/message-steering"
+import type {
+  MessageSteeringMode,
+  MessageSteeringPromptTemplates,
+  MessageSteeringState
+} from "@/types/message-steering"
 import type {
   Knowledge,
   ReplyTarget,
@@ -184,6 +192,8 @@ type UseChatActionsOptions = {
   markCompareHistoryCreated: (historyId: string) => void
   replyTarget: ReplyTarget | null
   clearReplyTarget: () => void
+  messageSteeringPrompts: MessageSteeringPromptTemplates | null
+  setSelectedQuickPrompt: (prompt: string | null) => void
   setSelectedSystemPrompt: (prompt: string) => void
   invalidateServerChatHistory: () => void
   selectedCharacter: Character | null
@@ -254,6 +264,8 @@ export const useChatActions = ({
   markCompareHistoryCreated,
   replyTarget,
   clearReplyTarget,
+  messageSteeringPrompts,
+  setSelectedQuickPrompt,
   setSelectedSystemPrompt,
   invalidateServerChatHistory,
   selectedCharacter,
@@ -279,6 +291,13 @@ export const useChatActions = ({
         forceNarrate: messageSteeringForceNarrate
       }),
     [messageSteeringForceNarrate, messageSteeringMode]
+  )
+  const resolvedMessageSteeringPrompts = React.useMemo(
+    () =>
+      normalizeMessageSteeringPrompts(
+        messageSteeringPrompts ?? DEFAULT_MESSAGE_STEERING_PROMPTS
+      ),
+    [messageSteeringPrompts]
   )
   const messagesRef = React.useRef(messages)
 
@@ -471,6 +490,7 @@ export const useChatActions = ({
       setActionInfo,
       webSearch,
       actorSettings,
+      messageSteeringPrompts: resolvedMessageSteeringPrompts,
       ...overrides
     }
   }
@@ -865,7 +885,10 @@ export const useChatActions = ({
           directed_character_id: directedCharacterId ?? undefined,
           continue_as_user: messageSteering.continueAsUser,
           impersonate_user: messageSteering.impersonateUser,
-          force_narrate: messageSteering.forceNarrate
+          force_narrate: messageSteering.forceNarrate,
+          message_steering_prompts: toMessageSteeringPromptPayload(
+            resolvedMessageSteeringPrompts
+          )
         },
         { signal }
       )) {
@@ -1241,6 +1264,19 @@ export const useChatActions = ({
     setHistory(next)
   }, [buildHistoryFromMessages, setHistory])
 
+  const extractContinuationDraft = React.useCallback(
+    (fullText: string, priorText: string): string => {
+      const trimmedFull = fullText.trim()
+      if (!trimmedFull) return ""
+      const trimmedPrior = priorText.trim()
+      if (!trimmedPrior) return trimmedFull
+      if (!fullText.startsWith(priorText)) return trimmedFull
+      const appended = fullText.slice(priorText.length).trim()
+      return appended || trimmedFull
+    },
+    []
+  )
+
   React.useEffect(() => {
     refreshHistoryFromMessages()
   }, [greetingEnabled, refreshHistoryFromMessages])
@@ -1328,7 +1364,9 @@ export const useChatActions = ({
     isContinue,
     docs,
     regenerateFromMessage,
-    imageBackendOverride
+    imageBackendOverride,
+    messageSteeringOverride,
+    continueOutputTarget = "chat"
   }: {
     message: string
     image: string
@@ -1340,6 +1378,8 @@ export const useChatActions = ({
     docs?: ChatDocuments
     regenerateFromMessage?: Message
     imageBackendOverride?: string
+    messageSteeringOverride?: Partial<MessageSteeringState> | null
+    continueOutputTarget?: "chat" | "composer_input"
   }) => {
     setStreaming(true)
     const trimmedImageBackendOverride =
@@ -1356,7 +1396,13 @@ export const useChatActions = ({
       signal = controller.signal
     }
 
-    const messageSteeringForTurn = resolvedMessageSteering
+    const messageSteeringForTurn = messageSteeringOverride
+      ? resolveMessageSteering({
+          mode: messageSteeringOverride.mode ?? messageSteeringMode,
+          forceNarrate:
+            messageSteeringOverride.forceNarrate ?? messageSteeringForceNarrate
+        })
+      : resolvedMessageSteering
     if (messageSteeringForTurn.hadConflict) {
       notification.warning({
         message: t("warning", { defaultValue: "Warning" }),
@@ -1409,13 +1455,77 @@ export const useChatActions = ({
 
     try {
       if (isContinue) {
+        const continueMessages = chatHistory || messages
+        const continueHistory = memory || history
+        const continueTargetMessage =
+          continueMessages[continueMessages.length - 1]
+        const priorAssistantText = continueTargetMessage?.message || ""
+        const priorHistorySnapshot = continueHistory.map((entry) => ({
+          ...entry
+        }))
+
         markSteeringApplied()
         await continueChatMode(
-          chatHistory || messages,
-          memory || history,
+          continueMessages,
+          continueHistory,
           signal,
           chatModeParams
         )
+
+        if (continueOutputTarget === "composer_input") {
+          const currentMessages = messagesRef.current
+          const continuedMessage = continueTargetMessage?.id
+            ? currentMessages.find((entry) => entry.id === continueTargetMessage.id)
+            : currentMessages[currentMessages.length - 1]
+          const continuedText = continuedMessage?.message || ""
+          const continuationDraft = extractContinuationDraft(
+            continuedText,
+            priorAssistantText
+          )
+
+          setSelectedQuickPrompt(continuationDraft)
+
+          if (continueTargetMessage?.id) {
+            const targetId = continueTargetMessage.id
+            setMessages((prev) =>
+              prev.map((entry) =>
+                entry.id === targetId
+                  ? updateActiveVariant(entry, { message: priorAssistantText })
+                  : entry
+              )
+            )
+          } else {
+            setMessages((prev) => {
+              if (prev.length === 0) return prev
+              const next = [...prev]
+              const lastIndex = next.length - 1
+              next[lastIndex] = updateActiveVariant(next[lastIndex], {
+                message: priorAssistantText
+              })
+              return next
+            })
+          }
+
+          setHistory(priorHistorySnapshot)
+
+          const resolvedHistoryId =
+            typeof chatModeParams.historyId === "string" &&
+            chatModeParams.historyId.length > 0
+              ? chatModeParams.historyId
+              : historyId
+          if (
+            resolvedHistoryId &&
+            resolvedHistoryId !== "temp" &&
+            continueTargetMessage?.id
+          ) {
+            await updateMessage(
+              resolvedHistoryId,
+              continueTargetMessage.id,
+              priorAssistantText
+            ).catch(() => null)
+          }
+        }
+
         return
       }
 

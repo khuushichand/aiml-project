@@ -251,6 +251,26 @@ class CharacterChatCompletionV1Response(BaseModel):
 # Character Chat v2 + Prep Schemas (centralized)
 # ========================================================================
 
+class MessageSteeringPromptOverrides(BaseModel):
+    """Optional prompt text overrides for single-turn message steering."""
+
+    continue_as_user: Optional[str] = Field(
+        None,
+        max_length=2_000,
+        description="Override prompt text used when continue_as_user is enabled.",
+    )
+    impersonate_user: Optional[str] = Field(
+        None,
+        max_length=2_000,
+        description="Override prompt text used when impersonate_user is enabled.",
+    )
+    force_narrate: Optional[str] = Field(
+        None,
+        max_length=2_000,
+        description="Override prompt text used when force_narrate is enabled.",
+    )
+
+
 class CharacterChatCompletionPrepRequest(BaseModel):
     """Prepare chat messages for use with the main Chat API.
 
@@ -280,6 +300,10 @@ class CharacterChatCompletionPrepRequest(BaseModel):
     force_narrate: bool = Field(
         False,
         description="Single response: force narration style for the assistant reply.",
+    )
+    message_steering_prompts: Optional[MessageSteeringPromptOverrides] = Field(
+        None,
+        description="Optional prompt text overrides for steering instructions.",
     )
     prompt_preset: Optional[str] = Field(
         None,
@@ -329,6 +353,10 @@ class CharacterChatCompletionV2Request(BaseModel):
     force_narrate: bool = Field(
         False,
         description="Single response: force narration style for the assistant reply.",
+    )
+    message_steering_prompts: Optional[MessageSteeringPromptOverrides] = Field(
+        None,
+        description="Optional prompt text overrides for steering instructions.",
     )
     mood_label: Optional[str] = Field(
         None,

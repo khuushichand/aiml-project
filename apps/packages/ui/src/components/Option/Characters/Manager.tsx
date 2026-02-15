@@ -1489,7 +1489,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
     for (const char of selectedChars) {
       try {
-        await tldwClient.deleteCharacter(String(char.id || char.slug || char.name))
+        await tldwClient.deleteCharacter(
+          String(char.id || char.slug || char.name),
+          char.version
+        )
         successCount++
       } catch {
         failCount++
@@ -1625,7 +1628,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const undoDeleteRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const { mutate: deleteCharacter, isPending: deleting } = useMutation({
-    mutationFn: async (id: string) => tldwClient.deleteCharacter(id),
+    mutationFn: async ({ id, expectedVersion }: { id: string; expectedVersion?: number }) =>
+      tldwClient.deleteCharacter(id, expectedVersion),
     onSuccess: (_data, _variables, context: any) => {
       // Don't invalidate immediately - wait for undo timeout
       // The character is already removed from UI optimistically
@@ -1838,7 +1842,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
   const handleDelete = React.useCallback(async (record: any) => {
     const name = record?.name || record?.title || record?.slug || ""
-    const characterId = record.id || record.slug || record.name
+    const characterId = String(record.id || record.slug || record.name)
     const characterVersion = record.version
 
     // Clear any existing undo timeout
@@ -1851,12 +1855,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }
 
     // Delete the character (soft delete on backend)
-    deleteCharacter(characterId, {
+    deleteCharacter({ id: characterId, expectedVersion: characterVersion }, {
       onSuccess: () => {
         // Optimistically remove from UI
         qc.setQueryData(
           ["tldw:listCharacters", { search: debouncedSearchTerm.trim() || "", tags: filterTags.slice().sort(), matchAll: matchAllTags }],
-          (old: any[] | undefined) => old?.filter((c: any) => (c.id || c.slug || c.name) !== characterId) ?? []
+          (old: any[] | undefined) =>
+            old?.filter((c: any) => String(c.id || c.slug || c.name) !== characterId) ?? []
         )
 
         // Create undo timeout - after 10 seconds, finalize delete
@@ -1890,7 +1895,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
                 // Restore the character
                 // Version incremented by 1 after soft delete
-                restoreCharacter({ id: String(characterId), version: (characterVersion ?? 0) + 1 })
+                restoreCharacter({ id: characterId, version: (characterVersion ?? 0) + 1 })
               }}>
               {t("common:undo", { defaultValue: "Undo" })}
             </button>
@@ -2605,7 +2610,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                             })
                           })
                           if (ok) {
-                            deleteCharacter(record.id || record.slug || record.name)
+                            handleDelete(record)
                           }
                         }}>
                         <Trash2 className="w-4 h-4" />

@@ -355,6 +355,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
         <div className="flex flex-wrap items-center gap-2">
           <ConnectionStatus showLabel={false} className="px-1 py-0.5" />
           {!isMobile && mcpControl}
+          {modelSelectButton}
           <PromptSelect
             selectedSystemPrompt={selectedSystemPrompt}
             setSelectedSystemPrompt={setSelectedSystemPrompt}
@@ -362,7 +363,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
             iconClassName="h-4 w-4"
             className="text-text-muted hover:text-text"
           />
-          {modelSelectButton}
           <CharacterSelect
             showLabel={isProMode ? undefined : false}
             iconClassName="h-4 w-4"

@@ -17,7 +17,7 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Mapping, Optional
 
 from fastapi import (
     APIRouter,
@@ -1914,22 +1914,65 @@ def _resolve_message_steering_flags(
     return continue_flag, impersonate_flag, narrate_flag, had_conflict
 
 
+_DEFAULT_CONTINUE_AS_USER_PROMPT = (
+    "Continue the user's current thought in the same voice and perspective."
+)
+_DEFAULT_IMPERSONATE_USER_PROMPT = (
+    "Write this reply as if it is authored by the user, in first person, while preserving the user's intent."
+)
+_DEFAULT_FORCE_NARRATE_PROMPT = "Use narrative prose style for this reply."
+
+
+def _normalize_message_steering_prompt_overrides(
+    prompt_overrides: Any,
+) -> dict[str, str]:
+    raw_overrides: Mapping[str, Any] | dict[str, Any] = {}
+    if hasattr(prompt_overrides, "model_dump"):
+        try:
+            raw_overrides = prompt_overrides.model_dump(exclude_none=True)
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            raw_overrides = {}
+    elif isinstance(prompt_overrides, Mapping):
+        raw_overrides = dict(prompt_overrides)
+
+    def _resolve_prompt(raw_value: Any, fallback: str) -> str:
+        if not isinstance(raw_value, str):
+            return fallback
+        normalized = raw_value.strip()
+        return normalized or fallback
+
+    return {
+        "continue_as_user": _resolve_prompt(
+            raw_overrides.get("continue_as_user"),
+            _DEFAULT_CONTINUE_AS_USER_PROMPT,
+        ),
+        "impersonate_user": _resolve_prompt(
+            raw_overrides.get("impersonate_user"),
+            _DEFAULT_IMPERSONATE_USER_PROMPT,
+        ),
+        "force_narrate": _resolve_prompt(
+            raw_overrides.get("force_narrate"),
+            _DEFAULT_FORCE_NARRATE_PROMPT,
+        ),
+    }
+
+
 def _build_message_steering_instruction(
     continue_as_user: bool,
     impersonate_user: bool,
     force_narrate: bool,
+    prompt_overrides: Any = None,
 ) -> str:
+    prompt_templates = _normalize_message_steering_prompt_overrides(
+        prompt_overrides
+    )
     instructions: list[str] = []
     if impersonate_user:
-        instructions.append(
-            "Write this reply as if it is authored by the user, in first person, while preserving the user's intent."
-        )
+        instructions.append(prompt_templates["impersonate_user"])
     elif continue_as_user:
-        instructions.append(
-            "Continue the user's current thought in the same voice and perspective."
-        )
+        instructions.append(prompt_templates["continue_as_user"])
     if force_narrate:
-        instructions.append("Use narrative prose style for this reply.")
+        instructions.append(prompt_templates["force_narrate"])
     if not instructions:
         return ""
     return f"Steering instruction (single response): {' '.join(instructions)}"
@@ -1940,6 +1983,7 @@ def _inject_message_steering_instruction(
     continue_as_user: Any,
     impersonate_user: Any,
     force_narrate: Any,
+    prompt_overrides: Any = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     continue_flag, impersonate_flag, narrate_flag, had_conflict = (
         _resolve_message_steering_flags(
@@ -1952,6 +1996,7 @@ def _inject_message_steering_instruction(
         continue_as_user=continue_flag,
         impersonate_user=impersonate_flag,
         force_narrate=narrate_flag,
+        prompt_overrides=prompt_overrides,
     )
     if not instruction:
         return messages, had_conflict
@@ -2696,6 +2741,7 @@ async def prepare_chat_completion(
             continue_as_user=body.continue_as_user,
             impersonate_user=body.impersonate_user,
             force_narrate=body.force_narrate,
+            prompt_overrides=body.message_steering_prompts,
         )
         if steering_conflict:
             logger.debug(
@@ -2951,12 +2997,14 @@ async def prompt_assembly_preview(
             continue_as_user=continue_flag,
             impersonate_user=impersonate_flag,
             force_narrate=narrate_flag,
+            prompt_overrides=body.message_steering_prompts,
         )
         formatted, _ = _inject_message_steering_instruction(
             formatted,
             continue_as_user=body.continue_as_user,
             impersonate_user=body.impersonate_user,
             force_narrate=body.force_narrate,
+            prompt_overrides=body.message_steering_prompts,
         )
 
         lorebook_text = ""
@@ -3257,6 +3305,7 @@ async def character_chat_completion(
             continue_as_user=body.continue_as_user,
             impersonate_user=body.impersonate_user,
             force_narrate=body.force_narrate,
+            prompt_overrides=body.message_steering_prompts,
         )
         if steering_conflict:
             logger.debug(

@@ -95,6 +95,21 @@ const createProps = (
 })
 
 describe("ComposerToolbar web search", () => {
+  it("renders MCP, then model/provider, then prompts in row 1", () => {
+    render(<ComposerToolbar {...createProps()} />)
+
+    const mcp = screen.getByText("MCP")
+    const model = screen.getByText("Model")
+    const prompt = screen.getByTestId("prompt-select")
+
+    expect(
+      mcp.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      model.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+
   it("invokes toggle callback when web search button is clicked", () => {
     const onToggleWebSearch = vi.fn()
     render(

@@ -23,7 +23,10 @@ import { buildMessageSteeringSnippet } from "@/utils/message-steering"
 import { useStoreMessageOption } from "@/store/option"
 import type { ChatHistory, Message, ToolChoice } from "~/store/option"
 import type { ToolCall } from "@/types/tool-calls"
-import type { MessageSteeringFlags } from "@/types/message-steering"
+import type {
+  MessageSteeringFlags,
+  MessageSteeringPromptTemplates
+} from "@/types/message-steering"
 
 const STREAMING_UPDATE_INTERVAL_MS = 80
 
@@ -53,6 +56,7 @@ export type ChatModeParamsBase = {
   historyForModel?: ChatHistory
   regenerateFromMessage?: Message
   messageSteering?: MessageSteeringFlags
+  messageSteeringPrompts?: MessageSteeringPromptTemplates
 }
 
 export type ChatModeContext<TParams extends ChatModeParamsBase> = TParams & {
@@ -380,7 +384,8 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
         continueAsUser: false,
         impersonateUser: false,
         forceNarrate: false
-      }
+      },
+      context.messageSteeringPrompts
     )
     if (steeringSnippet) {
       promptData.chatHistory = [

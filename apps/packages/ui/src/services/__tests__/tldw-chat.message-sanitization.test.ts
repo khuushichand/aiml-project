@@ -14,7 +14,10 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   }
 }))
 
-import { TldwChatService } from "@/services/tldw/TldwChat"
+import {
+  TldwChatService,
+  getLastChatCompletionDebugSnapshot
+} from "@/services/tldw/TldwChat"
 import type { ChatMessage } from "@/services/tldw/TldwApiClient"
 
 const makeDefaultResponse = () =>
@@ -126,6 +129,49 @@ describe("TldwChatService message sanitization", () => {
           }
         ]
       }
+    ])
+  })
+
+  it("captures the last non-stream payload for debugging", async () => {
+    const service = new TldwChatService()
+    await service.sendMessage([{ role: "user", content: "hello there" }], {
+      model: "gpt-test"
+    })
+
+    const snapshot = getLastChatCompletionDebugSnapshot()
+    expect(snapshot).toMatchObject({
+      endpoint: "/api/v1/chat/completions",
+      mode: "non-stream",
+      request: expect.objectContaining({
+        model: "gpt-test",
+        stream: false
+      })
+    })
+    expect(snapshot?.request.messages).toEqual([
+      { role: "user", content: "hello there" }
+    ])
+  })
+
+  it("captures the last stream payload for debugging", async () => {
+    const service = new TldwChatService()
+    for await (const _ of service.streamMessage(
+      [{ role: "user", content: "stream hello" }],
+      { model: "gpt-test" }
+    )) {
+      break
+    }
+
+    const snapshot = getLastChatCompletionDebugSnapshot()
+    expect(snapshot).toMatchObject({
+      endpoint: "/api/v1/chat/completions",
+      mode: "stream",
+      request: expect.objectContaining({
+        model: "gpt-test",
+        stream: true
+      })
+    })
+    expect(snapshot?.request.messages).toEqual([
+      { role: "user", content: "stream hello" }
     ])
   })
 })

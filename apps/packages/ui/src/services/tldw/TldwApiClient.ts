@@ -6,6 +6,7 @@ import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import type { AllowedPath, PathOrUrl } from "@/services/tldw/openapi-guard"
 import { appendPathQuery } from "@/services/tldw/path-utils"
 import { inferUploadMediaTypeFromUrl } from "@/services/tldw/media-routing"
+import { captureChatRequestDebugSnapshot } from "@/services/tldw/chat-request-debug"
 import {
   buildContentPayload,
   mapApiDetailToUi,
@@ -1166,6 +1167,12 @@ export class TldwApiClient {
 
   async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
     // Non-stream request via background
+    captureChatRequestDebugSnapshot({
+      endpoint: "/api/v1/chat/completions",
+      method: "POST",
+      mode: "non-stream",
+      body: request
+    })
     const res = await bgRequest<Response>({ path: '/api/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: request })
     // bgRequest returns parsed data; for non-streaming chat we expect a JSON structure or text. To keep existing consumers happy, wrap as Response-like
     // For simplicity, return a minimal object with json() and text()
@@ -1175,6 +1182,12 @@ export class TldwApiClient {
 
   async *streamChatCompletion(request: ChatCompletionRequest, options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }): AsyncGenerator<any, void, unknown> {
     request.stream = true
+    captureChatRequestDebugSnapshot({
+      endpoint: "/api/v1/chat/completions",
+      method: "POST",
+      mode: "stream",
+      body: request
+    })
     for await (const line of bgStream({ path: '/api/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: request, abortSignal: options?.signal, streamIdleTimeoutMs: options?.streamIdleTimeoutMs })) {
       try {
         const parsed = JSON.parse(line)
@@ -2073,11 +2086,14 @@ export class TldwApiClient {
     })
   }
 
-  async getCharacter(id: string | number): Promise<any> {
+  async getCharacter(id: string | number, options?: { forceRefresh?: boolean }): Promise<any> {
     const cid = String(id)
-    const cached = this.characterCache.get(cid)
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.value
+    const forceRefresh = options?.forceRefresh === true
+    if (!forceRefresh) {
+      const cached = this.characterCache.get(cid)
+      if (cached && cached.expiresAt > Date.now()) {
+        return cached.value
+      }
     }
     const inFlight = this.characterInFlight.get(cid)
     if (inFlight) return inFlight
@@ -2185,13 +2201,25 @@ export class TldwApiClient {
     return res
   }
 
-  async deleteCharacter(id: string | number): Promise<void> {
+  async deleteCharacter(id: string | number, expectedVersion?: number): Promise<void> {
     const cid = String(id)
+    let resolvedVersion = Number(expectedVersion)
+    if (!Number.isInteger(resolvedVersion) || resolvedVersion < 0) {
+      const character = await this.getCharacter(cid, { forceRefresh: true })
+      const fetchedVersion = Number(character?.version)
+      if (!Number.isInteger(fetchedVersion) || fetchedVersion < 0) {
+        throw new Error("Character delete failed: missing expected version")
+      }
+      resolvedVersion = fetchedVersion
+    }
     const template = await this.resolveApiPath("characters.delete", [
       "/api/v1/characters/{id}",
       "/api/v1/characters/{id}/"
     ])
-    const path = this.fillPathParams(template, cid)
+    const path = appendPathQuery(
+      this.fillPathParams(template, cid),
+      `?expected_version=${encodeURIComponent(String(resolvedVersion))}`
+    )
     await bgRequest<void>({ path, method: 'DELETE' })
     this.characterCache.delete(cid)
   }
@@ -2665,11 +2693,18 @@ export class TldwApiClient {
     payload?: Record<string, any>
   ): Promise<any> {
     const cid = String(chat_id)
+    const body = payload || {}
+    captureChatRequestDebugSnapshot({
+      endpoint: `/api/v1/chats/${cid}/completions`,
+      method: "POST",
+      mode: "non-stream",
+      body
+    })
     return await bgRequest<any>({
       path: `/api/v1/chats/${cid}/completions`,
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: payload || {}
+      body
     })
   }
 
@@ -2708,6 +2743,12 @@ export class TldwApiClient {
   ): AsyncGenerator<any> {
     const cid = String(chat_id)
     const body = { ...(payload || {}), stream: true }
+    captureChatRequestDebugSnapshot({
+      endpoint: `/api/v1/chats/${cid}/complete-v2`,
+      method: "POST",
+      mode: "stream",
+      body
+    })
     for await (const line of bgStream({
       path: `/api/v1/chats/${cid}/complete-v2`,
       method: "POST",
@@ -2734,12 +2775,26 @@ export class TldwApiClient {
 
   async completeChat(chat_id: string | number, payload?: Record<string, any>): Promise<any> {
     const cid = String(chat_id)
-    return await bgRequest<any>({ path: `/api/v1/chats/${cid}/complete`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload || {} })
+    const body = payload || {}
+    captureChatRequestDebugSnapshot({
+      endpoint: `/api/v1/chats/${cid}/complete`,
+      method: "POST",
+      mode: "non-stream",
+      body
+    })
+    return await bgRequest<any>({ path: `/api/v1/chats/${cid}/complete`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
   }
 
   async * streamCompleteChat(chat_id: string | number, payload?: Record<string, any>): AsyncGenerator<any> {
     const cid = String(chat_id)
-    for await (const line of bgStream({ path: `/api/v1/chats/${cid}/complete`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload || {} })) {
+    const body = payload || {}
+    captureChatRequestDebugSnapshot({
+      endpoint: `/api/v1/chats/${cid}/complete`,
+      method: "POST",
+      mode: "stream",
+      body
+    })
+    for await (const line of bgStream({ path: `/api/v1/chats/${cid}/complete`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body })) {
       try { yield JSON.parse(line) } catch {}
     }
   }

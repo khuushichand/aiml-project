@@ -5,6 +5,11 @@ import {
   type ChatCompletionContentPart
 } from "./TldwApiClient"
 import { extractTokenFromChunk } from "@/utils/extract-token-from-chunk"
+import {
+  captureChatRequestDebugSnapshot,
+  getLastChatCompletionDebugSnapshot,
+  type ChatCompletionDebugSnapshot
+} from "./chat-request-debug"
 
 type ToolFunctionSchema = Record<string, unknown>
 type ToolFunction = {
@@ -247,6 +252,8 @@ export interface TldwChatOptions {
   extraBody?: Record<string, unknown>
   jsonMode?: boolean
 }
+export { getLastChatCompletionDebugSnapshot }
+export type { ChatCompletionDebugSnapshot }
 
 export interface ChatStreamChunk {
   id?: string
@@ -315,6 +322,12 @@ export class TldwChatService {
         extra_body: options.extraBody,
         response_format: options.jsonMode ? { type: "json_object" } : undefined
       }
+      captureChatRequestDebugSnapshot({
+        endpoint: "/api/v1/chat/completions",
+        method: "POST",
+        mode: "non-stream",
+        body: request
+      })
 
       const response = await tldwClient.createChatCompletion(request)
       const data = await response.json().catch(() => null)
@@ -376,6 +389,12 @@ export class TldwChatService {
         extra_body: options.extraBody,
         response_format: options.jsonMode ? { type: "json_object" } : undefined
       }
+      captureChatRequestDebugSnapshot({
+        endpoint: "/api/v1/chat/completions",
+        method: "POST",
+        mode: "stream",
+        body: request
+      })
 
       const stream = tldwClient.streamChatCompletion(request, { signal: this.currentController.signal })
 

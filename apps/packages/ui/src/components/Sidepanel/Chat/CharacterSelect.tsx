@@ -17,6 +17,11 @@ import {
   upsertCharacterMoodImage,
   type CharacterMoodLabel
 } from "@/utils/character-mood"
+import {
+  DEFAULT_MESSAGE_STEERING_PROMPTS,
+  MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
+  normalizeMessageSteeringPrompts
+} from "@/utils/message-steering"
 import { IconButton } from "@/components/Common/IconButton"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useAntdModal } from "@/hooks/useAntdModal"
@@ -28,6 +33,7 @@ import type {
   Character as StoredCharacter,
   CharacterApiResponse
 } from "@/types/character"
+import type { MessageSteeringPromptTemplates } from "@/types/message-steering"
 
 type Props = {
   selectedCharacterId: string | null
@@ -123,6 +129,11 @@ export const CharacterSelect: React.FC<Props> = ({
     "chatShowCharacterPortraits",
     true
   )
+  const [messageSteeringPrompts, setMessageSteeringPrompts] =
+    useStorage<MessageSteeringPromptTemplates>(
+      MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
+      DEFAULT_MESSAGE_STEERING_PROMPTS
+    )
   const [searchText, setSearchText] = useState("")
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
@@ -292,6 +303,15 @@ export const CharacterSelect: React.FC<Props> = ({
   }, [userPersonaImage])
   const trimmedDisplayName = userDisplayName.trim()
   const displayNameInputRef = useRef(trimmedDisplayName)
+  const steeringPromptDraftRef = useRef<MessageSteeringPromptTemplates>(
+    normalizeMessageSteeringPrompts(messageSteeringPrompts)
+  )
+
+  useEffect(() => {
+    steeringPromptDraftRef.current = normalizeMessageSteeringPrompts(
+      messageSteeringPrompts
+    )
+  }, [messageSteeringPrompts])
 
   const buildStoredCharacter = React.useCallback(
     (character: Partial<CharacterApiResponse>): StoredCharacter | null => {
@@ -382,6 +402,101 @@ export const CharacterSelect: React.FC<Props> = ({
       }
     })
   }, [modal, setUserDisplayName, t, trimmedDisplayName])
+
+  const openGenerationPromptsModal = React.useCallback(() => {
+    const current = normalizeMessageSteeringPrompts(messageSteeringPrompts)
+    steeringPromptDraftRef.current = { ...current }
+    React.startTransition(() => {
+      modal.confirm({
+        title: t("sidepanel:characterSelect.editPromptsTitle", {
+          defaultValue: "Edit generation prompts"
+        }),
+        width: 720,
+        centered: true,
+        maskClosable: false,
+        content: (
+          <div className="space-y-3">
+            <div className="text-xs text-text-muted">
+              {t("sidepanel:characterSelect.editPromptsHelp", {
+                defaultValue:
+                  "These templates are used when running Continue as user, Impersonate user, and Force narrate."
+              })}
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-text">
+                {t("sidepanel:characterSelect.continueAsUser", {
+                  defaultValue: "Continue as user"
+                })}
+              </div>
+              <Input.TextArea
+                rows={3}
+                defaultValue={current.continueAsUser}
+                onChange={(event) => {
+                  steeringPromptDraftRef.current = {
+                    ...steeringPromptDraftRef.current,
+                    continueAsUser: event.target.value
+                  }
+                }}
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-text">
+                {t("sidepanel:characterSelect.impersonateUser", {
+                  defaultValue: "Impersonate user"
+                })}
+              </div>
+              <Input.TextArea
+                rows={3}
+                defaultValue={current.impersonateUser}
+                onChange={(event) => {
+                  steeringPromptDraftRef.current = {
+                    ...steeringPromptDraftRef.current,
+                    impersonateUser: event.target.value
+                  }
+                }}
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-text">
+                {t("sidepanel:characterSelect.forceNarrate", {
+                  defaultValue: "Force narrate"
+                })}
+              </div>
+              <Input.TextArea
+                rows={3}
+                defaultValue={current.forceNarrate}
+                onChange={(event) => {
+                  steeringPromptDraftRef.current = {
+                    ...steeringPromptDraftRef.current,
+                    forceNarrate: event.target.value
+                  }
+                }}
+              />
+            </div>
+          </div>
+        ),
+        okText: t("common:save", { defaultValue: "Save" }),
+        cancelText: t("common:cancel", { defaultValue: "Cancel" }),
+        onOk: async () => {
+          const next = normalizeMessageSteeringPrompts(
+            steeringPromptDraftRef.current
+          )
+          await new Promise<void>((resolve) => {
+            React.startTransition(() => {
+              Promise.resolve(setMessageSteeringPrompts(next)).finally(() =>
+                resolve()
+              )
+            })
+          })
+          notification.success({
+            message: t("sidepanel:characterSelect.editPromptsSaved", {
+              defaultValue: "Generation prompts saved"
+            })
+          })
+        }
+      })
+    })
+  }, [messageSteeringPrompts, modal, notification, setMessageSteeringPrompts, t])
 
   const handlePersonaImageUploadClick = React.useCallback(() => {
     if (!personaImageInputRef.current) return
@@ -1162,6 +1277,20 @@ export const CharacterSelect: React.FC<Props> = ({
     })
 
     items.push({
+      key: "edit-generation-prompts",
+      label: (
+        <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
+          <span>
+            {t("sidepanel:characterSelect.editPrompts", {
+              defaultValue: "Edit generation prompts"
+            })}
+          </span>
+        </div>
+      ),
+      onClick: openGenerationPromptsModal
+    })
+
+    items.push({
       key: "persona-image-upload",
       label: (
         <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
@@ -1296,6 +1425,7 @@ export const CharacterSelect: React.FC<Props> = ({
     handleSelect,
     isLoading,
     openDisplayNameModal,
+    openGenerationPromptsModal,
     hasUserPersonaImage,
     handlePersonaImageUploadClick,
     clearPersonaImage,

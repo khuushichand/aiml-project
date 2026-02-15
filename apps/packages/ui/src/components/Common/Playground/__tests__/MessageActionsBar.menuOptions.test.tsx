@@ -1,5 +1,5 @@
 import React from "react"
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { MessageActionsBar } from "../MessageActionsBar"
 
@@ -81,5 +81,33 @@ describe("MessageActionsBar menu options", () => {
     )
 
     expect(screen.getByText("Generate document")).toBeInTheDocument()
+  })
+
+  it("runs steered continue actions immediately when callback is provided", () => {
+    const onRunSteeredContinue = vi.fn()
+    const onMessageSteeringModeChange = vi.fn()
+
+    render(
+      <MessageActionsBar
+        {...baseProps()}
+        onContinue={vi.fn()}
+        onRunSteeredContinue={onRunSteeredContinue}
+        onMessageSteeringModeChange={onMessageSteeringModeChange}
+        onMessageSteeringForceNarrateChange={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByText("Continue as user"))
+    fireEvent.click(screen.getByText("Impersonate user"))
+
+    expect(onRunSteeredContinue).toHaveBeenNthCalledWith(
+      1,
+      "continue_as_user"
+    )
+    expect(onRunSteeredContinue).toHaveBeenNthCalledWith(
+      2,
+      "impersonate_user"
+    )
+    expect(onMessageSteeringModeChange).not.toHaveBeenCalled()
   })
 })

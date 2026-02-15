@@ -52,6 +52,10 @@ import {
 import { useStoreMessage } from "@/store"
 import { updateMessageDiscoSkillComment } from "@/db/dexie/helpers"
 import type { MessageSteeringMode } from "@/types/message-steering"
+import {
+  resolveAvatarColumnAlignment,
+  resolveMessageRenderSide
+} from "./message-layout"
 
 const Markdown = React.lazy(() => import("../../Common/Markdown"))
 
@@ -119,6 +123,9 @@ type Props = {
   modelImage?: string
   modelName?: string
   onContinue?: () => void
+  onRunSteeredContinue?: (
+    mode: Exclude<MessageSteeringMode, "none">
+  ) => void
   documents?: ChatDocuments
   actionInfo?: string | null
   onNewBranch?: () => void
@@ -338,10 +345,17 @@ export const PlaygroundMessage = (props: Props) => {
     : props.isBot
       ? resolvedModelImage || ""
       : resolvedUserPersonaImage
-  const portraitSide: "left" | "right" = props.isBot ? "left" : "right"
+  const messageRenderSide = resolveMessageRenderSide({
+    isBot: props.isBot,
+    isSystemMessage
+  })
+  const portraitSide: "left" | "right" = messageRenderSide
   const shouldShowPortrait =
     Boolean(showCharacterPortraits) && Boolean(portraitImage)
   const shouldShowAvatarColumn = !shouldShowPortrait
+  const avatarColumnAlignmentClass = resolveAvatarColumnAlignment(
+    messageRenderSide
+  )
   const userAvatarNode = props.userAvatar ? (
     props.userAvatar
   ) : resolvedUserPersonaImage ? (
@@ -1009,6 +1023,48 @@ export const PlaygroundMessage = (props: Props) => {
       <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-transparent" />
     </button>
   ) : null
+  const avatarColumn = shouldShowAvatarColumn ? (
+    <div className={`w-8 flex flex-col relative ${avatarColumnAlignmentClass}`}>
+      {props.isBot ? (
+        !resolvedModelImage ? (
+          <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
+            <div className="absolute h-8 w-8 rounded-full bg-gradient-to-r from-green-300 to-purple-400"></div>
+          </div>
+        ) : shouldPreviewAvatar ? (
+          <button
+            type="button"
+            onClick={() => setIsAvatarPreviewOpen(true)}
+            className="rounded-full focus:outline-none focus:ring-2 focus:ring-focus"
+            aria-label={t("playground:previewCharacterAvatar", {
+              defaultValue: "Preview character avatar"
+            }) as string}
+          >
+            <Avatar
+              src={resolvedModelImage}
+              alt={resolvedModelName || props.name}
+              className="size-8"
+            />
+          </button>
+        ) : (
+          <Avatar
+            src={resolvedModelImage}
+            alt={resolvedModelName || props.name}
+            className="size-8"
+          />
+        )
+      ) : isSystemMessage ? (
+        <div className="relative h-7 w-7 p-1 rounded-sm text-warn flex items-center justify-center text-opacity-100">
+          <div className="absolute h-8 w-8 rounded-full border border-warn/40 bg-warn/10"></div>
+        </div>
+      ) : !userAvatarNode ? (
+        <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
+          <div className="absolute h-8 w-8 rounded-full from-primary/60 to-primary bg-gradient-to-r"></div>
+        </div>
+      ) : (
+        userAvatarNode
+      )}
+    </div>
+  ) : null
   return (
     <article
       data-testid="chat-message"
@@ -1044,48 +1100,7 @@ export const PlaygroundMessage = (props: Props) => {
           isProMode ? "gap-4 md:gap-6 my-2" : "gap-3 md:gap-4 my-1.5"
         }`}>
         {portraitSide === "left" ? portraitPanel : null}
-        {shouldShowAvatarColumn && (
-          <div className="w-8 flex flex-col relative items-end">
-            {props.isBot ? (
-              !resolvedModelImage ? (
-                <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
-                  <div className="absolute h-8 w-8 rounded-full bg-gradient-to-r from-green-300 to-purple-400"></div>
-                </div>
-              ) : shouldPreviewAvatar ? (
-                <button
-                  type="button"
-                  onClick={() => setIsAvatarPreviewOpen(true)}
-                  className="rounded-full focus:outline-none focus:ring-2 focus:ring-focus"
-                  aria-label={t("playground:previewCharacterAvatar", {
-                    defaultValue: "Preview character avatar"
-                  }) as string}
-                >
-                  <Avatar
-                    src={resolvedModelImage}
-                    alt={resolvedModelName || props.name}
-                    className="size-8"
-                  />
-                </button>
-              ) : (
-                <Avatar
-                  src={resolvedModelImage}
-                  alt={resolvedModelName || props.name}
-                  className="size-8"
-                />
-              )
-            ) : isSystemMessage ? (
-              <div className="relative h-7 w-7 p-1 rounded-sm text-warn flex items-center justify-center text-opacity-100">
-                <div className="absolute h-8 w-8 rounded-full border border-warn/40 bg-warn/10"></div>
-              </div>
-            ) : !userAvatarNode ? (
-              <div className="relative h-7 w-7 p-1 rounded-sm text-white flex items-center justify-center  text-opacity-100">
-                <div className="absolute h-8 w-8 rounded-full from-primary/60 to-primary bg-gradient-to-r"></div>
-              </div>
-            ) : (
-              userAvatarNode
-            )}
-          </div>
-        )}
+        {portraitSide === "left" ? avatarColumn : null}
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className={messageCardClass}>
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1319,6 +1334,7 @@ export const PlaygroundMessage = (props: Props) => {
               temporaryChat={props.temporaryChat}
               hideContinue={props.hideContinue}
               onContinue={props.onContinue}
+              onRunSteeredContinue={props.onRunSteeredContinue}
               messageSteeringMode={props.messageSteeringMode}
               onMessageSteeringModeChange={props.onMessageSteeringModeChange}
               messageSteeringForceNarrate={props.messageSteeringForceNarrate}
@@ -1450,6 +1466,7 @@ export const PlaygroundMessage = (props: Props) => {
           )}
           </div>
         </div>
+        {portraitSide === "right" ? avatarColumn : null}
         {portraitSide === "right" ? portraitPanel : null}
       </div>
       {isAvatarPreviewOpen && portraitImage && (

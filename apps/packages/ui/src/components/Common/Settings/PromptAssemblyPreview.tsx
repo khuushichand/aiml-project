@@ -2,9 +2,16 @@ import React from "react"
 import { ChevronDown, ChevronUp, RefreshCcw } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
+import { useStorage } from "@plasmohq/storage/hook"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useStoreMessageOption } from "@/store/option"
-import { resolveMessageSteering } from "@/utils/message-steering"
+import {
+  DEFAULT_MESSAGE_STEERING_PROMPTS,
+  MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
+  resolveMessageSteering,
+  toMessageSteeringPromptPayload
+} from "@/utils/message-steering"
+import type { MessageSteeringPromptTemplates } from "@/types/message-steering"
 
 export type PromptPreviewConflict = {
   type: string
@@ -169,6 +176,11 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
   const [open, setOpen] = React.useState(false)
   const id = React.useId()
   const panelId = `${id}-prompt-assembly-preview-panel`
+  const [messageSteeringPrompts] =
+    useStorage<MessageSteeringPromptTemplates>(
+      MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
+      DEFAULT_MESSAGE_STEERING_PROMPTS
+    )
   const { messageSteeringMode, messageSteeringForceNarrate } =
     useStoreMessageOption()
   const resolvedSteering = React.useMemo(
@@ -186,7 +198,10 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
       serverChatId,
       settingsFingerprint,
       resolvedSteering.mode,
-      resolvedSteering.forceNarrate
+      resolvedSteering.forceNarrate,
+      messageSteeringPrompts.continueAsUser,
+      messageSteeringPrompts.impersonateUser,
+      messageSteeringPrompts.forceNarrate
     ],
     enabled: open && Boolean(serverChatId),
     queryFn: async () => {
@@ -199,7 +214,10 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
         offset: 0,
         continue_as_user: resolvedSteering.continueAsUser,
         impersonate_user: resolvedSteering.impersonateUser,
-        force_narrate: resolvedSteering.forceNarrate
+        force_narrate: resolvedSteering.forceNarrate,
+        message_steering_prompts: toMessageSteeringPromptPayload(
+          messageSteeringPrompts
+        )
       })
       return normalizePreviewPayload(payload)
     },
@@ -213,7 +231,11 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
       <button
         type="button"
         className="flex w-full items-center justify-between px-3 py-2 text-left"
-        onClick={() => setOpen((value) => !value)}
+        onClick={() =>
+          React.startTransition(() => {
+            setOpen((value) => !value)
+          })
+        }
         aria-expanded={open}
         aria-controls={panelId}
       >

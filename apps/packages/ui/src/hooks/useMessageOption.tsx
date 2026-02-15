@@ -26,6 +26,11 @@ import {
   toRagAdvancedOptions,
   type RagSettings
 } from "@/services/rag/unified-rag"
+import {
+  DEFAULT_MESSAGE_STEERING_PROMPTS,
+  MESSAGE_STEERING_PROMPTS_STORAGE_KEY
+} from "@/utils/message-steering"
+import type { MessageSteeringPromptTemplates } from "@/types/message-steering"
 
 export const useMessageOption = (
   opts: { forceCompareEnabled?: boolean } = {}
@@ -193,6 +198,11 @@ export const useMessageOption = (
     "ragSearchSettingsV2",
     DEFAULT_RAG_SETTINGS
   )
+  const [messageSteeringPrompts] =
+    useStorage<MessageSteeringPromptTemplates>(
+      MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
+      DEFAULT_MESSAGE_STEERING_PROMPTS
+    )
 
   const { ttsEnabled } = useWebUI()
 
@@ -523,11 +533,13 @@ export const useMessageOption = (
     compareMaxModels,
     compareFeatureEnabled,
     markCompareHistoryCreated,
+    messageSteeringPrompts,
     messageSteeringMode,
     messageSteeringForceNarrate,
     clearMessageSteering,
     replyTarget,
     clearReplyTarget,
+    setSelectedQuickPrompt,
     setSelectedSystemPrompt,
     invalidateServerChatHistory,
     selectedCharacter

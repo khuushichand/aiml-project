@@ -73,7 +73,16 @@ import { fetchChatModels, fetchImageModels } from "@/services/tldw-server"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useTldwAudioStatus } from "@/hooks/useTldwAudioStatus"
 import { useMcpTools } from "@/hooks/useMcpTools"
-import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
+import {
+  tldwClient,
+  type ConversationState,
+  type ChatCompletionRequest,
+  type ChatMessage
+} from "@/services/tldw/TldwApiClient"
+import {
+  captureChatRequestDebugSnapshot,
+  type ChatRequestDebugSnapshot
+} from "@/services/tldw/chat-request-debug"
 import {
   buildDiscussMediaHint,
   getMediaChatHandoffMode,
@@ -107,6 +116,7 @@ import { useSimpleForm } from "@/hooks/useSimpleForm"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useStoreMessageOption } from "@/store/option"
 import { trackOnboardingChatSubmitSuccess } from "@/utils/onboarding-ingestion-telemetry"
+import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import {
   useModelSelector,
   useComposerTokens,
@@ -192,7 +202,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setServerChatVersion,
     replyTarget,
     clearReplyTarget,
-    ragPinnedResults
+    ragPinnedResults,
+    messageSteeringMode,
+    messageSteeringForceNarrate,
+    contextFiles,
+    documentContext,
+    selectedKnowledge,
+    ragMediaIds
   } = useMessageOption()
   const setRagMediaIds = useStoreMessageOption((s) => s.setRagMediaIds)
 
@@ -204,6 +220,21 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const setSystemPrompt = useStoreChatModelSettings(
     (state) => state.setSystemPrompt
   )
+  const currentChatModelSettings = useStoreChatModelSettings((state) => ({
+    temperature: state.temperature,
+    numPredict: state.numPredict,
+    topP: state.topP,
+    frequencyPenalty: state.frequencyPenalty,
+    presencePenalty: state.presencePenalty,
+    reasoningEffort: state.reasoningEffort,
+    historyMessageLimit: state.historyMessageLimit,
+    historyMessageOrder: state.historyMessageOrder,
+    slashCommandInjectionMode: state.slashCommandInjectionMode,
+    apiProvider: state.apiProvider,
+    extraHeaders: state.extraHeaders,
+    extraBody: state.extraBody,
+    jsonMode: state.jsonMode
+  }))
   const numCtx = useStoreChatModelSettings((state) => state.numCtx)
   const updateChatModelSetting = useStoreChatModelSettings(
     (state) => state.updateSetting
@@ -2717,7 +2748,448 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   // State for collapsible advanced section in tools popover
   const [advancedToolsExpanded, setAdvancedToolsExpanded] = React.useState(isProMode)
+  const [rawRequestModalOpen, setRawRequestModalOpen] = React.useState(false)
+  const [rawRequestSnapshot, setRawRequestSnapshot] =
+    React.useState<ChatRequestDebugSnapshot | null>(null)
   const { mcpSettingsOpen, setMcpSettingsOpen } = mcpCtrl
+
+  const parseJsonObject = React.useCallback((value?: string) => {
+    if (!value || typeof value !== "string") return undefined
+    const trimmed = value.trim()
+    if (!trimmed) return undefined
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      return undefined
+    }
+    return undefined
+  }, [])
+
+  const getComposerModelMeta = React.useCallback(
+    (modelId: string) => {
+      const normalized = String(modelId || "").replace(/^tldw:/, "")
+      const models = Array.isArray(composerModels) ? (composerModels as any[]) : []
+      return models.find((entry) => {
+        const candidate =
+          String(entry?.id || entry?.model || entry?.name || "").replace(
+            /^tldw:/,
+            ""
+          )
+        return candidate === normalized
+      })
+    },
+    [composerModels]
+  )
+
+  const supportsCapability = React.useCallback(
+    (modelId: string, capability: string) => {
+      const meta = getComposerModelMeta(modelId)
+      const caps = Array.isArray(meta?.capabilities) ? meta.capabilities : []
+      return caps.includes(capability)
+    },
+    [getComposerModelMeta]
+  )
+
+  const toPreviewUserContent = React.useCallback(
+    (text: string, image: string, modelId: string): ChatMessage["content"] => {
+      const cleanedText = text ?? ""
+      const trimmedImage = typeof image === "string" ? image.trim() : ""
+      const canUseImages = supportsCapability(modelId, "vision")
+      if (trimmedImage.length > 0 && canUseImages) {
+        return [
+          { type: "image_url", image_url: { url: trimmedImage } },
+          { type: "text", text: cleanedText }
+        ]
+      }
+      return cleanedText
+    },
+    [supportsCapability]
+  )
+
+  const toPreviewHistoryMessages = React.useCallback(
+    (modelId: string, draftMessage: string, draftImage: string): ChatMessage[] => {
+      const requestMessages: ChatMessage[] = []
+      for (const entry of history || []) {
+        if (!entry || typeof entry.content !== "string") continue
+        if (entry.role === "system") {
+          requestMessages.push({ role: "system", content: entry.content })
+          continue
+        }
+        if (entry.role === "assistant") {
+          requestMessages.push({ role: "assistant", content: entry.content })
+          continue
+        }
+        if (entry.role === "user") {
+          requestMessages.push({
+            role: "user",
+            content: toPreviewUserContent(
+              entry.content,
+              typeof entry.image === "string" ? entry.image : "",
+              modelId
+            )
+          })
+        }
+      }
+
+      if (draftMessage.trim().length > 0 || draftImage.trim().length > 0) {
+        requestMessages.push({
+          role: "user",
+          content: toPreviewUserContent(draftMessage, draftImage, modelId)
+        })
+      }
+
+      const trimmedSystemPrompt = String(systemPrompt || "").trim()
+      if (
+        trimmedSystemPrompt.length > 0 &&
+        requestMessages[0]?.role !== "system"
+      ) {
+        requestMessages.unshift({ role: "system", content: trimmedSystemPrompt })
+      }
+
+      return requestMessages
+    },
+    [history, systemPrompt, toPreviewUserContent]
+  )
+
+  const buildNormalPreviewRequest = React.useCallback(
+    async (modelId: string, draftMessage: string, draftImage: string) => {
+      const normalizedModel = String(modelId || "").replace(/^tldw:/, "").trim()
+      const resolvedProvider = await resolveApiProviderForModel({
+        modelId: normalizedModel,
+        explicitProvider: currentChatModelSettings.apiProvider
+      })
+      const modelSupportsTools = supportsCapability(normalizedModel, "tools")
+      const toolsAllowed =
+        modelSupportsTools &&
+        hasMcp &&
+        mcpHealthState !== "unavailable" &&
+        mcpHealthState !== "unhealthy"
+      const executableTools = Array.isArray(mcpTools)
+        ? mcpTools.filter((tool) => {
+            if (!tool || typeof tool !== "object") return false
+            if (!("canExecute" in tool)) return true
+            return Boolean((tool as Record<string, unknown>).canExecute)
+          })
+        : []
+      const effectiveTools =
+        toolsAllowed &&
+        toolChoice !== "none" &&
+        executableTools.length > 0
+          ? executableTools
+          : undefined
+      const request: ChatCompletionRequest = {
+        messages: toPreviewHistoryMessages(normalizedModel, draftMessage, draftImage),
+        model: normalizedModel,
+        stream: true,
+        temperature: currentChatModelSettings.temperature,
+        max_tokens: currentChatModelSettings.numPredict,
+        top_p: currentChatModelSettings.topP,
+        frequency_penalty: currentChatModelSettings.frequencyPenalty,
+        presence_penalty: currentChatModelSettings.presencePenalty,
+        reasoning_effort:
+          currentChatModelSettings.reasoningEffort === "low" ||
+          currentChatModelSettings.reasoningEffort === "medium" ||
+          currentChatModelSettings.reasoningEffort === "high"
+            ? currentChatModelSettings.reasoningEffort
+            : undefined,
+        tool_choice: effectiveTools ? toolChoice : undefined,
+        tools: effectiveTools,
+        save_to_db: !temporaryChat && Boolean(serverChatId),
+        conversation_id: !temporaryChat && serverChatId ? serverChatId : undefined,
+        history_message_limit: currentChatModelSettings.historyMessageLimit,
+        history_message_order: currentChatModelSettings.historyMessageOrder,
+        slash_command_injection_mode:
+          currentChatModelSettings.slashCommandInjectionMode,
+        api_provider: resolvedProvider || undefined,
+        extra_headers: parseJsonObject(currentChatModelSettings.extraHeaders),
+        extra_body: parseJsonObject(currentChatModelSettings.extraBody),
+        response_format: currentChatModelSettings.jsonMode
+          ? { type: "json_object" }
+          : undefined
+      }
+      return request
+    },
+    [
+      currentChatModelSettings.apiProvider,
+      currentChatModelSettings.extraBody,
+      currentChatModelSettings.extraHeaders,
+      currentChatModelSettings.frequencyPenalty,
+      currentChatModelSettings.historyMessageLimit,
+      currentChatModelSettings.historyMessageOrder,
+      currentChatModelSettings.jsonMode,
+      currentChatModelSettings.numPredict,
+      currentChatModelSettings.presencePenalty,
+      currentChatModelSettings.reasoningEffort,
+      currentChatModelSettings.slashCommandInjectionMode,
+      currentChatModelSettings.temperature,
+      currentChatModelSettings.topP,
+      hasMcp,
+      mcpHealthState,
+      mcpTools,
+      parseJsonObject,
+      serverChatId,
+      temporaryChat,
+      toPreviewHistoryMessages,
+      toolChoice,
+      supportsCapability
+    ]
+  )
+
+  const buildCurrentRawRequestSnapshot = React.useCallback(async () => {
+    const intent = resolveSubmissionIntent(form.values.message || "")
+    const draftMessage = intent.message.trim()
+    const draftImage = intent.isImageCommand ? "" : String(form.values.image || "")
+    const hasScopedRagMediaIds =
+      Array.isArray(ragMediaIds) && ragMediaIds.length > 0
+    const shouldUseRag =
+      Boolean(selectedKnowledge) || (fileRetrievalEnabled && hasScopedRagMediaIds)
+    const hasContextFiles = Array.isArray(contextFiles) && contextFiles.length > 0
+    const hasDocs =
+      (Array.isArray(selectedDocuments) && selectedDocuments.length > 0) ||
+      (Array.isArray(documentContext) && documentContext.length > 0)
+    const isCharacterFlow =
+      !compareModeActive &&
+      !intent.isImageCommand &&
+      !hasContextFiles &&
+      !hasDocs &&
+      !shouldUseRag &&
+      Boolean(selectedCharacter?.id)
+
+    if (intent.isImageCommand) {
+      const backend =
+        intent.imageBackendOverride || imageBackendDefaultTrimmed || "image-generation"
+      return {
+        endpoint: "/api/v1/files/create",
+        method: "POST",
+        mode: "non-stream" as const,
+        sentAt: new Date().toISOString(),
+        body: {
+          file_type: "image",
+          payload: {
+            backend,
+            prompt: draftMessage
+          },
+          export: {
+            format: "png",
+            mode: "inline",
+            async_mode: "sync"
+          },
+          options: {
+            persist: true
+          }
+        }
+      } satisfies ChatRequestDebugSnapshot
+    }
+
+    if (isCharacterFlow) {
+      const resolvedModel = String(selectedModel || "").replace(/^tldw:/, "").trim()
+      const provider = await resolveApiProviderForModel({
+        modelId: resolvedModel,
+        explicitProvider: currentChatModelSettings.apiProvider
+      })
+      const chatIdHint = serverChatId || "<new-chat-id>"
+      const messagePayload: Record<string, unknown> = {
+        role: "user",
+        content: draftMessage
+      }
+      const normalizedImage = String(form.values.image || "")
+      if (normalizedImage.startsWith("data:")) {
+        const b64 = normalizedImage.includes(",")
+          ? normalizedImage.split(",")[1]
+          : normalizedImage
+        if (b64 && b64.length > 0) {
+          messagePayload.image_base64 = b64
+        }
+      }
+      return {
+        endpoint: `/api/v1/chats/${chatIdHint}/complete-v2`,
+        method: "POST",
+        mode: "stream",
+        sentAt: new Date().toISOString(),
+        body: {
+          sequence: [
+            !serverChatId
+              ? {
+                  endpoint: "/api/v1/chats/",
+                  method: "POST",
+                  body: {
+                    character_id: selectedCharacter?.id,
+                    state: serverChatState || "in-progress",
+                    source: serverChatSource || undefined
+                  }
+                }
+              : null,
+            {
+              endpoint: `/api/v1/chats/${chatIdHint}/messages`,
+              method: "POST",
+              body: messagePayload
+            },
+            {
+              endpoint: `/api/v1/chats/${chatIdHint}/complete-v2`,
+              method: "POST",
+              body: {
+                include_character_context: true,
+                model: resolvedModel,
+                provider: provider || undefined,
+                save_to_db: !temporaryChat,
+                continue_as_user: messageSteeringMode === "continue_as_user",
+                impersonate_user: messageSteeringMode === "impersonate_user",
+                force_narrate: Boolean(messageSteeringForceNarrate),
+                stream: true
+              }
+            }
+          ].filter(Boolean)
+        }
+      } satisfies ChatRequestDebugSnapshot
+    }
+
+    const modelsForPreview = compareModeActive
+      ? Array.from(
+          new Set(
+            compareSelectedModels.length > 0
+              ? compareSelectedModels
+              : selectedModel
+                ? [selectedModel]
+                : []
+          )
+        )
+      : selectedModel
+        ? [selectedModel]
+        : []
+    const limitedModels =
+      compareModeActive && compareMaxModels > 0
+        ? modelsForPreview.slice(0, compareMaxModels)
+        : modelsForPreview
+
+    if (limitedModels.length === 0) {
+      return {
+        endpoint: "/api/v1/chat/completions",
+        method: "POST",
+        mode: "stream",
+        sentAt: new Date().toISOString(),
+        body: {
+          error: "No model selected"
+        }
+      } satisfies ChatRequestDebugSnapshot
+    }
+
+    if (limitedModels.length === 1) {
+      const request = await buildNormalPreviewRequest(
+        limitedModels[0],
+        draftMessage,
+        draftImage
+      )
+      return {
+        endpoint: "/api/v1/chat/completions",
+        method: "POST",
+        mode: "stream",
+        sentAt: new Date().toISOString(),
+        body: request
+      } satisfies ChatRequestDebugSnapshot
+    }
+
+    const requests = await Promise.all(
+      limitedModels.map((modelId) =>
+        buildNormalPreviewRequest(modelId, draftMessage, draftImage)
+      )
+    )
+    return {
+      endpoint: "/api/v1/chat/completions",
+      method: "POST",
+      mode: "stream",
+      sentAt: new Date().toISOString(),
+      body: {
+        compare_mode: true,
+        requests
+      }
+    } satisfies ChatRequestDebugSnapshot
+  }, [
+    buildNormalPreviewRequest,
+    compareMaxModels,
+    compareModeActive,
+    compareSelectedModels,
+    contextFiles,
+    currentChatModelSettings.apiProvider,
+    documentContext,
+    fileRetrievalEnabled,
+    form.values.image,
+    form.values.message,
+    imageBackendDefaultTrimmed,
+    messageSteeringForceNarrate,
+    messageSteeringMode,
+    ragMediaIds,
+    resolveSubmissionIntent,
+    selectedCharacter?.id,
+    selectedKnowledge,
+    selectedModel,
+    selectedDocuments,
+    serverChatId,
+    serverChatSource,
+    serverChatState,
+    temporaryChat
+  ])
+
+  const rawRequestJson = React.useMemo(
+    () =>
+      rawRequestSnapshot
+        ? JSON.stringify(rawRequestSnapshot.body, null, 2)
+        : "",
+    [rawRequestSnapshot]
+  )
+
+  const refreshRawRequestSnapshot = React.useCallback(async () => {
+    try {
+      const snapshot = await buildCurrentRawRequestSnapshot()
+      setRawRequestSnapshot(snapshot)
+      captureChatRequestDebugSnapshot({
+        endpoint: snapshot.endpoint,
+        method: snapshot.method,
+        mode: snapshot.mode,
+        body: snapshot.body
+      })
+    } catch (error) {
+      console.error("Failed to build current request preview", error)
+      setRawRequestSnapshot(null)
+      notificationApi.error({
+        message: t("error", { defaultValue: "Error" }),
+        description: t(
+          "playground:tools.rawChatRequestBuildFailed",
+          "Failed to generate request preview from current input."
+        )
+      })
+    }
+  }, [buildCurrentRawRequestSnapshot, notificationApi, t])
+
+  const openRawRequestModal = React.useCallback(() => {
+    setToolsPopoverOpen(false)
+    setRawRequestModalOpen(true)
+    void refreshRawRequestSnapshot()
+  }, [refreshRawRequestSnapshot])
+
+  const copyRawRequestJson = React.useCallback(async () => {
+    if (!rawRequestJson) return
+    try {
+      await navigator.clipboard.writeText(rawRequestJson)
+      notificationApi.success({
+        message: t("common:copied", "Copied"),
+        description: t(
+          "playground:tools.rawChatRequestCopied",
+          "Copied request JSON to clipboard."
+        )
+      })
+    } catch {
+      notificationApi.error({
+        message: t("error", { defaultValue: "Error" }),
+        description: t(
+          "playground:tools.rawChatRequestCopyFailed",
+          "Unable to copy request JSON."
+        )
+      })
+    }
+  }, [notificationApi, rawRequestJson, t])
 
   const moreToolsContent = React.useMemo(
     () => (
@@ -2866,6 +3338,30 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
             <div className="border-t border-border my-1" />
 
+            <div className="flex flex-col gap-1.5 px-2">
+              <button
+                type="button"
+                onClick={openRawRequestModal}
+                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
+              >
+                <span>
+                  {t(
+                    "playground:tools.rawChatRequest",
+                    "View raw chat JSON"
+                  )}
+                </span>
+                <FileText className="h-4 w-4" />
+              </button>
+              <p className="text-[11px] text-text-muted">
+                {t(
+                  "playground:tools.rawChatRequestHelp",
+                  "Shows the chat request payload preview generated from your current composer input."
+                )}
+              </p>
+            </div>
+
+            <div className="border-t border-border my-1" />
+
             {/* Voice Settings */}
             <div className="flex flex-col gap-2 px-2">
               <Tooltip
@@ -2940,6 +3436,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       imageProviderControl,
       isSending,
       navigate,
+      openRawRequestModal,
       setAllowExternalImages,
       setDefaultInternetSearchOnSetting,
       setSimpleInternetSearch,
@@ -4212,6 +4709,70 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           </div>
         </div>
       </div>
+      <Modal
+        open={rawRequestModalOpen}
+        onCancel={() => setRawRequestModalOpen(false)}
+        title={t("playground:tools.rawChatRequestTitle", "Current chat request JSON")}
+        width={780}
+        destroyOnHidden
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button onClick={refreshRawRequestSnapshot}>
+              {t("common:refresh", "Refresh")}
+            </Button>
+            <Button onClick={copyRawRequestJson} disabled={!rawRequestJson}>
+              {t("common:copy", "Copy")}
+            </Button>
+            <Button type="primary" onClick={() => setRawRequestModalOpen(false)}>
+              {t("common:close", "Close")}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          {rawRequestSnapshot ? (
+            <>
+              <div className="space-y-1 text-xs text-text-muted">
+                <p>
+                  {t("playground:tools.rawChatRequestEndpoint", "Endpoint")}:{" "}
+                  <span className="font-mono">{rawRequestSnapshot.endpoint}</span>
+                </p>
+                <p>
+                  {t("playground:tools.rawChatRequestMethod", "Method")}:{" "}
+                  {rawRequestSnapshot.method}
+                </p>
+                <p>
+                  {t("playground:tools.rawChatRequestMode", "Mode")}:{" "}
+                  {rawRequestSnapshot.mode}
+                </p>
+                <p>
+                  {t("playground:tools.rawChatRequestSentAt", "Sent at")}:{" "}
+                  {new Date(rawRequestSnapshot.sentAt).toLocaleString()}
+                </p>
+                <p>
+                  {t("playground:tools.rawChatRequestMessageCount", "Messages")}:{" "}
+                  {Array.isArray((rawRequestSnapshot.body as any)?.messages)
+                    ? (rawRequestSnapshot.body as any).messages.length
+                    : t("playground:tools.rawChatRequestMessageCountNa", "n/a")}
+                </p>
+              </div>
+              <Input.TextArea
+                readOnly
+                value={rawRequestJson}
+                autoSize={{ minRows: 14, maxRows: 30 }}
+                className="font-mono text-xs"
+              />
+            </>
+          ) : (
+            <p className="text-sm text-text-muted">
+              {t(
+                "playground:tools.rawChatRequestEmpty",
+                "Unable to generate a request preview for the current composer state."
+              )}
+            </p>
+          )}
+        </div>
+      </Modal>
       <Modal
         title={t(
           "common:modelSettings.form.numCtx.label",

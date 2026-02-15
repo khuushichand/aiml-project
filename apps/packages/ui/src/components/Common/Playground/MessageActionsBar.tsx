@@ -110,6 +110,9 @@ type MessageActionsBarProps = {
   temporaryChat?: boolean
   hideContinue?: boolean
   onContinue?: () => void
+  onRunSteeredContinue?: (
+    mode: Exclude<MessageSteeringMode, "none">
+  ) => void
   messageSteeringMode?: MessageSteeringMode
   onMessageSteeringModeChange?: (mode: MessageSteeringMode) => void
   messageSteeringForceNarrate?: boolean
@@ -169,6 +172,7 @@ export function MessageActionsBar({
   temporaryChat,
   hideContinue,
   onContinue,
+  onRunSteeredContinue,
   messageSteeringMode = "none",
   onMessageSteeringModeChange,
   messageSteeringForceNarrate = false,
@@ -243,13 +247,17 @@ export function MessageActionsBar({
           label={
             t("playground:composer.steering.continue", "Continue as user") as string
           }
-          onClick={() =>
+          onClick={() => {
+            if (onRunSteeredContinue) {
+              onRunSteeredContinue("continue_as_user")
+              return
+            }
             onMessageSteeringModeChange(
               messageSteeringMode === "continue_as_user"
                 ? "none"
                 : "continue_as_user"
             )
-          }
+          }}
           active={messageSteeringMode === "continue_as_user"}
         />
       )
@@ -260,13 +268,17 @@ export function MessageActionsBar({
           label={
             t("playground:composer.steering.impersonate", "Impersonate user") as string
           }
-          onClick={() =>
+          onClick={() => {
+            if (onRunSteeredContinue) {
+              onRunSteeredContinue("impersonate_user")
+              return
+            }
             onMessageSteeringModeChange(
               messageSteeringMode === "impersonate_user"
                 ? "none"
                 : "impersonate_user"
             )
-          }
+          }}
           active={messageSteeringMode === "impersonate_user"}
         />
       )
@@ -377,7 +389,7 @@ export function MessageActionsBar({
     return items
   }, [
     canReply, onReply, isBot, onNewBranch, temporaryChat,
-    hideContinue, isLastMessage, onContinue, canSaveToNotes,
+    hideContinue, isLastMessage, onContinue, onRunSteeredContinue, canSaveToNotes,
     messageSteeringMode, onMessageSteeringModeChange,
     messageSteeringForceNarrate, onMessageSteeringForceNarrateChange,
     onClearMessageSteering,

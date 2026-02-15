@@ -27,8 +27,14 @@ import {
   upsertCharacterMoodImage,
   type CharacterMoodLabel
 } from "@/utils/character-mood"
+import {
+  DEFAULT_MESSAGE_STEERING_PROMPTS,
+  MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
+  normalizeMessageSteeringPrompts
+} from "@/utils/message-steering"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useStoreMessageOption } from "@/store/option"
+import type { MessageSteeringPromptTemplates } from "@/types/message-steering"
 
 type Props = {
   className?: string
@@ -172,6 +178,11 @@ export const CharacterSelect: React.FC<Props> = ({
     "chatShowCharacterPortraits",
     true
   )
+  const [messageSteeringPrompts, setMessageSteeringPrompts] =
+    useStorage<MessageSteeringPromptTemplates>(
+      MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
+      DEFAULT_MESSAGE_STEERING_PROMPTS
+    )
   const latestSelectionIdRef = React.useRef<string | null>(null)
   const lastErrorRef = React.useRef<unknown | null>(null)
   const importInputRef = React.useRef<HTMLInputElement | null>(null)
@@ -188,6 +199,15 @@ export const CharacterSelect: React.FC<Props> = ({
     null
   )
   const [isImporting, setIsImporting] = React.useState(false)
+  const steeringPromptDraftRef = React.useRef<MessageSteeringPromptTemplates>(
+    normalizeMessageSteeringPrompts(messageSteeringPrompts)
+  )
+
+  React.useEffect(() => {
+    steeringPromptDraftRef.current = normalizeMessageSteeringPrompts(
+      messageSteeringPrompts
+    )
+  }, [messageSteeringPrompts])
 
   const { data, refetch, isFetching, isLoading, error } = useQuery<CharacterSummary[]>({
     queryKey: ["tldw:listCharacters"],
@@ -1278,6 +1298,116 @@ export const CharacterSelect: React.FC<Props> = ({
     }
   }
 
+  const editGenerationPromptsItem: MenuProps["items"][number] = {
+    key: "__edit_generation_prompts__",
+    label: (
+      <button
+        type="button"
+        className="w-full text-left text-xs font-medium text-text hover:text-text-muted"
+      >
+        {t("playground:composer.steering.editPrompts", {
+          defaultValue: "Edit generation prompts"
+        })}
+      </button>
+    ),
+    onClick: () => {
+      const current = normalizeMessageSteeringPrompts(messageSteeringPrompts)
+      steeringPromptDraftRef.current = {
+        ...current
+      }
+      React.startTransition(() => {
+        modal.confirm({
+          title: t("playground:composer.steering.editPromptsTitle", {
+            defaultValue: "Edit generation prompts"
+          }),
+          width: 720,
+          centered: true,
+          maskClosable: false,
+          content: (
+            <div className="space-y-3">
+              <div className="text-xs text-text-muted">
+                {t("playground:composer.steering.editPromptsHelp", {
+                  defaultValue:
+                    "These templates are used when running Continue as user, Impersonate user, and Force narrate."
+                })}
+              </div>
+              <div>
+                <div className="mb-1 text-xs font-medium text-text">
+                  {t("playground:composer.steering.continue", {
+                    defaultValue: "Continue as user"
+                  })}
+                </div>
+                <Input.TextArea
+                  rows={3}
+                  defaultValue={current.continueAsUser}
+                  onChange={(event) => {
+                    steeringPromptDraftRef.current = {
+                      ...steeringPromptDraftRef.current,
+                      continueAsUser: event.target.value
+                    }
+                  }}
+                />
+              </div>
+              <div>
+                <div className="mb-1 text-xs font-medium text-text">
+                  {t("playground:composer.steering.impersonate", {
+                    defaultValue: "Impersonate user"
+                  })}
+                </div>
+                <Input.TextArea
+                  rows={3}
+                  defaultValue={current.impersonateUser}
+                  onChange={(event) => {
+                    steeringPromptDraftRef.current = {
+                      ...steeringPromptDraftRef.current,
+                      impersonateUser: event.target.value
+                    }
+                  }}
+                />
+              </div>
+              <div>
+                <div className="mb-1 text-xs font-medium text-text">
+                  {t("playground:composer.steering.narrate", {
+                    defaultValue: "Force narrate"
+                  })}
+                </div>
+                <Input.TextArea
+                  rows={3}
+                  defaultValue={current.forceNarrate}
+                  onChange={(event) => {
+                    steeringPromptDraftRef.current = {
+                      ...steeringPromptDraftRef.current,
+                      forceNarrate: event.target.value
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          ),
+          okText: t("common:save", { defaultValue: "Save" }),
+          cancelText: t("common:cancel", { defaultValue: "Cancel" }),
+          onOk: async () => {
+            const next = normalizeMessageSteeringPrompts(
+              steeringPromptDraftRef.current
+            )
+            await new Promise<void>((resolve) => {
+              React.startTransition(() => {
+                Promise.resolve(setMessageSteeringPrompts(next)).finally(() =>
+                  resolve()
+                )
+              })
+            })
+            notification.success({
+              message: t("playground:composer.steering.editPromptsSaved", {
+                defaultValue: "Generation prompts saved"
+              })
+            })
+          }
+        })
+      })
+    }
+  }
+
   const moodPortraitItems: MenuProps["items"] = selectedCharacter
     ? CHARACTER_MOOD_OPTIONS.flatMap((moodOption) => {
         const hasMoodImage = Boolean(selectedCharacterMoodImages[moodOption.key])
@@ -1330,6 +1460,7 @@ export const CharacterSelect: React.FC<Props> = ({
   menuItems.push(
     noneItem,
     displayNameItem,
+    editGenerationPromptsItem,
     uploadPersonaImageItem,
     togglePortraitsItem
   )

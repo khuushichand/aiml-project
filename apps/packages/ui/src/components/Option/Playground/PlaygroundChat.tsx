@@ -186,6 +186,29 @@ export const PlaygroundChat = () => {
     previousMessageCount.current = messages.length
   }, [messages.length, serverChatId, stableHistoryId])
   const blocks = React.useMemo(() => buildBlocks(messages), [messages])
+  const runContinue = React.useCallback(() => {
+    void onSubmit({
+      image: "",
+      message: "",
+      isContinue: true
+    })
+  }, [onSubmit])
+  const runSteeredContinue = React.useCallback(
+    (mode: "continue_as_user" | "impersonate_user") => {
+      void onSubmit({
+        image: "",
+        message: "",
+        isContinue: true,
+        messageSteeringOverride: {
+          mode,
+          forceNarrate: messageSteeringForceNarrate
+        },
+        continueOutputTarget:
+          mode === "impersonate_user" ? "composer_input" : "chat"
+      })
+    },
+    [messageSteeringForceNarrate, onSubmit]
+  )
   const selectedGreeting = React.useMemo(() => {
     if (!selectedCharacter || typeof selectedCharacter.greeting !== "string") {
       return ""
@@ -394,13 +417,8 @@ export const PlaygroundChat = () => {
                 createdAt={message?.createdAt}
                 temporaryChat={temporaryChat}
                 onStopStreaming={stopStreamingRequest}
-                onContinue={() => {
-                  onSubmit({
-                    image: "",
-                    message: "",
-                    isContinue: true
-                  })
-                }}
+                onContinue={runContinue}
+                onRunSteeredContinue={runSteeredContinue}
                 documents={message?.documents}
                 actionInfo={actionInfo}
                 serverChatId={serverChatId}
@@ -637,13 +655,8 @@ export const PlaygroundChat = () => {
                 createdAt={userMessage?.createdAt}
                 temporaryChat={temporaryChat}
                 onStopStreaming={stopStreamingRequest}
-                onContinue={() => {
-                  onSubmit({
-                    image: "",
-                    message: "",
-                    isContinue: true
-                  })
-                }}
+                onContinue={runContinue}
+                onRunSteeredContinue={runSteeredContinue}
                 documents={userMessage?.documents}
                 actionInfo={actionInfo}
                 serverChatId={serverChatId}
@@ -981,13 +994,8 @@ export const PlaygroundChat = () => {
                         createdAt={message?.createdAt}
                         temporaryChat={temporaryChat}
                         onStopStreaming={stopStreamingRequest}
-                        onContinue={() => {
-                          onSubmit({
-                            image: "",
-                            message: "",
-                            isContinue: true
-                          })
-                        }}
+                        onContinue={runContinue}
+                        onRunSteeredContinue={runSteeredContinue}
                         documents={message?.documents}
                         actionInfo={actionInfo}
                         serverChatId={serverChatId}
