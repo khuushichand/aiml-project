@@ -545,19 +545,26 @@ async def check_rate_limit(
                 globals()["_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED"] = True
                 logger.warning(
                     "Prompt Studio shared rate limiter unavailable; local fallback limiter is retired. "
-                    "Allowing request via diagnostics-only shim. operation={} error={}",
+                    "Denying request (fail-closed). operation={} error={}",
                     operation,
                     e,
                 )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Prompt Studio rate limiter is temporarily unavailable",
+            ) from e
     else:
         if not bool(globals().get("_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED", False)):
             globals()["_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED"] = True
             logger.warning(
                 "Prompt Studio shared rate limiter not available; local fallback limiter is retired. "
-                "Allowing request via diagnostics-only shim. operation={}",
+                "Denying request (fail-closed). operation={}",
                 operation,
             )
-    return True
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Prompt Studio rate limiter is not configured",
+        )
 
 ########################################################################################################################
 # Cleanup

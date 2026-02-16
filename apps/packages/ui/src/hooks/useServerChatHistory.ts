@@ -16,13 +16,29 @@ const SERVER_CHAT_FETCH_MAX_PAGES = 50
 type FetchServerChatsPage = (params: {
   limit: number
   offset: number
+  signal?: AbortSignal
 }) => Promise<{
   chats: ServerChatSummary[]
   total: number
 }>
 
+const isAbortLikeError = (error: unknown): boolean => {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : String((error as { message?: unknown } | null)?.message || "")
+  const normalizedMessage = message.toLowerCase()
+  const name =
+    error instanceof Error
+      ? error.name
+      : String((error as { name?: unknown } | null)?.name || "")
+  return name === "AbortError" || normalizedMessage.includes("abort")
+}
+
 export const isRecoverableServerChatHistoryError = (error: unknown): boolean => {
-  return isRecoverableAuthConfigError(error)
+  return isRecoverableAuthConfigError(error) || isAbortLikeError(error)
 }
 
 export const mapServerChatHistoryItems = (
@@ -54,6 +70,7 @@ export const fetchAllServerChatPages = async (
   options?: {
     limit?: number
     maxPages?: number
+    signal?: AbortSignal
   }
 ): Promise<ServerChatSummary[]> => {
   const limit = Math.max(1, options?.limit ?? SERVER_CHAT_FETCH_LIMIT)
@@ -64,7 +81,11 @@ export const fetchAllServerChatPages = async (
   let total: number | null = null
 
   for (let page = 0; page < maxPages; page += 1) {
-    const { chats, total: pageTotal } = await fetchPage({ limit, offset })
+    const { chats, total: pageTotal } = await fetchPage({
+      limit,
+      offset,
+      signal: options?.signal
+    })
     const batch = Array.isArray(chats) ? chats : []
 
     if (typeof pageTotal === "number" && Number.isFinite(pageTotal) && pageTotal >= 0) {
@@ -101,15 +122,22 @@ export const useServerChatHistory = (
   const query = useQuery({
     queryKey: ["serverChatHistory"],
     enabled: isEnabled,
-    queryFn: async (): Promise<ServerChatHistoryItem[]> => {
+    queryFn: async ({ signal }): Promise<ServerChatHistoryItem[]> => {
       await tldwClient.initialize().catch(() => null)
       try {
-        const chats = await fetchAllServerChatPages(({ limit, offset }) =>
-          tldwClient.listChatsWithMeta({
-            limit,
-            offset,
-            ordering: "-updated_at"
-          })
+        const chats = await fetchAllServerChatPages(
+          ({ limit, offset, signal: pageSignal }) =>
+            tldwClient.listChatsWithMeta(
+              {
+                limit,
+                offset,
+                ordering: "-updated_at"
+              },
+              { signal: pageSignal }
+            ),
+          {
+            signal
+          }
         )
 
         return mapServerChatHistoryItems(chats)

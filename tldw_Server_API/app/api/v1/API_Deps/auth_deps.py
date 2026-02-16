@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
@@ -100,6 +101,8 @@ _SENSITIVE_USER_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _AUTH_DEPS_RG_DIAGNOSTICS_ONLY_LOGGED: set[str] = set()
+_AUTH_DEPS_FALLBACK_RATE_WINDOWS: dict[tuple[str, str], deque[float]] = {}
+_AUTH_DEPS_FALLBACK_RATE_WINDOWS_LOCK = threading.Lock()
 
 
 def _read_non_negative_int_env(name: str, default: int) -> int:
@@ -1646,8 +1649,66 @@ def _log_auth_deps_rg_diagnostics_only_shim(
     )
 
 
+def _auth_deps_rate_limit_identifier(request: Request, endpoint: str) -> str:
+    """Build a stable fallback limiter key from request principal/user/ip."""
+    try:
+        state = getattr(request, "state", None)
+        if state is not None:
+            auth_ctx = getattr(state, "auth", None)
+            if isinstance(auth_ctx, AuthContext):
+                principal = getattr(auth_ctx, "principal", None)
+                principal_id = str(getattr(principal, "principal_id", "") or "").strip()
+                if principal_id:
+                    return f"principal:{principal_id}:{endpoint}"
+            user_id = str(getattr(state, "user_id", "") or "").strip()
+            if user_id:
+                return f"user:{user_id}:{endpoint}"
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    try:
+        client = getattr(request, "client", None)
+        host = str(getattr(client, "host", "") or "").strip()
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+        host = ""
+    if host:
+        return f"ip:{host}:{endpoint}"
+    return f"anonymous:{endpoint}"
+
+
+def _consume_auth_deps_fallback_rate_token(
+    *,
+    dependency: str,
+    identifier: str,
+    limit: int,
+    window_seconds: float,
+) -> tuple[bool, int]:
+    """Consume one token from an in-process fallback fixed-window limiter."""
+    safe_limit = max(1, int(limit))
+    safe_window = max(1.0, float(window_seconds))
+    now = time.monotonic()
+    cutoff = now - safe_window
+    key = (dependency, identifier)
+
+    with _AUTH_DEPS_FALLBACK_RATE_WINDOWS_LOCK:
+        bucket = _AUTH_DEPS_FALLBACK_RATE_WINDOWS.get(key)
+        if bucket is None:
+            bucket = deque()
+            _AUTH_DEPS_FALLBACK_RATE_WINDOWS[key] = bucket
+
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+
+        if len(bucket) >= safe_limit:
+            retry_after = int(max(1.0, (bucket[0] + safe_window) - now))
+            return False, retry_after
+
+        bucket.append(now)
+        return True, 0
+
+
 async def check_rate_limit(request: Request, rate_limiter=None) -> None:
-    """General ingress compatibility shim (diagnostics-only; no legacy limiter enforcement)."""
+    """General ingress compatibility shim with fail-closed fallback enforcement."""
     _ = rate_limiter
     if _rg_enabled_for_request(request):
         return
@@ -1672,20 +1733,37 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
     if _is_test_mode():
         return
 
-    reason = (
-        "rg_enabled_without_policy_context"
-        if _rg_enabled_flag()
-        else "rg_disabled_legacy_limiter_retired"
-    )
-    _log_auth_deps_rg_diagnostics_only_shim(
-        dependency="check_rate_limit",
-        endpoint=endpoint,
-        reason=reason,
-    )
+    try:
+        fallback_limit = _read_non_negative_int_env("AUTH_DEPS_FALLBACK_RATE_LIMIT", 120)
+        fallback_window = _read_non_negative_float_env("AUTH_DEPS_FALLBACK_RATE_WINDOW_SECONDS", 60.0)
+        identifier = _auth_deps_rate_limit_identifier(request, endpoint)
+        allowed, retry_after = _consume_auth_deps_fallback_rate_token(
+            dependency="check_rate_limit",
+            identifier=identifier,
+            limit=fallback_limit,
+            window_seconds=fallback_window,
+        )
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(
+            "Auth dependency check_rate_limit fallback enforcement failed (endpoint={}): {}",
+            endpoint,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiting temporarily unavailable",
+        ) from exc
+
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded for endpoint: {endpoint}",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
-    """Auth ingress compatibility shim (diagnostics-only; no legacy limiter enforcement)."""
+    """Auth ingress compatibility shim with fail-closed fallback enforcement."""
     _ = rate_limiter
     if _rg_enabled_for_request(request):
         return
@@ -1710,16 +1788,33 @@ async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
     if _is_test_mode():
         return
 
-    reason = (
-        "rg_enabled_without_policy_context"
-        if _rg_enabled_flag()
-        else "rg_disabled_legacy_limiter_retired"
-    )
-    _log_auth_deps_rg_diagnostics_only_shim(
-        dependency="check_auth_rate_limit",
-        endpoint=endpoint,
-        reason=reason,
-    )
+    try:
+        fallback_limit = _read_non_negative_int_env("AUTH_DEPS_AUTH_FALLBACK_RATE_LIMIT", 30)
+        fallback_window = _read_non_negative_float_env("AUTH_DEPS_AUTH_FALLBACK_RATE_WINDOW_SECONDS", 60.0)
+        identifier = _auth_deps_rate_limit_identifier(request, endpoint)
+        allowed, retry_after = _consume_auth_deps_fallback_rate_token(
+            dependency="check_auth_rate_limit",
+            identifier=identifier,
+            limit=fallback_limit,
+            window_seconds=fallback_window,
+        )
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(
+            "Auth dependency check_auth_rate_limit fallback enforcement failed (endpoint={}): {}",
+            endpoint,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiting temporarily unavailable",
+        ) from exc
+
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Auth rate limit exceeded for endpoint: {endpoint}",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 # ---------------------------------------------------------------------------------

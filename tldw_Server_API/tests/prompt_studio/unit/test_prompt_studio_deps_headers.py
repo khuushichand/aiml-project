@@ -2,6 +2,7 @@ import os
 from typing import Any, Dict
 
 import pytest
+from fastapi import HTTPException
 from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
 
@@ -100,7 +101,7 @@ async def test_prompt_studio_rate_limit_bypass_accepts_single_letter_y(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_prompt_studio_rate_limit_shared_limiter_failure_uses_diagnostics_only_shim(monkeypatch):
+async def test_prompt_studio_rate_limit_shared_limiter_failure_fails_closed(monkeypatch):
     if hasattr(deps.check_rate_limit, "_local_requests"):
         delattr(deps.check_rate_limit, "_local_requests")
 
@@ -113,9 +114,10 @@ async def test_prompt_studio_rate_limit_shared_limiter_failure_uses_diagnostics_
     sec = deps.get_security_config()
     ctx = {"user_id": "u1"}
 
-    allowed_1 = await deps.check_rate_limit(operation="optimize", user_context=ctx, security_config=sec)
-    allowed_2 = await deps.check_rate_limit(operation="optimize", user_context=ctx, security_config=sec)
-
-    assert allowed_1 is True
-    assert allowed_2 is True
+    with pytest.raises(HTTPException) as exc_info_1:
+        await deps.check_rate_limit(operation="optimize", user_context=ctx, security_config=sec)
+    with pytest.raises(HTTPException) as exc_info_2:
+        await deps.check_rate_limit(operation="optimize", user_context=ctx, security_config=sec)
+    assert exc_info_1.value.status_code == 503
+    assert exc_info_2.value.status_code == 503
     assert not hasattr(deps.check_rate_limit, "_local_requests")

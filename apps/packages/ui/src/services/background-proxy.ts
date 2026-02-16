@@ -265,6 +265,27 @@ export async function bgRequest<
   }
   const isAbortErrorMessage = (value?: string) =>
     typeof value === "string" && value.toLowerCase().includes("abort")
+  const buildRequestError = (
+    msg: string,
+    status?: number
+  ): (Error & { status?: number; code?: string }) => {
+    if (isAbortErrorMessage(msg)) {
+      const abortError = new Error(msg || "Aborted") as Error & {
+        status?: number
+        code?: string
+      }
+      abortError.name = "AbortError"
+      abortError.status = typeof status === "number" ? status : 0
+      abortError.code = "REQUEST_ABORTED"
+      return abortError
+    }
+    const error = new Error(`${msg} (${method} ${path})`) as Error & {
+      status?: number
+      code?: string
+    }
+    error.status = status
+    return error
+  }
   const shouldBypassBackground =
     responseType === "arrayBuffer" &&
     typeof path === "string" &&
@@ -320,10 +341,7 @@ export async function bgRequest<
           source: "direct"
         })
       }
-      const error = new Error(`${msg} (${method} ${path})`) as Error & {
-        status?: number
-      }
-      error.status = resp?.status
+      const error = buildRequestError(msg, resp?.status)
       if (!returnResponse) {
         throw error
       }
@@ -386,10 +404,7 @@ export async function bgRequest<
               source: "background"
             })
           }
-          const error = new Error(`${msg} (${method} ${path})`) as Error & {
-            status?: number
-          }
-          error.status = resp?.status
+          const error = buildRequestError(msg, resp?.status)
           if (!returnResponse) {
             throw markNoFallbackError(error)
           }
@@ -416,10 +431,7 @@ export async function bgRequest<
                 fallback?.error,
                 `Request failed: ${fallback?.status}`
               )
-              const error = new Error(`${msg} (${method} ${path})`) as Error & {
-                status?: number
-              }
-              error.status = fallback?.status
+              const error = buildRequestError(msg, fallback?.status)
               throw error
             }
             return fallback.data as T
@@ -493,10 +505,7 @@ export async function bgRequest<
             source: "background"
           })
         }
-        const error = new Error(`${msg} (${method} ${path})`) as Error & {
-          status?: number
-        }
-        error.status = resp?.status
+        const error = buildRequestError(msg, resp?.status)
         if (!returnResponse) {
           throw markNoFallbackError(error)
         }
@@ -523,10 +532,7 @@ export async function bgRequest<
               fallback?.error,
               `Request failed: ${fallback?.status}`
             )
-            const error = new Error(`${msg} (${method} ${path})`) as Error & {
-              status?: number
-            }
-            error.status = fallback?.status
+            const error = buildRequestError(msg, fallback?.status)
             throw error
           }
           return fallback.data as T
@@ -583,10 +589,7 @@ export async function bgRequest<
         source: "direct"
       })
     }
-    const error = new Error(`${msg} (${method} ${path})`) as Error & {
-      status?: number
-    }
-    error.status = resp?.status
+    const error = buildRequestError(msg, resp?.status)
     if (!returnResponse) {
       throw error
     }

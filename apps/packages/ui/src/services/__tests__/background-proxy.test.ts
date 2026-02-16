@@ -95,6 +95,30 @@ describe("background proxy fallback safety", () => {
     expect(detail?.source).toBe("direct")
   })
 
+  it("classifies aborted direct fallback requests as AbortError", async () => {
+    mocks.sendMessage.mockRejectedValue(
+      new Error("Could not establish connection. Receiving end does not exist.")
+    )
+    mocks.tldwRequest.mockResolvedValue({
+      ok: false,
+      status: 0,
+      error: "The operation was aborted."
+    })
+
+    const { bgRequest } = await importProxy()
+
+    await expect(
+      bgRequest({
+        path: "/api/v1/chats/?limit=200&offset=0&ordering=-updated_at",
+        method: "GET"
+      })
+    ).rejects.toMatchObject({
+      name: "AbortError",
+      status: 0,
+      code: "REQUEST_ABORTED"
+    })
+  })
+
   it("falls back to direct request on GET extension timeout", async () => {
     vi.useFakeTimers()
     mocks.sendMessage.mockImplementation(() => new Promise(() => undefined))

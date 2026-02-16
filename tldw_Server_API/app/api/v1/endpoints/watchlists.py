@@ -62,6 +62,7 @@ from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _g
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.exceptions import TemplateValidationError
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime as _is_explicit_pytest_runtime
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 from tldw_Server_API.app.core.testing import is_truthy as _is_truthy
 from tldw_Server_API.app.core.Watchlists import template_store
@@ -936,9 +937,10 @@ async def _resolve_watchlists_ws_user_id(
             primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
             if primary_key:
                 allowed_keys.add(primary_key)
-            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
-            if test_key:
-                allowed_keys.add(test_key)
+            if _is_explicit_pytest_runtime():
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                if test_key:
+                    allowed_keys.add(test_key)
             if api_key in allowed_keys and is_single_user_ip_allowed(client_ip, settings):
                 return int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
             raise HTTPException(status_code=401, detail="invalid_api_key")

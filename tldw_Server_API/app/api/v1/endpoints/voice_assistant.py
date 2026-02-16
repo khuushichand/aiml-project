@@ -59,6 +59,7 @@ from tldw_Server_API.app.api.v1.schemas.voice_assistant_schemas import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.TTS.tts_exceptions import TTSError
+from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime
 from tldw_Server_API.app.core.VoiceAssistant import (
     ActionType,
     VoiceCommand,
@@ -175,9 +176,10 @@ async def _authenticate_websocket(
             primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
             if primary_key:
                 allowed_keys.add(primary_key)
-            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
-            if test_key:
-                allowed_keys.add(test_key)
+            if is_explicit_pytest_runtime():
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                if test_key:
+                    allowed_keys.add(test_key)
             if token in allowed_keys and is_single_user_ip_allowed(client_ip, settings):
                 return True, int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
             return False, None

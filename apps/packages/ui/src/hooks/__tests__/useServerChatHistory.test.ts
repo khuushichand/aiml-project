@@ -40,9 +40,9 @@ describe("fetchAllServerChatPages", () => {
       "chat-5"
     ])
     expect(fetchPage).toHaveBeenCalledTimes(3)
-    expect(fetchPage).toHaveBeenNthCalledWith(1, { limit: 2, offset: 0 })
-    expect(fetchPage).toHaveBeenNthCalledWith(2, { limit: 2, offset: 2 })
-    expect(fetchPage).toHaveBeenNthCalledWith(3, { limit: 2, offset: 4 })
+    expect(fetchPage).toHaveBeenNthCalledWith(1, { limit: 2, offset: 0, signal: undefined })
+    expect(fetchPage).toHaveBeenNthCalledWith(2, { limit: 2, offset: 2, signal: undefined })
+    expect(fetchPage).toHaveBeenNthCalledWith(3, { limit: 2, offset: 4, signal: undefined })
   })
 
   it("stops when maxPages is reached", async () => {
@@ -108,6 +108,12 @@ describe("isRecoverableServerChatHistoryError", () => {
     expect(
       isRecoverableServerChatHistoryError(
         new Error("Unauthorized (GET /api/v1/chats/)")
+      )
+    ).toBe(true)
+
+    expect(
+      isRecoverableServerChatHistoryError(
+        new Error("The operation was aborted. (GET /api/v1/chats/)")
       )
     ).toBe(true)
   })

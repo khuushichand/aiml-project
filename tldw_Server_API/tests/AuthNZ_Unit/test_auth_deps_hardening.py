@@ -344,18 +344,21 @@ async def test_admin_rate_limit_bypass_is_principal_first(
 
 
 @pytest.mark.asyncio
-async def test_check_rate_limit_uses_diagnostics_only_shim_when_rg_disabled(
+async def test_check_rate_limit_enforces_fallback_limiter_when_rg_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RG_ENABLED", "0")
     monkeypatch.setenv("TEST_MODE", "0")
     monkeypatch.setenv("TLDW_TEST_MODE", "0")
     monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("AUTH_DEPS_FALLBACK_RATE_LIMIT", "1")
+    monkeypatch.setenv("AUTH_DEPS_FALLBACK_RATE_WINDOW_SECONDS", "60")
 
     async def _fake_get_auth_governor() -> object:
         return object()
 
     monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+    auth_deps._AUTH_DEPS_FALLBACK_RATE_WINDOWS.clear()
 
     request = _DummyRequest()
     request.state.user_id = "not-an-int"
@@ -370,24 +373,30 @@ async def test_check_rate_limit_uses_diagnostics_only_shim_when_rg_disabled(
 
         async def check_rate_limit(self, **kwargs):
             _ = kwargs
-            raise AssertionError("legacy fallback limiter should be bypassed when RG is disabled")
+            raise AssertionError("legacy limiter should not be used by auth_deps fallback")
 
     await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
+    assert exc_info.value.status_code == 429
 
 
 @pytest.mark.asyncio
-async def test_check_rate_limit_uses_diagnostics_only_shim_when_rg_enabled_without_policy(
+async def test_check_rate_limit_enforces_fallback_limiter_when_rg_enabled_without_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("TEST_MODE", "0")
     monkeypatch.setenv("TLDW_TEST_MODE", "0")
     monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("AUTH_DEPS_FALLBACK_RATE_LIMIT", "1")
+    monkeypatch.setenv("AUTH_DEPS_FALLBACK_RATE_WINDOW_SECONDS", "60")
 
     async def _fake_get_auth_governor() -> object:
         return object()
 
     monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+    auth_deps._AUTH_DEPS_FALLBACK_RATE_WINDOWS.clear()
 
     request = _DummyRequest()
     request.url.path = "/api/v1/rag/search"
@@ -402,21 +411,27 @@ async def test_check_rate_limit_uses_diagnostics_only_shim_when_rg_enabled_witho
             raise AssertionError("legacy fallback limiter should be bypassed when RG is enabled")
 
     await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
+    assert exc_info.value.status_code == 429
 
 
 @pytest.mark.asyncio
-async def test_check_auth_rate_limit_uses_diagnostics_only_shim_when_rg_disabled(
+async def test_check_auth_rate_limit_enforces_fallback_limiter_when_rg_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RG_ENABLED", "0")
     monkeypatch.setenv("TEST_MODE", "0")
     monkeypatch.setenv("TLDW_TEST_MODE", "0")
     monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("AUTH_DEPS_AUTH_FALLBACK_RATE_LIMIT", "1")
+    monkeypatch.setenv("AUTH_DEPS_AUTH_FALLBACK_RATE_WINDOW_SECONDS", "60")
 
     async def _fake_get_auth_governor() -> object:
         return object()
 
     monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+    auth_deps._AUTH_DEPS_FALLBACK_RATE_WINDOWS.clear()
 
     request = _DummyRequest()
     request.url.path = "/api/v1/auth/forgot-password"
@@ -430,24 +445,30 @@ async def test_check_auth_rate_limit_uses_diagnostics_only_shim_when_rg_disabled
 
         async def check_rate_limit(self, **kwargs):
             _ = kwargs
-            raise AssertionError("legacy fallback limiter should be bypassed when RG is disabled")
+            raise AssertionError("legacy limiter should not be used by auth_deps fallback")
 
     await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
+    assert exc_info.value.status_code == 429
 
 
 @pytest.mark.asyncio
-async def test_check_auth_rate_limit_uses_diagnostics_only_shim_when_rg_enabled_without_policy(
+async def test_check_auth_rate_limit_enforces_fallback_limiter_when_rg_enabled_without_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("TEST_MODE", "0")
     monkeypatch.setenv("TLDW_TEST_MODE", "0")
     monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("AUTH_DEPS_AUTH_FALLBACK_RATE_LIMIT", "1")
+    monkeypatch.setenv("AUTH_DEPS_AUTH_FALLBACK_RATE_WINDOW_SECONDS", "60")
 
     async def _fake_get_auth_governor() -> object:
         return object()
 
     monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+    auth_deps._AUTH_DEPS_FALLBACK_RATE_WINDOWS.clear()
 
     request = _DummyRequest()
     request.url.path = "/api/v1/auth/forgot-password"
@@ -462,6 +483,9 @@ async def test_check_auth_rate_limit_uses_diagnostics_only_shim_when_rg_enabled_
             raise AssertionError("legacy fallback limiter should be bypassed when RG is enabled")
 
     await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
+    assert exc_info.value.status_code == 429
 
 
 @pytest.mark.asyncio
