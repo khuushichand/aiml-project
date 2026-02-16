@@ -2056,6 +2056,73 @@ export class TldwApiClient {
     })
   }
 
+  private getCharacterListIdentity(character: any, fallbackIndex: number): string {
+    const id = character?.id ?? character?.character_id ?? character?.characterId
+    if (id !== undefined && id !== null && String(id).trim().length > 0) {
+      return `id:${String(id)}`
+    }
+
+    const slug = character?.slug
+    if (typeof slug === "string" && slug.trim().length > 0) {
+      return `slug:${slug}`
+    }
+
+    const name = character?.name ?? character?.title
+    if (typeof name === "string" && name.trim().length > 0) {
+      return `name:${name}`
+    }
+
+    return `idx:${fallbackIndex}`
+  }
+
+  async listAllCharacters(options?: {
+    pageSize?: number
+    maxPages?: number
+  }): Promise<any[]> {
+    const requestedPageSize =
+      typeof options?.pageSize === "number" && Number.isFinite(options.pageSize)
+        ? Math.floor(options.pageSize)
+        : 1000
+    const requestedMaxPages =
+      typeof options?.maxPages === "number" && Number.isFinite(options.maxPages)
+        ? Math.floor(options.maxPages)
+        : 20
+    const pageSize = Math.min(1000, Math.max(1, requestedPageSize))
+    const maxPages = Math.min(200, Math.max(1, requestedMaxPages))
+
+    const characters: any[] = []
+    const seen = new Set<string>()
+
+    for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+      const offset = pageIndex * pageSize
+      const page = await this.listCharacters({ limit: pageSize, offset })
+      const pageList = Array.isArray(page) ? page : []
+      if (pageList.length === 0) {
+        break
+      }
+
+      let addedFromPage = 0
+      for (const character of pageList) {
+        const identity = this.getCharacterListIdentity(
+          character,
+          characters.length + addedFromPage
+        )
+        if (seen.has(identity)) continue
+        seen.add(identity)
+        characters.push(character)
+        addedFromPage += 1
+      }
+
+      // Stop if we reached the final partial page, or the backend ignored offset
+      // and returned only already-seen entries.
+      if (pageList.length < pageSize || addedFromPage === 0) {
+        break
+      }
+    }
+
+    return characters
+  }
+
    async searchCharacters(query: string, params?: Record<string, any>): Promise<any[]> {
     const qp = this.buildQuery({ query, ...(params || {}) })
     const base = await this.resolveApiPath("characters.search", [

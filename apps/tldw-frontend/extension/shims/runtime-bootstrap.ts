@@ -14,16 +14,54 @@ import {
   UI_MODE_SETTING
 } from "@/services/settings/ui-settings"
 
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === "object" && value !== null
+}
+
+const mergeMissingProperties = (
+  target: Record<string, unknown>,
+  source: Record<string, unknown>
+) => {
+  Object.entries(source).forEach(([key, sourceValue]) => {
+    const targetValue = target[key]
+
+    if (targetValue === undefined || targetValue === null) {
+      try {
+        target[key] = sourceValue
+      } catch {
+        // Ignore write failures on non-configurable host objects.
+      }
+      return
+    }
+
+    if (isRecord(targetValue) && isRecord(sourceValue)) {
+      mergeMissingProperties(targetValue, sourceValue)
+    }
+  })
+}
+
 if (typeof globalThis !== "undefined") {
   const globalScope = globalThis as typeof globalThis & {
     browser?: typeof browser
-    chrome?: typeof browser
+    chrome?: typeof browser | Record<string, unknown>
   }
-  if (!globalScope.browser) {
+
+  if (!isRecord(globalScope.browser)) {
     globalScope.browser = browser
+  } else {
+    mergeMissingProperties(
+      globalScope.browser as unknown as Record<string, unknown>,
+      browser as unknown as Record<string, unknown>
+    )
   }
-  if (!globalScope.chrome) {
-    globalScope.chrome = browser
+
+  if (!isRecord(globalScope.chrome)) {
+    globalScope.chrome = browser as unknown as Record<string, unknown>
+  } else {
+    mergeMissingProperties(
+      globalScope.chrome as Record<string, unknown>,
+      browser as unknown as Record<string, unknown>
+    )
   }
 }
 

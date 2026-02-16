@@ -35,6 +35,12 @@ import {
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useStoreMessageOption } from "@/store/option"
 import type { MessageSteeringPromptTemplates } from "@/types/message-steering"
+import { getBrowserRuntime, isExtensionRuntime } from "@/utils/browser-runtime"
+import {
+  buildCharactersHash as buildCharactersHashUrl,
+  buildCharactersRoute as buildCharactersRouteUrl,
+  resolveCharactersDestinationMode
+} from "@/utils/characters-route"
 
 type Props = {
   className?: string
@@ -213,7 +219,7 @@ export const CharacterSelect: React.FC<Props> = ({
     queryKey: ["tldw:listCharacters"],
     queryFn: async () => {
       await tldwClient.initialize()
-      const list = await tldwClient.listCharacters()
+      const list = await tldwClient.listAllCharacters()
       return Array.isArray(list) ? list : []
     },
     // Cache characters so we don't refetch on every open.
@@ -772,46 +778,59 @@ export const CharacterSelect: React.FC<Props> = ({
     })
   }, [error, isFetching, notification, t])
 
+  const buildCharactersRoute = React.useCallback((create?: boolean) => {
+    return buildCharactersRouteUrl({ from: "header-select", create })
+  }, [])
+
   const buildCharactersHash = React.useCallback((create?: boolean) => {
-    const params = new URLSearchParams({ from: "header-select" })
-    if (create) {
-      params.set("create", "true")
-    }
-    return `#/characters?${params.toString()}`
+    return buildCharactersHashUrl({ from: "header-select", create })
   }, [])
 
   const handleOpenCharacters = React.useCallback((options?: { create?: boolean }) => {
     try {
       if (typeof window === "undefined") return
 
+      const route = buildCharactersRoute(options?.create)
       const hash = buildCharactersHash(options?.create)
       const pathname = window.location.pathname || ""
+      const optionsPath = `/options.html${hash}`
+      const runtime = getBrowserRuntime()
+      const mode = resolveCharactersDestinationMode({
+        pathname,
+        extensionRuntime: isExtensionRuntime(runtime)
+      })
 
-      // If we're already inside the options UI, just switch routes in-place.
-      if (pathname.includes("options.html")) {
+      if (mode === "options-in-place") {
+        // If we're already inside options UI, switch routes in-place.
         const base = window.location.href.replace(/#.*$/, "")
         window.location.href = `${base}${hash}`
         return
       }
 
-      // Otherwise, try to open the options page in a new tab.
-      try {
-        const url = browser.runtime.getURL(`/options.html${hash}`)
-        if (browser.tabs?.create) {
-          browser.tabs.create({ url })
-        } else {
-          window.open(url, "_blank")
+      if (mode === "options-tab") {
+        // Outside options.html in extension runtime: open options page in a new tab.
+        try {
+          const url = runtime?.getURL ? runtime.getURL(optionsPath) : optionsPath
+          if (browser.tabs?.create) {
+            browser.tabs.create({ url })
+          } else {
+            window.open(url, "_blank")
+          }
+          return
+        } catch {
+          // fall through to options path fallback
         }
+
+        window.open(optionsPath, "_blank")
         return
-      } catch {
-        // fall through to window.open fallback
       }
 
-      window.open(`/options.html${hash}`, "_blank")
+      // In web runtime, open the direct Next.js route.
+      window.open(route, "_blank")
     } catch {
       // ignore navigation errors
     }
-  }, [buildCharactersHash])
+  }, [buildCharactersHash, buildCharactersRoute])
 
   const handleOpenCreate = React.useCallback(() => {
     handleOpenCharacters({ create: true })

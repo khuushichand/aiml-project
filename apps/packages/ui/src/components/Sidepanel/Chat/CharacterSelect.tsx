@@ -29,6 +29,12 @@ import { useConfirmModal } from "@/hooks/useConfirmModal"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useStoreMessageOption } from "@/store/option"
+import { getBrowserRuntime, isExtensionRuntime } from "@/utils/browser-runtime"
+import {
+  buildCharactersHash as buildCharactersHashUrl,
+  buildCharactersRoute as buildCharactersRouteUrl,
+  resolveCharactersDestinationMode
+} from "@/utils/characters-route"
 import type {
   Character as StoredCharacter,
   CharacterApiResponse
@@ -186,7 +192,7 @@ export const CharacterSelect: React.FC<Props> = ({
     queryKey: ["characters-list"],
     queryFn: async () => {
       await tldwClient.initialize().catch(() => null)
-      const result = await tldwClient.listCharacters({ limit: 100 })
+      const result = await tldwClient.listAllCharacters()
       return result as CharacterApiResponse[]
     },
     enabled: !!hasCharacters,
@@ -1091,34 +1097,61 @@ export const CharacterSelect: React.FC<Props> = ({
     t
   ])
 
+  const buildCharactersRoute = React.useCallback((create?: boolean) => {
+    return buildCharactersRouteUrl({ from: "sidepanel-character-select", create })
+  }, [])
+
   const buildCharactersHash = React.useCallback((create?: boolean) => {
-    const params = new URLSearchParams({ from: "sidepanel-character-select" })
-    if (create) {
-      params.set("create", "true")
-    }
-    return `#/characters?${params.toString()}`
+    return buildCharactersHashUrl({ from: "sidepanel-character-select", create })
   }, [])
 
   const openCharactersWorkspace = React.useCallback(
     async (options?: { create?: boolean }) => {
       if (typeof window === "undefined") return
+      const route = buildCharactersRoute(options?.create)
       const hash = buildCharactersHash(options?.create)
-      const url = browser.runtime.getURL(`/options.html${hash}`)
-      try {
-        if (browser.tabs?.create) {
-          await browser.tabs.create({ url })
-          return
+      const pathname = window.location.pathname || ""
+      const optionsPath = `/options.html${hash}`
+      const runtime = getBrowserRuntime()
+      const mode = resolveCharactersDestinationMode({
+        pathname,
+        extensionRuntime: isExtensionRuntime(runtime)
+      })
+
+      if (mode === "options-in-place") {
+        const base = window.location.href.replace(/#.*$/, "")
+        window.location.href = `${base}${hash}`
+        return
+      }
+
+      if (mode === "options-tab") {
+        const url = runtime?.getURL ? runtime.getURL(optionsPath) : optionsPath
+        try {
+          if (browser.tabs?.create) {
+            await browser.tabs.create({ url })
+            return
+          }
+        } catch (error) {
+          console.debug(
+            "[CharacterSelect] Failed to open characters workspace tab:",
+            error
+          )
         }
+
+        window.open(url, "_blank")
+        return
+      }
+
+      try {
+        window.open(route, "_blank")
       } catch (error) {
         console.debug(
-          "[CharacterSelect] Failed to open characters workspace tab:",
+          "[CharacterSelect] Failed to open characters workspace route:",
           error
         )
       }
-
-      window.open(url, "_blank")
     },
-    [buildCharactersHash]
+    [buildCharactersHash, buildCharactersRoute]
   )
 
   const createCharacterItem = React.useCallback(
