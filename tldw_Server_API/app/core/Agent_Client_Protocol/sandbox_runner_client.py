@@ -340,6 +340,11 @@ class ACPSandboxRunnerManager:
             updates.append(queue.popleft())
         return updates
 
+    async def verify_session_access(self, session_id: str, user_id: int) -> bool:
+        """Verify that the given user owns the sandbox-backed ACP session."""
+        sess = await self._get_session(session_id, required=False)
+        return bool(sess and int(sess.user_id) == int(user_id))
+
     # -------------------------------------------------------------------------
     # SSH metadata
     # -------------------------------------------------------------------------

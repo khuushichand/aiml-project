@@ -49,6 +49,8 @@ class MockRunnerClient:
         self.prompt_calls: List[tuple] = []
         self.cancel_calls: List[str] = []
         self._pending_permissions: Dict[str, Dict[str, PendingPermission]] = {}
+        self.expected_user_id: Optional[int] = None
+        self.access_checks: List[tuple[str, int]] = []
 
     async def register_websocket(self, session_id: str, send_callback) -> None:
         if session_id not in self._ws_callbacks:
@@ -64,6 +66,12 @@ class MockRunnerClient:
 
     def has_websocket_connections(self, session_id: str) -> bool:
         return session_id in self._ws_callbacks and len(self._ws_callbacks[session_id]) > 0
+
+    async def verify_session_access(self, session_id: str, user_id: int) -> bool:
+        self.access_checks.append((session_id, user_id))
+        if self.expected_user_id is None:
+            return True
+        return int(user_id) == int(self.expected_user_id)
 
     async def respond_to_permission(
         self,
@@ -165,6 +173,39 @@ class TestACPWebSocketConnection:
         ) as websocket:
             data = websocket.receive_json()
             assert data["type"] == "connected"
+
+    def test_websocket_connect_with_api_key_uses_configured_fixed_id(
+        self, client_user_only, mock_get_runner_client, monkeypatch
+    ):
+        """Ensure API-key auth uses SINGLE_USER_FIXED_ID rather than hardcoded ID."""
+        import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+        class _Settings:
+            AUTH_MODE = "single_user"
+            SINGLE_USER_API_KEY = "test-api-key"
+            SINGLE_USER_FIXED_ID = 42
+
+        mock_get_runner_client.expected_user_id = 42
+        monkeypatch.setattr(acp_endpoints, "get_auth_settings", lambda: _Settings())
+        monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key")
+
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?api_key=test-api-key"
+        ) as websocket:
+            data = websocket.receive_json()
+            assert data["type"] == "connected"
+        assert ("test-session", 42) in mock_get_runner_client.access_checks
+
+    def test_websocket_connect_without_session_access_fails(
+        self, client_user_only, mock_get_runner_client, mock_jwt_manager
+    ):
+        """Connection should be rejected when the user does not own the session."""
+        mock_get_runner_client.expected_user_id = 999
+        with pytest.raises(Exception):
+            with client_user_only.websocket_connect(
+                "/api/v1/acp/sessions/test-session/stream?token=valid-token"
+            ):
+                pass
 
     def test_websocket_connect_without_auth_fails(
         self, client_user_only, mock_get_runner_client, monkeypatch

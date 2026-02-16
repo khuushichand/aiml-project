@@ -31,6 +31,7 @@ import { useLayoutEffectsOwner } from "@/hooks/useLayoutEffectsOwner"
 import { useChatSidebar } from "@/hooks/useFeatureFlags"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useSetting } from "@/hooks/useSetting"
+import { useServerOnline } from "@/hooks/useServerOnline"
 import { ChatSidebar } from "@/components/Common/ChatSidebar"
 import { EventOnlyHosts } from "@/components/Common/EventHosts"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
@@ -105,6 +106,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
   const isMobileViewport = useMobile()
+  useServerOnline()
   const location = useLocation()
   const { phase, isConnected } = useConnectionState()
   const { checkOnce } = useConnectionActions()

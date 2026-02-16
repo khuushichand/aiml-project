@@ -180,8 +180,14 @@ async def create_project(
                 existing_id = db.lookup_idempotency("project", idempotency_key, user_id_str)
                 if existing_id:
                     existing = db.get_project(existing_id)
-                    if existing:
+                    if existing and str(existing.get("user_id", "")) == user_id_str:
                         return StandardResponse(success=True, data=ProjectResponse(**existing))
+                    if existing:
+                        logger.warning(
+                            "Ignoring idempotency hit with mismatched owner for key {} (user {})",
+                            idempotency_key,
+                            user_id_str,
+                        )
             except DatabaseError as e:
                 logger.warning(f"Idempotency lookup failed for key {idempotency_key}: {e}")
 

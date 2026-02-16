@@ -816,17 +816,30 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     # --- Idempotency helpers (Postgres) ---
     def _idem_lookup(self, entity_type: str, key: str, user_id: Optional[str]) -> Optional[int]:
         try:
-            cursor = self._execute(
-                """
-                SELECT entity_id
-                FROM prompt_studio_idempotency
-                WHERE entity_type = ?
-                  AND idempotency_key = ?
-                  AND (user_id = ? OR user_id IS NULL)
-                LIMIT 1
-                """,
-                (entity_type, key, user_id),
-            )
+            if user_id is None:
+                cursor = self._execute(
+                    """
+                    SELECT entity_id
+                    FROM prompt_studio_idempotency
+                    WHERE entity_type = ?
+                      AND idempotency_key = ?
+                      AND user_id IS NULL
+                    LIMIT 1
+                    """,
+                    (entity_type, key),
+                )
+            else:
+                cursor = self._execute(
+                    """
+                    SELECT entity_id
+                    FROM prompt_studio_idempotency
+                    WHERE entity_type = ?
+                      AND idempotency_key = ?
+                      AND user_id = ?
+                    LIMIT 1
+                    """,
+                    (entity_type, key, user_id),
+                )
             row = cursor.fetchone()
             return int(row[0]) if row else None
         except BackendDatabaseError:
@@ -3704,19 +3717,30 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
-            # Scoped lookup by entity_type and (user_id or NULL-scope). This prevents returning
-            # mappings created by other users while preserving existing keys created without user scope.
-            cursor.execute(
-                """
-                SELECT entity_id
-                FROM prompt_studio_idempotency
-                WHERE entity_type = ?
-                  AND idempotency_key = ?
-                  AND (user_id = ? OR user_id IS NULL)
-                LIMIT 1
-                """,
-                (entity_type, key, user_id),
-            )
+            if user_id is None:
+                cursor.execute(
+                    """
+                    SELECT entity_id
+                    FROM prompt_studio_idempotency
+                    WHERE entity_type = ?
+                      AND idempotency_key = ?
+                      AND user_id IS NULL
+                    LIMIT 1
+                    """,
+                    (entity_type, key),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT entity_id
+                    FROM prompt_studio_idempotency
+                    WHERE entity_type = ?
+                      AND idempotency_key = ?
+                      AND user_id = ?
+                    LIMIT 1
+                    """,
+                    (entity_type, key, user_id),
+                )
             row = cursor.fetchone()
             return int(row[0]) if row else None
         except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:

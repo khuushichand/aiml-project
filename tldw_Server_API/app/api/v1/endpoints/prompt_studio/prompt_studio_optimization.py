@@ -703,8 +703,6 @@ async def create_optimization(
         user_id_str = str(user_context.get("user_id", "anonymous"))
         if idempotency_key:
             try:
-                # TODO(PS-IDEMPOTENCY-SCOPE): Once DB lookup scopes by user_id, we can rely on per-user separation
-                # for idempotency keys. For now, lookup by key remains global.
                 existing_id = db.lookup_idempotency("optimization", idempotency_key, user_id_str)
                 if existing_id:
                     with contextlib.suppress(_OPTIMIZATION_NONCRITICAL_EXCEPTIONS):
@@ -712,8 +710,15 @@ async def create_optimization(
                             "prompt_studio.idempotency.hit_total", labels={"entity_type": "optimization"}
                         )
                     existing_opt = db.get_optimization(existing_id)
-                    if existing_opt:
+                    if existing_opt and int(existing_opt.get("project_id") or -1) == int(project_id):
                         return StandardResponse(success=True, data={"optimization": existing_opt, "job_id": None})
+                    if existing_opt:
+                        logger.warning(
+                            "Ignoring idempotency hit with mismatched project for key {} (user {}, requested project {})",
+                            idempotency_key,
+                            user_id_str,
+                            project_id,
+                        )
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
                 pass
 

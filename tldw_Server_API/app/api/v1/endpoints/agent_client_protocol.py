@@ -27,8 +27,10 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
     get_runner_client,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings as get_auth_settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     User,
     get_request_user,
@@ -101,10 +103,27 @@ async def _authenticate_ws(
     # Try API key (single-user mode)
     if api_key:
         try:
-            import os
-            expected_key = os.getenv("SINGLE_USER_API_KEY", "")
-            if expected_key and api_key == expected_key:
-                return 1  # Single-user mode user ID
+            settings = get_auth_settings()
+            auth_mode = str(getattr(settings, "AUTH_MODE", "single_user")).strip().lower()
+            if auth_mode == "single_user":
+                allowed_keys: set[str] = set()
+                primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
+                if isinstance(primary_key, str) and primary_key.strip():
+                    allowed_keys.add(primary_key.strip())
+                env_primary = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
+                if isinstance(env_primary, str) and env_primary.strip():
+                    allowed_keys.add(env_primary.strip())
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                if isinstance(test_key, str) and test_key.strip():
+                    allowed_keys.add(test_key.strip())
+                if api_key in allowed_keys:
+                    return int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
+            else:
+                api_mgr = await get_api_key_manager()
+                info = await api_mgr.validate_api_key(api_key=api_key, required_scope="read")
+                user_id = info.get("user_id") if isinstance(info, dict) else None
+                if user_id is not None:
+                    return int(user_id)
         except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("API key auth failed for WebSocket: {}", e)
 
@@ -129,6 +148,26 @@ async def _authenticate_ws(
                 return await _authenticate_ws(websocket, api_key=value)
 
     return None
+
+
+async def _require_session_access(
+    client: Any,
+    *,
+    session_id: str,
+    user_id: int,
+) -> None:
+    """Require that the authenticated user owns the requested ACP session."""
+    verifier = getattr(client, "verify_session_access", None)
+    if not callable(verifier):
+        logger.warning(
+            "ACP session access denied: client {} does not expose verify_session_access()",
+            type(client).__name__,
+        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+
+    allowed = await verifier(session_id, user_id)
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
 
 
 # -----------------------------------------------------------------------------
@@ -170,6 +209,18 @@ async def acp_session_stream(
             await websocket.close(code=4401)
         return
 
+    try:
+        client = await get_runner_client()
+        await _require_session_access(client, session_id=session_id, user_id=user_id)
+    except HTTPException:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await websocket.close(code=4404)
+        return
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await websocket.close(code=4404)
+        return
+
     # Set up WebSocket stream wrapper for metrics
     stream = WebSocketStream(
         websocket,
@@ -181,9 +232,6 @@ async def acp_session_stream(
 
     try:
         await stream.start()
-
-        # Get runner client
-        client = await get_runner_client()
 
         # Define send callback for broadcasting
         async def send_callback(message: dict[str, Any]) -> None:
@@ -717,6 +765,7 @@ async def acp_session_prompt(
 ) -> ACPSessionPromptResponse:
     try:
         client = await get_runner_client()
+        await _require_session_access(client, session_id=payload.session_id, user_id=int(user.id))
         result = await client.prompt(payload.session_id, payload.prompt)
     except ACPResponseError as exc:
         logger.error("ACP session/prompt failed for user {}: {}", user.id, exc)
@@ -735,6 +784,7 @@ async def acp_session_cancel(
 ) -> dict:
     try:
         client = await get_runner_client()
+        await _require_session_access(client, session_id=payload.session_id, user_id=int(user.id))
         await client.cancel(payload.session_id)
     except ACPResponseError as exc:
         logger.error("ACP session/cancel failed for user {}: {}", user.id, exc)
@@ -749,6 +799,7 @@ async def acp_session_close(
 ) -> dict:
     try:
         client = await get_runner_client()
+        await _require_session_access(client, session_id=payload.session_id, user_id=int(user.id))
         await client.close_session(payload.session_id)
     except ACPResponseError as exc:
         logger.error("ACP session/close failed for user {}: {}", user.id, exc)
@@ -763,5 +814,6 @@ async def acp_session_updates(
     user: User = Depends(get_request_user),
 ) -> ACPSessionUpdatesResponse:
     client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
     updates = client.pop_updates(session_id, limit=limit or 100)
     return ACPSessionUpdatesResponse(updates=updates)

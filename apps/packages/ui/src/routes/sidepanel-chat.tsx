@@ -20,6 +20,7 @@ import {
   useWebSearchShortcuts
 } from "@/hooks/keyboard/useKeyboardShortcuts"
 import { useConnectionActions } from "@/hooks/useConnectionState"
+import { useServerOnline } from "@/hooks/useServerOnline"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useCharacterGreeting } from "@/hooks/useCharacterGreeting"
 import { useTTS } from "@/hooks/useTTS"
@@ -389,6 +390,7 @@ const buildHistorySnapshot = ({
 }
 
 const SidepanelChat = () => {
+  useServerOnline()
   const drop = React.useRef<HTMLDivElement>(null)
   const [dropedFile, setDropedFile] = React.useState<File | undefined>()
   const [sidebarOpen, setSidebarOpen] = React.useState(false)

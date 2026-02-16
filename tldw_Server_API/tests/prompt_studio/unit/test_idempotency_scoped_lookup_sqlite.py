@@ -31,3 +31,19 @@ def test_idempotency_lookup_scoped_by_user_sqlite(prompt_studio_dual_backend_db)
     db.record_idempotency("project", key, 424242, "userB")
     found_b2 = db.lookup_idempotency("project", key, "userB")
     assert found_b2 == 424242
+
+
+def test_idempotency_lookup_does_not_fallback_to_null_scope_sqlite(prompt_studio_dual_backend_db):
+    label, db = prompt_studio_dual_backend_db
+    if label != "sqlite":
+        pytest.skip("SQLite-specific lookup test")
+
+    proj = db.create_project(name=f"NullScopeProj-{uuid.uuid4().hex[:6]}", status="active")
+    key = f"null-scope-{uuid.uuid4().hex}"
+
+    # Simulate a legacy null-scoped record.
+    db.record_idempotency("project", key, int(proj["id"]), None)
+
+    # User-scoped lookups must not resolve null-scoped records.
+    assert db.lookup_idempotency("project", key, "userA") is None
+    assert db.lookup_idempotency("project", key, "userB") is None

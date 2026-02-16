@@ -181,8 +181,15 @@ async def create_prompt(
                 existing_id = db.lookup_idempotency("prompt", idempotency_key, user_id_str)
                 if existing_id:
                     existing = db.get_prompt(existing_id)
-                    if existing:
+                    if existing and int(existing.get("project_id") or -1) == int(prompt_data.project_id):
                         return StandardResponse(success=True, data=PromptResponse(**existing))
+                    if existing:
+                        logger.warning(
+                            "Ignoring idempotency hit with mismatched project for key {} (user {}, requested project {})",
+                            idempotency_key,
+                            user_id_str,
+                            prompt_data.project_id,
+                        )
             except Exception:
                 pass
 

@@ -28,6 +28,7 @@ import { useMigration } from "../../hooks/useMigration"
 import { useStorageMigrations } from "@/hooks/useStorageMigrations"
 import { useLayoutEffectsOwner } from "@/hooks/useLayoutEffectsOwner"
 import { useChatSidebar } from "@/hooks/useFeatureFlags"
+import { useServerOnline } from "@/hooks/useServerOnline"
 import { ChatSidebar } from "@/components/Common/ChatSidebar"
 import { EventOnlyHosts } from "@/components/Common/EventHosts"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
@@ -110,6 +111,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { isLoading: migrationLoading } = useMigration()
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
+  useServerOnline()
   const location = useLocation()
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const isChatScreen = location.pathname === "/chat"
