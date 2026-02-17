@@ -233,15 +233,6 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
     routes: ["/flashcards"]
   },
   {
-    id: "m5-rc-collapse-children-deprecation",
-    scope: "console",
-    pattern: /\[rc-collapse\]\s+`children`\s+will be removed/i,
-    rationale: "AntD dependency deprecation notice; no user-facing regression in smoke.",
-    owner: "WebUI",
-    expiresOn: "2026-03-31",
-    routes: ["/settings/quick-ingest"]
-  },
-  {
     id: "m5-media-max-update-depth-warning",
     scope: "console",
     pattern: /Maximum update depth exceeded/i,

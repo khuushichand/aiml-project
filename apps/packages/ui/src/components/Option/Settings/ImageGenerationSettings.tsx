@@ -1,12 +1,5 @@
 import React from "react"
-import {
-  Button,
-  Collapse,
-  Input,
-  InputNumber,
-  Select,
-  Tooltip
-} from "antd"
+import { Button, Collapse, Input, InputNumber, Select, Tooltip } from "antd"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
@@ -18,8 +11,6 @@ import type {
   ImageBackendConfigMap,
   ImageOutputFormat
 } from "@/services/image-generation"
-
-const { Panel } = Collapse
 
 type ImageBackendOption = { value: string; label: string; provider?: string }
 
@@ -203,8 +194,9 @@ export const ImageGenerationSettings = () => {
             )}
           </div>
         ) : (
-          <Collapse accordion>
-            {backendPanels.map((option) => {
+          <Collapse
+            accordion
+            items={backendPanels.map((option) => {
               const backend = option.value
               const config = imageBackendConfigs?.[backend] || {}
               const providerLabel = option.provider
@@ -213,8 +205,11 @@ export const ImageGenerationSettings = () => {
               const panelLabel = providerLabel
                 ? `${providerLabel} · ${option.label}`
                 : option.label
-              return (
-                <Panel header={panelLabel} key={backend}>
+
+              return {
+                key: backend,
+                label: panelLabel,
+                children: (
                   <div className="space-y-2">
                     <SettingRow
                       label={t(
@@ -489,10 +484,10 @@ export const ImageGenerationSettings = () => {
                       </Tooltip>
                     </div>
                   </div>
-                </Panel>
-              )
+                )
+              }
             })}
-          </Collapse>
+          />
         )}
       </div>
     </div>
