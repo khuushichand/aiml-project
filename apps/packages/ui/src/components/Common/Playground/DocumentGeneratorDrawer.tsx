@@ -520,7 +520,7 @@ export const DocumentGeneratorDrawer: React.FC<DocumentGeneratorDrawerProps> = (
         <Alert
           type="warning"
           showIcon
-          message={t(
+          title={t(
             "playground:documentGenerator.unavailable",
             "Document generation is not available on this server."
           )}
@@ -531,7 +531,7 @@ export const DocumentGeneratorDrawer: React.FC<DocumentGeneratorDrawerProps> = (
         <Alert
           type="info"
           showIcon
-          message={t(
+          title={t(
             "playground:documentGenerator.noConversation",
             "Start a server-backed chat to generate documents."
           )}

@@ -15,6 +15,22 @@ export type GreetingOption = {
   sourceLabel?: string
 }
 
+export type GreetingSelectionFallback = "none" | "first" | "random"
+
+export type ResolveGreetingSelectionArgs = {
+  options: GreetingOption[]
+  greetingSelectionId?: string | null
+  greetingsChecksum?: string | null
+  useCharacterDefault?: boolean
+  fallback?: GreetingSelectionFallback
+}
+
+export type ResolvedGreetingSelection = {
+  option: GreetingOption | null
+  checksum: string | null
+  isStale: boolean
+}
+
 export type GreetingEntry = {
   text: string
   sourceKey: string
@@ -161,6 +177,63 @@ export const buildGreetingsChecksum = (greetings: string[]): string =>
 
 export const isGreetingMessageType = (messageType?: string | null): boolean =>
   messageType === "character:greeting" || messageType === "greeting"
+
+export const parseGreetingSelectionIndex = (
+  selectionId: unknown
+): number | null => {
+  if (typeof selectionId !== "string") return null
+  const parts = selectionId.trim().split(":")
+  if (parts.length < 3 || parts[0] !== "greeting") return null
+  const index = Number(parts[1])
+  if (!Number.isInteger(index) || index < 0) return null
+  return index
+}
+
+export const resolveGreetingSelection = ({
+  options,
+  greetingSelectionId,
+  greetingsChecksum,
+  useCharacterDefault = false,
+  fallback = "first"
+}: ResolveGreetingSelectionArgs): ResolvedGreetingSelection => {
+  const checksum =
+    options.length > 0 ? buildGreetingsChecksumFromOptions(options) : null
+  const storedSelectionId =
+    typeof greetingSelectionId === "string" ? greetingSelectionId : null
+  const storedChecksum =
+    typeof greetingsChecksum === "string" ? greetingsChecksum : null
+  const isStale =
+    Boolean(storedChecksum) && Boolean(checksum)
+      ? storedChecksum !== checksum
+      : false
+
+  let option =
+    !isStale && storedSelectionId
+      ? options.find((candidate) => candidate.id === storedSelectionId)
+      : undefined
+  if (!option && !isStale && storedSelectionId) {
+    const selectedIndex = parseGreetingSelectionIndex(storedSelectionId)
+    if (selectedIndex != null) {
+      option = options[selectedIndex]
+    }
+  }
+
+  if (!option) {
+    if (useCharacterDefault) {
+      option = options[0]
+    } else if (fallback === "first") {
+      option = options[0]
+    } else if (fallback === "random" && options.length > 0) {
+      option = options[Math.floor(Math.random() * options.length)]
+    }
+  }
+
+  return {
+    option: option ?? null,
+    checksum,
+    isStale
+  }
+}
 
 export const pickGreeting = (greetings: string[]): string => {
   if (greetings.length === 0) return ""

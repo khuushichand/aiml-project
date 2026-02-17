@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import {
   Button,
+  Empty,
   Input,
   Popconfirm,
   Select,
@@ -30,6 +31,10 @@ import { SourceFormModal } from "./SourceFormModal"
 import { GroupsTree } from "./GroupsTree"
 import { SourcesBulkImport } from "./SourcesBulkImport"
 import { SourceSeenDrawer } from "./SourceSeenDrawer"
+import {
+  getSourcesTableEmptyDescription,
+  shouldShowUnifiedWatchlistsEmptyState
+} from "./empty-state"
 
 const { Search } = Input
 
@@ -89,6 +94,24 @@ export const SourcesTab: React.FC = () => {
     () => sources.filter((source) => selectedRowKeys.includes(source.id)),
     [sources, selectedRowKeys]
   )
+  const hasActiveFilters = useMemo(
+    () =>
+      Boolean(
+        selectedGroupId ||
+          selectedTagName ||
+          selectedTypeFilter ||
+          sourcesSearch.trim().length > 0
+      ),
+    [selectedGroupId, selectedTagName, selectedTypeFilter, sourcesSearch]
+  )
+  const unifiedEmptyState = shouldShowUnifiedWatchlistsEmptyState({
+    groupsCount: groups.length,
+    sourcesCount: sources.length,
+    hasActiveFilters,
+    groupsLoading,
+    sourcesLoading
+  })
+  const tableEmptyDescription = getSourcesTableEmptyDescription(hasActiveFilters)
 
   // Fetch sources
   const loadSources = useCallback(async () => {
@@ -570,46 +593,93 @@ export const SourcesTab: React.FC = () => {
         </div>
       )}
 
-      <div className="flex flex-col gap-4 lg:flex-row">
-        <div className="w-full lg:w-72 shrink-0 space-y-4">
-          <GroupsTree
-            groups={groups}
-            selectedGroupId={selectedGroupId}
-            loading={groupsLoading}
-            onSelect={setSelectedGroupId}
-            onRefresh={loadGroups}
-          />
+      {unifiedEmptyState ? (
+        <div className="rounded-lg border border-dashed border-border bg-surface p-8">
+          <Empty
+            description={
+              <div className="space-y-2">
+                <p className="text-text-muted">
+                  {t("watchlists:sources.emptyInitialTitle", "No watchlist sources yet")}
+                </p>
+                <p className="text-sm text-text-subtle">
+                  {t(
+                    "watchlists:sources.emptyInitialDescription",
+                    "Add a source or import OPML to start monitoring updates."
+                  )}
+                </p>
+              </div>
+            }
+          >
+            <Space>
+              <Button
+                type="primary"
+                icon={<Plus className="h-4 w-4" />}
+                onClick={() => openSourceForm()}
+              >
+                {t("watchlists:sources.addSource", "Add Source")}
+              </Button>
+              <Button
+                icon={<UploadCloud className="h-4 w-4" />}
+                onClick={() => setImportOpen(true)}
+              >
+                {t("watchlists:sources.import", "Import OPML")}
+              </Button>
+            </Space>
+          </Empty>
         </div>
+      ) : (
+        <div className="flex flex-col gap-4 lg:flex-row">
+          <div className="w-full lg:w-72 shrink-0 space-y-4">
+            <GroupsTree
+              groups={groups}
+              selectedGroupId={selectedGroupId}
+              loading={groupsLoading}
+              onSelect={setSelectedGroupId}
+              onRefresh={loadGroups}
+            />
+          </div>
 
-        <div className="flex-1">
-          <Table
-            dataSource={Array.isArray(sources) ? sources : []}
-            columns={columns}
-            rowKey="id"
-            loading={sourcesLoading}
-            rowSelection={{
-              selectedRowKeys,
-              onChange: setSelectedRowKeys
-            }}
-            pagination={{
-              current: sourcesPage,
-              pageSize: sourcesPageSize,
-              total: sourcesTotal,
-              showSizeChanger: true,
-              showTotal: (total) =>
-                t("watchlists:sources.totalItems", "{{total}} sources", { total }),
-              onChange: (page, pageSize) => {
-                setSourcesPage(page)
-                if (pageSize !== sourcesPageSize) {
-                  setSourcesPageSize(pageSize)
+          <div className="flex-1">
+            <Table
+              dataSource={Array.isArray(sources) ? sources : []}
+              columns={columns}
+              rowKey="id"
+              loading={sourcesLoading}
+              locale={{
+                emptyText: (
+                  <Empty
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description={t(
+                      "watchlists:sources.emptyTableDescription",
+                      tableEmptyDescription
+                    )}
+                  />
+                )
+              }}
+              rowSelection={{
+                selectedRowKeys,
+                onChange: setSelectedRowKeys
+              }}
+              pagination={{
+                current: sourcesPage,
+                pageSize: sourcesPageSize,
+                total: sourcesTotal,
+                showSizeChanger: true,
+                showTotal: (total) =>
+                  t("watchlists:sources.totalItems", "{{total}} sources", { total }),
+                onChange: (page, pageSize) => {
+                  setSourcesPage(page)
+                  if (pageSize !== sourcesPageSize) {
+                    setSourcesPageSize(pageSize)
+                  }
                 }
-              }
-            }}
-            size="middle"
-            scroll={{ x: 800 }}
-          />
+              }}
+              size="middle"
+              scroll={{ x: 800 }}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       <SourceFormModal
         open={sourceFormOpen}

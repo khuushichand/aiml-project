@@ -262,7 +262,7 @@ export const RunsTab: React.FC = () => {
                 type="info"
                 showIcon
                 className="mb-2 text-xs"
-                message={t("evaluations:runPollingHint", {
+                title={t("evaluations:runPollingHint", {
                   defaultValue:
                     "Runs execute asynchronously. The UI polls every ~3s until status leaves running/pending."
                 })}
@@ -417,7 +417,7 @@ export const RunsTab: React.FC = () => {
                 <Alert
                   type="warning"
                   showIcon
-                  message={t("evaluations:runsErrorTitle", {
+                  title={t("evaluations:runsErrorTitle", {
                     defaultValue: "Unable to load runs"
                   })}
                 />
@@ -589,7 +589,7 @@ export const RunsTab: React.FC = () => {
             <Alert
               type="warning"
               showIcon
-              message={t("evaluations:runDetailErrorTitle", {
+              title={t("evaluations:runDetailErrorTitle", {
                 defaultValue: "Unable to load run details"
               })}
             />

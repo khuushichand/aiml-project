@@ -889,7 +889,7 @@ export const PromptBody = () => {
             type="info"
             showIcon
             className="mb-4"
-            message={t("managePrompts.projectFilter.active", {
+            title={t("managePrompts.projectFilter.active", {
               defaultValue: "Filtering by project"
             })}
             description={t("managePrompts.projectFilter.description", {
@@ -1608,7 +1608,7 @@ export const PromptBody = () => {
           showIcon
           icon={<AlertTriangle className="size-4" />}
           className="mb-4"
-          message={t("managePrompts.privateMode.title", { defaultValue: "Limited functionality in Private Mode" })}
+          title={t("managePrompts.privateMode.title", { defaultValue: "Limited functionality in Private Mode" })}
           description={t("managePrompts.privateMode.description", {
             defaultValue: "Firefox Private Mode doesn't support IndexedDB. You can view existing prompts, but creating, editing, or importing prompts is disabled. Use a normal window for full functionality."
           })}
@@ -1619,7 +1619,7 @@ export const PromptBody = () => {
           type="error"
           showIcon
           className="mb-4"
-          message={t(
+          title={t(
             "managePrompts.partialLoad",
             "Some prompt data isn't available"
           )}

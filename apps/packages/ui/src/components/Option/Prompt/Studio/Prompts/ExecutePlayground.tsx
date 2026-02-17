@@ -132,7 +132,7 @@ export const ExecutePlayground: React.FC<ExecutePlaygroundProps> = ({
           })}
         </span>
       }
-      width={600}
+      size={600}
       destroyOnHidden
     >
       {isLoadingPrompt && <Skeleton paragraph={{ rows: 8 }} />}
@@ -152,7 +152,7 @@ export const ExecutePlayground: React.FC<ExecutePlaygroundProps> = ({
             <Alert
               type="info"
               showIcon
-              message={t("managePrompts.studio.prompts.variablesDetected", {
+              title={t("managePrompts.studio.prompts.variablesDetected", {
                 defaultValue: "Variables detected in prompt"
               })}
               description={

@@ -104,7 +104,7 @@ export const EvaluationDetailPanel: React.FC<EvaluationDetailPanelProps> = ({
           })}
         </span>
       }
-      width={600}
+      size={600}
       destroyOnHidden
     >
       {isLoading && <Skeleton paragraph={{ rows: 10 }} />}

@@ -6,8 +6,10 @@ import { useWorkspaceStore } from "@/store/workspace"
 import { useStoreMessageOption } from "@/store/option"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { useSmartScroll } from "@/hooks/useSmartScroll"
+import { useMobile } from "@/hooks/useMediaQuery"
 import { PlaygroundMessage } from "@/components/Common/Playground/Message"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
+import { getWorkspaceChatNoSourcesHint } from "../source-location-copy"
 
 const { TextArea } = Input
 
@@ -59,7 +61,8 @@ const ChatContextIndicator: React.FC = () => {
 const WorkspaceChatEmpty: React.FC<{
   hasSelectedSources: boolean
   sourceCount: number
-}> = ({ hasSelectedSources, sourceCount }) => {
+  isMobile: boolean
+}> = ({ hasSelectedSources, sourceCount, isMobile }) => {
   const { t } = useTranslation(["playground"])
 
   return (
@@ -76,7 +79,7 @@ const WorkspaceChatEmpty: React.FC<{
               )
             : t(
                 "playground:chat.emptyNoSources",
-                "Select sources from the left pane, then ask questions"
+                getWorkspaceChatNoSourcesHint(isMobile)
               )
         }
         examples={[
@@ -152,6 +155,7 @@ const WORKSPACE_CONVERSATION_ID = "workspace-playground-conversation"
  */
 export const ChatPane: React.FC = () => {
   const { t } = useTranslation(["playground", "common"])
+  const isMobile = useMobile()
 
   // Workspace store
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
@@ -267,6 +271,7 @@ export const ChatPane: React.FC = () => {
               <WorkspaceChatEmpty
                 hasSelectedSources={hasSelectedSources}
                 sourceCount={selectedSources.length}
+                isMobile={isMobile}
               />
             )}
           </div>

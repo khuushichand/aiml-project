@@ -1,5 +1,13 @@
-import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
+import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
 
 export default function AdminOrgsRedirectPage() {
-  return <RouteRedirect to="/admin/server" />;
+  return (
+    <RoutePlaceholder
+      title="Organization Management Is Coming Soon"
+      description="Organization and tenant administration workflows are planned for this route."
+      plannedPath="/admin/orgs"
+      primaryCtaHref="/admin/server"
+      primaryCtaLabel="Open Server Admin"
+    />
+  );
 }

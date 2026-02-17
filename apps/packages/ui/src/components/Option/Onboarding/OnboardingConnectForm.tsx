@@ -1189,11 +1189,11 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
       {/* Demo Mode - Prominent placement for users without a server */}
       <div className="mb-6 rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 via-accent/10 to-surface p-5">
-        <div className="flex flex-wrap items-center gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-white shadow-sm shadow-primary/20">
             <Sparkles className="size-5" />
           </div>
-          <div className="flex-1 min-w-0">
+          <div className="min-w-0 sm:flex-1">
             <h3 className="font-medium text-text">
               {t("settings:onboarding.demo.titleNoServer", "No server? Try Demo Mode")}
             </h3>
@@ -1207,7 +1207,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
           <Button
             type="primary"
             onClick={handleDemoMode}
-            className="shrink-0 rounded-full border-0 bg-primary px-4 font-medium text-white hover:bg-primaryStrong"
+            className="w-full rounded-full border-0 bg-primary px-4 font-medium text-white hover:bg-primaryStrong sm:w-auto"
           >
             {t("settings:onboarding.demo.buttonTry", "Try Demo")}
           </Button>
@@ -1285,7 +1285,8 @@ export function OnboardingConnectForm({ onFinish }: Props) {
             </p>
           )}
           {serverUrl && urlValidation.valid && !isConnecting && progress.serverReachable === "idle" && (
-            <p className="mt-1 text-xs text-success">
+            <p className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-text">
+              <Check className="size-3.5 text-success" aria-hidden="true" />
               {t("settings:onboarding.serverUrl.validUrl", "URL format is valid. Click Connect to test the connection.")}
             </p>
           )}
@@ -1743,7 +1744,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
       <div className="mt-6 text-center">
         <button
           onClick={completeOnboarding}
-          className="text-sm text-text-subtle hover:text-text"
+          className="text-sm text-text-muted underline decoration-text-muted/80 underline-offset-4 transition-colors hover:text-text"
         >
           {t("settings:onboarding.buttons.skip", "Skip for now")}
         </button>

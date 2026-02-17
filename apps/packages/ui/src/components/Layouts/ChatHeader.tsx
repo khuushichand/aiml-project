@@ -1,7 +1,7 @@
 import React from "react"
 import type { TFunction } from "i18next"
 import { Tooltip, Input } from "antd"
-import { CogIcon, Menu, Search, Signpost, SquarePen } from "lucide-react"
+import { CogIcon, Menu, Moon, Search, Signpost, SquarePen, Sun } from "lucide-react"
 import { HeaderShortcuts } from "./HeaderShortcuts"
 import logoImage from "~/assets/icon.png"
 
@@ -19,6 +19,8 @@ type ChatHeaderProps = {
   onOpenCommandPalette: () => void
   onOpenShortcutsModal: () => void
   onOpenSettings: () => void
+  onToggleTheme?: () => void
+  themeMode?: "system" | "dark" | "light"
   onClearChat: () => void
   shortcutsExpanded: boolean
   onToggleShortcuts: (next?: boolean) => void
@@ -39,6 +41,8 @@ export function ChatHeader({
   onOpenCommandPalette,
   onOpenShortcutsModal,
   onOpenSettings,
+  onToggleTheme,
+  themeMode = "dark",
   onClearChat,
   shortcutsExpanded,
   onToggleShortcuts,
@@ -56,6 +60,10 @@ export function ChatHeader({
     ? t("option:header.hideShortcuts", "Hide shortcuts")
     : t("option:header.showShortcuts", "Show shortcuts")
   const canEditTitle = !temporaryChat && historyId && historyId !== "temp"
+  const isDarkTheme = themeMode !== "light"
+  const themeToggleLabel = isDarkTheme
+    ? t("common:theme.switchToLight", "Switch to light theme")
+    : t("common:theme.switchToDark", "Switch to dark theme")
   const focusRingClasses =
     "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
@@ -73,6 +81,7 @@ export function ChatHeader({
                 type="button"
                 onClick={onToggleSidebar}
                 aria-label={sidebarLabel as string}
+                data-testid="chat-header-sidebar-toggle"
                 className={`rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
                 title={sidebarLabel as string}
               >
@@ -167,6 +176,24 @@ export function ChatHeader({
               <CogIcon className="size-4" aria-hidden="true" />
             </button>
           </Tooltip>
+          {onToggleTheme && (
+            <Tooltip title={themeToggleLabel}>
+              <button
+                type="button"
+                onClick={onToggleTheme}
+                aria-label={themeToggleLabel as string}
+                className={`inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
+                title={themeToggleLabel as string}
+                data-testid="chat-header-theme-toggle"
+              >
+                {isDarkTheme ? (
+                  <Sun className="size-4" aria-hidden="true" />
+                ) : (
+                  <Moon className="size-4" aria-hidden="true" />
+                )}
+              </button>
+            </Tooltip>
+          )}
           <Tooltip title={t("option:header.keyboardShortcuts", "Keyboard shortcuts (?)")}>
             <button
               type="button"

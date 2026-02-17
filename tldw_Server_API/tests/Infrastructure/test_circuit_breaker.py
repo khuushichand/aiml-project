@@ -2,12 +2,19 @@
 """Tests for the unified circuit breaker module."""
 
 import asyncio
+import importlib
 import threading
 import time
-from unittest.mock import MagicMock, patch
+from typing import Callable
+from unittest.mock import patch
 
 import pytest
 
+from tldw_Server_API.app.core.DB_Management.Circuit_Breaker_Registry_DB import (
+    CircuitBreakerOptimisticLockError,
+    CircuitBreakerRegistryDB,
+    CircuitBreakerStoredState,
+)
 from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
@@ -16,6 +23,10 @@ from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
     CircuitState,
     circuit_breaker,
     registry,
+)
+
+_infra_cb_module = importlib.import_module(
+    "tldw_Server_API.app.core.Infrastructure.circuit_breaker"
 )
 
 
@@ -51,6 +62,14 @@ async def _async_fail() -> str:
     raise TransientError("boom")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_global_registry():
+    """Prevent cross-test pollution in the global decorator registry."""
+    registry.clear()
+    yield
+    registry.clear()
+
+
 # ---------------------------------------------------------------------------
 # TestConfig
 # ---------------------------------------------------------------------------
@@ -79,7 +98,7 @@ class TestConfig:
             failure_rate_threshold=0.3,
             backoff_factor=2.0,
             max_recovery_timeout=600.0,
-            category="test",
+            category="chat",
             service="svc",
             operation="op",
         )
@@ -597,14 +616,14 @@ class TestCallbacks:
 # ---------------------------------------------------------------------------
 
 class TestMetricsEmission:
-    @patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._increment_counter")
-    @patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._set_gauge")
+    @patch.object(_infra_cb_module, "_increment_counter")
+    @patch.object(_infra_cb_module, "_set_gauge")
     def test_metrics_on_trip(self, mock_gauge, mock_counter):
         cb = CircuitBreaker(
             "metrics",
             config=CircuitBreakerConfig(
                 failure_threshold=1,
-                category="test_cat",
+                category="chat",
                 service="test_svc",
             ),
         )
@@ -631,8 +650,8 @@ class TestMetricsEmission:
         ]
         assert len(gauge_calls) >= 1
 
-    @patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._increment_counter")
-    @patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._set_gauge")
+    @patch.object(_infra_cb_module, "_increment_counter")
+    @patch.object(_infra_cb_module, "_set_gauge")
     def test_metrics_on_success(self, mock_gauge, mock_counter):
         cb = CircuitBreaker("metrics-ok")
         cb.call(_succeed)
@@ -642,8 +661,8 @@ class TestMetricsEmission:
         ]
         assert len(success_calls) == 1
 
-    @patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._increment_counter")
-    @patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._set_gauge")
+    @patch.object(_infra_cb_module, "_increment_counter")
+    @patch.object(_infra_cb_module, "_set_gauge")
     def test_metrics_on_rejection(self, mock_gauge, mock_counter):
         cb = CircuitBreaker("metrics-rej", config=CircuitBreakerConfig(failure_threshold=1))
         with pytest.raises(TransientError):
@@ -655,6 +674,32 @@ class TestMetricsEmission:
             if c[0][0] == "circuit_breaker_rejections_total"
         ]
         assert len(rejection_calls) >= 1
+
+    @patch.object(_infra_cb_module, "_increment_counter")
+    @patch.object(_infra_cb_module, "_set_gauge")
+    def test_legacy_aliases_not_emitted_for_standard_metrics(self, mock_gauge, mock_counter):
+        cb = CircuitBreaker(
+            "metrics-legacy",
+            config=CircuitBreakerConfig(
+                failure_threshold=1,
+                category="chat",
+                service="svc",
+            ),
+        )
+        cb.call(_succeed)  # success metric
+        with pytest.raises(TransientError):
+            cb.call(_fail_transient)  # failure + trip + state_change
+        with pytest.raises(CircuitBreakerOpenError):
+            cb.call(_succeed)  # rejection
+
+        assert not any(
+            c.kwargs.get("labels", {}).get("service") == "chat:svc"
+            for c in mock_counter.call_args_list
+        )
+        assert not any(
+            c.kwargs.get("labels", {}).get("service") == "chat:svc"
+            for c in mock_gauge.call_args_list
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -709,6 +754,479 @@ class TestRegistry:
         assert reg.reset("reset-one") is True
         assert cb.is_closed
         assert reg.reset("nonexistent") is False
+
+    def test_clear(self):
+        reg = CircuitBreakerRegistry()
+        reg.get_or_create("c1")
+        reg.get_or_create("c2")
+        assert reg.get_all_status()
+        reg.clear()
+        assert reg.get_all_status() == {}
+        assert reg.get("c1") is None
+
+    def test_persistence_shares_state_across_registry_instances(self, tmp_path):
+        db_path = tmp_path / "cb_registry_shared.db"
+        reg_a = CircuitBreakerRegistry(
+            persistence_enabled=True,
+            db_path=str(db_path),
+        )
+        reg_b = CircuitBreakerRegistry(
+            persistence_enabled=True,
+            db_path=str(db_path),
+        )
+
+        cfg = CircuitBreakerConfig(
+            failure_threshold=1,
+            recovery_timeout=60.0,
+        )
+        cb_a = reg_a.get_or_create("shared-breaker", config=cfg)
+        cb_b = reg_b.get_or_create("shared-breaker", config=cfg)
+
+        with pytest.raises(TransientError):
+            cb_a.call(_fail_transient)
+        assert cb_a.is_open
+
+        with pytest.raises(CircuitBreakerOpenError):
+            cb_b.call(_succeed)
+
+    def test_registry_persistence_opt_in_enabled(self, tmp_path):
+        db_path = tmp_path / "cb_registry_enabled.db"
+        reg = CircuitBreakerRegistry(
+            persistence_enabled=True,
+            db_path=str(db_path),
+        )
+        assert reg.persistence_enabled is True
+
+    def test_registry_persistence_disabled(self):
+        reg = CircuitBreakerRegistry(persistence_enabled=False)
+        assert reg.persistence_enabled is False
+
+
+class TestPersistentStore:
+    class _ConflictSimulatingStore:
+        def __init__(
+            self,
+            *,
+            name: str,
+            state: CircuitBreakerStoredState,
+            version: int = 1,
+            conflicts: int = 1,
+            conflict_injector: Callable[[object], None] | None = None,
+        ):
+            self._name = name
+            self._state = state
+            self._version = version
+            self._conflicts_remaining = conflicts
+            self._conflict_injector = conflict_injector
+            self.upsert_calls = 0
+
+        def load(self, name: str):
+            if name != self._name:
+                return None
+            return self._state, self._version
+
+        def upsert(self, name: str, state: CircuitBreakerStoredState, *, expected_version: int):
+            self.upsert_calls += 1
+            if name != self._name:
+                raise CircuitBreakerOptimisticLockError(
+                    name,
+                    expected_version=expected_version,
+                    current_version=None,
+                )
+            if self._conflicts_remaining > 0:
+                self._conflicts_remaining -= 1
+                if self._conflict_injector is not None:
+                    self._conflict_injector(self)
+                raise CircuitBreakerOptimisticLockError(
+                    name,
+                    expected_version=expected_version,
+                    current_version=self._version,
+                )
+            if expected_version > 0 and expected_version != self._version:
+                raise CircuitBreakerOptimisticLockError(
+                    name,
+                    expected_version=expected_version,
+                    current_version=self._version,
+                )
+            if expected_version <= 0 and self._version != 0:
+                raise CircuitBreakerOptimisticLockError(
+                    name,
+                    expected_version=expected_version,
+                    current_version=self._version,
+                )
+            self._version = self._version + 1 if self._version > 0 else 1
+            self._state = state
+            return self._version
+
+    @staticmethod
+    def _stored(
+        *,
+        state: CircuitState,
+        failure_count: int,
+        success_count: int,
+        last_failure_time: float | None,
+        last_state_change_time: float,
+        half_open_calls: int = 0,
+        current_recovery_timeout: float = 30.0,
+        last_trip_failure_count: int = 0,
+    ) -> CircuitBreakerStoredState:
+        return CircuitBreakerStoredState(
+            state=int(state.value),
+            failure_count=failure_count,
+            success_count=success_count,
+            last_failure_time=last_failure_time,
+            last_state_change_time=last_state_change_time,
+            half_open_calls=half_open_calls,
+            current_recovery_timeout=current_recovery_timeout,
+            last_trip_failure_count=last_trip_failure_count,
+        )
+
+    def test_optimistic_locking_detects_version_conflicts(self, tmp_path):
+        db = CircuitBreakerRegistryDB(tmp_path / "cb_store.db")
+        reg = CircuitBreakerRegistry(
+            persistence_enabled=True,
+            db_path=str(tmp_path / "cb_store.db"),
+        )
+        cb = reg.get_or_create("lock-test", config=CircuitBreakerConfig())
+        cb.call(_succeed)
+
+        row = db.load("lock-test")
+        assert row is not None
+        stored, version = row
+        assert version >= 1
+
+        next_version = db.upsert(
+            "lock-test",
+            stored,
+            expected_version=version,
+        )
+        assert next_version == version + 1
+
+        with pytest.raises(CircuitBreakerOptimisticLockError):
+            db.upsert(
+                "lock-test",
+                stored,
+                expected_version=version,
+            )
+
+    def test_conflict_retry_merges_success_and_closes_half_open(self):
+        now = time.time()
+        breaker_name = "merge-success"
+        initial = self._stored(
+            state=CircuitState.HALF_OPEN,
+            failure_count=0,
+            success_count=0,
+            last_failure_time=now - 20,
+            last_state_change_time=now - 10,
+            current_recovery_timeout=30.0,
+            last_trip_failure_count=2,
+        )
+
+        def _inject_other_success(store: TestPersistentStore._ConflictSimulatingStore) -> None:
+            store._version += 1
+            store._state = self._stored(
+                state=CircuitState.HALF_OPEN,
+                failure_count=0,
+                success_count=1,
+                last_failure_time=now - 5,
+                last_state_change_time=now - 4,
+                current_recovery_timeout=30.0,
+                last_trip_failure_count=2,
+            )
+
+        store = self._ConflictSimulatingStore(
+            name=breaker_name,
+            state=initial,
+            version=1,
+            conflicts=1,
+            conflict_injector=_inject_other_success,
+        )
+        cb = CircuitBreaker(
+            breaker_name,
+            config=CircuitBreakerConfig(success_threshold=2),
+            state_store=store,
+        )
+        assert cb.is_half_open
+
+        cb.record_success()
+
+        assert cb.is_closed
+        persisted, _ = store.load(breaker_name)
+        assert persisted.state == int(CircuitState.CLOSED.value)
+        assert persisted.success_count == 0
+        assert store.upsert_calls >= 2
+
+    def test_conflict_retry_merges_failure_and_preserves_trip_threshold(self):
+        now = time.time()
+        breaker_name = "merge-failure"
+        initial = self._stored(
+            state=CircuitState.CLOSED,
+            failure_count=1,
+            success_count=0,
+            last_failure_time=now - 30,
+            last_state_change_time=now - 30,
+            current_recovery_timeout=45.0,
+        )
+
+        def _inject_other_failure(store: TestPersistentStore._ConflictSimulatingStore) -> None:
+            store._version += 1
+            store._state = self._stored(
+                state=CircuitState.CLOSED,
+                failure_count=2,
+                success_count=0,
+                last_failure_time=now - 2,
+                last_state_change_time=now - 2,
+                current_recovery_timeout=45.0,
+            )
+
+        store = self._ConflictSimulatingStore(
+            name=breaker_name,
+            state=initial,
+            version=1,
+            conflicts=1,
+            conflict_injector=_inject_other_failure,
+        )
+        cb = CircuitBreaker(
+            breaker_name,
+            config=CircuitBreakerConfig(
+                failure_threshold=3,
+                recovery_timeout=45.0,
+            ),
+            state_store=store,
+        )
+        assert cb.is_closed
+
+        cb.record_failure(TransientError("boom"))
+
+        assert cb.is_open
+        persisted, _ = store.load(breaker_name)
+        assert persisted.state == int(CircuitState.OPEN.value)
+        assert persisted.last_trip_failure_count >= 3
+
+    def test_conflict_retry_preserves_newer_open_during_transition(self):
+        now = time.time()
+        breaker_name = "merge-transition-open"
+        initial = self._stored(
+            state=CircuitState.OPEN,
+            failure_count=0,
+            success_count=0,
+            last_failure_time=now - 10,
+            last_state_change_time=now - 10,
+            current_recovery_timeout=60.0,
+            last_trip_failure_count=4,
+        )
+
+        def _inject_newer_open(store: TestPersistentStore._ConflictSimulatingStore) -> None:
+            store._version += 1
+            store._state = self._stored(
+                state=CircuitState.OPEN,
+                failure_count=0,
+                success_count=0,
+                last_failure_time=now - 1,
+                last_state_change_time=now + 1,
+                current_recovery_timeout=120.0,
+                last_trip_failure_count=5,
+            )
+
+        store = self._ConflictSimulatingStore(
+            name=breaker_name,
+            state=initial,
+            version=1,
+            conflicts=1,
+            conflict_injector=_inject_newer_open,
+        )
+        cb = CircuitBreaker(
+            breaker_name,
+            config=CircuitBreakerConfig(),
+            state_store=store,
+        )
+        assert cb.is_open
+
+        cb.force_half_open()
+
+        assert cb.is_open
+        persisted, _ = store.load(breaker_name)
+        assert persisted.state == int(CircuitState.OPEN.value)
+        assert persisted.current_recovery_timeout >= 120.0
+
+    def test_conflict_retry_exhaustion_adopts_latest_state_without_raising(self):
+        now = time.time()
+        breaker_name = "merge-exhaustion"
+        latest = self._stored(
+            state=CircuitState.CLOSED,
+            failure_count=5,
+            success_count=0,
+            last_failure_time=now - 2,
+            last_state_change_time=now - 2,
+            current_recovery_timeout=30.0,
+        )
+        store = self._ConflictSimulatingStore(
+            name=breaker_name,
+            state=latest,
+            version=5,
+            conflicts=999,
+            conflict_injector=None,
+        )
+        cb = CircuitBreaker(
+            breaker_name,
+            config=CircuitBreakerConfig(failure_threshold=100),
+            state_store=store,
+        )
+
+        with patch.object(_infra_cb_module.logger, "warning") as warning_spy:
+            cb.record_failure(TransientError("will-conflict"))
+
+        assert warning_spy.called
+        assert cb.failure_count == 5
+        assert cb.is_closed
+        assert store.upsert_calls == cb._persist_retry_attempts
+
+    def test_distributed_half_open_leases_enforce_global_probe_limit(self, tmp_path):
+        db_path = tmp_path / "cb_probe_leases_limit.db"
+        name = "lease-limit"
+        cfg = CircuitBreakerConfig(
+            failure_threshold=1,
+            recovery_timeout=0.05,
+            half_open_max_calls=1,
+            success_threshold=1,
+        )
+        reg_a = CircuitBreakerRegistry(
+            persistence_enabled=True,
+            db_path=str(db_path),
+        )
+        reg_b = CircuitBreakerRegistry(
+            persistence_enabled=True,
+            db_path=str(db_path),
+        )
+        cb_a = reg_a.get_or_create(name, config=cfg)
+        cb_b = reg_b.get_or_create(name, config=cfg)
+        db = CircuitBreakerRegistryDB(db_path)
+
+        cb_a.record_failure(TransientError("trip"))
+        assert cb_a.is_open
+        time.sleep(0.06)
+
+        release_event = threading.Event()
+        result: dict[str, object] = {}
+
+        def _blocking_work():
+            release_event.wait(timeout=1.0)
+            return "ok"
+
+        def _run_a():
+            try:
+                result["value"] = cb_a.call(_blocking_work)
+            except Exception as exc:  # noqa: BLE001
+                result["error"] = exc
+
+        t = threading.Thread(target=_run_a, daemon=True)
+        t.start()
+
+        deadline = time.time() + 1.0
+        while time.time() < deadline and db.count_active_probe_leases(name) < 1:
+            time.sleep(0.01)
+
+        assert db.count_active_probe_leases(name) == 1
+        with pytest.raises(CircuitBreakerOpenError):
+            cb_b.call(_succeed)
+
+        release_event.set()
+        t.join(timeout=1.0)
+        assert not t.is_alive()
+        assert "error" not in result
+        assert result.get("value") == "ok"
+        assert db.count_active_probe_leases(name) == 0
+
+    def test_expired_probe_lease_allows_later_acquisition(self, tmp_path):
+        db = CircuitBreakerRegistryDB(tmp_path / "cb_probe_leases_expiry.db")
+        name = "lease-expiry"
+
+        lease1 = db.acquire_probe_lease(
+            name,
+            max_calls=1,
+            ttl_seconds=0.05,
+            owner_id="worker-1",
+        )
+        assert lease1 is not None
+        assert db.count_active_probe_leases(name) == 1
+
+        time.sleep(0.07)
+        lease2 = db.acquire_probe_lease(
+            name,
+            max_calls=1,
+            ttl_seconds=1.0,
+            owner_id="worker-2",
+        )
+        assert lease2 is not None
+        assert lease2.lease_id != lease1.lease_id
+        assert db.count_active_probe_leases(name) == 1
+        assert db.release_probe_lease(name, lease2.lease_id) is True
+        assert db.count_active_probe_leases(name) == 0
+
+    def test_probe_leases_released_after_success_and_failure_paths(self, tmp_path):
+        db_path = tmp_path / "cb_probe_leases_release.db"
+        name = "lease-release"
+        reg = CircuitBreakerRegistry(
+            persistence_enabled=True,
+            db_path=str(db_path),
+        )
+        db = CircuitBreakerRegistryDB(db_path)
+        cb = reg.get_or_create(
+            name,
+            config=CircuitBreakerConfig(
+                failure_threshold=1,
+                recovery_timeout=0.05,
+                half_open_max_calls=1,
+                success_threshold=2,
+            ),
+        )
+
+        cb.record_failure(TransientError("trip"))
+        assert cb.is_open
+        time.sleep(0.06)
+
+        assert cb.call(_succeed) == "ok"
+        assert cb.is_half_open
+        assert db.count_active_probe_leases(name) == 0
+
+        with pytest.raises(TransientError):
+            cb.call(_fail_transient)
+        assert cb.is_open
+        assert db.count_active_probe_leases(name) == 0
+
+    def test_open_and_closed_transitions_clear_probe_leases(self, tmp_path):
+        db_path = tmp_path / "cb_probe_leases_transition_cleanup.db"
+        name = "lease-transition-cleanup"
+        reg = CircuitBreakerRegistry(
+            persistence_enabled=True,
+            db_path=str(db_path),
+        )
+        cb = reg.get_or_create(name, config=CircuitBreakerConfig())
+        db = CircuitBreakerRegistryDB(db_path)
+
+        lease = db.acquire_probe_lease(
+            name,
+            max_calls=1,
+            ttl_seconds=60.0,
+            owner_id="stale-worker",
+        )
+        assert lease is not None
+        assert db.count_active_probe_leases(name) == 1
+
+        cb.force_open()
+        assert db.count_active_probe_leases(name) == 0
+
+        lease2 = db.acquire_probe_lease(
+            name,
+            max_calls=1,
+            ttl_seconds=60.0,
+            owner_id="stale-worker-2",
+        )
+        assert lease2 is not None
+        assert db.count_active_probe_leases(name) == 1
+
+        cb.reset()
+        assert db.count_active_probe_leases(name) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -950,11 +1468,11 @@ class TestConvenienceKwargs:
             "kw-test",
             failure_threshold=3,
             recovery_timeout=10.0,
-            category="my_cat",
+            category="chat",
         )
         assert cb.config.failure_threshold == 3
         assert cb.config.recovery_timeout == 10.0
-        assert cb._category == "my_cat"
+        assert cb._category == "chat"
 
     def test_config_takes_precedence(self):
         cfg = CircuitBreakerConfig(failure_threshold=7)

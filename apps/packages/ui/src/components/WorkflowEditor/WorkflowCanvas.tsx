@@ -196,14 +196,14 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
     const meta = getStepMetadata(data.stepType, stepRegistry)
     // theme-exempt: workflow category colors
     const categoryColors: Record<string, string> = {
-      ai: "#a855f7",
+      ai: "#3b82f6",
       search: "#3b82f6",
       media: "#6366f1",
       text: "#06b6d4",
       research: "#8b5cf6",
       audio: "#14b8a6",
       video: "#10b981",
-      control: "#f97316",
+      control: "#6366f1",
       io: "#22c55e",
       utility: "#6b7280"
     }

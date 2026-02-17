@@ -56,7 +56,7 @@ const NoteQuickSaveModal: React.FC<NoteQuickSaveModalProps> = ({
       okButtonProps={{ loading, disabled: loading }}
       maskClosable={false}
     >
-      <Space direction="vertical" size="middle" className="w-full">
+      <Space orientation="vertical" size="middle" className="w-full">
         <div className="space-y-1">
           <div className="flex items-center justify-between gap-2">
             <Typography.Text strong>

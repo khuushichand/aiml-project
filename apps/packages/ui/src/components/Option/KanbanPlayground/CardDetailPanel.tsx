@@ -134,7 +134,7 @@ export const CardDetailPanel = ({
       }
       open={open}
       onClose={onClose}
-      width={400}
+      size={400}
       footer={
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>

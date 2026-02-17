@@ -832,7 +832,7 @@ export const AddSourceModal: React.FC = () => {
         {error && (
           <Alert
             type="error"
-            message={error}
+            title={error}
             closable
             onClose={() => setError(null)}
             className="mb-4"

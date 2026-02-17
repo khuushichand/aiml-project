@@ -3,6 +3,7 @@ import { shallow } from "zustand/shallow"
 import type { TFunction } from "i18next"
 import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
 import { useStoreMessageOption } from "@/store/option"
+import type { Message } from "@/store/option"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { getHistoriesWithMetadata, saveMessage } from "@/db/dexie/helpers"
 import { syncChatSettingsForServerChat } from "@/services/chat-settings"
@@ -21,6 +22,46 @@ type UseServerChatLoaderOptions = {
   ) => Promise<string | null>
   notification: NotificationApi
   t: TFunction
+}
+
+type PreserveLocalMessagesArgs = {
+  currentMessages: Message[]
+  serverMessages: Message[]
+  isStreaming: boolean
+  isProcessing: boolean
+}
+
+const toServerMessageId = (message: Message): string | null => {
+  if (typeof message.serverMessageId !== "string") return null
+  const trimmed = message.serverMessageId.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+export const shouldPreserveLocalMessagesForServerLoad = ({
+  currentMessages,
+  serverMessages,
+  isStreaming,
+  isProcessing
+}: PreserveLocalMessagesArgs): boolean => {
+  if (isStreaming || isProcessing) return true
+  if (!Array.isArray(currentMessages) || currentMessages.length === 0) return false
+
+  const hasUnsyncedMessages = currentMessages.some(
+    (message) =>
+      !toServerMessageId(message) &&
+      typeof message.message === "string" &&
+      message.message.trim().length > 0
+  )
+  if (hasUnsyncedMessages) return true
+
+  const serverMessageIds = new Set(
+    serverMessages.map((message) => toServerMessageId(message)).filter(Boolean)
+  )
+
+  return currentMessages.some((message) => {
+    const serverMessageId = toServerMessageId(message)
+    return Boolean(serverMessageId) && !serverMessageIds.has(serverMessageId)
+  })
 }
 
 export const useServerChatLoader = ({
@@ -323,15 +364,12 @@ export const useServerChatLoader = ({
           }))
 
           const currentMessages = messagesRef.current
-          const hasLocalMessages = currentMessages.length > 0
-          const hasUnsyncedMessages = currentMessages.some(
-            (msg) =>
-              !msg.serverMessageId && String(msg.message || "").trim().length > 0
-          )
-          const shouldPreserveLocal =
-            streamingRef.current ||
-            processingRef.current ||
-            (hasLocalMessages && hasUnsyncedMessages)
+          const shouldPreserveLocal = shouldPreserveLocalMessagesForServerLoad({
+            currentMessages,
+            serverMessages: mappedMessages,
+            isStreaming: streamingRef.current,
+            isProcessing: processingRef.current
+          })
 
           if (!shouldPreserveLocal) {
             setHistory(history)

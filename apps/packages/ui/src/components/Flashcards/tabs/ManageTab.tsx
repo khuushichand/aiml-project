@@ -1023,7 +1023,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                       : "No flashcards yet"
                 })}
               >
-                <Space direction="vertical" align="center">
+                <Space orientation="vertical" align="center">
                   <Text type="secondary">
                     {t("option:flashcards.noCardsDescription", {
                       defaultValue:
@@ -1318,7 +1318,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             : t("option:flashcards.bulkMove", { defaultValue: "Bulk Move" })
         }
         placement="right"
-        width={360}
+        size={360}
         open={moveOpen}
         onClose={() => {
           setMoveOpen(false)
@@ -1456,7 +1456,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           <Alert
             type="warning"
             showIcon
-            message={t("option:flashcards.bulkDeleteLargeWarning", {
+            title={t("option:flashcards.bulkDeleteLargeWarning", {
               defaultValue: "These cards will move to Trash for {{seconds}} seconds.",
               seconds: DELETE_UNDO_SECONDS
             })}

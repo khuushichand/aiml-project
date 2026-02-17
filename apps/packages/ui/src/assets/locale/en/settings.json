@@ -2181,11 +2181,11 @@
       "coreChecking": "Core: checking…",
       "coreOk": "Core: reachable",
       "coreFailed": "Core: unreachable",
-      "coreUnknown": "Core: waiting",
+      "coreUnknown": "Core: not checked yet",
       "ragChecking": "RAG: checking…",
       "ragHealthy": "RAG: healthy",
       "ragUnhealthy": "RAG: needs attention",
-      "ragUnknown": "RAG: waiting"
+      "ragUnknown": "RAG: not checked yet"
     },
     "billing": {
       "title": "Billing & usage",

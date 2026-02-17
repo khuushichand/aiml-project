@@ -2,6 +2,7 @@
 """Parity tests: TTS and RAG circuit breaker behavior."""
 
 import asyncio
+import importlib
 import time
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +13,10 @@ from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
     CircuitBreakerConfig,
     CircuitBreakerOpenError,
     CircuitState,
+)
+
+_infra_cb_module = importlib.import_module(
+    "tldw_Server_API.app.core.Infrastructure.circuit_breaker"
 )
 
 
@@ -188,6 +193,55 @@ class TestTTSParity:
         result = await cb.call_async(_async_succeed)
         assert result == "async ok"
         assert cb.is_closed
+
+    @pytest.mark.asyncio
+    async def test_tts_wrapper_rejects_after_open(self):
+        """Exercise the real TTS wrapper, not only unified breaker surrogates."""
+        from tldw_Server_API.app.core.TTS.circuit_breaker import (
+            CircuitBreaker as TTSCircuitBreaker,
+            CircuitOpenError as TTSCircuitOpenError,
+        )
+
+        cb = TTSCircuitBreaker(
+            provider_name="parity_wrapper",
+            failure_threshold=1,
+            recovery_timeout=30.0,
+        )
+
+        async def failing_func():
+            raise RuntimeError("tts wrapper fail")
+
+        with pytest.raises(RuntimeError):
+            await cb.call(failing_func)
+        assert cb.state == "open"
+
+        with pytest.raises(TTSCircuitOpenError):
+            await cb.call(_async_succeed)
+
+    def test_tts_wrapper_recovery_uses_unified_state_clock(self):
+        """_should_attempt_recovery should use unified state timestamps."""
+        from tldw_Server_API.app.core.TTS.circuit_breaker import (
+            CircuitBreaker as TTSCircuitBreaker,
+        )
+
+        cb = TTSCircuitBreaker(
+            provider_name="parity_recovery_clock",
+            failure_threshold=1,
+            recovery_timeout=0.05,
+        )
+        cb._cb.record_failure(TransientError("open"))
+        assert cb.state == "open"
+
+        # A stale local field must not trigger recovery.
+        cb._state_changed_at = time.time() - 999.0
+        with cb._cb._lock:
+            cb._cb._last_state_change_time = time.time()
+        assert cb._should_attempt_recovery() is False
+
+        # Unified state age controls recovery decisions.
+        with cb._cb._lock:
+            cb._cb._last_state_change_time = time.time() - 0.2
+        assert cb._should_attempt_recovery() is True
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +437,7 @@ class TestNewFeatures:
         cfg1 = CircuitBreakerConfig(failure_threshold=3)
         cfg2 = CircuitBreakerConfig(failure_threshold=5)
         cb1 = reg.get_or_create("mismatch", config=cfg1)
-        with patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker.logger") as mock_logger:
+        with patch.object(_infra_cb_module, "logger") as mock_logger:
             cb2 = reg.get_or_create("mismatch", config=cfg2)
             mock_logger.warning.assert_called()
         assert cb1 is cb2  # returns existing
@@ -408,8 +462,8 @@ class TestNewFeatures:
         assert cb.failure_count == 1
 
     @pytest.mark.asyncio
-    @patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._increment_counter")
-    @patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._set_gauge")
+    @patch.object(_infra_cb_module, "_increment_counter")
+    @patch.object(_infra_cb_module, "_set_gauge")
     async def test_timeout_metric_emitted(self, mock_gauge, mock_counter):
         cb = CircuitBreaker(
             "timeout_metric",

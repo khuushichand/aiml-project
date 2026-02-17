@@ -1665,25 +1665,35 @@ class AuthnzOrgsTeamsRepo:
         user_id: int,
     ) -> list[dict[str, Any]]:
         """
-        List org memberships for a user: ``[{org_id, role}]``.
+        List org memberships for a user: ``[{org_id, role, status}]``.
         """
         try:
             if self.db_pool.pool:
                 rows = await self.db_pool.fetchall(
                     """
-                    SELECT org_id, role
+                    SELECT org_id, role, status
                     FROM org_members
                     WHERE user_id = $1
                     ORDER BY org_id
                     """,
                     user_id,
                 )
-                return [dict(r) for r in rows]
+                normalized: list[dict[str, Any]] = []
+                for r in rows:
+                    row_dict = dict(r)
+                    normalized.append(
+                        {
+                            "org_id": int(row_dict.get("org_id")),
+                            "role": row_dict.get("role"),
+                            "status": row_dict.get("status"),
+                        }
+                    )
+                return normalized
 
             async with self.db_pool.acquire() as conn:
                 cur = await conn.execute(
                     """
-                    SELECT org_id, role
+                    SELECT org_id, role, status
                     FROM org_members
                     WHERE user_id = ?
                     ORDER BY org_id
@@ -1691,7 +1701,7 @@ class AuthnzOrgsTeamsRepo:
                     (user_id,),
                 )
                 rows = await cur.fetchall()
-                return [{"org_id": r[0], "role": r[1]} for r in rows]
+                return [{"org_id": r[0], "role": r[1], "status": r[2]} for r in rows]
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzOrgsTeamsRepo.list_org_memberships_for_user failed: {exc}"

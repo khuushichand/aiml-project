@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext, useContext, ReactNode } from 'react';
+import { useState, useEffect, createContext, useContext, ReactNode, startTransition } from 'react';
 import { useRouter } from 'next/router';
 import { authService, getAuthMode, User } from '@web/lib/auth';
 import { emitSplashAfterLoginSuccess } from '@/services/splash-events';
@@ -43,7 +43,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           } else {
             authService.logout();
-            router.push('/login');
+            startTransition(() => {
+              void router.push('/login');
+            });
           }
         }
       } catch (error) {
@@ -61,13 +63,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const loggedInUser = authService.getUser();
     setUser(loggedInUser);
     emitSplashAfterLoginSuccess();
-    router.push('/');
+    startTransition(() => {
+      void router.push('/');
+    });
   };
 
   const logout = () => {
     authService.logout();
     setUser(null);
-    router.push('/login');
+    startTransition(() => {
+      void router.push('/login');
+    });
   };
 
   return (

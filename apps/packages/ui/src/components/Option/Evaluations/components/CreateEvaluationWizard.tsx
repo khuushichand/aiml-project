@@ -146,7 +146,7 @@ export const CreateEvaluationWizard: React.FC<CreateEvaluationWizardProps> = ({
               type="info"
               showIcon
               className="text-xs"
-              message={t("evaluations:evalTypesHint", {
+              title={t("evaluations:evalTypesHint", {
                 defaultValue:
                   "Supported: model_graded, response_quality, rag, rag_pipeline, geval, exact_match, includes, fuzzy_match, proposition_extraction, qa3, label_choice, nli_factcheck, ocr."
               })}

@@ -3097,7 +3097,7 @@ export const WritingPlayground = () => {
         <Alert
           type="warning"
           showIcon
-          message={t("option:writingPlayground.offlineTitle", "Server required")}
+          title={t("option:writingPlayground.offlineTitle", "Server required")}
           description={t(
             "option:writingPlayground.offlineBody",
             "Connect to your tldw server to load writing sessions and generate."
@@ -3109,7 +3109,7 @@ export const WritingPlayground = () => {
         <Alert
           type="info"
           showIcon
-          message={t(
+          title={t(
             "option:writingPlayground.unavailableTitle",
             "Playground unavailable"
           )}
@@ -3144,7 +3144,7 @@ export const WritingPlayground = () => {
               <Alert
                 type="error"
                 showIcon
-                message={t(
+                title={t(
                   "option:writingPlayground.sessionsError",
                   "Unable to load sessions."
                 )}
@@ -3281,7 +3281,7 @@ export const WritingPlayground = () => {
                   <Alert
                     type="error"
                     showIcon
-                    message={t(
+                    title={t(
                       "option:writingPlayground.editorError",
                       "Unable to load this session."
                     )}
@@ -3730,7 +3730,7 @@ export const WritingPlayground = () => {
                   <Alert
                     type="error"
                     showIcon
-                    message={t(
+                    title={t(
                       "option:writingPlayground.settingsError",
                       "Unable to load session settings."
                     )}
@@ -4081,7 +4081,7 @@ export const WritingPlayground = () => {
                 <Alert
                   type="error"
                   showIcon
-                  message={t(
+                  title={t(
                     "option:writingPlayground.templateError",
                     "Unable to load templates."
                   )}
@@ -4375,7 +4375,7 @@ export const WritingPlayground = () => {
                 <Alert
                   type="error"
                   showIcon
-                  message={t(
+                  title={t(
                     "option:writingPlayground.themeError",
                     "Unable to load themes."
                   )}

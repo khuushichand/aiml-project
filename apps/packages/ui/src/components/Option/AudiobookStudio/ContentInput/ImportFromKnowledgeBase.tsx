@@ -163,7 +163,7 @@ export const ImportFromKnowledgeBase: React.FC<ImportFromKnowledgeBaseProps> = (
         {listError ? (
           <Alert
             type="error"
-            message={t(
+            title={t(
               "audiobook:import.loadMediaListError",
               "Failed to load media library"
             )}
@@ -211,7 +211,7 @@ export const ImportFromKnowledgeBase: React.FC<ImportFromKnowledgeBaseProps> = (
             )}
 
             {contentError && (
-              <Alert type="warning" message={contentError} showIcon />
+              <Alert type="warning" title={contentError} showIcon />
             )}
 
             {previewContent && (

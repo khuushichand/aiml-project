@@ -237,6 +237,14 @@ describe("workflow step registry", () => {
     expect(registry.foo_step.description).toBe("Foo step")
   })
 
+  it("preserves acronym casing in fallback labels", () => {
+    expect(humanizeStepType("llm")).toBe("LLM")
+    expect(humanizeStepType("llm_compare")).toBe("LLM Compare")
+
+    const registry = buildStepRegistry([{ name: "llm", description: "LLM step" }])
+    expect(registry.llm.label).toBe("LLM")
+  })
+
   it("every backend step type has an explicit CATEGORY_OVERRIDES entry", () => {
     for (const stepType of BACKEND_STEP_TYPES) {
       const expectedCategory = EXPECTED_CATEGORY_BY_STEP[stepType]
@@ -346,6 +354,8 @@ describe("workflow step registry", () => {
       expect(STEP_CATEGORIES[cat].label).toBeTruthy()
       expect(STEP_CATEGORIES[cat].color).toBeTruthy()
     }
+    expect(STEP_CATEGORIES.ai.color).toBe("blue")
+    expect(STEP_CATEGORIES.control.color).toBe("indigo")
   })
 
   it("all backend step types have meaningful icons", () => {

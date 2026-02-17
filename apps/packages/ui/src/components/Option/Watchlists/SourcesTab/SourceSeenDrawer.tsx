@@ -123,7 +123,7 @@ export const SourceSeenDrawer: React.FC<SourceSeenDrawerProps> = ({
           <Spin size="large" />
         </div>
       ) : error ? (
-        <Alert type="error" showIcon message={error} className="mb-4" />
+        <Alert type="error" showIcon title={error} className="mb-4" />
       ) : stats ? (
         <div className="space-y-6">
           {/* Stats section */}

@@ -41,6 +41,8 @@ const createProps = (overrides: Partial<React.ComponentProps<typeof ChatHeader>>
   onOpenCommandPalette: vi.fn(),
   onOpenShortcutsModal: vi.fn(),
   onOpenSettings: vi.fn(),
+  onToggleTheme: vi.fn(),
+  themeMode: "dark" as const,
   onClearChat: vi.fn(),
   shortcutsExpanded: false,
   onToggleShortcuts: vi.fn(),
@@ -92,6 +94,7 @@ describe("ChatHeader shortcut toggle", () => {
       screen.getByRole("button", { name: "Show shortcuts" }),
       screen.getByRole("button", { name: "New chat" }),
       screen.getByRole("button", { name: "Open settings" }),
+      screen.getByRole("button", { name: "Switch to light theme" }),
       screen.getByRole("button", { name: "Show keyboard shortcuts" })
     ]
 
@@ -101,5 +104,17 @@ describe("ChatHeader shortcut toggle", () => {
       expect(control.className).toContain("focus-visible:ring-offset-2")
       expect(control.className).toContain("focus-visible:ring-offset-bg")
     }
+  })
+
+  it("shows a theme toggle control and triggers toggle callback", () => {
+    const props = createProps({ themeMode: "light" })
+    render(<ChatHeader {...props} />)
+
+    const toggleButton = screen.getByRole("button", {
+      name: "Switch to dark theme"
+    })
+    fireEvent.click(toggleButton)
+
+    expect(props.onToggleTheme).toHaveBeenCalledTimes(1)
   })
 })

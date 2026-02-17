@@ -37,8 +37,6 @@ import {
   Sparkles
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
-import OptionLayout from "~/components/Layouts/Layout"
-import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import { createSettingsRoute } from "./settings-route"
 import { Navigate } from "react-router-dom"
 import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
@@ -197,6 +195,7 @@ const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
 const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
 const OptionSkills = lazy(() => import("./option-skills"))
 const OptionSetup = lazy(() => import("./option-setup"))
+const OptionOnboardingTest = lazy(() => import("./option-onboarding-test"))
 // OptionWorkspacePlayground and OptionChat are eagerly imported above
 
 export const ROUTE_DEFINITIONS: RouteDefinition[] = [
@@ -206,11 +205,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   {
     kind: "options",
     path: "/onboarding-test",
-    element: (
-      <OptionLayout hideHeader>
-        <OnboardingWizard />
-      </OptionLayout>
-    ),
+    element: <OptionOnboardingTest />,
     targets: ALL_TARGETS
   },
   {
@@ -334,6 +329,11 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       icon: ImageIcon,
       order: 7
     }
+  },
+  {
+    kind: "options",
+    path: "/settings/image-gen",
+    element: <Navigate to="/settings/image-generation" replace />
   },
   {
     kind: "options",

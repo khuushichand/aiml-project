@@ -241,7 +241,7 @@ export const NodeInfoPanel: React.FC = () => {
 
       {/* Actions */}
       <div className="mt-auto">
-        <Space direction="vertical" className="w-full">
+        <Space orientation="vertical" className="w-full">
           {/* Navigate to message */}
           <Button
             type="primary"

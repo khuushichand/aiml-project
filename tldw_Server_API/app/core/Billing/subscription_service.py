@@ -152,13 +152,16 @@ class SubscriptionService:
         """
         Resolve a plan for checkout by name.
 
-        Plans must exist in the subscription_plans table and be active.
+        Plans must exist in the subscription_plans table, be active, and be
+        publicly purchasable.
         """
         repo = await self._get_billing_repo()
         plan = await repo.get_plan_by_name(plan_name)
         if not plan:
             return None
         if plan.get("is_active") is False:
+            return None
+        if plan.get("is_public") is False:
             return None
         return plan
 
@@ -411,11 +414,19 @@ class SubscriptionService:
         # Cancel in Stripe if applicable
         if sub.get("stripe_subscription_id") and is_billing_enabled():
             stripe = self._get_stripe_client()
-            if stripe.is_available:
+            if not stripe.is_available:
+                raise RuntimeError(
+                    "Stripe is not configured; refusing to change local subscription state."
+                )
+            try:
                 result = await stripe.cancel_subscription(
                     sub["stripe_subscription_id"],
                     at_period_end=at_period_end,
                 )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to cancel subscription in Stripe: {exc}"
+                ) from exc
 
         # Update local status to mirror Stripe semantics:
         # - at_period_end=True  -> keep status "active", set cancel_at_period_end=True
@@ -465,8 +476,16 @@ class SubscriptionService:
         # Resume in Stripe if applicable
         if sub.get("stripe_subscription_id") and is_billing_enabled():
             stripe = self._get_stripe_client()
-            if stripe.is_available:
+            if not stripe.is_available:
+                raise RuntimeError(
+                    "Stripe is not configured; refusing to change local subscription state."
+                )
+            try:
                 result = await stripe.resume_subscription(sub["stripe_subscription_id"])
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to resume subscription in Stripe: {exc}"
+                ) from exc
 
         # Update local status
         await repo.update_org_subscription(org_id, status="active", cancel_at_period_end=False)
@@ -569,7 +588,7 @@ class SubscriptionService:
             return await handler(event_data, repo)
 
         logger.debug(f"Unhandled webhook event type: {event_type}")
-        return {"handled": False, "event_type": event_type}
+        return {"handled": False, "event_type": event_type, "retryable": False}
 
     async def _handle_checkout_completed(
         self,
@@ -583,13 +602,13 @@ class SubscriptionService:
 
         if not org_id_str:
             logger.warning("Checkout completed without org_id in metadata")
-            return {"handled": False, "reason": "missing_org_id"}
+            return {"handled": False, "reason": "missing_org_id", "retryable": False}
 
         try:
             org_id = int(org_id_str)
         except (ValueError, TypeError) as e:
             logger.warning(f"Checkout completed with invalid org_id '{org_id_str}': {e}")
-            return {"handled": False, "reason": "invalid_org_id"}
+            return {"handled": False, "reason": "invalid_org_id", "retryable": False}
         subscription_id = session.get("subscription")
         customer_id = session.get("customer")
 
@@ -613,14 +632,46 @@ class SubscriptionService:
             if cycle_norm in {"monthly", "yearly"}:
                 plan_updates["billing_cycle"] = cycle_norm
 
-        # Update subscription record
-        await repo.update_org_subscription(
-            org_id,
-            stripe_subscription_id=subscription_id,
-            stripe_customer_id=customer_id,
-            status="active",
-            **plan_updates,
-        )
+        # Update or create subscription record. Some legacy datasets may not have
+        # an org_subscriptions row yet, so update-only semantics can silently no-op.
+        existing_sub = await repo.get_org_subscription(org_id)
+        if existing_sub:
+            await repo.update_org_subscription(
+                org_id,
+                stripe_subscription_id=subscription_id,
+                stripe_customer_id=customer_id,
+                status="active",
+                **plan_updates,
+            )
+        else:
+            plan_id = plan_updates.get("plan_id")
+            if plan_id is None:
+                free_plan = await repo.get_plan_by_name("free")
+                if not free_plan:
+                    logger.error(
+                        "Checkout completed for org {} but no subscription row exists and free plan is missing",
+                        org_id,
+                    )
+                    return {"handled": False, "reason": "missing_free_plan", "retryable": True}
+                plan_id = free_plan["id"]
+
+            billing_cycle_value = str(plan_updates.get("billing_cycle") or "monthly").strip().lower()
+            if billing_cycle_value not in {"monthly", "yearly"}:
+                billing_cycle_value = "monthly"
+
+            await repo.create_org_subscription(
+                org_id=org_id,
+                plan_id=int(plan_id),
+                stripe_customer_id=customer_id,
+                stripe_subscription_id=subscription_id,
+                billing_cycle=billing_cycle_value,
+                status="active",
+            )
+
+        persisted = await repo.get_org_subscription(org_id)
+        if not persisted:
+            logger.error("Checkout completed for org {} but subscription state was not persisted", org_id)
+            return {"handled": False, "reason": "subscription_not_persisted", "retryable": True}
 
         await repo.log_billing_action(
             org_id=org_id,
@@ -646,7 +697,7 @@ class SubscriptionService:
         sub = await repo.get_subscription_by_stripe_customer(customer_id)
         if not sub:
             logger.warning(f"Subscription update for unknown customer {customer_id}")
-            return {"handled": False, "reason": "unknown_customer"}
+            return {"handled": False, "reason": "unknown_customer", "retryable": True}
 
         org_id = sub["org_id"]
 
@@ -723,28 +774,46 @@ class SubscriptionService:
 
         sub = await repo.get_subscription_by_stripe_customer(customer_id)
         if not sub:
-            return {"handled": False, "reason": "unknown_customer"}
+            return {"handled": False, "reason": "unknown_customer", "retryable": True}
 
         org_id = sub["org_id"]
 
-        # Downgrade to free plan
+        # Downgrade to free plan.
         free_plan = await repo.get_plan_by_name("free")
-        await repo.update_org_subscription(
-            org_id,
-            plan_id=free_plan["id"] if free_plan else 1,
-            status="active",
-            stripe_subscription_id=None,
-            stripe_subscription_status=None,
-        )
+        downgraded_to = "free"
+        if free_plan:
+            await repo.update_org_subscription(
+                org_id,
+                plan_id=free_plan["id"],
+                status="active",
+                stripe_subscription_id=None,
+                stripe_subscription_status=None,
+                cancel_at_period_end=False,
+            )
+        else:
+            # Fail-safe when the free plan row is missing: remove Stripe linkage
+            # and mark canceled so paid entitlements are not retained.
+            logger.error(
+                "Missing free plan during subscription deletion for org {}; marking canceled",
+                org_id,
+            )
+            await repo.update_org_subscription(
+                org_id,
+                status="canceled",
+                stripe_subscription_id=None,
+                stripe_subscription_status=None,
+                cancel_at_period_end=False,
+            )
+            downgraded_to = "canceled_no_free_plan"
 
         await repo.log_billing_action(
             org_id=org_id,
             action="subscription.deleted",
-            details={"downgraded_to": "free"},
+            details={"downgraded_to": downgraded_to},
         )
 
-        logger.info(f"Subscription deleted for org {org_id}, downgraded to free")
-        return {"handled": True, "org_id": org_id}
+        logger.info(f"Subscription deleted for org {org_id}, downgraded_to={downgraded_to}")
+        return {"handled": True, "org_id": org_id, "downgraded_to": downgraded_to}
 
     async def _handle_invoice_paid(
         self,
@@ -757,7 +826,7 @@ class SubscriptionService:
 
         sub = await repo.get_subscription_by_stripe_customer(customer_id)
         if not sub:
-            return {"handled": False, "reason": "unknown_customer"}
+            return {"handled": False, "reason": "unknown_customer", "retryable": True}
 
         org_id = sub["org_id"]
 
@@ -786,7 +855,7 @@ class SubscriptionService:
 
         sub = await repo.get_subscription_by_stripe_customer(customer_id)
         if not sub:
-            return {"handled": False, "reason": "unknown_customer"}
+            return {"handled": False, "reason": "unknown_customer", "retryable": True}
 
         org_id = sub["org_id"]
 

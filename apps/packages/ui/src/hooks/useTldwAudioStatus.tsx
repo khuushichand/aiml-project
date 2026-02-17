@@ -22,13 +22,22 @@ type AudioStatus = {
   voicesAvailable: boolean | null
 }
 
+type AudioHealthResponse = {
+  ok?: boolean
+  status?: number
+}
+
 export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
   const { capabilities, loading } = useServerCapabilities()
   const hasAudio = Boolean(capabilities?.hasAudio) && !loading
 
-  const healthQuery = useQuery({
+  const healthQuery = useQuery<AudioHealthResponse>({
     queryKey: ["audio-health"],
-    queryFn: async () => apiSend({ path: "/api/v1/audio/health", method: "GET" }),
+    queryFn: async () =>
+      (await apiSend({
+        path: "/api/v1/audio/health",
+        method: "GET"
+      })) as AudioHealthResponse,
     enabled: hasAudio,
     staleTime: 60_000,
     refetchInterval: 60_000,
@@ -48,9 +57,9 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
     healthState = "unhealthy"
   }
 
-  const voicesQuery = useQuery({
+  const voicesQuery = useQuery<TldwVoice[]>({
     queryKey: ["audio-voices"],
-    queryFn: fetchTldwVoices,
+    queryFn: () => fetchTldwVoices(),
     enabled: hasAudio && Boolean(options.requireVoices),
     staleTime: 300_000,
     refetchOnWindowFocus: false

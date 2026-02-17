@@ -1,5 +1,13 @@
-import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
+import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
 
 export default function ConfigRedirectPage() {
-  return <RouteRedirect to="/settings" />;
+  return (
+    <RoutePlaceholder
+      title="Configuration Center Is Coming Soon"
+      description="Unified configuration workflows are planned for this route."
+      plannedPath="/config"
+      primaryCtaHref="/settings"
+      primaryCtaLabel="Open Settings"
+    />
+  );
 }

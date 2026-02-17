@@ -7,6 +7,7 @@ import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { MarkdownErrorBoundary } from "@/components/Common/MarkdownErrorBoundary"
 import { PageShell } from "@/components/Common/PageShell"
 import { classNames } from "@/libs/class-name"
+import { withTemplateFallback } from "@/utils/template-guards"
 import { textContainsQuery } from "@/utils/text-highlight"
 
 const Markdown = React.lazy(() => import("@/components/Common/Markdown"))
@@ -22,6 +23,7 @@ type DocEntry = {
   relativePath: string
   fullPath: string
   importPath: string
+  inlineContent?: string
 }
 
 type DocLoadState = {
@@ -122,18 +124,53 @@ const SERVER_DOCS = buildDocs(
   "Docs/Published"
 )
 
+const buildFallbackDoc = (
+  source: DocSource,
+  title: string,
+  baseDir: string
+): DocEntry => ({
+  id: `${source}:fallback`,
+  title,
+  source,
+  relativePath: `${baseDir}/README.md`,
+  fullPath: `${baseDir}/README.md`,
+  importPath: `inline:${source}:fallback`,
+  inlineContent: `# ${title}
+
+Documentation files were not auto-discovered for this source.
+
+Expected path: \`${baseDir}\`
+
+Add markdown files under ${baseDir} to populate this section.
+`
+})
+
+const EXTENSION_FALLBACK_DOCS: DocEntry[] = [
+  buildFallbackDoc("extension", "Extension Documentation", "Docs/User_Documentation")
+]
+
+const SERVER_FALLBACK_DOCS: DocEntry[] = [
+  buildFallbackDoc("server", "Server Documentation", "Docs/Published")
+]
+
+const EXTENSION_DOCS_WITH_FALLBACK =
+  EXTENSION_DOCS.length > 0 ? EXTENSION_DOCS : EXTENSION_FALLBACK_DOCS
+
+const SERVER_DOCS_WITH_FALLBACK =
+  SERVER_DOCS.length > 0 ? SERVER_DOCS : SERVER_FALLBACK_DOCS
+
 export const DocumentationPage: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const [activeSource, setActiveSource] = React.useState<DocSource>(() => {
-    if (EXTENSION_DOCS.length > 0) return "extension"
-    if (SERVER_DOCS.length > 0) return "server"
+    if (EXTENSION_DOCS_WITH_FALLBACK.length > 0) return "extension"
+    if (SERVER_DOCS_WITH_FALLBACK.length > 0) return "server"
     return "extension"
   })
   const [activeDocIds, setActiveDocIds] = React.useState<
     Record<DocSource, string | null>
   >(() => ({
-    extension: EXTENSION_DOCS[0]?.id ?? null,
-    server: SERVER_DOCS[0]?.id ?? null
+    extension: EXTENSION_DOCS_WITH_FALLBACK[0]?.id ?? null,
+    server: SERVER_DOCS_WITH_FALLBACK[0]?.id ?? null
   }))
   const [searchQuery, setSearchQuery] = React.useState("")
   const [docStateById, setDocStateById] = React.useState<
@@ -143,8 +180,8 @@ export const DocumentationPage: React.FC = () => {
 
   const docsBySource = React.useMemo(
     () => ({
-      extension: EXTENSION_DOCS,
-      server: SERVER_DOCS
+      extension: EXTENSION_DOCS_WITH_FALLBACK,
+      server: SERVER_DOCS_WITH_FALLBACK
     }),
     []
   )
@@ -255,6 +292,20 @@ export const DocumentationPage: React.FC = () => {
         return
       }
       if (loadingDocIds.current.has(doc.id)) return
+
+      if (typeof doc.inlineContent === "string") {
+        const title = extractTitle(doc.inlineContent, doc.title)
+        setDocStateById((prev) => ({
+          ...prev,
+          [doc.id]: {
+            status: "loaded",
+            content: doc.inlineContent,
+            title
+          }
+        }))
+        return
+      }
+
       const loader = DOC_IMPORTS_BY_SOURCE[doc.source][doc.importPath]
       if (!loader) {
         setDocStateById((prev) => ({
@@ -322,17 +373,21 @@ export const DocumentationPage: React.FC = () => {
     const isDocError = selectedDocState?.status === "error"
 
     if (docs.length === 0) {
+      const emptyDescription = withTemplateFallback(
+        t(
+          "option:documentation.emptyDescription",
+          "Add markdown files under {{path}} to populate this section.",
+          { path: sourceMeta[source].path }
+        ),
+        `Add markdown files under ${sourceMeta[source].path} to populate this section.`
+      )
       return (
         <FeatureEmptyState
           title={t(
             "option:documentation.emptyTitle",
             "No documentation found"
           )}
-          description={t(
-            "option:documentation.emptyDescription",
-            "Add markdown files under {{path}} to populate this section.",
-            { path: sourceMeta[source].path }
-          )}
+          description={emptyDescription}
           icon={FileText}
         />
       )
@@ -353,9 +408,12 @@ export const DocumentationPage: React.FC = () => {
                 {sourceMeta[source].path}
               </p>
               <p className="text-xs text-text-muted">
-                {t("option:documentation.resultsLabel", "{{count}} results", {
-                  count: filteredDocs.length
-                })}
+                {withTemplateFallback(
+                  t("option:documentation.resultsLabel", "{{count}} results", {
+                    count: filteredDocs.length
+                  }),
+                  `${filteredDocs.length} results`
+                )}
               </p>
             </div>
             <div className="mt-3 max-h-[60vh] space-y-2 overflow-auto pr-1">
@@ -493,13 +551,16 @@ export const DocumentationPage: React.FC = () => {
             className="bg-surface"
           />
           <p className="text-xs text-text-muted">
-            {t(
-              "option:documentation.sourceHint",
-              "Sources: {{extensionPath}} and {{serverPath}}",
-              {
-                extensionPath: "Docs/User_Documentation",
-                serverPath: "Docs/Published"
-              }
+            {withTemplateFallback(
+              t(
+                "option:documentation.sourceHint",
+                "Sources: {{extensionPath}} and {{serverPath}}",
+                {
+                  extensionPath: "Docs/User_Documentation",
+                  serverPath: "Docs/Published"
+                }
+              ),
+              "Sources: Docs/User_Documentation and Docs/Published"
             )}
           </p>
         </div>

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { startTransition } from 'react';
 import { useRouter } from 'next/router';
 
 export default function NotFoundPage() {
@@ -25,7 +26,11 @@ export default function NotFoundPage() {
           <button
             type="button"
             className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-white hover:bg-primaryStrong"
-            onClick={() => router.push('/')}
+            onClick={() => {
+              startTransition(() => {
+                void router.push('/');
+              });
+            }}
             data-testid="not-found-go-chat"
           >
             Go to Chat
@@ -54,7 +59,11 @@ export default function NotFoundPage() {
           <button
             type="button"
             className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
-            onClick={() => router.back()}
+            onClick={() => {
+              startTransition(() => {
+                router.back();
+              });
+            }}
             data-testid="not-found-go-back"
           >
             Go back

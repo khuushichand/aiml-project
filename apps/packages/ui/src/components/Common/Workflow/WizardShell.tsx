@@ -116,7 +116,7 @@ export const WizardShell: React.FC<WizardShellProps> = ({
       {/* Error alert */}
       {error && (
         <Alert
-          message={t("workflows:error", "Error")}
+          title={t("workflows:error", "Error")}
           description={error}
           type="error"
           showIcon

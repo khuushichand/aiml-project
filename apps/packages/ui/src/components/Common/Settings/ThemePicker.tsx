@@ -15,6 +15,13 @@ const MODE_OPTIONS: { value: ThemeValue; icon: React.ReactNode; label: string }[
 ]
 
 const SWATCH_KEYS = ["bg", "primary", "accent", "surface", "text"] as const
+const SWATCH_LABELS: Record<(typeof SWATCH_KEYS)[number], string> = {
+  bg: "Background",
+  primary: "Primary",
+  accent: "Accent",
+  surface: "Surface",
+  text: "Text"
+}
 
 function ThemeSwatch({
   theme,
@@ -52,7 +59,13 @@ function ThemeSwatch({
               key={key}
               className="h-4 w-4 rounded-full border border-border"
               style={{ backgroundColor: rgbTripleToHex(palette[key]) }}
+              title={SWATCH_LABELS[key]}
             />
+          ))}
+        </div>
+        <div className="flex flex-wrap justify-center gap-1 text-[10px] leading-none text-text-subtle">
+          {SWATCH_KEYS.map((key) => (
+            <span key={key}>{SWATCH_LABELS[key]}</span>
           ))}
         </div>
         <span className="text-xs text-text-muted leading-none">{theme.name}</span>
@@ -100,6 +113,7 @@ export function ThemePicker() {
     deleteCustomTheme,
   } = useTheme()
   const isDark = mode === "dark"
+  const [showAdvancedTools, setShowAdvancedTools] = useState(false)
 
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingTheme, setEditingTheme] = useState<ThemeDefinition | undefined>()
@@ -149,9 +163,27 @@ export function ThemePicker() {
       </div>
 
       <div className="flex flex-col gap-2">
-        <span className="text-sm text-text">
-          {t("generalSettings.settings.themePreset.label", "Theme")}
-        </span>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-sm text-text">
+            {t("generalSettings.settings.themePreset.label", "Theme")}
+          </span>
+          <button
+            type="button"
+            className="text-xs text-text-muted hover:text-text"
+            data-testid="theme-advanced-tools-toggle"
+            onClick={() => setShowAdvancedTools((prev) => !prev)}
+          >
+            {showAdvancedTools
+              ? t(
+                  "generalSettings.settings.themePreset.hideAdvanced",
+                  "Hide advanced theme tools"
+                )
+              : t(
+                  "generalSettings.settings.themePreset.showAdvanced",
+                  "Show advanced theme tools"
+                )}
+          </button>
+        </div>
         <div className="flex flex-wrap gap-2">
           {builtinPresets.map((preset) => (
             <ThemeSwatch
@@ -169,20 +201,34 @@ export function ThemePicker() {
               isActive={preset.id === themeId}
               isDark={isDark}
               onClick={() => setThemeId(preset.id)}
-              onEdit={() => handleEdit(preset)}
-              onDelete={() => handleDelete(preset.id)}
+              onEdit={
+                showAdvancedTools ? () => handleEdit(preset) : undefined
+              }
+              onDelete={
+                showAdvancedTools ? () => handleDelete(preset.id) : undefined
+              }
             />
           ))}
-          <button
-            type="button"
-            onClick={handleCreate}
-            className="flex flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border p-2.5 transition-colors hover:border-primary/50 hover:bg-surface2 min-w-[90px]"
-            title="Create custom theme"
-          >
-            <Plus className="h-4 w-4 text-text-muted" />
-            <span className="text-xs text-text-muted leading-none">Create</span>
-          </button>
+          {showAdvancedTools ? (
+            <button
+              type="button"
+              onClick={handleCreate}
+              className="flex flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border p-2.5 transition-colors hover:border-primary/50 hover:bg-surface2 min-w-[90px]"
+              title="Create custom theme"
+            >
+              <Plus className="h-4 w-4 text-text-muted" />
+              <span className="text-xs text-text-muted leading-none">Create</span>
+            </button>
+          ) : null}
         </div>
+        {!showAdvancedTools ? (
+          <p className="text-xs text-text-muted">
+            {t(
+              "generalSettings.settings.themePreset.advancedHint",
+              "Advanced theme token editing is hidden by default."
+            )}
+          </p>
+        ) : null}
       </div>
 
       <ThemeEditorModal

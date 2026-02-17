@@ -256,7 +256,7 @@ export const SplashSettings = () => {
           <Alert
             type="warning"
             showIcon
-            message={t(
+            title={t(
               "settings:splashSettings.emptySelectionWarning",
               "No splash cards are enabled. Enable at least one card to show splash screens."
             )}

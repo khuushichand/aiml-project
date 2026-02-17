@@ -20,7 +20,7 @@ export const SplitView: React.FC<SplitViewProps> = ({
     return (
       <Alert
         type="error"
-        message="PDF preview is required to use split view."
+        title="PDF preview is required to use split view."
         showIcon
       />
     )

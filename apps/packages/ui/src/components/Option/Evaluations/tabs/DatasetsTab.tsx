@@ -161,7 +161,7 @@ export const DatasetsTab: React.FC = () => {
           <Alert
             type="warning"
             showIcon
-            message={t("evaluations:datasetsErrorTitle", {
+            title={t("evaluations:datasetsErrorTitle", {
               defaultValue: "Unable to load datasets"
             })}
           />

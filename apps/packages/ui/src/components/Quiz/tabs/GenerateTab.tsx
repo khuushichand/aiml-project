@@ -107,7 +107,7 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake }) =>
         {listError ? (
           <Alert
             type="error"
-            message={t("settings:chunkingPlayground.loadMediaListError", "Failed to load media library")}
+            title={t("settings:chunkingPlayground.loadMediaListError", "Failed to load media library")}
           />
         ) : (
           <div className="space-y-2">

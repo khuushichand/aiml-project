@@ -179,7 +179,7 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
   return (
     <Drawer
       placement="right"
-      width={420}
+      size={420}
       open={open}
       onClose={() => setOpen(false)}
       title={t("playground:composer.actorTitle", "Scene Director (Actor)")}>

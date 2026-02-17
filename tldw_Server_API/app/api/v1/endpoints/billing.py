@@ -5,12 +5,16 @@ Billing and subscription management endpoints.
 """
 from __future__ import annotations
 
+import os
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.API_Deps.org_deps import (
     _get_user_org_membership,
+    _is_membership_active,
     get_active_org_id,
 )
 from tldw_Server_API.app.api.v1.schemas.billing_schemas import (
@@ -33,6 +37,7 @@ from tldw_Server_API.app.api.v1.schemas.billing_schemas import (
 from tldw_Server_API.app.core.AuthNZ.input_validation import validate_email
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Billing.enforcement import get_billing_enforcer
+from tldw_Server_API.app.core.Billing import stripe_client as stripe_client_module
 from tldw_Server_API.app.core.Billing.stripe_client import is_billing_enabled
 from tldw_Server_API.app.core.Billing.subscription_service import get_subscription_service
 
@@ -53,6 +58,91 @@ async def _require_billing_enabled():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Billing is not enabled on this server",
         )
+
+
+def _is_stripe_provider_error(exc: Exception) -> bool:
+    """Return True when exc is a Stripe SDK exception."""
+    stripe_mod = getattr(stripe_client_module, "stripe", None)
+    stripe_error_cls = getattr(stripe_mod, "StripeError", None) if stripe_mod else None
+    return bool(stripe_error_cls and isinstance(exc, stripe_error_cls))
+
+
+def _host_matches_allowed_pattern(host: str, pattern: str) -> bool:
+    normalized = pattern.strip().lower()
+    if not normalized:
+        return False
+    if normalized.startswith("*."):
+        suffix = normalized[1:]
+        return host.endswith(suffix)
+    return host == normalized
+
+
+def _get_env_flag(name: str, default: bool = False) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _validate_billing_redirect_url(url: str, *, field_name: str) -> None:
+    """
+    Validate redirect URLs used in checkout/portal flows.
+
+    Controls:
+    - BILLING_REDIRECT_REQUIRE_HTTPS: reject non-https URLs when enabled.
+    - BILLING_REDIRECT_ALLOWLIST_REQUIRED: require BILLING_ALLOWED_REDIRECT_HOSTS.
+    - BILLING_ALLOWED_REDIRECT_HOSTS: exact/wildcard host allowlist.
+    """
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").strip().lower()
+    if scheme not in {"http", "https"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {field_name}: unsupported URL scheme '{scheme or 'missing'}'",
+        )
+
+    if _get_env_flag("BILLING_REDIRECT_REQUIRE_HTTPS", default=False) and scheme != "https":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {field_name}: HTTPS is required",
+        )
+
+    raw_allowlist = os.environ.get("BILLING_ALLOWED_REDIRECT_HOSTS", "")
+    allowlist_required = _get_env_flag("BILLING_REDIRECT_ALLOWLIST_REQUIRED", default=False)
+    if allowlist_required and not raw_allowlist.strip():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Billing redirect allowlist is required but not configured. "
+                "Set BILLING_ALLOWED_REDIRECT_HOSTS."
+            ),
+        )
+
+    if not raw_allowlist.strip():
+        return
+
+    allowed_hosts = {
+        entry.strip().lower()
+        for entry in raw_allowlist.split(",")
+        if entry.strip()
+    }
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {field_name}: missing hostname",
+        )
+
+    if any(_host_matches_allowed_pattern(host, pattern) for pattern in allowed_hosts):
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            f"Invalid {field_name}: host '{host}' is not allowed. "
+            "Set BILLING_ALLOWED_REDIRECT_HOSTS to allow this host."
+        ),
+    )
 
 
 async def _resolve_org_id(principal: AuthPrincipal, org_id: int | None) -> int:
@@ -83,7 +173,54 @@ async def _resolve_org_id(principal: AuthPrincipal, org_id: int | None) -> int:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="You are not a member of any organization",
         )
-    return user_orgs[0]["org_id"]
+
+    for org in user_orgs:
+        candidate_org_id = org.get("org_id")
+        if candidate_org_id is None:
+            continue
+        membership = await _get_user_org_membership(principal.user_id, int(candidate_org_id))
+        if _is_membership_active(membership):
+            return int(candidate_org_id)
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="You are not an active member of any organization",
+    )
+
+
+def _normalized_role(membership: dict | None) -> str:
+    if not membership:
+        return ""
+    return str(membership.get("role", "")).strip().lower()
+
+
+async def _require_billing_org_access(
+    *,
+    principal: AuthPrincipal,
+    org_id: int,
+    allowed_roles: tuple[str, ...] | None,
+    detail: str,
+) -> None:
+    """
+    Require active membership in the target org and optional role membership.
+
+    This helper keeps billing access checks consistent across endpoints.
+    """
+    membership = await _get_user_org_membership(principal.user_id, org_id)
+    if not membership or not _is_membership_active(membership):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=detail,
+        )
+
+    if allowed_roles:
+        role = _normalized_role(membership)
+        normalized_allowed = {str(item).strip().lower() for item in allowed_roles}
+        if role not in normalized_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=detail,
+            )
 
 
 # =============================================================================
@@ -134,6 +271,7 @@ async def list_plans():
 )
 async def get_subscription(
     org_id: int | None = Depends(get_active_org_id),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Get the subscription status for an organization."""
     if org_id is None:
@@ -141,6 +279,13 @@ async def get_subscription(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="You are not a member of any organization",
         )
+
+    await _require_billing_org_access(
+        principal=principal,
+        org_id=org_id,
+        allowed_roles=None,
+        detail="You are not an active member of this organization",
+    )
 
     service = await get_subscription_service()
     sub = await service.get_subscription(org_id)
@@ -169,6 +314,7 @@ async def get_subscription(
 )
 async def get_usage(
     org_id: int | None = Depends(get_active_org_id),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Get current usage vs limits for an organization."""
     if org_id is None:
@@ -176,6 +322,13 @@ async def get_usage(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="You are not a member of any organization",
         )
+
+    await _require_billing_org_access(
+        principal=principal,
+        org_id=org_id,
+        allowed_roles=None,
+        detail="You are not an active member of this organization",
+    )
 
     service = await get_subscription_service()
 
@@ -185,7 +338,8 @@ async def get_usage(
     current_usage = {
         "api_calls_day": usage_summary.api_calls_today,
         "llm_tokens_month": usage_summary.llm_tokens_month,
-        "storage_mb": round(usage_summary.storage_bytes / (1024 ** 2), 2),  # Convert bytes to MB
+        # Use integer MB to match schema/limit units.
+        "storage_mb": usage_summary.storage_bytes // (1024 ** 2),
         "team_members": usage_summary.team_members,
     }
 
@@ -218,13 +372,12 @@ async def get_rag_usage_debug(
     """Debug view of RAG usage vs daily limit for an organization."""
     org_id = await _resolve_org_id(principal, org_id)
 
-    # Verify billing view permissions
-    membership = await _get_user_org_membership(principal.user_id, org_id)
-    if not membership or membership.get("role") not in ("owner", "admin"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only organization owners and admins can view RAG usage",
-        )
+    await _require_billing_org_access(
+        principal=principal,
+        org_id=org_id,
+        allowed_roles=("owner", "admin"),
+        detail="Only active organization owners and admins can view RAG usage",
+    )
 
     enforcer = get_billing_enforcer()
     usage_summary = await enforcer.get_org_usage(org_id)
@@ -259,13 +412,12 @@ async def create_checkout(
     await _require_billing_enabled()
     org_id = await _resolve_org_id(principal, org_id)
 
-    # Verify user has billing permissions (owner or admin)
-    membership = await _get_user_org_membership(principal.user_id, org_id)
-    if not membership or membership.get("role") not in ("owner", "admin"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only organization owners and admins can manage billing",
-        )
+    await _require_billing_org_access(
+        principal=principal,
+        org_id=org_id,
+        allowed_roles=("owner", "admin"),
+        detail="Only active organization owners and admins can manage billing",
+    )
 
     service = await get_subscription_service()
     if not await service.get_plan_for_checkout(body.plan_name):
@@ -289,12 +441,16 @@ async def create_checkout(
                 detail=f"Billing requires a valid email address: {email_error or 'invalid email'}",
             )
         logger.info(f"Creating checkout session: org_id={org_id}, plan={body.plan_name}, user_id={principal.user_id}")
+        success_url = str(body.success_url)
+        cancel_url = str(body.cancel_url)
+        _validate_billing_redirect_url(success_url, field_name="success_url")
+        _validate_billing_redirect_url(cancel_url, field_name="cancel_url")
         session = await service.create_checkout_session(
             org_id=org_id,
             plan_name=body.plan_name,
             billing_cycle=body.billing_cycle,
-            success_url=str(body.success_url),
-            cancel_url=str(body.cancel_url),
+            success_url=success_url,
+            cancel_url=cancel_url,
             org_email=principal_email_str,
             org_name=principal.username,
         )
@@ -310,6 +466,14 @@ async def create_checkout(
     except RuntimeError as e:
         logger.error(f"Checkout service error for org_id={org_id}: {e}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)) from e
+    except Exception as e:
+        if _is_stripe_provider_error(e):
+            logger.error(f"Stripe checkout error for org_id={org_id}: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Billing provider error while creating checkout session",
+            ) from e
+        raise
 
 
 @router.post(
@@ -330,21 +494,22 @@ async def create_portal(
     await _require_billing_enabled()
     org_id = await _resolve_org_id(principal, org_id)
 
-    # Verify billing permissions
-    membership = await _get_user_org_membership(principal.user_id, org_id)
-    if not membership or membership.get("role") not in ("owner", "admin"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only organization owners and admins can access billing portal",
-        )
+    await _require_billing_org_access(
+        principal=principal,
+        org_id=org_id,
+        allowed_roles=("owner", "admin"),
+        detail="Only active organization owners and admins can access billing portal",
+    )
 
     service = await get_subscription_service()
 
     try:
         logger.info(f"Creating portal session: org_id={org_id}, user_id={principal.user_id}")
+        return_url = str(body.return_url)
+        _validate_billing_redirect_url(return_url, field_name="return_url")
         session = await service.create_portal_session(
             org_id=org_id,
-            return_url=str(body.return_url),
+            return_url=return_url,
         )
 
         logger.info(f"Portal session created: session_id={session.id}, org_id={org_id}")
@@ -358,6 +523,14 @@ async def create_portal(
     except RuntimeError as e:
         logger.error(f"Portal service error for org_id={org_id}: {e}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)) from e
+    except Exception as e:
+        if _is_stripe_provider_error(e):
+            logger.error(f"Stripe portal error for org_id={org_id}: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Billing provider error while creating portal session",
+            ) from e
+        raise
 
 
 # =============================================================================
@@ -383,13 +556,12 @@ async def cancel_subscription(
     await _require_billing_enabled()
     org_id = await _resolve_org_id(principal, org_id)
 
-    # Verify owner role
-    membership = await _get_user_org_membership(principal.user_id, org_id)
-    if not membership or membership.get("role") != "owner":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only organization owners can cancel subscriptions",
-        )
+    await _require_billing_org_access(
+        principal=principal,
+        org_id=org_id,
+        allowed_roles=("owner",),
+        detail="Only active organization owners can cancel subscriptions",
+    )
 
     service = await get_subscription_service()
 
@@ -411,6 +583,9 @@ async def cancel_subscription(
     except ValueError as e:
         logger.warning(f"Cancel subscription failed for org_id={org_id}: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error(f"Cancel subscription service error for org_id={org_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)) from e
 
 
 @router.post(
@@ -430,13 +605,12 @@ async def resume_subscription(
     await _require_billing_enabled()
     org_id = await _resolve_org_id(principal, org_id)
 
-    # Verify owner role
-    membership = await _get_user_org_membership(principal.user_id, org_id)
-    if not membership or membership.get("role") != "owner":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only organization owners can resume subscriptions",
-        )
+    await _require_billing_org_access(
+        principal=principal,
+        org_id=org_id,
+        allowed_roles=("owner",),
+        detail="Only active organization owners can resume subscriptions",
+    )
 
     service = await get_subscription_service()
 
@@ -448,6 +622,9 @@ async def resume_subscription(
     except ValueError as e:
         logger.warning(f"Resume subscription failed for org_id={org_id}: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error(f"Resume subscription service error for org_id={org_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)) from e
 
 
 # =============================================================================
@@ -473,13 +650,12 @@ async def list_invoices(
     org_id = await _resolve_org_id(principal, org_id)
     await _require_billing_enabled()
 
-    # Verify billing view permissions
-    membership = await _get_user_org_membership(principal.user_id, org_id)
-    if not membership or membership.get("role") not in ("owner", "admin"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only organization owners and admins can view invoices",
-        )
+    await _require_billing_org_access(
+        principal=principal,
+        org_id=org_id,
+        allowed_roles=("owner", "admin"),
+        detail="Only active organization owners and admins can view invoices",
+    )
 
     service = await get_subscription_service()
     invoices, total = await service.list_invoices(org_id, limit=limit, offset=offset)

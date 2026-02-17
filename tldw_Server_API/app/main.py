@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.routing import APIRoute
 from loguru import logger
+from starlette.requests import ClientDisconnect
 from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
@@ -4266,6 +4267,17 @@ from fastapi.responses import JSONResponse as _JSONResponse  # noqa: E402
 
 @app.exception_handler(Exception)
 async def _global_unhandled_exception_handler(request, exc):
+    if isinstance(exc, ClientDisconnect):
+        logger.debug(
+            "Client disconnected during {method} {url}",
+            method=request.method,
+            url=request.url,
+        )
+        return _JSONResponse(
+            status_code=499,
+            content={"detail": "Client disconnected"},
+        )
+
     logger.opt(exception=exc).error(
         "Unhandled exception on {method} {url}: {exc}",
         method=request.method,
@@ -4275,6 +4287,19 @@ async def _global_unhandled_exception_handler(request, exc):
     return _JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
+    )
+
+
+@app.exception_handler(ClientDisconnect)
+async def _client_disconnect_exception_handler(request: Request, exc: ClientDisconnect):
+    logger.debug(
+        "Client disconnected during {method} {url}",
+        method=request.method,
+        url=request.url,
+    )
+    return _JSONResponse(
+        status_code=499,
+        content={"detail": "Client disconnected"},
     )
 
 

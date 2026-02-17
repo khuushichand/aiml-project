@@ -194,7 +194,7 @@ export const EvaluationsPage: React.FC = () => {
         <Alert
           type="info"
           showIcon
-          message={t("evaluations:tourTitle", {
+          title={t("evaluations:tourTitle", {
             defaultValue: "Evaluations tour"
           })}
           description={t("evaluations:tourDescription", {

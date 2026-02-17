@@ -37,8 +37,34 @@ const isAbortLikeError = (error: unknown): boolean => {
   return name === "AbortError" || normalizedMessage.includes("abort")
 }
 
+const isRateLimitedError = (error: unknown): boolean => {
+  const status = (error as { status?: unknown } | null)?.status
+  if (typeof status === "number" && Number.isFinite(status) && status === 429) {
+    return true
+  }
+
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : String((error as { message?: unknown } | null)?.message || "")
+  const normalized = message.toLowerCase()
+  if (!normalized) return false
+
+  return (
+    normalized.includes("rate_limited") ||
+    normalized.includes("rate limit") ||
+    normalized.includes("too many requests")
+  )
+}
+
 export const isRecoverableServerChatHistoryError = (error: unknown): boolean => {
-  return isRecoverableAuthConfigError(error) || isAbortLikeError(error)
+  return (
+    isRecoverableAuthConfigError(error) ||
+    isAbortLikeError(error) ||
+    isRateLimitedError(error)
+  )
 }
 
 export const mapServerChatHistoryItems = (
@@ -81,11 +107,21 @@ export const fetchAllServerChatPages = async (
   let total: number | null = null
 
   for (let page = 0; page < maxPages; page += 1) {
-    const { chats, total: pageTotal } = await fetchPage({
-      limit,
-      offset,
-      signal: options?.signal
-    })
+    let response: { chats: ServerChatSummary[]; total: number }
+    try {
+      response = await fetchPage({
+        limit,
+        offset,
+        signal: options?.signal
+      })
+    } catch (error) {
+      // Keep already-fetched chat history visible if a later page gets rate-limited.
+      if (allChats.length > 0 && isRateLimitedError(error)) {
+        break
+      }
+      throw error
+    }
+    const { chats, total: pageTotal } = response
     const batch = Array.isArray(chats) ? chats : []
 
     if (typeof pageTotal === "number" && Number.isFinite(pageTotal) && pageTotal >= 0) {

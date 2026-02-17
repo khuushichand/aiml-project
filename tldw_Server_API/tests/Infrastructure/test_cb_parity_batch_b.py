@@ -2,8 +2,10 @@
 """Parity tests: Embeddings and Evaluations circuit breaker behavior."""
 
 import asyncio
+import importlib
 import time
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -12,8 +14,10 @@ from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
     CircuitBreakerConfig,
     CircuitBreakerOpenError,
     CircuitBreakerRegistry,
-    CircuitState,
-    registry,
+)
+
+_infra_cb_module = importlib.import_module(
+    "tldw_Server_API.app.core.Infrastructure.circuit_breaker"
 )
 
 
@@ -28,8 +32,8 @@ class TransientError(Exception):
 class TestEmbeddingsParity:
     """Verify Embeddings circuit breaker behavior via the unified module."""
 
-    @patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._increment_counter")
-    @patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._set_gauge")
+    @patch.object(_infra_cb_module, "_increment_counter")
+    @patch.object(_infra_cb_module, "_set_gauge")
     def test_embeddings_metrics_on_trip(self, mock_gauge, mock_counter):
         cb = CircuitBreaker(
             "emb_metrics",
@@ -61,20 +65,20 @@ class TestEmbeddingsParity:
         )
         assert reg.get("embeddings_test") is cb
 
-    def test_embeddings_shim_re_exports(self):
-        """The Embeddings shim module re-exports from Infrastructure."""
-        from tldw_Server_API.app.core.Embeddings.circuit_breaker import (
-            CircuitBreaker as EmbCB,
-            CircuitBreakerConfig as EmbCfg,
-            CircuitBreakerError,
-            CircuitBreakerRegistry as EmbReg,
-            CircuitState as EmbState,
+    def test_embeddings_imports_unified_breaker_directly(self):
+        """Embeddings runtime modules should import Infrastructure breaker directly."""
+        connection_pool_path = (
+            Path(__file__).resolve().parents[2]
+            / "app"
+            / "core"
+            / "Embeddings"
+            / "connection_pool.py"
         )
-        assert EmbCB is CircuitBreaker
-        assert EmbCfg is CircuitBreakerConfig
-        assert EmbReg is CircuitBreakerRegistry
-        assert EmbState is CircuitState
-        assert issubclass(CircuitBreakerError, Exception)
+        source = connection_pool_path.read_text(encoding="utf-8")
+        assert (
+            "from tldw_Server_API.app.core.Infrastructure.circuit_breaker import CircuitBreaker"
+            in source
+        )
 
     def test_embeddings_connection_pool_independent(self):
         """Circuit breaker is independent of connection pool behavior."""
@@ -101,8 +105,8 @@ class TestEmbeddingsParity:
         assert cb1.is_open
         assert cb2.is_closed
 
-    @patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._increment_counter")
-    @patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._set_gauge")
+    @patch.object(_infra_cb_module, "_increment_counter")
+    @patch.object(_infra_cb_module, "_set_gauge")
     def test_embeddings_metrics_on_success(self, mock_gauge, mock_counter):
         cb = CircuitBreaker(
             "emb_succ",
@@ -122,8 +126,8 @@ class TestEmbeddingsParity:
 
     def test_embeddings_emit_metrics_opt_out(self):
         """When emit_metrics=False, no metrics should be emitted."""
-        with patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._increment_counter") as mock_counter:
-            with patch("tldw_Server_API.app.core.Infrastructure.circuit_breaker._set_gauge") as mock_gauge:
+        with patch.object(_infra_cb_module, "_increment_counter") as mock_counter:
+            with patch.object(_infra_cb_module, "_set_gauge"):
                 cb = CircuitBreaker(
                     "emb_no_metrics",
                     config=CircuitBreakerConfig(
@@ -173,6 +177,7 @@ class TestEvaluationsParity:
             ),
         )
         assert openai_cb.config.failure_threshold == 3
+        assert anthropic_cb.config.failure_threshold == 3
         assert local_cb.config.failure_threshold == 5
         assert local_cb.config.recovery_timeout == 30.0
 
@@ -253,6 +258,8 @@ class TestEvaluationsParity:
         """_state_changed_at in Evaluations wrapper is independent of _last_failure_time."""
         from tldw_Server_API.app.core.Evaluations.circuit_breaker import (
             CircuitBreaker as EvalCB,
+        )
+        from tldw_Server_API.app.core.Evaluations.circuit_breaker import (
             CircuitBreakerConfig as EvalCfg,
         )
         cb = EvalCB("eval_sca", EvalCfg(failure_threshold=5))
@@ -280,6 +287,8 @@ class TestEvaluationsParity:
         """Evaluations CircuitBreaker.get_state() returns expected format."""
         from tldw_Server_API.app.core.Evaluations.circuit_breaker import (
             CircuitBreaker as EvalCB,
+        )
+        from tldw_Server_API.app.core.Evaluations.circuit_breaker import (
             CircuitBreakerConfig as EvalCfg,
         )
         cb = EvalCB("eval_state", EvalCfg(failure_threshold=3))

@@ -10,6 +10,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Skills.skills_service import SkillsService
 from tldw_Server_API.app.main import app
 
 pytestmark = pytest.mark.integration
@@ -162,6 +163,27 @@ class TestUpdateSkill:
         )
         assert r.status_code == 409
 
+    def test_update_skill_supporting_file_delete_with_null(self, client):
+        create_resp = client.post(
+            f"{SKILLS_PREFIX}/",
+            json={
+                "name": "upd-files",
+                "content": "content",
+                "supporting_files": {"remove.md": "to remove", "keep.md": "to keep"},
+            },
+        )
+        assert create_resp.status_code == 201, create_resp.text
+
+        r = client.put(
+            f"{SKILLS_PREFIX}/upd-files",
+            json={"supporting_files": {"remove.md": None}},
+        )
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["supporting_files"] is not None
+        assert "remove.md" not in data["supporting_files"]
+        assert data["supporting_files"]["keep.md"] == "to keep"
+
 
 class TestDeleteSkill:
     def test_delete_skill_204(self, client):
@@ -193,6 +215,28 @@ class TestImportExport:
         assert r.status_code == 201, r.text
         assert r.json()["name"] == "imported"
 
+    def test_import_skill_json_without_name_uses_frontmatter(self, client):
+        r = client.post(
+            f"{SKILLS_PREFIX}/import",
+            json={
+                "content": "---\nname: from-frontmatter\ndescription: Imported\n---\nImported content",
+                "overwrite": False,
+            },
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["name"] == "from-frontmatter"
+
+    def test_import_skill_invalid_frontmatter_name_400(self, client):
+        r = client.post(
+            f"{SKILLS_PREFIX}/import",
+            json={
+                "name": "safe-name",
+                "content": "---\nname: Invalid_Name!\n---\nImported content",
+                "overwrite": False,
+            },
+        )
+        assert r.status_code == 400
+
     def test_import_skill_overwrite(self, client):
         client.post(
             f"{SKILLS_PREFIX}/",
@@ -209,6 +253,31 @@ class TestImportExport:
         assert r.status_code == 201
         assert r.json()["description"] == "Overwritten"
 
+    def test_import_skill_json_supporting_files_count_limit_422(self, client):
+        files = {f"file{i:02d}.md": "content" for i in range(25)}
+        r = client.post(
+            f"{SKILLS_PREFIX}/import",
+            json={
+                "content": "---\nname: too-many-files\n---\nBody",
+                "supporting_files": files,
+                "overwrite": False,
+            },
+        )
+        assert r.status_code == 422
+
+    def test_import_skill_json_supporting_files_aggregate_limit_422(self, client):
+        big_content = "x" * 400_000
+        files = {f"file{i:02d}.md": big_content for i in range(15)}
+        r = client.post(
+            f"{SKILLS_PREFIX}/import",
+            json={
+                "content": "---\nname: too-big-files\n---\nBody",
+                "supporting_files": files,
+                "overwrite": False,
+            },
+        )
+        assert r.status_code == 422
+
     def test_import_skill_file_md(self, client, tmp_path):
         skill_file = tmp_path / "my-file-skill.md"
         skill_file.write_text("---\ndescription: From file\n---\nFile content")
@@ -219,6 +288,17 @@ class TestImportExport:
                 files={"file": ("my-file-skill.md", f, "text/markdown")},
             )
         assert r.status_code == 201, r.text
+
+    def test_import_skill_file_invalid_frontmatter_name_400(self, client, tmp_path):
+        skill_file = tmp_path / "SKILL.md"
+        skill_file.write_text("---\nname: Invalid_Name!\n---\nFile content")
+
+        with open(skill_file, "rb") as f:
+            r = client.post(
+                f"{SKILLS_PREFIX}/import/file",
+                files={"file": ("SKILL.md", f, "text/markdown")},
+            )
+        assert r.status_code == 400
 
     def test_import_skill_file_zip(self, client, tmp_path):
         import zipfile
@@ -236,6 +316,57 @@ class TestImportExport:
         )
         assert r.status_code == 201, r.text
         assert r.json()["name"] == "zip-skill"
+
+    def test_import_skill_file_zip_path_traversal_400(self, client):
+        import zipfile
+        from io import BytesIO
+
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("safe-skill/SKILL.md", "---\nname: safe-skill\n---\nZip content")
+            zf.writestr("safe-skill/../escape.md", "escape")
+        buf.seek(0)
+
+        r = client.post(
+            f"{SKILLS_PREFIX}/import/file",
+            files={"file": ("skill.zip", buf, "application/zip")},
+        )
+        assert r.status_code == 400
+
+    def test_import_skill_file_zip_supporting_files_count_limit_400(self, client):
+        import zipfile
+        from io import BytesIO
+
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("zip-limit-count/SKILL.md", "---\nname: zip-limit-count\n---\nZip content")
+            for i in range(21):
+                zf.writestr(f"zip-limit-count/file{i:02d}.md", "tiny")
+        buf.seek(0)
+
+        r = client.post(
+            f"{SKILLS_PREFIX}/import/file",
+            files={"file": ("skill.zip", buf, "application/zip")},
+        )
+        assert r.status_code == 400
+
+    def test_import_skill_file_zip_supporting_files_aggregate_limit_400(self, client):
+        import zipfile
+        from io import BytesIO
+
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("zip-limit-size/SKILL.md", "---\nname: zip-limit-size\n---\nZip content")
+            big_content = "x" * 400_000
+            for i in range(15):
+                zf.writestr(f"zip-limit-size/file{i:02d}.md", big_content)
+        buf.seek(0)
+
+        r = client.post(
+            f"{SKILLS_PREFIX}/import/file",
+            files={"file": ("skill.zip", buf, "application/zip")},
+        )
+        assert r.status_code == 400
 
     def test_export_skill_zip(self, client):
         client.post(
@@ -282,6 +413,26 @@ class TestContextPayload:
         assert len(data["available_skills"]) >= 1
         assert "ctx-skill" in data["context_text"]
 
+    def test_get_context_payload_uses_async_service_method(self, client, monkeypatch):
+        calls = {"async": 0}
+
+        async def _fake_async_payload(self):
+            calls["async"] += 1
+            return {"available_skills": [], "context_text": ""}
+
+        def _fake_sync_payload(self):
+            raise AssertionError("sync context payload should not be called from async endpoint")
+
+        monkeypatch.setattr(SkillsService, "get_context_payload_async", _fake_async_payload)
+        monkeypatch.setattr(SkillsService, "get_context_payload", _fake_sync_payload)
+
+        r = client.get(f"{SKILLS_PREFIX}/context")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["available_skills"] == []
+        assert data["context_text"] == ""
+        assert calls["async"] == 1
+
 
 class TestSupportingFilesLimit:
     def test_supporting_files_aggregate_limit_rejected(self, client):
@@ -293,3 +444,178 @@ class TestSupportingFilesLimit:
             json={"name": "big-files", "content": "content", "supporting_files": files},
         )
         assert r.status_code == 422  # Pydantic validation error
+
+
+class TestSkillsEndToEndWorkflow:
+    @staticmethod
+    def _rename_skill_in_export_zip(zip_bytes: bytes, source_name: str, target_name: str) -> bytes:
+        import zipfile
+        from io import BytesIO
+
+        src_prefix = f"{source_name}/"
+        dst_prefix = f"{target_name}/"
+        output = BytesIO()
+        with zipfile.ZipFile(BytesIO(zip_bytes), "r") as src_zip:
+            with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as dst_zip:
+                for entry in src_zip.infolist():
+                    filename = entry.filename
+                    if filename == source_name:
+                        rewritten = target_name
+                    elif filename.startswith(src_prefix):
+                        rewritten = f"{dst_prefix}{filename[len(src_prefix):]}"
+                    else:
+                        rewritten = filename
+
+                    if entry.is_dir():
+                        dst_zip.writestr(rewritten, b"")
+                    else:
+                        dst_zip.writestr(rewritten, src_zip.read(entry.filename))
+        return output.getvalue()
+
+    def test_e2e_skills_lifecycle_workflow(self, client):
+        skill_name = "e2e-workflow-skill"
+        copied_skill_name = "e2e-workflow-copy"
+
+        # 1) Create
+        create_resp = client.post(
+            f"{SKILLS_PREFIX}/",
+            json={
+                "name": skill_name,
+                "content": (
+                    "---\n"
+                    "description: E2E workflow skill\n"
+                    "context: inline\n"
+                    "---\n\n"
+                    "Analyze: $ARGUMENTS"
+                ),
+                "supporting_files": {
+                    "guide.md": "workflow guide",
+                    "notes.txt": "first revision",
+                },
+            },
+        )
+        assert create_resp.status_code == 201, create_resp.text
+        created = create_resp.json()
+        assert created["name"] == skill_name
+        assert created["version"] == 1
+
+        # 2) List + get
+        list_resp = client.get(f"{SKILLS_PREFIX}/?limit=50&offset=0")
+        assert list_resp.status_code == 200, list_resp.text
+        listed_names = [skill["name"] for skill in list_resp.json()["skills"]]
+        assert skill_name in listed_names
+
+        get_resp = client.get(f"{SKILLS_PREFIX}/{skill_name}")
+        assert get_resp.status_code == 200, get_resp.text
+        fetched = get_resp.json()
+        assert fetched["supporting_files"]["guide.md"] == "workflow guide"
+        assert fetched["supporting_files"]["notes.txt"] == "first revision"
+
+        # 3) Update (versioned) with supporting-file add/update/delete
+        update_resp = client.put(
+            f"{SKILLS_PREFIX}/{skill_name}",
+            headers={"If-Match": str(created["version"])},
+            json={
+                "content": (
+                    "---\n"
+                    "description: E2E workflow skill updated\n"
+                    "context: inline\n"
+                    "---\n\n"
+                    "Analyze updated: $ARGUMENTS"
+                ),
+                "supporting_files": {
+                    "guide.md": "workflow guide v2",
+                    "notes.txt": None,
+                    "appendix.md": "appendix content",
+                },
+            },
+        )
+        assert update_resp.status_code == 200, update_resp.text
+        updated = update_resp.json()
+        assert updated["version"] == 2
+        assert updated["description"] == "E2E workflow skill updated"
+        assert updated["supporting_files"]["guide.md"] == "workflow guide v2"
+        assert updated["supporting_files"]["appendix.md"] == "appendix content"
+        assert "notes.txt" not in updated["supporting_files"]
+
+        # 4) Execute preview
+        execute_resp = client.post(
+            f"{SKILLS_PREFIX}/{skill_name}/execute",
+            json={"args": "e2e input"},
+        )
+        assert execute_resp.status_code == 200, execute_resp.text
+        execute_data = execute_resp.json()
+        assert execute_data["skill_name"] == skill_name
+        assert "e2e input" in execute_data["rendered_prompt"]
+        assert execute_data["execution_mode"] == "inline"
+
+        # 5) Context payload reflects updated skill
+        context_resp = client.get(f"{SKILLS_PREFIX}/context")
+        assert context_resp.status_code == 200, context_resp.text
+        context_data = context_resp.json()
+        assert skill_name in context_data["context_text"]
+        assert "E2E workflow skill updated" in context_data["context_text"]
+
+        # 6) Export zip and import back as renamed copy
+        export_resp = client.get(f"{SKILLS_PREFIX}/{skill_name}/export")
+        assert export_resp.status_code == 200, export_resp.text
+        assert export_resp.content[:2] == b"PK"
+        renamed_zip = self._rename_skill_in_export_zip(
+            export_resp.content,
+            source_name=skill_name,
+            target_name=copied_skill_name,
+        )
+
+        import_resp = client.post(
+            f"{SKILLS_PREFIX}/import/file",
+            files={"file": ("copied-skill.zip", renamed_zip, "application/zip")},
+        )
+        assert import_resp.status_code == 201, import_resp.text
+        assert import_resp.json()["name"] == copied_skill_name
+
+        copy_get_resp = client.get(f"{SKILLS_PREFIX}/{copied_skill_name}")
+        assert copy_get_resp.status_code == 200, copy_get_resp.text
+        copy_data = copy_get_resp.json()
+        assert copy_data["description"] == "E2E workflow skill updated"
+        assert copy_data["supporting_files"]["guide.md"] == "workflow guide v2"
+        assert copy_data["supporting_files"]["appendix.md"] == "appendix content"
+
+        # 7) Delete original
+        delete_resp = client.delete(f"{SKILLS_PREFIX}/{skill_name}")
+        assert delete_resp.status_code == 204, delete_resp.text
+        missing_resp = client.get(f"{SKILLS_PREFIX}/{skill_name}")
+        assert missing_resp.status_code == 404
+
+        # 8) Seed builtin skills
+        seed_resp = client.post(f"{SKILLS_PREFIX}/seed")
+        assert seed_resp.status_code == 200, seed_resp.text
+        seed_data = seed_resp.json()
+        assert seed_data["count"] >= 2
+        assert "summarize" in seed_data["seeded"]
+        assert "code-review" in seed_data["seeded"]
+
+    def test_e2e_seed_endpoint_idempotent_and_overwrite(self, client):
+        first_seed = client.post(f"{SKILLS_PREFIX}/seed")
+        assert first_seed.status_code == 200, first_seed.text
+        first_data = first_seed.json()
+        assert first_data["count"] >= 2
+
+        # idempotent without overwrite
+        second_seed = client.post(f"{SKILLS_PREFIX}/seed")
+        assert second_seed.status_code == 200, second_seed.text
+        assert second_seed.json()["count"] == 0
+
+        # mutate summarize, then verify overwrite restores builtin content
+        mutate_resp = client.put(
+            f"{SKILLS_PREFIX}/summarize",
+            json={"content": "Custom summarize content"},
+        )
+        assert mutate_resp.status_code == 200, mutate_resp.text
+
+        overwrite_seed = client.post(f"{SKILLS_PREFIX}/seed?overwrite=true")
+        assert overwrite_seed.status_code == 200, overwrite_seed.text
+        assert "summarize" in overwrite_seed.json()["seeded"]
+
+        summarize_resp = client.get(f"{SKILLS_PREFIX}/summarize")
+        assert summarize_resp.status_code == 200, summarize_resp.text
+        assert "Custom summarize content" not in summarize_resp.json()["content"]

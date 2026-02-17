@@ -283,7 +283,7 @@ export const EvaluationsTab: React.FC = () => {
         ) : evalsError || evalListResp?.ok === false ? (
           <Alert
             type="error"
-            message={t("evaluations:loadErrorTitle", {
+            title={t("evaluations:loadErrorTitle", {
               defaultValue: "Unable to load evaluations"
             })}
             description={t("evaluations:loadErrorDescription", {
@@ -386,7 +386,7 @@ export const EvaluationsTab: React.FC = () => {
         ) : evalDetailError || evalDetailResp?.ok === false ? (
           <Alert
             type="warning"
-            message={t("evaluations:detailErrorTitle", {
+            title={t("evaluations:detailErrorTitle", {
               defaultValue: "Unable to load evaluation details"
             })}
           />

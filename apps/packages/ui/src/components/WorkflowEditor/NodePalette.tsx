@@ -94,9 +94,9 @@ const buildStepSearchText = (
 // theme-exempt: workflow category colors
 const CATEGORY_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   purple: {
-    bg: "bg-purple-100 dark:bg-purple-900/30",
-    text: "text-purple-600 dark:text-purple-400",
-    border: "border-purple-300 dark:border-purple-700"
+    bg: "bg-primary/10",
+    text: "text-primary",
+    border: "border-primary/30"
   },
   blue: {
     bg: "bg-primary/10",
@@ -129,9 +129,9 @@ const CATEGORY_COLORS: Record<string, { bg: string; text: string; border: string
     border: "border-emerald-300 dark:border-emerald-700"
   },
   orange: {
-    bg: "bg-orange-100 dark:bg-orange-900/30",
-    text: "text-orange-600 dark:text-orange-400",
-    border: "border-orange-300 dark:border-orange-700"
+    bg: "bg-indigo-100 dark:bg-indigo-900/30",
+    text: "text-indigo-600 dark:text-indigo-400",
+    border: "border-indigo-300 dark:border-indigo-700"
   },
   green: {
     bg: "bg-success/10",
@@ -357,7 +357,7 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
           <Alert
             type="warning"
             showIcon
-            message="Limited node library"
+            title="Limited node library"
             description={
               <span className="text-xs">
                 Could not load server step types. Showing fallback steps.

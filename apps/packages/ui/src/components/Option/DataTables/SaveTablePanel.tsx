@@ -122,7 +122,7 @@ export const SaveTablePanel: React.FC = () => {
     return (
       <Alert
         type="warning"
-        message={t("dataTables:noTableToSave", "No table to save")}
+        title={t("dataTables:noTableToSave", "No table to save")}
         description={t(
           "dataTables:goBackToGenerate",
           "Go back to the previous step to generate a table first."

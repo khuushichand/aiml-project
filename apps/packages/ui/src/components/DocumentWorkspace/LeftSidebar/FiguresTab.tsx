@@ -112,7 +112,7 @@ export const FiguresTab: React.FC = () => {
         <Alert
           className="mb-3"
           type="error"
-          message={t("option:documentWorkspace.figuresError", "Failed to load document")}
+          title={t("option:documentWorkspace.figuresError", "Failed to load document")}
           description={loadError || t("common:unknownError", "An unknown error occurred")}
           showIcon
         />

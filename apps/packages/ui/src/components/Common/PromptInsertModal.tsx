@@ -188,7 +188,7 @@ export const PromptInsertModal: React.FC<Props> = ({
               <Alert
                 type="error"
                 showIcon
-                message={errorTitle}
+                title={errorTitle}
                 description={errorDescription}
               />
             </div>

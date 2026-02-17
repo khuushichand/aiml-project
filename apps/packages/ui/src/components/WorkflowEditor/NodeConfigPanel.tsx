@@ -407,6 +407,8 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
               <Button
                 type="text"
                 size="small"
+                aria-label="Duplicate node"
+                title="Duplicate node"
                 icon={<Copy className="w-4 h-4" />}
                 onClick={handleDuplicate}
               />
@@ -416,6 +418,8 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
                 type="text"
                 size="small"
                 danger
+                aria-label="Delete node"
+                title="Delete node"
                 icon={<Trash2 className="w-4 h-4" />}
                 onClick={handleDelete}
               />
@@ -456,7 +460,7 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
               {rawConfigError && (
                 <Alert
                   type="error"
-                  message={rawConfigError}
+                  title={rawConfigError}
                   showIcon
                   className="mt-2"
                 />

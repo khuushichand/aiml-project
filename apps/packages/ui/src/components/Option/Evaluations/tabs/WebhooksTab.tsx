@@ -148,7 +148,7 @@ export const WebhooksTab: React.FC = () => {
             <Alert
               className="mt-3"
               type="success"
-              message={t("evaluations:webhookSecretTitle", {
+              title={t("evaluations:webhookSecretTitle", {
                 defaultValue: "Webhook Secret"
               })}
               description={
@@ -171,7 +171,7 @@ export const WebhooksTab: React.FC = () => {
         ) : webhooksError || webhooksResp?.ok === false ? (
           <Alert
             type="warning"
-            message={t("evaluations:webhookListErrorTitle", {
+            title={t("evaluations:webhookListErrorTitle", {
               defaultValue: "Unable to load webhooks"
             })}
           />
@@ -237,7 +237,7 @@ export const WebhooksTab: React.FC = () => {
         <Alert
           type="info"
           showIcon
-          message={t("evaluations:webhookInfoTitle", {
+          title={t("evaluations:webhookInfoTitle", {
             defaultValue: "About webhooks"
           })}
           description={

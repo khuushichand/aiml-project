@@ -335,7 +335,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
               type="warning"
               showIcon
               className="mb-3"
-              message={t("watchlists:runs.detail.logsTruncated", "Logs truncated")}
+              title={t("watchlists:runs.detail.logsTruncated", "Logs truncated")}
               description={t("watchlists:runs.detail.logsTruncatedDesc", "Showing the most recent log output.")}
             />
           )}

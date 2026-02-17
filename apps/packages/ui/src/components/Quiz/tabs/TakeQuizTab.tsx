@@ -131,7 +131,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
           value={answers[question.id]}
           onChange={(e) => updateAnswer(question.id, e.target.value)}
         >
-          <Space direction="vertical">
+          <Space orientation="vertical">
             {(question.options ?? []).map((option, index) => (
               <Radio key={index} value={index}>
                 {option || `${t("option:quiz.option", { defaultValue: "Option" })} ${index + 1}`}
@@ -147,7 +147,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
           value={answers[question.id]}
           onChange={(e) => updateAnswer(question.id, e.target.value)}
         >
-          <Space direction="vertical">
+          <Space orientation="vertical">
             <Radio value="true">{t("option:quiz.true", { defaultValue: "True" })}</Radio>
             <Radio value="false">{t("option:quiz.false", { defaultValue: "False" })}</Radio>
           </Space>
@@ -178,7 +178,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
       <div className="space-y-4">
         <Alert
           type={passed ? "success" : "warning"}
-          message={t("option:quiz.scoreSummary", {
+          title={t("option:quiz.scoreSummary", {
             defaultValue: "Score: {{score}} / {{total}} ({{percent}}%)",
             score,
             total,
@@ -325,11 +325,14 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
           description={
             <div className="space-y-2">
               <p className="text-text-muted">
-                {t("option:quiz.empty.noQuizzes", { defaultValue: "No quizzes yet" })}
+                {t("option:quiz.empty.noQuizzes", {
+                  defaultValue: "No quizzes available to take yet"
+                })}
               </p>
               <p className="text-sm text-text-subtle">
                 {t("option:quiz.empty.createFirst", {
-                  defaultValue: "Create your first quiz or generate one from media"
+                  defaultValue:
+                    "Generate one from media or create one manually, then come back to take it"
                 })}
               </p>
             </div>

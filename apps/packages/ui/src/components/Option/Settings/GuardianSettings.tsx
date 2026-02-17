@@ -111,6 +111,25 @@ const normalizeRelationshipStatus = (status: string): string => {
   return status
 }
 
+const UNSUPPORTED_GUARDIAN_STATUS_CODES = new Set([404, 405, 410, 501])
+
+const getGuardianErrorStatus = (error: unknown): number | null => {
+  const status = (error as { status?: unknown } | null)?.status
+  if (typeof status === "number" && Number.isFinite(status)) return status
+  const message =
+    error instanceof Error ? error.message : String(error || "")
+  const matched = message.match(/\b([45]\d{2})\b/)
+  if (!matched) return null
+  const parsed = Number.parseInt(matched[1], 10)
+  return Number.isNaN(parsed) ? null : parsed
+}
+
+const isGuardianEndpointUnsupported = (error: unknown): boolean => {
+  const status = getGuardianErrorStatus(error)
+  if (status == null) return false
+  return UNSUPPORTED_GUARDIAN_STATUS_CODES.has(status)
+}
+
 // ---------------------------------------------------------------------------
 // Self-Monitoring Tab
 // ---------------------------------------------------------------------------
@@ -122,33 +141,56 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
   const [governanceModalOpen, setGovernanceModalOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<SelfMonitoringRule | null>(null)
   const [selectedAlertIds, setSelectedAlertIds] = useState<string[]>([])
+  const [apiUnavailable, setApiUnavailable] = useState(false)
   const [form] = Form.useForm()
   const [governanceForm] = Form.useForm()
 
   const rulesQuery = useQuery({
     queryKey: ["guardian", "rules"],
     queryFn: () => listRules(),
-    enabled: online
+    enabled: online && !apiUnavailable,
+    retry: false
   })
 
   const alertsQuery = useQuery({
     queryKey: ["guardian", "alerts"],
     queryFn: () => listAlerts({ limit: 50 }),
-    enabled: online
+    enabled: online && !apiUnavailable,
+    retry: false
   })
 
   const unreadQuery = useQuery({
     queryKey: ["guardian", "unread"],
     queryFn: getUnreadCount,
     refetchInterval: 30_000,
-    enabled: online
+    enabled: online && !apiUnavailable,
+    retry: false
   })
 
   const governanceQuery = useQuery({
     queryKey: ["guardian", "governance"],
     queryFn: () => listGovernancePolicies(),
-    enabled: online
+    enabled: online && !apiUnavailable,
+    retry: false
   })
+
+  React.useEffect(() => {
+    if (apiUnavailable) return
+    if (
+      isGuardianEndpointUnsupported(rulesQuery.error) ||
+      isGuardianEndpointUnsupported(alertsQuery.error) ||
+      isGuardianEndpointUnsupported(unreadQuery.error) ||
+      isGuardianEndpointUnsupported(governanceQuery.error)
+    ) {
+      setApiUnavailable(true)
+    }
+  }, [
+    alertsQuery.error,
+    apiUnavailable,
+    governanceQuery.error,
+    rulesQuery.error,
+    unreadQuery.error
+  ])
 
   const createMutation = useMutation({
     mutationFn: createRule,
@@ -525,6 +567,23 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
     }
   ]
 
+  if (apiUnavailable) {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        title={t(
+          "guardian.selfMonitoring.unavailableTitle",
+          "Self-Monitoring endpoints unavailable"
+        )}
+        description={t(
+          "guardian.selfMonitoring.unavailableDescription",
+          "Your connected server does not expose self-monitoring endpoints yet. Upgrade the server to use Guardian monitoring rules."
+        )}
+      />
+    )
+  }
+
   const unreadCount = unreadQuery.data?.unread_count ?? 0
 
   return (
@@ -658,7 +717,7 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
         title={editingRule ? t("guardian.rules.edit", "Edit Rule") : t("guardian.rules.create", "Create Rule")}
         open={ruleDrawerOpen}
         onClose={closeDrawer}
-        width={520}
+        size={520}
         extra={
           <Button
             type="primary"
@@ -896,13 +955,15 @@ function GuardianControlsTab({ online }: { online: boolean }) {
   const [selectedRelationshipId, setSelectedRelationshipId] = useState<string | null>(null)
   const [policyDrawerOpen, setPolicyDrawerOpen] = useState(false)
   const [editingPolicy, setEditingPolicy] = useState<SupervisedPolicy | null>(null)
+  const [apiUnavailable, setApiUnavailable] = useState(false)
   const [createForm] = Form.useForm()
   const [policyForm] = Form.useForm()
 
   const relQuery = useQuery({
     queryKey: ["guardian", "relationships", relationshipRole],
     queryFn: () => listRelationships({ role: relationshipRole }),
-    enabled: online
+    enabled: online && !apiUnavailable,
+    retry: false
   })
 
   const selectedRelationship =
@@ -914,7 +975,8 @@ function GuardianControlsTab({ online }: { online: boolean }) {
       selectedRelationship
         ? listPolicies({ relationship_id: selectedRelationship.id })
         : Promise.resolve({ items: [], total: 0 }),
-    enabled: online && !!selectedRelationship
+    enabled: online && !apiUnavailable && !!selectedRelationship,
+    retry: false
   })
 
   const auditQuery = useQuery({
@@ -923,8 +985,24 @@ function GuardianControlsTab({ online }: { online: boolean }) {
       selectedRelationship
         ? getAuditLog({ relationship_id: selectedRelationship.id, limit: 50 })
         : Promise.resolve({ items: [], total: 0 }),
-    enabled: online && relationshipRole === "guardian" && !!selectedRelationship
+    enabled:
+      online &&
+      !apiUnavailable &&
+      relationshipRole === "guardian" &&
+      !!selectedRelationship,
+    retry: false
   })
+
+  React.useEffect(() => {
+    if (apiUnavailable) return
+    if (
+      isGuardianEndpointUnsupported(relQuery.error) ||
+      isGuardianEndpointUnsupported(policiesQuery.error) ||
+      isGuardianEndpointUnsupported(auditQuery.error)
+    ) {
+      setApiUnavailable(true)
+    }
+  }, [apiUnavailable, auditQuery.error, policiesQuery.error, relQuery.error])
 
   const createRelMutation = useMutation({
     mutationFn: createRelationship,
@@ -1279,6 +1357,23 @@ function GuardianControlsTab({ online }: { online: boolean }) {
     }
   ]
 
+  if (apiUnavailable) {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        title={t(
+          "guardian.controls.unavailableTitle",
+          "Guardian controls endpoints unavailable"
+        )}
+        description={t(
+          "guardian.controls.unavailableDescription",
+          "This server does not expose guardian relationship APIs yet. Upgrade the server to manage guardian controls."
+        )}
+      />
+    )
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Relationships */}
@@ -1432,7 +1527,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
         title={editingPolicy ? t("guardian.policies.edit", "Edit Supervised Policy") : t("guardian.policies.create", "Create Supervised Policy")}
         open={policyDrawerOpen}
         onClose={closePolicyDrawer}
-        width={480}
+        size={480}
         extra={
           <Button
             type="primary"
@@ -1544,12 +1639,38 @@ function GuardianControlsTab({ online }: { online: boolean }) {
 
 function CrisisResourcesTab({ online }: { online: boolean }) {
   const { t } = useTranslation("settings")
+  const [apiUnavailable, setApiUnavailable] = useState(false)
 
   const crisisQuery = useQuery({
     queryKey: ["guardian", "crisis"],
     queryFn: getCrisisResources,
-    enabled: online
+    enabled: online && !apiUnavailable,
+    retry: false
   })
+
+  React.useEffect(() => {
+    if (apiUnavailable) return
+    if (isGuardianEndpointUnsupported(crisisQuery.error)) {
+      setApiUnavailable(true)
+    }
+  }, [apiUnavailable, crisisQuery.error])
+
+  if (apiUnavailable) {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        title={t(
+          "guardian.crisis.unavailableTitle",
+          "Crisis resources endpoint unavailable"
+        )}
+        description={t(
+          "guardian.crisis.unavailableDescription",
+          "Your connected server does not expose crisis resources yet. Upgrade the server to access this support panel."
+        )}
+      />
+    )
+  }
 
   if (crisisQuery.isLoading) return <Skeleton active />
 
@@ -1561,7 +1682,7 @@ function CrisisResourcesTab({ online }: { online: boolean }) {
         <Alert
           type="info"
           showIcon
-          message={t("guardian.crisis.disclaimer", "Disclaimer")}
+          title={t("guardian.crisis.disclaimer", "Disclaimer")}
           description={data.disclaimer}
         />
       )}
@@ -1615,7 +1736,7 @@ export function GuardianSettings() {
       <Alert
         type="info"
         showIcon
-        message={t("guardian.unavailableTitle", "Guardian settings unavailable")}
+        title={t("guardian.unavailableTitle", "Guardian settings unavailable")}
         description={t(
           "guardian.unavailableDescription",
           "Your current server does not expose Guardian or Self-Monitoring endpoints."
@@ -1638,7 +1759,7 @@ export function GuardianSettings() {
         <Alert
           type="warning"
           showIcon
-          message={t("guardian.serverOfflineTitle", "Server offline")}
+          title={t("guardian.serverOfflineTitle", "Server offline")}
           description={t(
             "guardian.serverOffline",
             "Connect to your tldw server to manage guardian and monitoring settings."

@@ -28,6 +28,7 @@ import { CharacterPreviewPopup } from "./CharacterPreviewPopup"
 import { AvatarField, extractAvatarValues, createAvatarValue } from "./AvatarField"
 import { GenerateCharacterPanel, GenerationPreviewModal } from "./GenerateCharacterPanel"
 import { GenerateFieldButton } from "./GenerateFieldButton"
+import { filterCharactersForWorkspace } from "./search-utils"
 import { useCharacterGeneration } from "@/hooks/useCharacterGeneration"
 import { useFormDraft, formatDraftAge } from "@/hooks/useFormDraft"
 import { useCharacterShortcuts } from "@/hooks/useCharacterShortcuts"
@@ -53,6 +54,10 @@ import { useStoreMessageOption } from "@/store/option"
 import { shallow } from "zustand/shallow"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
+import {
+  buildServerLogHint,
+  sanitizeServerErrorMessage
+} from "@/utils/server-error-message"
 
 const MAX_NAME_LENGTH = 75
 const MAX_DESCRIPTION_LENGTH = 65
@@ -1064,60 +1069,17 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   }
 
   const {
-    data,
+    data: allCharactersData,
     status,
     error,
     refetch
   } = useQuery({
-    queryKey: [
-      "tldw:listCharacters",
-      {
-        search: debouncedSearchTerm.trim() || "",
-        tags: filterTags.slice().sort(),
-        matchAll: matchAllTags
-      }
-    ],
+    queryKey: ["tldw:listCharacters", "all"],
     queryFn: async () => {
       try {
         await tldwClient.initialize()
-        const query = debouncedSearchTerm.trim()
-        const tags = filterTags.filter((t) => t.trim().length > 0)
-        const hasSearch = query.length > 0
-        const hasTags = tags.length > 0
-
-        if (!hasSearch && !hasTags) {
-          const list = await tldwClient.listCharacters()
-          return Array.isArray(list) ? list : []
-        }
-
-        if (hasSearch && !hasTags) {
-          const list = await tldwClient.searchCharacters(query)
-          return Array.isArray(list) ? list : []
-        }
-
-        if (!hasSearch && hasTags) {
-          const list = await tldwClient.filterCharactersByTags(tags, {
-            match_all: matchAllTags
-          })
-          return Array.isArray(list) ? list : []
-        }
-
-        // When both search and tags are active, use server search then filter client-side by tags
-        const searched = await tldwClient.searchCharacters(query)
-        const normalized = Array.isArray(searched) ? searched : []
-        const filtered = normalized.filter((c: any) => {
-          const ct: string[] = Array.isArray(c?.tags)
-            ? c.tags
-            : typeof c?.tags === "string"
-              ? [c.tags]
-              : []
-          if (ct.length === 0) return false
-          if (matchAllTags) {
-            return tags.every((tag) => ct.includes(tag))
-          }
-          return tags.some((tag) => ct.includes(tag))
-        })
-        return filtered
+        const list = await tldwClient.listAllCharacters()
+        return Array.isArray(list) ? list : []
       } catch (e: any) {
         notification.error({
           message: t("settings:manageCharacters.notification.error", {
@@ -1131,8 +1093,22 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         })
         throw e
       }
-    }
+    },
+    staleTime: 5 * 60 * 1000
   })
+
+  const data = React.useMemo(
+    () =>
+      filterCharactersForWorkspace(
+        Array.isArray(allCharactersData) ? allCharactersData : [],
+        {
+          query: debouncedSearchTerm,
+          tags: filterTags,
+          matchAllTags
+        }
+      ),
+    [allCharactersData, debouncedSearchTerm, filterTags, matchAllTags]
+  )
 
   React.useEffect(() => {
     if (!Array.isArray(data)) return
@@ -1859,7 +1835,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       onSuccess: () => {
         // Optimistically remove from UI
         qc.setQueryData(
-          ["tldw:listCharacters", { search: debouncedSearchTerm.trim() || "", tags: filterTags.slice().sort(), matchAll: matchAllTags }],
+          ["tldw:listCharacters", "all"],
           (old: any[] | undefined) =>
             old?.filter((c: any) => String(c.id || c.slug || c.name) !== characterId) ?? []
         )
@@ -1904,7 +1880,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         })
       }
     })
-  }, [deleteCharacter, notification, t, qc, debouncedSearchTerm, filterTags, matchAllTags, pendingDelete, restoreCharacter])
+  }, [deleteCharacter, notification, t, qc, pendingDelete, restoreCharacter])
 
   const handleViewConversations = React.useCallback((record: any) => {
     setConversationCharacter(record)
@@ -2065,17 +2041,30 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         <div className="rounded-lg border border-danger/30 bg-danger/10 p-4">
           <Alert
             type="error"
-            message={t("settings:manageCharacters.loadError.title", {
+            title={t("settings:manageCharacters.loadError.title", {
               defaultValue: "Couldn't load characters"
             })}
             description={
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-danger">
-                  {(error as any)?.message ||
-                    t("settings:manageCharacters.loadError.description", {
-                      defaultValue: "Check your connection and try again."
-                    })}
-                </span>
+                <div className="text-sm text-danger">
+                  <p>
+                    {sanitizeServerErrorMessage(
+                      error,
+                      t("settings:manageCharacters.loadError.description", {
+                        defaultValue: "Check your connection and try again."
+                      })
+                    )}
+                  </p>
+                  <p className="mt-1 text-xs text-text-muted">
+                    {buildServerLogHint(
+                      error,
+                      t("settings:manageCharacters.loadError.logHint", {
+                        defaultValue:
+                          "If the issue persists, check server logs for more details."
+                      })
+                    )}
+                  </p>
+                </div>
                 <Button size="small" onClick={() => refetch()}>
                   {t("common:retry", { defaultValue: "Retry" })}
                 </Button>
@@ -2793,7 +2782,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             <Alert
               type="error"
               showIcon
-              message={chatsError}
+              title={chatsError}
               action={
                 <Button
                   size="small"
@@ -3067,7 +3056,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             type="info"
             showIcon
             className="mb-4"
-            message={
+            title={
               <span>
                 {t("settings:manageCharacters.draft.found", {
                   defaultValue: "Resume unsaved character?"
@@ -3817,7 +3806,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             type="info"
             showIcon
             className="mb-4"
-            message={
+            title={
               <span>
                 {t("settings:manageCharacters.draft.resumeEdit", {
                   defaultValue: "Resume unsaved changes?"

@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { SettingsLayout } from "../SettingsOptionLayout";
 
@@ -28,6 +28,7 @@ vi.mock("../settings-nav", () => ({
           to: "/settings/chat",
           labelToken: "settings:chatSettingsNav",
           icon: IconStub,
+          beta: true,
         },
       ],
     },
@@ -81,6 +82,10 @@ const renderSettingsLayout = (path = "/settings/tldw") =>
   );
 
 describe("settings navigation wayfinding", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it("marks the active route and exposes a current-section summary", () => {
     renderSettingsLayout("/settings/tldw");
 
@@ -113,6 +118,33 @@ describe("settings navigation wayfinding", () => {
     await user.keyboard("{Enter}");
     expect(screen.getByTestId("settings-layout-location")).toHaveTextContent(
       "/settings/chat",
+    );
+  });
+
+  it("renders beta badges by default and lets users dismiss them", async () => {
+    const user = userEvent.setup();
+    renderSettingsLayout("/settings/tldw");
+
+    expect(screen.getByText("beta")).toBeInTheDocument();
+    const toggle = screen.getByTestId("settings-beta-badges-toggle");
+    expect(toggle).toHaveTextContent("Hide beta badges");
+
+    await user.click(toggle);
+    expect(screen.queryByText("beta")).not.toBeInTheDocument();
+    expect(toggle).toHaveTextContent("Show beta badges");
+    expect(window.localStorage.getItem("tldw:settings:hide-beta-badges")).toBe(
+      "1",
+    );
+  });
+
+  it("respects persisted beta badge dismissal on load", () => {
+    window.localStorage.setItem("tldw:settings:hide-beta-badges", "1");
+
+    renderSettingsLayout("/settings/tldw");
+
+    expect(screen.queryByText("beta")).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-beta-badges-toggle")).toHaveTextContent(
+      "Show beta badges",
     );
   });
 });

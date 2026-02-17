@@ -292,6 +292,65 @@ class TestCircuitBreakerCallMethod:
 
         assert "Circuit breaker test is OPEN" in str(exc_info.value)
 
+    @pytest.mark.asyncio
+    async def test_open_error_preserves_context_fields(self):
+        """CircuitOpenError should include structured context from unified breaker."""
+        config = CircuitBreakerConfig(
+            failure_threshold=1,
+            recovery_timeout=12.0,
+            expected_exception=ValueError,
+        )
+        cb = CircuitBreaker("ctx", config)
+
+        def failing_func():
+            raise ValueError("boom")
+
+        with pytest.raises(ValueError):
+            await cb.call(failing_func)
+
+        with pytest.raises(CircuitOpenError) as exc_info:
+            await cb.call(failing_func)
+
+        err = exc_info.value
+        assert err.breaker_name == "ctx"
+        assert err.category == "evaluations"
+        assert err.service  # populated by unified breaker metadata
+        assert err.recovery_timeout == 12.0
+        assert err.failure_count >= 1
+        assert err.recovery_at is not None
+
+    @pytest.mark.asyncio
+    async def test_open_rejection_for_sync_func_has_no_unawaited_coroutine_warning(self, recwarn):
+        """Rejecting sync functions while OPEN should not leak unawaited coroutines."""
+        import gc
+
+        config = CircuitBreakerConfig(failure_threshold=1, expected_exception=ValueError)
+        cb = CircuitBreaker("no_leak", config)
+
+        def failing_func():
+            raise ValueError("boom")
+
+        def sync_should_not_run():
+            return 123
+
+        with pytest.raises(ValueError):
+            await cb.call(failing_func)
+
+        with pytest.raises(CircuitOpenError):
+            await cb.call(sync_should_not_run)
+
+        gc.collect()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        leaked = [
+            warning
+            for warning in recwarn
+            if issubclass(warning.category, RuntimeWarning)
+            and "was never awaited" in str(warning.message)
+        ]
+        assert leaked == []
+
 
 @pytest.mark.unit
 class TestCircuitBreakerRecovery:

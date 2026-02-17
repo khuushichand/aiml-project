@@ -302,7 +302,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
 
   return (
     <div>
-      <div className="mb-3">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
         <Select
           placeholder={t("option:flashcards.selectDeck", {
             defaultValue: "Select deck (optional)"
@@ -310,7 +310,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
           allowClear
           loading={decksQuery.isLoading}
           value={reviewDeckId ?? undefined}
-          className="min-w-64"
+          className="min-w-64 max-w-full flex-1"
           onChange={(v) => {
             onReviewDeckChange(v)
             if (reviewOverrideCard) {
@@ -323,6 +323,16 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
             value: d.id
           }))}
         />
+        <Button
+          type="primary"
+          className="min-h-11"
+          onClick={onNavigateToCreate}
+          data-testid="flashcards-review-create-cta"
+        >
+          {t("option:flashcards.noDueCreateCta", {
+            defaultValue: "Create a new card"
+          })}
+        </Button>
       </div>
 
       {dueCountsQuery.data && dueCountsQuery.data.total > 0 && (
@@ -492,7 +502,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                   })
             }
           >
-            <Space direction="vertical" align="center">
+            <Space orientation="vertical" align="center">
               {hasCardsQuery.data === false ? (
                 <>
                   <Text type="secondary">

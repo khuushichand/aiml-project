@@ -1,11 +1,13 @@
-import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
+import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
 
 export default function ConnectorBrowseRedirectPage() {
   return (
-    <RouteRedirect
-      to="/settings"
-      title="Connectors are managed in Settings"
-      description="Connector browsing is available in the Settings page."
+    <RoutePlaceholder
+      title="Connector Browse Is Coming Soon"
+      description="Connector catalog browsing is planned for this route."
+      plannedPath="/connectors/browse"
+      primaryCtaHref="/connectors"
+      primaryCtaLabel="Open Connectors Hub"
     />
   );
 }

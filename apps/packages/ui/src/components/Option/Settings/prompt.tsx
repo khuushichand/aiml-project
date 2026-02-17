@@ -74,7 +74,7 @@ export const SettingPrompt = () => {
         <Alert
           type="error"
           showIcon
-          message={t("managePrompts.loadError", "Unable to load prompt settings")}
+          title={t("managePrompts.loadError", "Unable to load prompt settings")}
           description={t(
             "managePrompts.loadErrorHelp",
             "Connect to your tldw server, then refresh the page."

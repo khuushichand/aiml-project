@@ -10,18 +10,21 @@ vi.mock("wxt/browser", () => ({
   browser: {
     runtime: {
       id: "test-extension",
-      sendMessage: (...args: unknown[]) => mocks.sendMessage(...args)
+      sendMessage: (...args: unknown[]) =>
+        (mocks.sendMessage as (...args: unknown[]) => unknown)(...args)
     }
   }
 }))
 
 vi.mock("@/services/tldw/request-core", () => ({
-  tldwRequest: (...args: unknown[]) => mocks.tldwRequest(...args)
+  tldwRequest: (...args: unknown[]) =>
+    (mocks.tldwRequest as (...args: unknown[]) => unknown)(...args)
 }))
 
 vi.mock("@/utils/safe-storage", () => ({
   createSafeStorage: () => ({
-    get: (...args: unknown[]) => mocks.storageGet(...args)
+    get: (...args: unknown[]) =>
+      (mocks.storageGet as (...args: unknown[]) => unknown)(...args)
   })
 }))
 

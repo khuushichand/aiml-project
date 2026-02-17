@@ -32,14 +32,64 @@ and this project adheres to Some kind of Versioning
 - Operations runbook documenting secure defaults, compatibility flags, and migration steps.
 - Added a startup/CI route guard that fails fast when duplicate `(path, method)` routes are registered.
 - Added regression tests for duplicate-route detection, CORS guardrails, ULTRA_MINIMAL health routing, and OpenAPI CORS behavior.
+- Skills
+  - End-to-end Skills API workflow tests covering create, list/get, versioned update with supporting-file add/remove, execute preview, context payload, export, zip re-import, delete, and seed flows.
+  - Seed endpoint integration test coverage for idempotency (`overwrite=false`) and overwrite restoration (`overwrite=true`).
+  - Deterministic unit tests for built-in skill seeding: recursive directory copy (including nested files), no-overwrite preservation, and overwrite replacement behavior.
+- Admin Backup Bundles
+  - Added API contract coverage for admin bundle import error detail shapes:
+  - `restore_failed` responses must return structured `detail` objects (`error_code`, `message`, optional `rollback_failures`).
+  - Standard import validation failures (for example checksum mismatches) must continue returning string `detail`.
+- Web UI/Extension UX audit gating and regression coverage:
+  - Added Stage 2 route-contract smoke spec for audited navigation destinations.
+  - Added Stage 3 rendering-resilience smoke spec for max-depth, template-leak, and retry/timeout assertions.
+  - Added Stage 4 mobile-sidebar and accessibility smoke specs, plus Axe high-risk route matrix coverage.
+  - Added Stage 5 audited-route release gate smoke spec and `e2e:smoke:stage5` script.
+  - Added deterministic admin smoke fixture profile/route mocks to remove skip behavior and backend-state dependency.
+- UX gate process updates:
+  - Added PR checklist items for UX smoke gate, console-budget checks, and WebUI/extension parity validation.
 
 ### Changed
--
 - Normalized Loguru formatting across tldw_Server_API/app from %-style placeholders to {} style.
 - Added CI/test guard to prevent reintroduction of %-style Loguru placeholders.
 - Sync client defaults now align with server routes (`/api/v1/sync/send` and `/api/v1/sync/get`) and support configurable auth headers (`Authorization` bearer and `X-API-KEY`).
 - Moved local LLM manager initialization out of import-time setup into lifespan startup, with lazy initialization behavior where applicable.
 - ULTRA_MINIMAL mode now uses control-plane health endpoints only (`/health`, `/ready`, `/health/ready`) to avoid duplicate route ownership.
+- Skills
+  - `SkillsService.seed_builtin_skills()` now copies full built-in skill directories recursively instead of recreating skills from `SKILL.md` only.
+  - Seed overwrite flow now force-syncs registry state and handles pre-existing soft-deleted rows before copy.
+- Admin Backup Bundles
+  - Admin bundle create/import concurrency control now uses an atomic non-blocking lock path to fail fast with `409 bundle_operation_in_progress` instead of race-prone check-then-acquire behavior.
+  - Bundle import disk-space preflight now checks all real write targets (system temp, upload temp location, and live DB target directories from manifest datasets).
+  - `retention_hours` is now enforced for bundle creation: expired bundles are pruned after create within the same bundle scope (`user_id` scoped, including global `None` scope).
+  - Bundle import success/dry-run payloads now consistently include `rollback_failures` for schema stability.
+- Circuit Breaker
+  - Unified admin circuit breaker endpoint: `GET /api/v1/admin/circuit-breakers` with RBAC protection (`admin` role + `system.logs` permission), deterministic sorting, and filters (`state`, `category`, `service`, `name_prefix`).
+  - Unified admin circuit breaker response contract with explicit `source` values: `memory`, `persistent`, and `mixed`.
+  - Cross-worker HALF_OPEN probe lease coordination in shared registry storage, including lease TTL, cleanup, and release-on-completion behavior.
+  - Optimistic-lock conflict observability metric: `circuit_breaker_persist_conflicts_total{category,service,operation,mutation}`.
+  - New endpoint test coverage for admin circuit breaker listing, filtering, and authorization behavior.
+  - Circuit breaker shared-state persistence now uses bounded merge/retry semantics on optimistic-lock conflicts to avoid dropping local mutations under contention.
+  - Circuit breaker operator documentation now includes new env knobs and tuning guidance:
+    - `CIRCUIT_BREAKER_REGISTRY_MODE`
+    - `CIRCUIT_BREAKER_REGISTRY_DB_PATH`
+    - `CIRCUIT_BREAKER_PERSIST_MAX_RETRIES`
+    - `CIRCUIT_BREAKER_HALF_OPEN_LEASE_TTL_SECONDS`
+  - Monitoring/admin docs now explicitly describe `source="mixed"` as expected when persistence is enabled for active in-process breakers.
+  - Circuit breaker unification PRD status updated to reflect implemented state and delivered hardening follow-on work.
+- Web UI/Extension parity:
+  - Shared `WebLayout` now defaults to collapsed rail on mobile (`<768px`) and opens navigation via header drawer toggle.
+  - Shared media-query initialization now reads `matchMedia` on first client render to prevent desktop-rail flash on mobile.
+  - Section 2 audited wrong-content routes now resolve to intended content or explicit “Coming Soon” placeholders instead of silent misrouting.
+- Accessibility and UX consistency:
+  - Standardized dismissible beta-badge behavior in shared settings navigation with persisted hide state (`tldw:settings:hide-beta-badges`).
+  - Added explicit labels/tooltips for previously icon-only controls in Document Workspace and Workflow Editor.
+- AntD/Markdown modernization:
+  - Migrated deprecated AntD usage in shared UI (`Drawer.width`, `Space.direction`, `Alert.message`, `Dropdown.Button`, and notification `message`) to current APIs.
+  - Aligned shared markdown dependency stack to ReactMarkdown v10 parity across WebUI and extension (`react-markdown`, `remark-gfm`, `remark-math`, `rehype-katex`).
+  - Updated shared markdown wrappers for ReactMarkdown v10 API compatibility (styling moved off direct `ReactMarkdown` `className` prop).
+- CI gating:
+  - Frontend UX gates workflow now runs the Stage 5 audited-route smoke gate before the broad all-pages smoke job.
 
 ### Removed
 - 
@@ -106,6 +156,25 @@ and this project adheres to Some kind of Versioning
 - Removed `shell=True` usage in CUDA detection (`nvidia-smi` now called with direct subprocess args).
 - Added backward-compatible chat dictionary endpoint re-exports for legacy imports/tests.
 - Updated telemetry dummy span compatibility (`set_attributes`, broader `record_exception` signature).
+- Skills
+  - Fixed built-in seed behavior so supporting and nested files are preserved during seeding.
+  - Fixed overwrite seeding edge cases where soft-deleted registry rows could prevent seeded skills from being visible after overwrite.
+- Admin Backup Bundles
+  - Fixed restore failure error reporting so rollback diagnostics are no longer collapsed to generic `import_error` behavior.
+  - `restore_failed` import errors now preserve structured rollback context for API consumers.
+  - Endpoint import response now properly propagates `rollback_failures` from service results.
+  - Retention cleanup now safely skips unreadable/corrupt manifests without crashing bundle creation and keeps ZIP/sidecar cleanup consistent.
+- Circuit Breaker
+  - AuthNZ integration assertion for circuit breaker `source` is now environment-safe by accepting both `memory` and `mixed` (persistent mode).
+- Resolved web-mode extension API runtime failures by guarding `chrome.storage` access and preventing `chrome is not defined`/`chrome.storage` uncaught exceptions.
+- Removed unresolved `{{...}}` template leaks from shared UI labels/tooltips on audited routes.
+- Hardened shared timeout/retry flows for admin stats and STT/TTS catalog discovery to prevent permanent-loading states.
+- Removed temporary Stage 5 warning allowlist (`m5-react-defaultprops-warning`) after root-cause remediation.
+- Revalidated audited smoke quality gates after remediation:
+  - Stage 5 gate: `11 passed`
+  - Full all-pages smoke: `165 expected, 0 unexpected, 0 flaky`
+  
+
 
 
 ## [0.1.20] 2026-02-07

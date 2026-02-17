@@ -14,7 +14,7 @@ This guide gets you from zero to a running tldw_server with working API calls. N
 
 ## Fastest Path (30 Seconds)
 
-If you have Python 3.10+:
+If you have Python 3.10+ (recommended: 3.12):
 
 ```bash
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
@@ -34,11 +34,17 @@ Already have dependencies installed? Use `make quickstart`.
 
 ## Prerequisites
 
+Python support for this repo:
+- Minimum: Python 3.10+
+- CI-tested: Python 3.11, 3.12, and 3.13
+- Recommended for local development: Python 3.12
+
 | Requirement | Check Command | Install |
 |-------------|---------------|---------|
 | Python 3.10+ | `python3 --version` | [python.org](https://www.python.org/downloads/) |
 | ffmpeg | `ffmpeg -version` | `brew install ffmpeg` (macOS) or your Linux package manager |
-| PyAudio/PortAudio (Linux audio capture) | `python3 -c "import pyaudio"` | `apt install portaudio19-dev python3-pyaudio` (Ubuntu/Debian) |
+| PyAudio/PortAudio (optional; audio capture paths) | `python3 -c "import pyaudio"` | Linux: install `portaudio` + `python3-pyaudio`; macOS: `brew install portaudio && pip install pyaudio`; Windows: `pip install pyaudio` |
+| Bun (optional; WebUI section below) | `bun --version` | [bun.sh](https://bun.sh/) |
 | pip | `pip --version` | Comes with Python |
 
 **Don't have Python/ffmpeg?** Use [Docker instead](#option-b-docker) (requires Docker Desktop or Docker Engine).
@@ -64,9 +70,17 @@ sudo dnf install -y ffmpeg portaudio-devel python3-pyaudio
 git clone https://github.com/rmusser01/tldw_server.git
 cd tldw_server
 
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+# Create virtual environment with a supported Python interpreter
+# macOS/Linux (3.12 recommended)
+python3.12 -m venv .venv  # or python3.11 / python3.10
+source .venv/bin/activate
+
+# Windows (PowerShell)
+py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
+
+# Confirm the active interpreter version
+python --version
 
 # Install dependencies
 pip install -e .
@@ -209,6 +223,9 @@ If your API is already running on `http://127.0.0.1:8000`, you can launch the Ne
 # macOS/Linux
 curl -fsSL https://bun.sh/install | bash
 
+# Windows (PowerShell)
+powershell -c "irm bun.sh/install.ps1 | iex"
+
 # Open a new terminal, then verify:
 bun --version
 ```
@@ -225,7 +242,7 @@ bun install
 ### Step 3: Run the WebUI
 
 ```bash
-bun run dev --port 8080
+bun run dev -- -p 8080
 ```
 
 Confirm `.env.local` has:

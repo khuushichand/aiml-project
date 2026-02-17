@@ -394,7 +394,7 @@ const ImportSection: React.FC = () => {
           <Alert
             type="info"
             showIcon
-            message={t("collections:import.selectedSource", "Source: {{source}}", {
+            title={t("collections:import.selectedSource", "Source: {{source}}", {
               source: importSource
                 ? t(`collections:import.sources.${importSource}.label`, importSource)
                 : t("collections:import.sources.auto.label", "Auto-detect")
@@ -451,7 +451,7 @@ const ImportSection: React.FC = () => {
             <Alert
               type="info"
               showIcon
-              message={t("collections:import.currentStatus", "Current status: {{status}}", {
+              title={t("collections:import.currentStatus", "Current status: {{status}}", {
                 status: importStatusLabel(importJob.status)
               })}
               description={
@@ -500,7 +500,7 @@ const ImportSection: React.FC = () => {
                 <Alert
                   type="warning"
                   showIcon
-                  message={t("collections:import.topErrorsTitle", "Top import errors")}
+                  title={t("collections:import.topErrorsTitle", "Top import errors")}
                   description={
                     <ul className="mb-0 list-disc pl-5">
                       {importResult.errors.slice(0, MAX_IMPORT_ERRORS_TO_SHOW).map((err, index) => (
@@ -1182,7 +1182,7 @@ const ExportSection: React.FC = () => {
           <Alert
             type="warning"
             showIcon
-            message={t(
+            title={t(
               "collections:export.zipSelectionWarning",
               "ZIP export doesn't support item selection"
             )}
@@ -1209,7 +1209,7 @@ const ExportSection: React.FC = () => {
           <Alert
             type="warning"
             showIcon
-            message={t(
+            title={t(
               "collections:export.dateZipUnsupported",
               "Date range filter export is available in JSONL mode only."
             )}

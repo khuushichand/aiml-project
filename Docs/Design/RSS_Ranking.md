@@ -13,6 +13,10 @@ https://towardsdatascience.com/a-mixed-methods-approach-to-offline-evaluation-of
 https://towardsdatascience.com/making-news-recommendations-explainable-with-large-language-models-74f119c7e036
 https://blog.det.life/from-scrolls-to-similarity-search-building-a-movie-recommender-with-duckdb-vss-8122e4d2e486?gi=c094d02d0993
 https://9to5google.com/2025/01/08/google-discover-daily-listen/
+https://gist.github.com/emschwartz/e6d2bf860ccc367fe37ff953ba6de66b
+https://talkback.sh/
+https://github.com/Olshansk/rss-feeds
+
 https://www.dogesec.com/blog/full_text_rss_atom_blog_feeds/
 https://engineering.fyi/?utm_source=www.hivefive.community&utm_medium=newsletter&utm_campaign=hive-five-237-different-kinds-of-smart
 https://medium.engineering/engineering-stories-behind-the-medium-daily-digest-algorithm-part-2-c977ad0b134f?gi=7b2dc9e4c917

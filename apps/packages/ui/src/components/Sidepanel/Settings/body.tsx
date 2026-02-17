@@ -142,8 +142,52 @@ export const SettingsBody = () => {
     Array.isArray(data?.models) &&
     !data.models.some((model) => model.model === data.defaultEM)
 
+  const sectionLinks = [
+    {
+      id: "chat-settings-prompts",
+      label: t("settingsNav.prompts", "Prompts")
+    },
+    {
+      id: "chat-settings-connection",
+      label: t("settingsNav.connection", "Connection")
+    },
+    {
+      id: "chat-settings-embeddings",
+      label: t("settingsNav.embeddings", "Embeddings")
+    },
+    {
+      id: "chat-settings-general",
+      label: t("settingsNav.general", "General")
+    },
+    {
+      id: "chat-settings-speech",
+      label: t("settingsNav.speech", "Speech")
+    },
+    {
+      id: "chat-settings-theme",
+      label: t("settingsNav.theme", "Theme")
+    }
+  ]
+
   return (
     <div className="flex flex-col gap-4 p-4 max-w-2xl mx-auto lg:max-w-3xl xl:max-w-4xl 2xl:max-w-5xl">
+      <nav
+        className="sticky top-0 z-20 -mx-4 overflow-x-auto border-b border-border/70 bg-bg/95 px-4 py-2 backdrop-blur"
+        aria-label={t("settingsNav.sections", "Settings sections")}
+      >
+        <div className="flex min-w-max items-center gap-2">
+          {sectionLinks.map((section) => (
+            <a
+              key={section.id}
+              href={`#${section.id}`}
+              className="rounded-full border border-border px-3 py-1 text-xs font-medium text-text-muted transition hover:bg-surface2 hover:text-text"
+            >
+              {section.label}
+            </a>
+          ))}
+        </div>
+      </nav>
+      <section id="chat-settings-prompts" className="scroll-mt-20">
       <div className="border border-border rounded p-4 bg-surface">
         <h2 className="text-md font-semibold text-text">
           {t("managePrompts.title")}
@@ -173,6 +217,8 @@ export const SettingsBody = () => {
             />
             <div className="flex justify-end">
               <SaveButton
+                text="Save normal prompt"
+                textOnSave="Normal prompt saved"
                 onClick={() => {
                   setSystemPromptForNonRag(systemPrompt)
                 }}
@@ -206,6 +252,8 @@ export const SettingsBody = () => {
 
             <div className="flex justify-end">
               <SaveButton
+                text="Save RAG prompts"
+                textOnSave="RAG prompts saved"
                 onClick={() => {
                   setPromptForRag(ragPrompt, ragQuestionPrompt)
                 }}
@@ -214,10 +262,12 @@ export const SettingsBody = () => {
           </div>
         )}
       </div>
+      </section>
       <div className="border border-border rounded p-4 bg-surface">
         <SidepanelRag hideBorder />
       </div>
       <CitationDictionarySettings />
+      <section id="chat-settings-connection" className="scroll-mt-20">
       <div className="border flex flex-col gap-4 border-border rounded p-4 bg-surface">
         <h2 className="text-md font-semibold text-text">
           {t("ollamaSettings.heading")}
@@ -262,12 +312,16 @@ export const SettingsBody = () => {
 
         <div className="flex justify-end">
           <SaveButton
+            text="Save server URL"
+            textOnSave="Server URL saved"
             onClick={() => {
               saveOllamaURL(ollamaURL)
             }}
           />
         </div>
       </div>
+      </section>
+      <section id="chat-settings-embeddings" className="scroll-mt-20">
       <div className="border border-border rounded p-4 bg-surface">
         <h2 className="text-md mb-4 font-semibold text-text">
           {t("rag.ragSettings.label")}
@@ -384,11 +438,18 @@ export const SettingsBody = () => {
           </Form.Item>
 
           <div className="flex justify-end">
-            <SaveButton disabled={isSaveRAGPending} btnType="submit" />
+            <SaveButton
+              disabled={isSaveRAGPending}
+              btnType="submit"
+              text="Save RAG defaults"
+              textOnSave="RAG defaults saved"
+            />
           </div>
         </Form>
       </div>
+      </section>
 
+      <section id="chat-settings-general" className="scroll-mt-20">
       <div className="border space-y-3 w-full border-border rounded p-4 bg-surface">
         <h2 className="text-base mb-4 font-semibold leading-7 text-text">
           {t("generalSettings.title")}
@@ -465,15 +526,20 @@ export const SettingsBody = () => {
           />
         </div>
       </div>
+      </section>
+      <section id="chat-settings-speech" className="scroll-mt-20">
       <div className="border border-border rounded p-4 bg-surface">
         <SSTSettings hideBorder />
       </div>
       <div className="border border-border rounded p-4 bg-surface">
         <TTSModeSettings hideBorder />
       </div>
+      </section>
+      <section id="chat-settings-theme" className="scroll-mt-20">
       <div className="border border-border rounded p-4 bg-surface">
         <ThemePicker />
       </div>
+      </section>
     </div>
   )
 }

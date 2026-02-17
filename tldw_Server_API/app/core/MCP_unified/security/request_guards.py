@@ -8,11 +8,14 @@ from collections.abc import Mapping
 
 from fastapi import HTTPException, Request
 from loguru import logger
+from starlette.requests import ClientDisconnect
 
 from tldw_Server_API.app.core.testing import is_test_mode
 from ..config import get_config
 from .ip_filter import enforce_ip_allowlist as _enforce_ip_allowlist
 from .ip_filter import get_ip_access_controller
+
+_BODYLESS_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 async def enforce_request_body_limit(request: Request) -> None:
@@ -26,8 +29,18 @@ async def enforce_request_body_limit(request: Request) -> None:
     limit = int(cfg.http_max_body_bytes or 0)
     if limit <= 0:
         return
+    if request.method.upper() in _BODYLESS_METHODS:
+        return
 
-    body = await request.body()
+    try:
+        body = await request.body()
+    except ClientDisconnect:
+        logger.debug(
+            "Client disconnected before MCP request body could be read",
+            extra={"audit": True, "path": request.url.path, "method": request.method},
+        )
+        return
+
     if len(body) > limit:
         logger.warning(
             "Rejecting MCP request exceeding size limit",

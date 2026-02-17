@@ -110,19 +110,29 @@ export const getAllModels = async ({ returnEmpty = false }: { returnEmpty?: bool
   }
 }
 
-export const fetchChatModels = async ({ returnEmpty = false }: { returnEmpty?: boolean }) => {
+export const fetchChatModels = async ({
+  returnEmpty = false,
+  forceRefresh = false,
+  refreshOpenRouter = false
+}: {
+  returnEmpty?: boolean
+  forceRefresh?: boolean
+  refreshOpenRouter?: boolean
+} = {}) => {
   const now = Date.now()
-  if (chatModelsCache && chatModelsCache.expiresAt > now) {
+  if (!forceRefresh && chatModelsCache && chatModelsCache.expiresAt > now) {
     return chatModelsCache.value
   }
-  if (chatModelsInFlight) {
+  if (!forceRefresh && chatModelsInFlight) {
     return await chatModelsInFlight
   }
 
   try {
     const fetchPromise = (async () => {
       // Primary: tldw_server aggregated models
-      const chatModels = await tldwModels.getChatModels()
+      const chatModels = await tldwModels.getChatModels(forceRefresh, {
+        refreshOpenRouter: refreshOpenRouter || forceRefresh
+      })
       const tldw = chatModels.map(mapTldwModelToUi)
 
       // Only tldw_server models are exposed as chat models

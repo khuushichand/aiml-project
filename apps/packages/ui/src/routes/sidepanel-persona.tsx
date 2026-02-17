@@ -63,6 +63,8 @@ type PersonaSessionSummary = {
   pending_plan_count?: number
 }
 
+const formatMemoryResultsLabel = (count: number) => `Memory results: ${count}`
+
 const SidepanelPersona = () => {
   const { t } = useTranslation(["sidepanel", "common"])
   const navigate = useNavigate()
@@ -484,6 +486,7 @@ const SidepanelPersona = () => {
             size="small"
             className="min-w-[180px]"
             value={selectedPersonaId}
+            aria-label={t("sidepanel:persona.select", "Select persona")}
             onChange={(value) => setSelectedPersonaId(String(value))}
             options={catalog.map((persona) => ({
               label: persona.name || persona.id,
@@ -496,6 +499,7 @@ const SidepanelPersona = () => {
             size="small"
             className="min-w-[180px]"
             value={resumeSessionId || "__new__"}
+            aria-label={t("sidepanel:persona.resume", "Resume session")}
             disabled={connected}
             onChange={(value) =>
               setResumeSessionId(value === "__new__" ? "" : String(value))
@@ -519,12 +523,16 @@ const SidepanelPersona = () => {
           <Select
             data-testid="persona-memory-topk-select"
             size="small"
-            className="w-[90px]"
+            className="w-[150px]"
             value={memoryTopK}
+            aria-label={t("sidepanel:persona.memoryTopK", "Memory results")}
             disabled={!memoryEnabled}
             onChange={(value) => setMemoryTopK(Number(value))}
-            options={[1, 2, 3, 4, 5].map((k) => ({ label: `k=${k}`, value: k }))}
-            placeholder="k"
+            options={[1, 2, 3, 4, 5].map((k) => ({
+              label: formatMemoryResultsLabel(k),
+              value: k
+            }))}
+            placeholder={t("sidepanel:persona.memoryTopK", "Memory results")}
           />
           {!connected ? (
             <Button
@@ -567,10 +575,16 @@ const SidepanelPersona = () => {
                   {pendingPlan.memory.enabled ? "memory on" : "memory off"}
                 </Tag>
                 {typeof pendingPlan.memory.requested_top_k === "number" ? (
-                  <Tag color="blue">{`k=${pendingPlan.memory.requested_top_k}`}</Tag>
+                  <Tag color="blue">
+                    {`requested ${formatMemoryResultsLabel(
+                      pendingPlan.memory.requested_top_k
+                    ).toLowerCase()}`}
+                  </Tag>
                 ) : null}
                 {typeof pendingPlan.memory.applied_count === "number" ? (
-                  <Tag color="purple">{`applied=${pendingPlan.memory.applied_count}`}</Tag>
+                  <Tag color="purple">
+                    {`applied results: ${pendingPlan.memory.applied_count}`}
+                  </Tag>
                 ) : null}
               </div>
             ) : null}

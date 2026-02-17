@@ -251,7 +251,7 @@ export const CompareView: React.FC<CompareViewProps> = ({
       {result.error && (
         <Alert
           type="error"
-          message={result.error}
+          title={result.error}
           closable
           onClose={() => setResult((r) => ({ ...r, error: null }))}
         />

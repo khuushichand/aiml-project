@@ -23,6 +23,7 @@ import {
 import type { UploadProps } from "antd"
 import { UploadOutlined, ScissorOutlined, SaveOutlined, DownloadOutlined } from "@ant-design/icons"
 import { useQuery } from "@tanstack/react-query"
+import { useDesktop } from "@/hooks/useMediaQuery"
 
 import {
   chunkText,
@@ -80,6 +81,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
   className
 }) => {
   const { t } = useTranslation(["settings", "common"])
+  const isDesktop = useDesktop()
 
   // Input state
   const [inputSource, setInputSource] = useState<InputSource>("paste")
@@ -748,7 +750,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                       <Alert
                         type="warning"
                         showIcon
-                        message={t(
+                        title={t(
                           "settings:chunkingPlayground.ocrBackendsError",
                           "Failed to load OCR backends"
                         )}
@@ -1187,7 +1189,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                       <Alert
                         type="warning"
                         showIcon
-                        message={(templatesError as Error)?.message}
+                        title={(templatesError as Error)?.message}
                       />
                     )}
 
@@ -1197,7 +1199,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                           "settings:chunkingPlayground.advanced.requestModeLabel",
                           "Request Endpoint"
                         )}>
-                        <Space direction="vertical" size={4} className="w-full">
+                        <Space orientation="vertical" size={4} className="w-full">
                           <Segmented
                             value={requestMode}
                             onChange={(v) => setRequestMode(v as RequestMode)}
@@ -1304,7 +1306,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
       {error && (
         <Alert
           type="error"
-          message={error}
+          title={error}
           closable
           onClose={() => setError(null)}
         />
@@ -1417,11 +1419,36 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
   )
 
   const renderSingleMode = () => (
-    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-      {/* Input section - 3 cols */}
-      <div className="lg:col-span-3 space-y-4">
-        {renderInputSection()}
+    isDesktop ? (
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        {/* Input section - 3 cols */}
+        <div className="lg:col-span-3 space-y-4">
+          {renderInputSection()}
 
+          <Button
+            type="primary"
+            icon={<ScissorOutlined />}
+            onClick={handleChunk}
+            loading={isLoading}
+            disabled={
+              inputSource === "pdf"
+                ? !pdfFile
+                : !inputText.trim() && !inputFile
+            }
+            size="large">
+            {t("settings:chunkingPlayground.chunkButton", "Chunk Text")}
+          </Button>
+
+          {renderResultsSection()}
+        </div>
+
+        {/* Settings section - 1 col */}
+        <div className="lg:col-span-1">{renderSettingsSection()}</div>
+      </div>
+    ) : (
+      <div className="space-y-4">
+        {renderInputSection()}
+        {renderSettingsSection()}
         <Button
           type="primary"
           icon={<ScissorOutlined />}
@@ -1435,13 +1462,9 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
           size="large">
           {t("settings:chunkingPlayground.chunkButton", "Chunk Text")}
         </Button>
-
         {renderResultsSection()}
       </div>
-
-      {/* Settings section - 1 col */}
-      <div className="lg:col-span-1">{renderSettingsSection()}</div>
-    </div>
+    )
   )
 
   return (

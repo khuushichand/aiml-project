@@ -807,7 +807,7 @@ export const MediaReviewPage: React.FC = () => {
             type="error"
             showIcon
             className="mt-3"
-            message={t('mediaPage.loadFailed', 'Failed to load content')}
+            title={t('mediaPage.loadFailed', 'Failed to load content')}
             action={
               <Button size="small" onClick={() => retryFetch(d.id)}>
                 {t('mediaPage.retry', 'Retry')}
@@ -1346,7 +1346,7 @@ export const MediaReviewPage: React.FC = () => {
                     onClick={() => goRelative(1)}
                     disabled={focusIndex < 0 || focusIndex >= allResults.length - 1}
                     icon={<ChevronRight className="w-4 h-4" />}
-                    iconPosition="end"
+                    iconPlacement="end"
                   >
                     {t("mediaPage.nextItem", "Next")}
                   </Button>

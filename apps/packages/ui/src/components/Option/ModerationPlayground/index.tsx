@@ -865,7 +865,7 @@ export const ModerationPlayground: React.FC = () => {
           icon={<InfoCircleOutlined />}
           closable
           onClose={dismissOnboarding}
-          message="Welcome to Moderation Playground"
+          title="Welcome to Moderation Playground"
           description={
             <div className="mt-2">
               <Text>Configure content safety rules to protect your users. Here's how to get started:</Text>
@@ -968,7 +968,7 @@ export const ModerationPlayground: React.FC = () => {
               type="info"
               showIcon
               icon={<InfoCircleOutlined />}
-              message={userIdError}
+              title={userIdError}
               className="mt-3"
             />
           )}
@@ -978,7 +978,7 @@ export const ModerationPlayground: React.FC = () => {
       {!online && (
         <Alert
           type="warning"
-          message="Connect to your tldw server to use moderation controls."
+          title="Connect to your tldw server to use moderation controls."
           showIcon
         />
       )}
@@ -989,7 +989,7 @@ export const ModerationPlayground: React.FC = () => {
           type="info"
           showIcon
           icon={<QuestionCircleOutlined />}
-          message={
+          title={
             <span>
               Looking for blocklist rules or user overrides?{" "}
               <Button type="link" className="p-0" onClick={() => setShowAdvanced(true)}>
@@ -1019,7 +1019,7 @@ export const ModerationPlayground: React.FC = () => {
             </Space>
           }
         >
-          <Space direction="vertical" size="middle" className="w-full">
+          <Space orientation="vertical" size="middle" className="w-full">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <Space>
@@ -1101,7 +1101,7 @@ export const ModerationPlayground: React.FC = () => {
               <Alert
                 type="info"
                 showIcon
-                message={
+                title={
                   <span>
                     Active categories: {normalizeCategories(settingsQuery.data.effective?.categories_enabled).join(", ") || "all categories"}
                   </span>
@@ -1133,7 +1133,7 @@ export const ModerationPlayground: React.FC = () => {
               <Alert
                 type="info"
                 showIcon
-                message="Switch to User scope to configure individual safety rules."
+                title="Switch to User scope to configure individual safety rules."
                 description="User-specific rules override server defaults for that user only."
               />
               {/* Show disabled preview of controls */}
@@ -1149,7 +1149,7 @@ export const ModerationPlayground: React.FC = () => {
               </div>
             </div>
           ) : (
-            <Space direction="vertical" size="middle" className="w-full">
+            <Space orientation="vertical" size="middle" className="w-full">
               <div>
                 <Text strong>Quick Presets</Text>
                 <div className="text-text-muted text-xs mb-2">
@@ -1326,7 +1326,7 @@ export const ModerationPlayground: React.FC = () => {
           }
           className="shadow-sm"
         >
-          <Space direction="vertical" size="middle" className="w-full">
+          <Space orientation="vertical" size="middle" className="w-full">
             <div className="flex flex-wrap gap-2">
               <Tooltip title="Test user input (what they send) or AI output (what they receive)">
                 <Segmented
@@ -1362,7 +1362,7 @@ export const ModerationPlayground: React.FC = () => {
                   testResult.action === "redact" ? <ExclamationCircleOutlined /> :
                   <WarningOutlined />
                 }
-                message={
+                title={
                   <div className="space-y-2">
                     <div className="flex items-center gap-2">
                       <Badge
@@ -1413,7 +1413,7 @@ export const ModerationPlayground: React.FC = () => {
           }
           className="shadow-sm"
         >
-          <Space direction="vertical" size="middle" className="w-full">
+          <Space orientation="vertical" size="middle" className="w-full">
             <div className="flex flex-wrap gap-2">
               <Tag color={policySnapshot.enabled ? "green" : "red"} icon={policySnapshot.enabled ? <CheckCircleOutlined /> : <CloseCircleOutlined />}>
                 {policySnapshot.enabled ? "Enabled" : "Disabled"}
@@ -1473,7 +1473,7 @@ export const ModerationPlayground: React.FC = () => {
                     </Tooltip>
                   ),
                   children: (
-                    <Space direction="vertical" size="middle" className="w-full">
+                    <Space orientation="vertical" size="middle" className="w-full">
                       <div className="flex flex-wrap items-center gap-2">
                         <Button onClick={handleLoadManaged} loading={managedLoading}>
                           Load managed list
@@ -1550,12 +1550,12 @@ export const ModerationPlayground: React.FC = () => {
                     </Tooltip>
                   ),
                   children: (
-                    <Space direction="vertical" size="middle" className="w-full">
+                    <Space orientation="vertical" size="middle" className="w-full">
                       <Alert
                         type="warning"
                         showIcon
                         icon={<WarningOutlined />}
-                        message="Raw file editing replaces all existing rules. Use with caution."
+                        title="Raw file editing replaces all existing rules. Use with caution."
                         className="!py-2"
                       />
                       <div className="flex flex-wrap gap-2">
@@ -1602,7 +1602,7 @@ export const ModerationPlayground: React.FC = () => {
             }
             className="shadow-sm"
           >
-            <Space direction="vertical" size="middle" className="w-full">
+            <Space orientation="vertical" size="middle" className="w-full">
               <Space wrap align="center">
                 <Input
                   placeholder="Search by user ID..."

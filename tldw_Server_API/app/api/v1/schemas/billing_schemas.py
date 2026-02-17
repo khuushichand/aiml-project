@@ -160,7 +160,16 @@ class InvoiceResponse(BaseModel):
     @property
     def amount_display(self) -> str:
         """Format amount for display."""
-        return f"${self.amount_cents / 100:.2f} {self.currency.upper()}"
+        currency = (self.currency or "usd").lower()
+        amount = self.amount_cents / 100
+        symbols = {
+            "usd": "$",
+            "eur": "EUR ",
+            "gbp": "GBP ",
+            "jpy": "JPY ",
+        }
+        prefix = symbols.get(currency, f"{currency.upper()} ")
+        return f"{prefix}{amount:.2f}"
 
 
 class InvoiceListResponse(BaseModel):

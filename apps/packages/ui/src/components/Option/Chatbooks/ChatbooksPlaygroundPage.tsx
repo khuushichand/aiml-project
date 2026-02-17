@@ -6,7 +6,6 @@ import {
   Divider,
   Empty,
   Input,
-  List,
   Progress,
   Select,
   Space,
@@ -31,6 +30,10 @@ import { bgRequest } from "@/services/background-proxy"
 import { PageShell } from "@/components/Common/PageShell"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { formatFileSize } from "@/utils/format"
+import {
+  buildServerLogHint,
+  sanitizeServerErrorMessage
+} from "@/utils/server-error-message"
 
 const { Text, Title, Paragraph } = Typography
 
@@ -590,7 +593,7 @@ type ContentTypePickerProps = {
   suppressAuthErrors?: boolean
 }
 
-const ContentTypePicker: React.FC<ContentTypePickerProps> = ({
+export const ContentTypePicker: React.FC<ContentTypePickerProps> = ({
   typeKey,
   label,
   helper,
@@ -663,6 +666,26 @@ const ContentTypePicker: React.FC<ContentTypePickerProps> = ({
     : query.data?.total ?? (query.data?.items?.length || 0)
   const showTruncatedWarning = Boolean(query.data?.truncated)
   const effectiveTruncationLimit = truncationLimit ?? SEARCH_FETCH_LIMIT
+  const loadErrorDescription = React.useMemo(
+    () =>
+      sanitizeServerErrorMessage(
+        query.error,
+        t("settings:chatbooksPlayground.loadErrorDescription", {
+          defaultValue: "Check your server connection and try again."
+        })
+      ),
+    [query.error, t]
+  )
+  const loadErrorHint = React.useMemo(
+    () =>
+      buildServerLogHint(
+        query.error,
+        t("settings:chatbooksPlayground.loadErrorHint", {
+          defaultValue: "If this keeps failing, check server logs for details."
+        })
+      ),
+    [query.error, t]
+  )
 
   const columns = React.useMemo<ColumnsType<ChatbookEntity>>(
     () => [
@@ -742,7 +765,7 @@ const ContentTypePicker: React.FC<ContentTypePickerProps> = ({
           <Alert
             type="info"
             showIcon
-            message={t("settings:chatbooksPlayground.includeAllHint", {
+            title={t("settings:chatbooksPlayground.includeAllHint", {
               defaultValue: "All {{label}} will be included.",
               label: label.toLowerCase()
             })}
@@ -792,7 +815,7 @@ const ContentTypePicker: React.FC<ContentTypePickerProps> = ({
               <Alert
                 type="warning"
                 showIcon
-                message={t("settings:chatbooksPlayground.resultsTruncated", {
+                title={t("settings:chatbooksPlayground.resultsTruncated", {
                   defaultValue:
                     "Results limited to the first {{limit}} items. Refine filters to narrow the list.",
                   limit: effectiveTruncationLimit
@@ -860,11 +883,25 @@ const ContentTypePicker: React.FC<ContentTypePickerProps> = ({
           <Alert
             type="warning"
             showIcon
-            message={t(
+            title={t(
               "settings:chatbooksPlayground.loadError",
               "Unable to load items"
             )}
-            description={(query.error as Error)?.message}
+            description={
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm">{loadErrorDescription}</p>
+                  <p className="mt-1 text-xs text-text-muted">{loadErrorHint}</p>
+                </div>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    void query.refetch()
+                  }}>
+                  {t("common:retry", { defaultValue: "Retry" })}
+                </Button>
+              </div>
+            }
           />
         )}
       </div>
@@ -1556,7 +1593,7 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
           <Alert
             type="info"
             showIcon
-            message={t(
+            title={t(
               "settings:chatbooksPlayground.serverOffline",
               "Server connection required"
             )}
@@ -1663,7 +1700,7 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
             <Alert
               type="info"
               showIcon
-              message={t("settings:chatbooksPlayground.previewLoading", "Previewing chatbook...")}
+              title={t("settings:chatbooksPlayground.previewLoading", "Previewing chatbook...")}
             />
           )}
 
@@ -1671,7 +1708,7 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
             <Alert
               type="error"
               showIcon
-              message={t("settings:chatbooksPlayground.previewError", "Preview failed")}
+              title={t("settings:chatbooksPlayground.previewError", "Preview failed")}
               description={previewError}
             />
           )}
@@ -1792,7 +1829,7 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
         <Alert
           type="info"
           showIcon
-          message={t(
+          title={t(
             "settings:chatbooksPlayground.previewNoTypes",
             "Preview did not return item details."
           )}
@@ -1847,7 +1884,7 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
         <Alert
           type="warning"
           showIcon
-          message={t("settings:chatbooksPlayground.jobsError", "Unable to load jobs")}
+          title={t("settings:chatbooksPlayground.jobsError", "Unable to load jobs")}
           description={jobsError}
         />
       )}
@@ -2047,7 +2084,7 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
           <Alert
             type="warning"
             showIcon
-            message={t(
+            title={t(
               "settings:chatbooksPlayground.unavailable",
               "Chatbooks is not available on this server."
             )}
@@ -2083,63 +2120,63 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
                   )}
                 />
               ) : (
-                <List
-                  dataSource={jobTrackerList}
-                  renderItem={(job: ChatbookJob & { kind: JobKind }) => {
+                <div className="divide-y divide-border">
+                  {jobTrackerList.map((job: ChatbookJob & { kind: JobKind }) => {
                     const progress = computeProgress(job)
                     return (
-                      <List.Item>
-                        <div className="flex w-full flex-col gap-2">
-                          <div className="flex items-center justify-between">
-                            <Text strong>
-                              {jobLabels[job.kind]} · {job.chatbook_name || job.job_id}
-                            </Text>
-                            <Tag color={statusColor(job.status)}>{job.status}</Tag>
-                          </div>
-                          {progress != null && <Progress percent={progress} size="small" />}
-                          {job.error_message && (
-                            <Text type="danger" className="text-xs">
-                              {job.error_message}
-                            </Text>
-                          )}
-                          <Space wrap>
-                            {job.kind === "export" && job.status === "completed" && (
-                              <Button
-                                size="small"
-                                icon={<Download className="h-4 w-4" />}
-                                onClick={() => handleDownload(job.job_id)}
-                              >
-                                {t("settings:chatbooksPlayground.download", "Download")}
-                              </Button>
-                            )}
-                            {isActiveJobStatus(job.status) && (
-                              <Button
-                                size="small"
-                                danger
-                                icon={<XCircle className="h-4 w-4" />}
-                                onClick={() => handleCancelJob(job, job.kind)}
-                              >
-                                {t("settings:chatbooksPlayground.cancel", "Cancel")}
-                              </Button>
-                            )}
-                            {isRemovableJobStatus(job.status) && (
-                              <Button
-                                size="small"
-                                icon={<Trash2 className="h-4 w-4" />}
-                                onClick={() => handleRemoveJob(job, job.kind)}
-                              >
-                                {t("settings:chatbooksPlayground.remove", "Remove")}
-                              </Button>
-                            )}
-                          </Space>
-                          <Text type="secondary" className="text-xs">
-                            {formatTimestamp(job.started_at || job.created_at)}
+                      <div
+                        key={`${job.kind}-${job.job_id}`}
+                        className="flex w-full flex-col gap-2 py-3 first:pt-0 last:pb-0"
+                      >
+                        <div className="flex items-center justify-between">
+                          <Text strong>
+                            {jobLabels[job.kind]} · {job.chatbook_name || job.job_id}
                           </Text>
+                          <Tag color={statusColor(job.status)}>{job.status}</Tag>
                         </div>
-                      </List.Item>
+                        {progress != null && <Progress percent={progress} size="small" />}
+                        {job.error_message && (
+                          <Text type="danger" className="text-xs">
+                            {job.error_message}
+                          </Text>
+                        )}
+                        <Space wrap>
+                          {job.kind === "export" && job.status === "completed" && (
+                            <Button
+                              size="small"
+                              icon={<Download className="h-4 w-4" />}
+                              onClick={() => handleDownload(job.job_id)}
+                            >
+                              {t("settings:chatbooksPlayground.download", "Download")}
+                            </Button>
+                          )}
+                          {isActiveJobStatus(job.status) && (
+                            <Button
+                              size="small"
+                              danger
+                              icon={<XCircle className="h-4 w-4" />}
+                              onClick={() => handleCancelJob(job, job.kind)}
+                            >
+                              {t("settings:chatbooksPlayground.cancel", "Cancel")}
+                            </Button>
+                          )}
+                          {isRemovableJobStatus(job.status) && (
+                            <Button
+                              size="small"
+                              icon={<Trash2 className="h-4 w-4" />}
+                              onClick={() => handleRemoveJob(job, job.kind)}
+                            >
+                              {t("settings:chatbooksPlayground.remove", "Remove")}
+                            </Button>
+                          )}
+                        </Space>
+                        <Text type="secondary" className="text-xs">
+                          {formatTimestamp(job.started_at || job.created_at)}
+                        </Text>
+                      </div>
                     )
-                  }}
-                />
+                  })}
+                </div>
               )}
             </Card>
 

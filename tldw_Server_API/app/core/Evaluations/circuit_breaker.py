@@ -181,13 +181,13 @@ class CircuitBreaker:
         self.stats.total_calls += 1
 
         try:
-            if asyncio.iscoroutinefunction(func):
-                coro = func(*args, **kwargs)
-            else:
-                coro = asyncio.to_thread(func, *args, **kwargs)
+            async def _invoke():
+                if asyncio.iscoroutinefunction(func):
+                    return await func(*args, **kwargs)
+                return await asyncio.to_thread(func, *args, **kwargs)
 
             async def _timed():
-                return await asyncio.wait_for(coro, timeout=self.config.timeout)
+                return await asyncio.wait_for(_invoke(), timeout=self.config.timeout)
 
             result = await self._cb.call_async(_timed)
             self.stats.successful_calls += 1
@@ -198,7 +198,15 @@ class CircuitBreaker:
 
         except _CBOpen as e:
             self.stats.rejected_calls += 1
-            raise CircuitOpenError(f"Circuit breaker {self.name} is OPEN") from e
+            raise CircuitOpenError(
+                f"Circuit breaker {self.name} is OPEN",
+                breaker_name=self.name,
+                category=e.category,
+                service=e.service,
+                recovery_timeout=e.recovery_timeout,
+                failure_count=e.failure_count,
+                recovery_at=e.recovery_at,
+            ) from e
 
         except asyncio.TimeoutError:
             self.stats.timeouts += 1
@@ -220,9 +228,9 @@ class CircuitBreaker:
 
         except Exception:
             # Unexpected exception — not counted in evaluations-level stats.
-            # Note: the unified breaker still records it as a failure (its
-            # expected_exception=Exception matches all), so trip logic is
-            # unaffected; only the local stats diverge intentionally.
+            # The unified breaker only records exceptions that match
+            # config.expected_exception, while local stats intentionally ignore
+            # this path.
             logger.warning(f"Unexpected exception in circuit breaker {self.name}")
             raise
 

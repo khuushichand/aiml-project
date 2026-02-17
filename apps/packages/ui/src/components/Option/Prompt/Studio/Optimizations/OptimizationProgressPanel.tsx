@@ -167,7 +167,7 @@ export const OptimizationProgressPanel: React.FC<
           })}
         </span>
       }
-      width={650}
+      size={650}
       destroyOnHidden
     >
       {isLoadingOptimization && <Skeleton paragraph={{ rows: 10 }} />}
@@ -194,7 +194,7 @@ export const OptimizationProgressPanel: React.FC<
             <Alert
               type="error"
               showIcon
-              message={t("managePrompts.studio.optimizations.error", {
+              title={t("managePrompts.studio.optimizations.error", {
                 defaultValue: "Error"
               })}
               description={optimization.error_message}
@@ -206,7 +206,7 @@ export const OptimizationProgressPanel: React.FC<
             <Alert
               type="warning"
               showIcon
-              message={t("managePrompts.studio.optimizations.cancelled", {
+              title={t("managePrompts.studio.optimizations.cancelled", {
                 defaultValue: "Cancelled"
               })}
               description={optimization.cancel_reason}
@@ -306,7 +306,7 @@ export const OptimizationProgressPanel: React.FC<
               type="success"
               showIcon
               icon={<CheckCircle2 className="size-4" />}
-              message={t("managePrompts.studio.optimizations.bestPromptFound", {
+              title={t("managePrompts.studio.optimizations.bestPromptFound", {
                 defaultValue: "Best prompt found"
               })}
               description={t(

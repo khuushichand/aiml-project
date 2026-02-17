@@ -34,14 +34,16 @@ vi.mock("react-router-dom", async () => {
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
-    getConfig: (...args: unknown[]) => mocks.getConfig(...args),
-    fetchWithAuth: (...args: unknown[]) => mocks.fetchWithAuth(...args)
+    getConfig: (...args: unknown[]) =>
+      (mocks.getConfig as (...args: unknown[]) => unknown)(...args),
+    fetchWithAuth: (...args: unknown[]) =>
+      (mocks.fetchWithAuth as (...args: unknown[]) => unknown)(...args)
   }
 }))
 
 vi.mock("@/services/persona-stream", () => ({
   buildPersonaWebSocketUrl: (...args: unknown[]) =>
-    mocks.buildPersonaWebSocketUrl(...args)
+    (mocks.buildPersonaWebSocketUrl as (...args: unknown[]) => unknown)(...args)
 }))
 
 vi.mock("@/components/Common/FeatureEmptyState", () => ({
@@ -127,13 +129,27 @@ const getSentPayloads = (ws: MockWebSocket) =>
 
 describe("SidepanelPersona", () => {
   const originalWebSocket = globalThis.WebSocket
+  const originalResizeObserver = globalThis.ResizeObserver
 
   beforeAll(() => {
     globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket
+    class MockResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    globalThis.ResizeObserver =
+      MockResizeObserver as unknown as typeof ResizeObserver
   })
 
   afterAll(() => {
     globalThis.WebSocket = originalWebSocket
+    if (originalResizeObserver) {
+      globalThis.ResizeObserver = originalResizeObserver
+    } else {
+      delete (globalThis as { ResizeObserver?: typeof ResizeObserver })
+        .ResizeObserver
+    }
   })
 
   beforeEach(() => {
@@ -165,6 +181,26 @@ describe("SidepanelPersona", () => {
 
     expect(screen.getByText("Persona unavailable")).toBeInTheDocument()
   })
+
+  it.each([390, 1280])(
+    "keeps new-session and memory controls discoverable at %ipx viewport width",
+    (width) => {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        writable: true,
+        value: width
+      })
+      window.dispatchEvent(new Event("resize"))
+
+      render(<SidepanelPersona />)
+
+      expect(screen.getByLabelText("Resume session")).toBeInTheDocument()
+      expect(screen.getByTestId("persona-memory-toggle")).toBeInTheDocument()
+      expect(screen.getByLabelText("Memory results")).toBeInTheDocument()
+      expect(screen.getByText("Memory results: 3")).toBeInTheDocument()
+      expect(screen.queryByText("k=3")).not.toBeInTheDocument()
+    }
+  )
 
   it("connects persona websocket and supports message/plan confirm-cancel flow", async () => {
     mocks.getConfig.mockResolvedValue({
@@ -498,6 +534,24 @@ describe("SidepanelPersona", () => {
 
     const ws = MockWebSocket.instances[0]
     ws.emitOpen()
+
+    await screen.findByText("Memory results: 3")
+    expect(screen.queryByText("k=3")).not.toBeInTheDocument()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_plan",
+        plan_id: "plan-memory-labels",
+        memory: {
+          enabled: true,
+          requested_top_k: 4,
+          applied_count: 2
+        },
+        steps: [{ idx: 0, tool: "rag_search", description: "search" }]
+      })
+    )
+    await screen.findByText("requested memory results: 4")
+    await screen.findByText("applied results: 2")
 
     fireEvent.click(screen.getByTestId("persona-memory-toggle"))
     fireEvent.change(screen.getByPlaceholderText("Ask Persona..."), {

@@ -71,7 +71,7 @@ export const LocaleJsonDiagnostics: React.FC = () => {
       <Alert
         type="error"
         showIcon
-        message="Locale JSON errors detected"
+        title="Locale JSON errors detected"
         description={
           <div className="space-y-1 text-xs">
             {issues.map((issue) => (

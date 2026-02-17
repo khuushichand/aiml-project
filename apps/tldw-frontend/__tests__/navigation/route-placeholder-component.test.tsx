@@ -1,0 +1,92 @@
+import React from 'react';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
+
+const mockBack = vi.fn();
+const mockRouter = {
+  asPath: '/connectors/jobs',
+  back: mockBack,
+};
+
+vi.mock('next/router', () => ({
+  useRouter: () => mockRouter,
+}));
+
+vi.mock('next/link', () => ({
+  default: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
+  ),
+}));
+
+describe('RoutePlaceholder recovery', () => {
+  beforeEach(() => {
+    mockBack.mockReset();
+    mockRouter.asPath = '/connectors/jobs';
+  });
+
+  it('shows route context and fallback actions', () => {
+    render(
+      <RoutePlaceholder
+        title="Connector Jobs Is Coming Soon"
+        description="Connector job orchestration is planned for this route."
+        plannedPath="/connectors/jobs"
+        primaryCtaHref="/connectors"
+        primaryCtaLabel="Open Connectors Hub"
+      />
+    );
+
+    expect(screen.getByRole('heading', { name: 'Connector Jobs Is Coming Soon' })).toBeVisible();
+    expect(screen.getAllByText('/connectors/jobs')).toHaveLength(2);
+    expect(screen.getByTestId('route-placeholder-primary')).toHaveAttribute('href', '/connectors');
+    expect(screen.getByTestId('route-placeholder-open-settings')).toHaveAttribute('href', '/settings');
+    expect(screen.getByTestId('route-placeholder-go-back')).toBeVisible();
+  });
+
+  it('supports keyboard traversal across recovery actions', async () => {
+    const user = userEvent.setup();
+    render(
+      <RoutePlaceholder
+        title="Connector Jobs Is Coming Soon"
+        description="Connector job orchestration is planned for this route."
+        plannedPath="/connectors/jobs"
+        primaryCtaHref="/connectors"
+        primaryCtaLabel="Open Connectors Hub"
+      />
+    );
+
+    const openPrimary = screen.getByTestId('route-placeholder-primary');
+    const openSettings = screen.getByTestId('route-placeholder-open-settings');
+    const goBack = screen.getByTestId('route-placeholder-go-back');
+
+    await user.tab();
+    expect(openPrimary).toHaveFocus();
+
+    await user.tab();
+    expect(openSettings).toHaveFocus();
+
+    await user.tab();
+    expect(goBack).toHaveFocus();
+  });
+
+  it('falls back to root CTA and triggers router back action', async () => {
+    const user = userEvent.setup();
+    mockRouter.asPath = '/profile';
+
+    render(
+      <RoutePlaceholder
+        title="Profile Page Is Coming Soon"
+        description="Dedicated profile management is not yet available on this route."
+      />
+    );
+
+    expect(screen.getByTestId('route-placeholder-primary')).toHaveAttribute('href', '/');
+    expect(screen.queryByText('Planned route:')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('route-placeholder-go-back'));
+    expect(mockBack).toHaveBeenCalledTimes(1);
+  });
+});

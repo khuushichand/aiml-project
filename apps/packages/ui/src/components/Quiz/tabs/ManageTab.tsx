@@ -761,7 +761,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         width={760}
       >
         {questionDraft && (
-          <Space direction="vertical" className="w-full">
+          <Space orientation="vertical" className="w-full">
             <Select
               value={questionDraft.question_type}
               onChange={(value: QuestionType) => {
@@ -826,7 +826,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                 value={questionDraft.correct_answer}
                 onChange={(e) => updateQuestionDraft({ correct_answer: e.target.value })}
               >
-                <Space direction="vertical">
+                <Space orientation="vertical">
                   <Radio value="true">{t("option:quiz.true", { defaultValue: "True" })}</Radio>
                   <Radio value="false">{t("option:quiz.false", { defaultValue: "False" })}</Radio>
                 </Space>

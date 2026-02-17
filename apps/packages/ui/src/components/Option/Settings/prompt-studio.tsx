@@ -141,11 +141,11 @@ export const PromptStudioSettings: React.FC = () => {
       {capabilityQuery.isError && (
         <Alert
           type="error"
-          message={t("settings:promptStudio.probeError", "Unable to reach Prompt Studio")}
+          title={t("settings:promptStudio.probeError", "Unable to reach Prompt Studio")}
         />
       )}
 
-      <Space direction="vertical" size="large" className="w-full">
+      <Space orientation="vertical" size="large" className="w-full">
         <Card
           title={t("settings:promptStudio.statusCard", "Status")}
           extra={
@@ -180,7 +180,7 @@ export const PromptStudioSettings: React.FC = () => {
             <Alert
               className="mt-3"
               type="error"
-              message={t("settings:promptStudio.statusError", "Status endpoint unavailable")}
+              title={t("settings:promptStudio.statusError", "Status endpoint unavailable")}
               description={statusError}
             />
           )}
@@ -303,7 +303,7 @@ export const PromptStudioSettings: React.FC = () => {
       {!capabilityReady && !capabilityQuery.isLoading && (
         <Alert
           type="info"
-          message={t(
+          title={t(
             "settings:promptStudio.unavailable",
             "Prompt Studio isn’t available on the server yet."
           )}

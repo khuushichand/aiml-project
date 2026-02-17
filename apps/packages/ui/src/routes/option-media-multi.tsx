@@ -7,6 +7,7 @@ import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useDemoMode } from "@/context/demo-mode"
+import { RouteErrorBoundary } from "@/components/Common/RouteErrorBoundary"
 
 const MediaMultiInner = () => {
   const { t } = useTranslation(["review", "common", "settings"])
@@ -164,7 +165,9 @@ const MediaMultiInner = () => {
 const OptionMediaMulti = () => {
   return (
     <OptionLayout>
-      <MediaMultiInner />
+      <RouteErrorBoundary routeId="media-multi" routeLabel="Media Review">
+        <MediaMultiInner />
+      </RouteErrorBoundary>
     </OptionLayout>
   )
 }

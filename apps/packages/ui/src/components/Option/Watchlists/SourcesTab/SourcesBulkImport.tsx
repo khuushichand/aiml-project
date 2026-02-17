@@ -136,7 +136,7 @@ export const SourcesBulkImport: React.FC<SourcesBulkImportProps> = ({
         {summary && (
           <Alert
             type={summary.errors > 0 ? "warning" : "success"}
-            message={t("watchlists:sources.importSummary", "Import Summary")}
+            title={t("watchlists:sources.importSummary", "Import Summary")}
             description={t(
               "watchlists:sources.importSummaryDesc",
               "{{created}} created, {{skipped}} skipped, {{errors}} errors",

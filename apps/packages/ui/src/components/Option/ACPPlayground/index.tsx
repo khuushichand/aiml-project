@@ -42,12 +42,21 @@ export const ACPPlayground: React.FC = () => {
   const [rightTab, setRightTab] = React.useState<"tools" | "workspace">("tools")
 
   // Store
-  const sessions = useACPSessionsStore((s) => s.getSessions())
+  const sessionsById = useACPSessionsStore((s) => s.sessions)
   const activeSessionId = useACPSessionsStore((s) => s.activeSessionId)
-  const activeSession = useACPSessionsStore((s) =>
-    s.activeSessionId ? s.getSession(s.activeSessionId) : undefined
+  const sessions = React.useMemo(
+    () =>
+      Object.values(sessionsById).sort(
+        (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
+      ),
+    [sessionsById]
+  )
+  const activeSession = React.useMemo(
+    () => (activeSessionId ? sessionsById[activeSessionId] : undefined),
+    [activeSessionId, sessionsById]
   )
   const cleanupExpiredSessions = useACPSessionsStore((s) => s.cleanupExpiredSessions)
+  const workspaceTabLabel = t("playground:acp.workspace.title", "Workspace")
 
   // Cleanup expired sessions on mount
   useEffect(() => {
@@ -116,7 +125,7 @@ export const ACPPlayground: React.FC = () => {
       label: (
         <span className="flex items-center gap-1.5">
           <Terminal className="h-4 w-4" />
-          <span>{t("playground:acp.workspace", "Workspace")}</span>
+          <span>{workspaceTabLabel}</span>
         </span>
       ),
       children: <ACPWorkspacePanel />,
@@ -178,7 +187,7 @@ export const ACPPlayground: React.FC = () => {
           placement="left"
           onClose={() => setLeftDrawerOpen(false)}
           open={leftDrawerOpen}
-          width={320}
+          size={320}
           className="lg:hidden"
           styles={{ body: { padding: 0 } }}
         >
@@ -204,7 +213,7 @@ export const ACPPlayground: React.FC = () => {
                 },
                 {
                   key: "workspace",
-                  label: t("playground:acp.workspace", "Workspace"),
+                  label: workspaceTabLabel,
                   children: <ACPWorkspacePanel />,
                 },
               ]}
@@ -224,7 +233,7 @@ export const ACPPlayground: React.FC = () => {
           placement="right"
           onClose={() => setRightDrawerOpen(false)}
           open={rightDrawerOpen}
-          width={320}
+          size={320}
           className="lg:hidden"
           styles={{ body: { padding: 0 } }}
         >
@@ -246,7 +255,7 @@ export const ACPPlayground: React.FC = () => {
               },
               {
                 key: "workspace",
-                label: t("playground:acp.workspace", "Workspace"),
+                label: workspaceTabLabel,
                 children: <ACPWorkspacePanel />,
               },
             ]}

@@ -15,6 +15,7 @@ import {
   Dropdown,
   Segmented,
   Badge,
+  Drawer,
   message
 } from "antd"
 import {
@@ -34,10 +35,12 @@ import {
   MoreVertical,
   AlertCircle,
   Plus,
-  Trash2
+  Trash2,
+  PanelLeft
 } from "lucide-react"
 import type { SidebarPanel } from "@/types/workflow-editor"
 import { useWorkflowEditorStore } from "@/store/workflow-editor"
+import { useDesktop } from "@/hooks/useMediaQuery"
 import { WorkflowCanvas } from "./WorkflowCanvas"
 import { NodePalette } from "./NodePalette"
 import { NodeConfigPanel } from "./NodeConfigPanel"
@@ -48,6 +51,8 @@ interface WorkflowEditorProps {
 }
 
 export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
+  const isDesktop = useDesktop()
+
   // Store state
   const workflowName = useWorkflowEditorStore((s) => s.workflowName)
   const isDirty = useWorkflowEditorStore((s) => s.isDirty)
@@ -78,6 +83,13 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
 
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(workflowName)
+  const [isMobilePanelsOpen, setIsMobilePanelsOpen] = useState(false)
+
+  useEffect(() => {
+    if (isDesktop) {
+      setIsMobilePanelsOpen(false)
+    }
+  }, [isDesktop])
 
   // Initialize with a new workflow on mount
   useEffect(() => {
@@ -199,6 +211,43 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
 
   const errorCount = issues.filter((i) => i.severity === "error").length
   const warningCount = issues.filter((i) => i.severity === "warning").length
+  const validationIssuesAriaLabel =
+    errorCount > 0 && warningCount > 0
+      ? `Validation issues: ${errorCount} errors, ${warningCount} warnings`
+      : errorCount > 0
+        ? `Validation issues: ${errorCount} errors`
+        : `Validation issues: ${warningCount} warnings`
+
+  const sidebarContent = (
+    <>
+      <div className="flex items-center p-2 border-b border-border">
+        <Segmented
+          size="small"
+          value={sidebarPanel || "palette"}
+          onChange={(value) => setSidebarPanel(value as SidebarPanel)}
+          options={sidebarPanelOptions.map((opt) => ({
+            value: opt.value,
+            label: (
+              <Tooltip title={opt.label}>
+                <span className="inline-flex items-center justify-center">
+                  <span aria-hidden="true">{opt.icon}</span>
+                  <span className="sr-only">{opt.label}</span>
+                </span>
+              </Tooltip>
+            ),
+            title: opt.label
+          }))}
+          block
+        />
+      </div>
+
+      <div className="flex-1 overflow-hidden">
+        {sidebarPanel === "palette" && <NodePalette className="h-full" />}
+        {sidebarPanel === "config" && <NodeConfigPanel className="h-full" />}
+        {sidebarPanel === "execution" && <ExecutionPanel className="h-full" />}
+      </div>
+    </>
+  )
 
   return (
     <div className={`flex flex-col h-full bg-bg ${className}`}>
@@ -262,6 +311,17 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
 
         {/* View controls */}
         <div className="flex items-center gap-1">
+          {!isDesktop && (
+            <Tooltip title="Open workflow panels">
+              <Button
+                type="text"
+                size="small"
+                aria-label="Open workflow panels"
+                icon={<PanelLeft className="w-4 h-4" />}
+                onClick={() => setIsMobilePanelsOpen(true)}
+              />
+            </Tooltip>
+          )}
           <Tooltip title="Toggle Grid">
             <Button
               type={isGridVisible ? "primary" : "text"}
@@ -307,7 +367,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
               <Button
                 type="text"
                 size="small"
-                aria-label="Validation issues"
+                aria-label={validationIssuesAriaLabel}
                 icon={
                   <AlertCircle
                     className={`w-4 h-4 ${
@@ -352,36 +412,33 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
 
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <div className="w-72 flex flex-col bg-surface border-r border-border">
-          {/* Panel tabs */}
-          <div className="flex items-center p-2 border-b border-border">
-            <Segmented
-              size="small"
-              value={sidebarPanel || "palette"}
-              onChange={(value) => setSidebarPanel(value as SidebarPanel)}
-              options={sidebarPanelOptions.map((opt) => ({
-                value: opt.value,
-                icon: opt.icon,
-                title: opt.label
-              }))}
-              block
-            />
+        {/* Sidebar (desktop only) */}
+        {isDesktop && (
+          <div className="w-72 flex flex-col bg-surface border-r border-border">
+            {sidebarContent}
           </div>
-
-          {/* Panel content */}
-          <div className="flex-1 overflow-hidden">
-            {sidebarPanel === "palette" && <NodePalette className="h-full" />}
-            {sidebarPanel === "config" && <NodeConfigPanel className="h-full" />}
-            {sidebarPanel === "execution" && <ExecutionPanel className="h-full" />}
-          </div>
-        </div>
+        )}
 
         {/* Canvas */}
         <div className="flex-1 overflow-hidden">
           <WorkflowCanvas />
         </div>
       </div>
+
+      {!isDesktop && (
+        <Drawer
+          title="Workflow panels"
+          placement="left"
+          open={isMobilePanelsOpen}
+          onClose={() => setIsMobilePanelsOpen(false)}
+          styles={{
+            wrapper: { width: 320 },
+            body: { padding: 0, display: "flex", flexDirection: "column" }
+          }}
+        >
+          {sidebarContent}
+        </Drawer>
+      )}
 
       {/* Status bar */}
       <div className="flex items-center justify-between px-3 py-1 bg-surface border-t border-border text-xs text-text-subtle">

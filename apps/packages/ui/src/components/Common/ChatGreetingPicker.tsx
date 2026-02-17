@@ -10,7 +10,8 @@ import {
   buildGreetingOptionsFromEntries,
   buildGreetingsChecksumFromOptions,
   collectGreetingEntries,
-  isGreetingMessageType
+  isGreetingMessageType,
+  parseGreetingSelectionIndex
 } from "@/utils/character-greetings"
 import { replaceUserDisplayNamePlaceholders } from "@/utils/chat-display-name"
 
@@ -74,10 +75,18 @@ export const ChatGreetingPicker: React.FC<Props> = ({
   if (hasNonGreetingMessages) return null
   if (greetingOptions.length === 0) return null
 
-  const resolvedSelection =
-    storedChecksum && checksum && storedChecksum !== checksum
-      ? null
-      : greetingOptions.find((option) => option.id === storedSelectionId)
+  const resolvedSelection = (() => {
+    if (storedChecksum && checksum && storedChecksum !== checksum) {
+      return null
+    }
+    const exactMatch = greetingOptions.find(
+      (option) => option.id === storedSelectionId
+    )
+    if (exactMatch) return exactMatch
+    const selectedIndex = parseGreetingSelectionIndex(storedSelectionId)
+    if (selectedIndex == null) return null
+    return greetingOptions[selectedIndex] || null
+  })()
   const selectedOption =
     useCharacterDefault && greetingOptions.length > 0
       ? greetingOptions[0]
@@ -121,7 +130,10 @@ export const ChatGreetingPicker: React.FC<Props> = ({
       useCharacterDefault: checked,
       greetingSelectionId: checked
         ? defaultId
-        : storedSelectionId ?? selectedOption?.id ?? null,
+        : resolvedSelection?.id ??
+          selectedOption?.id ??
+          storedSelectionId ??
+          null,
       greetingsChecksum: checksum
     })
   }

@@ -97,7 +97,7 @@ export const TestCaseGenerateModal: React.FC<TestCaseGenerateModalProps> = ({
         <Alert
           type="info"
           showIcon
-          message={t("managePrompts.studio.testCases.generateInfo", {
+          title={t("managePrompts.studio.testCases.generateInfo", {
             defaultValue:
               "Use AI to automatically generate test cases based on your prompt structure."
           })}

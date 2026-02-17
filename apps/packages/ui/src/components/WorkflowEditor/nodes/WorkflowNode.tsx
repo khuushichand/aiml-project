@@ -64,9 +64,9 @@ const STATUS_COLORS: Record<StepExecutionStatus, string> = {
 // theme-exempt: workflow category colors
 const CATEGORY_STYLES: Record<string, { border: string; bg: string; header: string }> = {
   ai: {
-    border: "border-purple-500",
-    bg: "bg-purple-50 dark:bg-purple-950/30",
-    header: "bg-purple-500"
+    border: "border-primary",
+    bg: "bg-primary/10",
+    header: "bg-primary"
   },
   search: {
     border: "border-primary",
@@ -99,9 +99,9 @@ const CATEGORY_STYLES: Record<string, { border: string; bg: string; header: stri
     header: "bg-emerald-500"
   },
   control: {
-    border: "border-orange-500",
-    bg: "bg-orange-50 dark:bg-orange-950/30",
-    header: "bg-orange-500"
+    border: "border-indigo-500",
+    bg: "bg-indigo-50 dark:bg-indigo-950/30",
+    header: "bg-indigo-500"
   },
   io: {
     border: "border-success",

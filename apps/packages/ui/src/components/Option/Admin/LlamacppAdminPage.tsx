@@ -25,6 +25,10 @@ import { parseGgufModelMetadata } from "@/utils/gguf-model-metadata"
 import { StatusBanner } from "./StatusBanner"
 import { CollapsibleSection } from "./CollapsibleSection"
 import { ServerArgsEditor } from "./ServerArgsEditor"
+import {
+  deriveAdminGuardFromError,
+  sanitizeAdminErrorMessage
+} from "./admin-error-utils"
 
 const { Title, Text } = Typography
 const { TextArea } = Input
@@ -165,11 +169,9 @@ export const LlamacppAdminPage: React.FC = () => {
   const [adminGuard, setAdminGuard] = React.useState<"forbidden" | "notFound" | null>(null)
 
   const markAdminGuardFromError = (err: any) => {
-    const msg = String(err?.message || "")
-    if (msg.includes("Request failed: 403")) {
-      setAdminGuard("forbidden")
-    } else if (msg.includes("Request failed: 404")) {
-      setAdminGuard("notFound")
+    const guardState = deriveAdminGuardFromError(err)
+    if (guardState) {
+      setAdminGuard(guardState)
     }
   }
 
@@ -187,7 +189,9 @@ export const LlamacppAdminPage: React.FC = () => {
       const data = await tldwClient.getLlamacppStatus()
       setStatus(data as LlamacppStatus)
     } catch (e: any) {
-      setStatusError(e?.message || "Failed to load Llama.cpp status.")
+      setStatusError(
+        sanitizeAdminErrorMessage(e, "Failed to load Llama.cpp status.")
+      )
       markAdminGuardFromError(e)
     } finally {
       setLoadingStatus(false)
@@ -204,8 +208,15 @@ export const LlamacppAdminPage: React.FC = () => {
       setModels(list)
       if (list.length > 0) {
         setSelectedModel((current) => current ?? list[0])
+      } else {
+        setSelectedModel(undefined)
       }
     } catch (e: any) {
+      setModels([])
+      setSelectedModel(undefined)
+      setStatusError(
+        sanitizeAdminErrorMessage(e, "Failed to load available Llama.cpp models.")
+      )
       markAdminGuardFromError(e)
     } finally {
       setLoadingModels(false)
@@ -232,7 +243,9 @@ export const LlamacppAdminPage: React.FC = () => {
       await tldwClient.startLlamacppServer(selectedModel, serverArgs)
       await loadStatus()
     } catch (e: any) {
-      setStatusError(e?.message || "Failed to start Llama.cpp server.")
+      setStatusError(
+        sanitizeAdminErrorMessage(e, "Failed to start Llama.cpp server.")
+      )
       markAdminGuardFromError(e)
     } finally {
       setActionLoading(false)
@@ -246,7 +259,9 @@ export const LlamacppAdminPage: React.FC = () => {
       await tldwClient.startLlamacppServer(selectedModel)
       await loadStatus()
     } catch (e: any) {
-      setStatusError(e?.message || "Failed to start Llama.cpp server.")
+      setStatusError(
+        sanitizeAdminErrorMessage(e, "Failed to start Llama.cpp server.")
+      )
       markAdminGuardFromError(e)
     } finally {
       setActionLoading(false)
@@ -259,7 +274,9 @@ export const LlamacppAdminPage: React.FC = () => {
       await tldwClient.stopLlamacppServer()
       await loadStatus()
     } catch (e: any) {
-      setStatusError(e?.message || "Failed to stop Llama.cpp server.")
+      setStatusError(
+        sanitizeAdminErrorMessage(e, "Failed to stop Llama.cpp server.")
+      )
       markAdminGuardFromError(e)
     } finally {
       setActionLoading(false)
@@ -312,11 +329,13 @@ export const LlamacppAdminPage: React.FC = () => {
     } catch (e: any) {
       setPresetNotice(null)
       setStatusError(
-        e?.message ||
+        sanitizeAdminErrorMessage(
+          e,
           t(
             "settings:admin.llamacppPresetImportFailed",
             "Failed to import preset."
           )
+        )
       )
     }
   }
@@ -324,6 +343,7 @@ export const LlamacppAdminPage: React.FC = () => {
   const effectiveState =
     status?.state || status?.status || status?.backend || "unknown"
   const isRunning = effectiveState === "running" || effectiveState === "online"
+  const statusUnavailable = !status && Boolean(statusError)
   const modelsWithMeta = React.useMemo(
     () => models.map((model) => ({ model, meta: parseGgufModelMetadata(model) })),
     [models]
@@ -338,12 +358,12 @@ export const LlamacppAdminPage: React.FC = () => {
 
   return (
     <PageShell>
-      <Space direction="vertical" size="large" className="w-full py-6">
+      <Space orientation="vertical" size="large" className="w-full py-6">
         {adminGuard && (
           <Alert
             type="warning"
             showIcon
-            message={
+            title={
               adminGuard === "forbidden"
                 ? t("settings:admin.adminGuardForbiddenTitle", "Admin access required")
                 : t("settings:admin.adminGuardNotFoundTitle", "Admin APIs not available")
@@ -410,7 +430,7 @@ export const LlamacppAdminPage: React.FC = () => {
               title={t("settings:admin.llamacppLoadTitle", "Load Model")}
               loading={loadingModels}
             >
-              <Space direction="vertical" size="middle" className="w-full">
+              <Space orientation="vertical" size="middle" className="w-full">
                 <div>
                   <Text strong className="mb-2 block">
                     {t("settings:admin.llamacppSelectModel", "Select model")}
@@ -455,7 +475,7 @@ export const LlamacppAdminPage: React.FC = () => {
                   <Alert
                     type="success"
                     showIcon
-                    message={presetNotice}
+                    title={presetNotice}
                   />
                 )}
 
@@ -960,23 +980,44 @@ export const LlamacppAdminPage: React.FC = () => {
                     type="primary"
                     onClick={handleStart}
                     loading={actionLoading}
-                    disabled={!selectedModel || isRunning}
+                    disabled={
+                      !selectedModel ||
+                      isRunning ||
+                      loadingModels ||
+                      statusUnavailable
+                    }
                   >
                     {t("settings:admin.llamacppStart", "Start Server")}
                   </Button>
                   <Button
                     onClick={handleStartWithDefaults}
                     loading={actionLoading}
-                    disabled={!selectedModel || isRunning}
+                    disabled={
+                      !selectedModel ||
+                      isRunning ||
+                      loadingModels ||
+                      statusUnavailable
+                    }
                   >
                     {t("settings:admin.llamacppStartDefaults", "Start with Defaults")}
                   </Button>
                 </Space>
 
+                {statusUnavailable && (
+                  <Alert
+                    type="warning"
+                    title={t(
+                      "settings:admin.llamacppUnavailableHint",
+                      "Llama.cpp controls are temporarily unavailable until status checks succeed."
+                    )}
+                    showIcon
+                  />
+                )}
+
                 {isRunning && (
                   <Alert
                     type="info"
-                    message={t("settings:admin.llamacppAlreadyRunning", "Server is already running. Stop it first to start with new settings.")}
+                    title={t("settings:admin.llamacppAlreadyRunning", "Server is already running. Stop it first to start with new settings.")}
                     showIcon
                   />
                 )}

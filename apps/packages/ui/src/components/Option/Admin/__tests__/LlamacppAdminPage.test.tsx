@@ -117,4 +117,34 @@ describe("LlamacppAdminPage", () => {
       })
     )
   })
+
+  it("disables start actions when model prerequisites fail to load", async () => {
+    apiMock.listLlamacppModels.mockRejectedValueOnce(
+      new Error(
+        "Request failed: 500 (GET /api/v1/llamacpp/models) model_dir=/Users/dev/models"
+      )
+    )
+
+    render(<LlamacppAdminPage />)
+
+    const startButton = await screen.findByRole("button", { name: "Start Server" })
+    expect(startButton).toBeDisabled()
+
+    const fullText = document.body.textContent || ""
+    expect(fullText).toContain("[admin-endpoint]")
+    expect(fullText).toContain("[redacted-path]")
+  })
+
+  it("gates controls when admin APIs are unavailable", async () => {
+    apiMock.getLlamacppStatus.mockRejectedValueOnce(
+      new Error(
+        "Request failed: 503 (GET /api/v1/admin/llamacpp/status) config=/Users/dev/.config/tldw/config.txt"
+      )
+    )
+
+    render(<LlamacppAdminPage />)
+
+    expect(await screen.findByText("Admin APIs not available")).toBeTruthy()
+    expect(screen.queryByText("Load Model")).toBeNull()
+  })
 })

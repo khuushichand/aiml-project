@@ -460,7 +460,7 @@ export const TablePreview: React.FC = () => {
       <div className="space-y-4">
         <Alert
           type="error"
-          message={t("dataTables:generationFailed", "Generation Failed")}
+          title={t("dataTables:generationFailed", "Generation Failed")}
           description={generationError}
           showIcon
         />
@@ -493,7 +493,7 @@ export const TablePreview: React.FC = () => {
       {generationWarnings.length > 0 && (
         <Alert
           type="warning"
-          message={t("dataTables:warnings", "Warnings")}
+          title={t("dataTables:warnings", "Warnings")}
           description={
             <ul className="list-disc list-inside">
               {generationWarnings.map((warning, index) => (

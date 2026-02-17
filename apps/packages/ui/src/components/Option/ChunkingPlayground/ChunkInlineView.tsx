@@ -237,7 +237,7 @@ export const ChunkInlineView: React.FC<ChunkInlineViewProps> = ({
       <Alert
         type="info"
         showIcon
-        message={t(
+        title={t(
           "settings:chunkingPlayground.inlineUnavailable",
           "Inline view requires character offsets; switch to Cards to inspect chunks."
         )}

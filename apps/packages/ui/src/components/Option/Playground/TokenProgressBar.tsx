@@ -1,6 +1,7 @@
 import React from "react"
 import { Tooltip } from "antd"
 import { useTranslation } from "react-i18next"
+import { withTemplateFallback } from "@/utils/template-guards"
 
 interface TokenProgressBarProps {
   /** Current conversation token count (excluding draft) */
@@ -102,6 +103,12 @@ export const TokenProgressBar: React.FC<TokenProgressBarProps> = ({
   const textColor = getProgressColorText(percentage)
 
   if (compact) {
+    const memoryUsageLabel = withTemplateFallback(
+      t("playground:tokens.memoryUsage", "Memory: {{percentage}}% full", {
+        percentage
+      }),
+      `Memory: ${percentage}% full`
+    )
     const compactContent = (
       <>
         <div className="relative h-1.5 w-16 sm:w-20 overflow-hidden rounded-full bg-border">
@@ -111,7 +118,7 @@ export const TokenProgressBar: React.FC<TokenProgressBarProps> = ({
           />
         </div>
         <span className={`text-xs sm:text-[10px] font-medium ${textColor}`}>
-          {t("playground:tokens.memoryUsage", "Memory: {{percentage}}% full", { percentage })}
+          {memoryUsageLabel}
         </span>
       </>
     )

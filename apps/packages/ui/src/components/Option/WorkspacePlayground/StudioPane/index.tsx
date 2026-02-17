@@ -23,6 +23,7 @@ import {
   PanelRightClose
 } from "lucide-react"
 import { Button, Empty, Tooltip, Input, Modal, message, Slider, Select } from "antd"
+import { useMobile } from "@/hooks/useMediaQuery"
 import { useWorkspaceStore } from "@/store/workspace"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { generateQuiz } from "@/services/quizzes"
@@ -31,6 +32,7 @@ import { fetchTldwVoiceCatalog, type TldwVoice } from "@/services/tldw/audio-voi
 import { inferTldwProviderFromModel } from "@/services/tts-provider"
 import type { ArtifactType, GeneratedArtifact, AudioTtsProvider } from "@/types/workspace"
 import { QuickNotesSection } from "./QuickNotesSection"
+import { getWorkspaceStudioNoSourcesHint } from "../source-location-copy"
 
 // Icon mapping for artifact types
 const ARTIFACT_TYPE_ICONS: Record<ArtifactType, React.ElementType> = {
@@ -124,6 +126,7 @@ interface StudioPaneProps {
  */
 export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const { t } = useTranslation(["playground", "common"])
+  const isMobile = useMobile()
   const [messageApi, contextHolder] = message.useMessage()
 
   // Store state
@@ -515,7 +518,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           <p className="mt-2 text-center text-xs text-text-muted">
             {t(
               "playground:studio.selectSourcesHint",
-              "Select sources from the left pane to enable generation"
+              getWorkspaceStudioNoSourcesHint(isMobile)
             )}
           </p>
         )}

@@ -640,7 +640,7 @@ export const WorldBooksManager: React.FC = () => {
           </div>
         )}
         placement="right"
-        width={screens.md ? "60vw" : "100%"}
+        size={screens.md ? "60vw" : "100%"}
         open={!!openEntries}
         onClose={handleCloseEntries}
         destroyOnHidden

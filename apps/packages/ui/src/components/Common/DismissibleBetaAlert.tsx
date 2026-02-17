@@ -38,7 +38,7 @@ export const DismissibleBetaAlert: React.FC<DismissibleBetaAlertProps> = ({
       type={type}
       showIcon={showIcon}
       icon={icon}
-      message={message}
+      title={message}
       description={description}
       closable
       onClose={() => {

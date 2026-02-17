@@ -1,11 +1,25 @@
 import React from "react"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
-import { Button, Card, Input, List, Select, Space, Switch, Tag, Tooltip, Typography } from "antd"
+import {
+  Alert,
+  Button,
+  Card,
+  Input,
+  List,
+  Select,
+  Space,
+  Switch,
+  Tag,
+  Tooltip,
+  Typography
+} from "antd"
 import { Mic, Pause, Save, Trash2 } from "lucide-react"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { PageShell } from "@/components/Common/PageShell"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
+import { isTimeoutLikeError } from "@/utils/request-timeout"
+import { withTemplateFallback } from "@/utils/template-guards"
 
 const { Text, Title } = Typography
 
@@ -50,6 +64,10 @@ export const SttPlaygroundPage: React.FC = () => {
 
   const [serverModels, setServerModels] = React.useState<string[]>([])
   const [serverModelsLoading, setServerModelsLoading] = React.useState(false)
+  const [serverModelsError, setServerModelsError] = React.useState<string | null>(
+    null
+  )
+  const [modelsLoadAttempt, setModelsLoadAttempt] = React.useState(0)
   const [activeModel, setActiveModel] = React.useState<string | undefined>()
   const [isRecording, setIsRecording] = React.useState(false)
   const [isTranscribing, setIsTranscribing] = React.useState(false)
@@ -65,8 +83,11 @@ export const SttPlaygroundPage: React.FC = () => {
     let cancelled = false
     const fetchModels = async () => {
       setServerModelsLoading(true)
+      setServerModelsError(null)
       try {
-        const res = await tldwClient.getTranscriptionModels()
+        const res = await tldwClient.getTranscriptionModels({
+          timeoutMs: 10_000
+        })
         const all = Array.isArray(res?.all_models)
           ? (res.all_models as string[])
           : []
@@ -81,6 +102,19 @@ export const SttPlaygroundPage: React.FC = () => {
           }
         }
       } catch (e) {
+        if (!cancelled) {
+          setServerModelsError(
+            isTimeoutLikeError(e)
+              ? (t(
+                  "playground:stt.modelsTimeout",
+                  "Model list took longer than 10 seconds. Check server health and retry."
+                ) as string)
+              : (t(
+                  "playground:stt.modelsLoadError",
+                  "Unable to load transcription models. Retry or check server settings."
+                ) as string)
+          )
+        }
         if ((import.meta as any)?.env?.DEV) {
           // eslint-disable-next-line no-console
           console.warn("Failed to load transcription models for STT Playground", e)
@@ -95,7 +129,7 @@ export const SttPlaygroundPage: React.FC = () => {
     return () => {
       cancelled = true
     }
-  }, [activeModel, sttModel])
+  }, [activeModel, modelsLoadAttempt, sttModel, t])
 
   const handleStopRecording = React.useCallback(async () => {
     const recorder = recorderRef.current
@@ -399,7 +433,7 @@ export const SttPlaygroundPage: React.FC = () => {
 
       <div className="mt-4 space-y-4">
         <Card>
-          <Space direction="vertical" className="w-full" size="middle">
+          <Space orientation="vertical" className="w-full" size="middle">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-1">
                 <Text strong>
@@ -442,6 +476,24 @@ export const SttPlaygroundPage: React.FC = () => {
                     "Language, task, response format, segmentation, and prompt reuse your Speech-to-Text defaults from Settings."
                   )}
                 </div>
+                {serverModelsError && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    title={serverModelsError}
+                    action={
+                      <Button
+                        size="small"
+                        onClick={() =>
+                          setModelsLoadAttempt((prev) => prev + 1)
+                        }
+                        disabled={serverModelsLoading}
+                      >
+                        {t("common:retry", "Retry")}
+                      </Button>
+                    }
+                  />
+                )}
               </div>
               <div className="space-y-1">
                 <Text type="secondary" className="block text-xs">
@@ -550,15 +602,22 @@ export const SttPlaygroundPage: React.FC = () => {
               </div>
             </div>
             <div className="text-xs text-text-muted ">
-              {t(
-                "playground:tooltip.speechToTextDetails",
-                "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.",
-                {
-                  model: activeModel || sttModel || "whisper-1",
-                  task: sttTask === "translate" ? "translate" : "transcribe",
-                  format: (sttResponseFormat || "json").toUpperCase()
-                } as any
-              ) as string}
+              {withTemplateFallback(
+                t(
+                  "playground:tooltip.speechToTextDetails",
+                  "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.",
+                  {
+                    model: activeModel || sttModel || "whisper-1",
+                    task: sttTask === "translate" ? "translate" : "transcribe",
+                    format: (sttResponseFormat || "json").toUpperCase()
+                  } as any
+                ),
+                `Uses ${
+                  activeModel || sttModel || "whisper-1"
+                } · ${sttTask === "translate" ? "translate" : "transcribe"} · ${(
+                  sttResponseFormat || "json"
+                ).toUpperCase()}. Configure in Settings -> General -> Speech-to-Text.`
+              )}
             </div>
             {(liveText || isRecording || isTranscribing) && (
               <div className="pt-3">

@@ -441,6 +441,15 @@ const SidepanelAgent: FC = () => {
     })
   }, [])
 
+  const focusWorkspaceSelector = useCallback(() => {
+    const selector = document.querySelector<HTMLButtonElement>(
+      "[data-testid='agent-workspace-selector']"
+    )
+    if (!selector) return
+    selector.focus()
+    selector.click()
+  }, [])
+
   // Tab items
   const tabItems = useMemo(() => [
     {
@@ -453,6 +462,29 @@ const SidepanelAgent: FC = () => {
       ),
       children: (
         <div className="flex flex-col h-full">
+          {!workspace && (
+            <div
+              data-testid="agent-workspace-empty-state"
+              className="mx-4 mt-4 rounded-lg border border-border bg-surface px-4 py-3"
+            >
+              <h3 className="text-sm font-semibold text-text">
+                {t("agentWorkspaceRequiredTitle", "Select a workspace to use Agent")}
+              </h3>
+              <p className="mt-1 text-xs text-text-muted">
+                {t(
+                  "agentWorkspaceRequiredBody",
+                  "Agent actions run against files in a specific project folder. Choose a workspace above, then send a task."
+                )}
+              </p>
+              <button
+                type="button"
+                onClick={focusWorkspaceSelector}
+                className="mt-3 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text transition hover:bg-surface2 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              >
+                {t("agentWorkspaceChoose", "Choose workspace")}
+              </button>
+            </div>
+          )}
           {/* Chat messages */}
           <div
             ref={chatContainerRef}
@@ -556,7 +588,19 @@ const SidepanelAgent: FC = () => {
         </div>
       )
     }
-  ], [messages, streamingContent, toolCalls, expandedToolIds, toggleToolExpand, diffs, selectedHunks, executions, t])
+  ], [
+    messages,
+    streamingContent,
+    toolCalls,
+    expandedToolIds,
+    toggleToolExpand,
+    diffs,
+    selectedHunks,
+    executions,
+    focusWorkspaceSelector,
+    t,
+    workspace
+  ])
 
   return (
     <AgentErrorBoundary
@@ -663,7 +707,10 @@ const SidepanelAgent: FC = () => {
             placeholder={
               workspace
                 ? t("askAgent", "Ask the agent to help with your code...")
-                : t("selectWorkspace", "Select a workspace to get started")
+                : t(
+                    "selectWorkspaceBeforePrompt",
+                    "Choose a workspace above, then describe what you want the agent to do"
+                  )
             }
             disabled={!workspace || isRunning}
             autoSize={{ minRows: 1, maxRows: 4 }}

@@ -48,6 +48,10 @@ _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS = (
     sqlite3.Error,
 )
 
+_BILLING_ENFORCEMENT_FAILURE_MODE_ENV = "BILLING_ENFORCEMENT_FAILURE_MODE"
+_BILLING_ENFORCEMENT_FAILURE_MODE_OPEN = "open"
+_BILLING_ENFORCEMENT_FAILURE_MODE_CLOSED = "closed"
+
 try:  # pragma: no cover - optional dependency guard
     import asyncpg  # type: ignore
 except Exception:  # pragma: no cover - asyncpg may be absent in SQLite-only setups
@@ -155,6 +159,76 @@ class BillingEnforcer:
             return backend.strip().lower() in {"postgres", "postgresql", "pg"}
         return False
 
+    @staticmethod
+    def _get_failure_mode() -> str:
+        """Return enforcement fallback mode for data-source failures."""
+        raw_mode = os.environ.get(
+            _BILLING_ENFORCEMENT_FAILURE_MODE_ENV,
+            _BILLING_ENFORCEMENT_FAILURE_MODE_OPEN,
+        )
+        mode = str(raw_mode).strip().lower()
+        if mode in {_BILLING_ENFORCEMENT_FAILURE_MODE_OPEN, _BILLING_ENFORCEMENT_FAILURE_MODE_CLOSED}:
+            return mode
+
+        logger.warning(
+            "Invalid {}={!r}; defaulting to {}",
+            _BILLING_ENFORCEMENT_FAILURE_MODE_ENV,
+            raw_mode,
+            _BILLING_ENFORCEMENT_FAILURE_MODE_OPEN,
+        )
+        return _BILLING_ENFORCEMENT_FAILURE_MODE_OPEN
+
+    @classmethod
+    def _fail_closed_on_data_error(cls) -> bool:
+        return cls._get_failure_mode() == _BILLING_ENFORCEMENT_FAILURE_MODE_CLOSED
+
+    @staticmethod
+    def _permissive_limit_fallbacks() -> dict[str, Any]:
+        """Fail-open fallback limits when billing data sources are unavailable."""
+        return {
+            "api_calls_day": 1000,
+            "llm_tokens_month": 10_000_000,
+            "storage_mb": 10240,
+            "team_members": -1,
+            "transcription_minutes_month": 600,
+            "rag_queries_day": 500,
+            "concurrent_jobs": 5,
+        }
+
+    @staticmethod
+    def _restrictive_limit_fallbacks() -> dict[str, Any]:
+        """Fail-closed fallback limits when billing data sources are unavailable."""
+        return {
+            "api_calls_day": 0,
+            "llm_tokens_month": 0,
+            "storage_mb": 0,
+            "team_members": 0,
+            "transcription_minutes_month": 0,
+            "rag_queries_day": 0,
+            "concurrent_jobs": 0,
+            "advanced_analytics": False,
+            "priority_support": False,
+            "custom_models": False,
+            "api_access": False,
+            "sso_enabled": False,
+            "audit_logs": False,
+        }
+
+    @staticmethod
+    def _restrictive_usage_fallback(org_id: int) -> UsageSummary:
+        """Fail-closed usage snapshot that forces blocking checks."""
+        max_usage = 2_147_483_647
+        return UsageSummary(
+            org_id=org_id,
+            api_calls_today=max_usage,
+            llm_tokens_month=max_usage,
+            storage_bytes=max_usage * (1024 ** 2),
+            team_members=max_usage,
+            transcription_minutes_month=max_usage,
+            rag_queries_today=max_usage,
+            concurrent_jobs=max_usage,
+        )
+
     async def get_org_limits(self, org_id: int) -> dict[str, Any]:
         """Get subscription limits for an organization with caching."""
         now = time.time()
@@ -173,17 +247,19 @@ class BillingEnforcer:
             self._limits_cache[org_id] = (limits, now)
             return limits
         except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
-            logger.warning(f"Failed to get org limits for {org_id}: {exc}")
-            # Return permissive defaults on failure
-            return {
-                "api_calls_day": 1000,
-                "llm_tokens_month": 10_000_000,
-                "storage_mb": 10240,
-                "team_members": -1,
-                "transcription_minutes_month": 600,
-                "rag_queries_day": 500,
-                "concurrent_jobs": 5,
-            }
+            if self._fail_closed_on_data_error():
+                logger.error(
+                    "Failed to get org limits for {}: {}. Applying fail-closed fallback.",
+                    org_id,
+                    exc,
+                )
+                return self._restrictive_limit_fallbacks()
+            logger.warning(
+                "Failed to get org limits for {}: {}. Applying fail-open fallback.",
+                org_id,
+                exc,
+            )
+            return self._permissive_limit_fallbacks()
 
     async def get_org_usage(self, org_id: int) -> UsageSummary:
         """
@@ -234,6 +310,12 @@ class BillingEnforcer:
                 cached, _ = self._usage_cache[org_id]
                 logger.warning(f"Using stale cached usage for org {org_id}")
                 return cached
+            if self._fail_closed_on_data_error():
+                logger.error(
+                    "No cached usage for org {}; returning restrictive usage (fail-closed).",
+                    org_id,
+                )
+                return self._restrictive_usage_fallback(org_id)
             # Otherwise return zeros (fail-open) but log warning
             logger.warning(f"No cached usage for org {org_id}, returning zeros (fail-open)")
 
@@ -267,22 +349,6 @@ class BillingEnforcer:
                             """,
                             (org_id, today),
                         ),
-                        (
-                            """
-                            SELECT COALESCE(SUM(requests), 0)
-                            FROM usage_daily
-                            WHERE day = $1
-                            """,
-                            (today,),
-                        ),
-                        (
-                            """
-                            SELECT COALESCE(SUM(request_count), 0)
-                            FROM usage_daily
-                            WHERE day = $1
-                            """,
-                            (today,),
-                        ),
                     )
                     result = 0
                     for query, params in query_variants:
@@ -311,22 +377,6 @@ class BillingEnforcer:
                             """,
                             (org_id, today),
                         ),
-                        (
-                            """
-                            SELECT COALESCE(SUM(requests), 0)
-                            FROM usage_daily
-                            WHERE day = ?
-                            """,
-                            (today,),
-                        ),
-                        (
-                            """
-                            SELECT COALESCE(SUM(request_count), 0)
-                            FROM usage_daily
-                            WHERE day = ?
-                            """,
-                            (today,),
-                        ),
                     )
                     result = 0
                     for query, params in query_variants:
@@ -347,9 +397,8 @@ class BillingEnforcer:
     async def _get_llm_tokens_month(self, org_id: int) -> int:
         """Get LLM token usage for current month for an organization.
 
-        This aggregates usage from both:
-        - User-scoped calls (llm_usage_log.user_id joined via org_members)
-        - API-key scoped calls (llm_usage_log.key_id joined via api_keys.org_id)
+        This aggregates usage from both user-scoped and API-key scoped calls.
+        Each llm_usage_log row is counted at most once per org.
 
         User-scoped calls are attributed to a user's primary org (earliest
         org_members.added_at, tie-broken by lowest org_id) to avoid
@@ -365,7 +414,7 @@ class BillingEnforcer:
 
             async with pool.acquire() as conn:
                 if is_postgres:
-                    # PostgreSQL: sum tokens for all org members and org-scoped API keys
+                    # PostgreSQL: single-pass attribution, no UNION path.
                     result = await conn.fetchval(
                         """
                         WITH primary_org AS (
@@ -380,23 +429,20 @@ class BillingEnforcer:
                             ) ranked
                             WHERE rn = 1
                         )
-                        SELECT COALESCE(SUM(sub.total_tokens), 0)
-                        FROM (
-                            SELECT l.total_tokens
-                            FROM llm_usage_log AS l
-                            JOIN primary_org AS po ON l.user_id = po.user_id
-                            WHERE po.org_id = $1 AND l.ts >= $2
-                            UNION ALL
-                            SELECT l2.total_tokens
-                            FROM llm_usage_log AS l2
-                            JOIN api_keys AS ak ON l2.key_id = ak.id
-                            WHERE ak.org_id = $1 AND l2.ts >= $2
-                        ) AS sub
+                        SELECT COALESCE(SUM(l.total_tokens), 0)
+                        FROM llm_usage_log AS l
+                        LEFT JOIN primary_org AS po ON l.user_id = po.user_id
+                        LEFT JOIN api_keys AS ak ON l.key_id = ak.id
+                        WHERE l.ts >= $2
+                          AND (
+                                po.org_id = $1
+                                OR ak.org_id = $1
+                              )
                         """,
                         org_id, month_start,
                     )
                 else:
-                    # SQLite: same aggregation using SQLite-compatible syntax
+                    # SQLite: single-pass attribution, no UNION path.
                     month_start_str = month_start.strftime("%Y-%m-%d %H:%M:%S")
                     cur = await conn.execute(
                         """
@@ -412,20 +458,17 @@ class BillingEnforcer:
                               ON po.user_id = om.user_id AND po.min_added = om.added_at
                             GROUP BY om.user_id
                         )
-                        SELECT COALESCE(SUM(sub.total_tokens), 0)
-                        FROM (
-                            SELECT l.total_tokens
-                            FROM llm_usage_log AS l
-                            JOIN primary_org_resolved po ON l.user_id = po.user_id
-                            WHERE po.org_id = ? AND l.ts >= ?
-                            UNION ALL
-                            SELECT l2.total_tokens
-                            FROM llm_usage_log AS l2
-                            JOIN api_keys AS ak ON l2.key_id = ak.id
-                            WHERE ak.org_id = ? AND l2.ts >= ?
-                        ) AS sub
+                        SELECT COALESCE(SUM(l.total_tokens), 0)
+                        FROM llm_usage_log AS l
+                        LEFT JOIN primary_org_resolved po ON l.user_id = po.user_id
+                        LEFT JOIN api_keys AS ak ON l.key_id = ak.id
+                        WHERE l.ts >= ?
+                          AND (
+                                po.org_id = ?
+                                OR ak.org_id = ?
+                              )
                         """,
-                        (org_id, month_start_str, org_id, month_start_str),
+                        (month_start_str, org_id, org_id),
                     )
                     row = await cur.fetchone()
                     result = row[0] if row else 0
@@ -452,6 +495,7 @@ class BillingEnforcer:
                     org_id=org_id,
                     limit=batch_size,
                     offset=offset,
+                    status="active",
                 )
                 if not members:
                     break
@@ -492,6 +536,7 @@ class BillingEnforcer:
                     org_id=org_id,
                     limit=batch_size,
                     offset=offset,
+                    status="active",
                 )
                 if not members:
                     break
@@ -554,6 +599,7 @@ class BillingEnforcer:
                     org_id=org_id,
                     limit=batch_size,
                     offset=offset,
+                    status="active",
                 )
                 if not members:
                     break
@@ -894,8 +940,12 @@ async def check_billing_with_rg(
         result = await enforcer.check_limit(org_id, category, requested_units=units)
         return not result.should_block
     except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
-        logger.warning(f"Billing RG check failed, allowing: {exc}")
-        return True  # Fail open
+        fail_closed = BillingEnforcer._fail_closed_on_data_error()
+        if fail_closed:
+            logger.error(f"Billing RG check failed, denying (fail-closed): {exc}")
+            return False
+        logger.warning(f"Billing RG check failed, allowing (fail-open): {exc}")
+        return True
 
 
 # Utility helpers

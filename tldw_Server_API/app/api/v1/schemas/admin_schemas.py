@@ -1076,6 +1076,59 @@ class AdminCleanupSettingsResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
+#
+# Unified Circuit Breaker (admin)
+
+class AdminCircuitBreakerStatus(BaseModel):
+    """Circuit breaker status row exposed by `/api/v1/admin/circuit-breakers`.
+
+    `source` semantics:
+    - `memory`: present only in the current process registry
+    - `persistent`: present only in shared persisted registry storage
+    - `mixed`: present in both memory and persisted storage (expected when
+      persistence is enabled for in-process breakers)
+    """
+
+    name: str
+    state: Literal["CLOSED", "OPEN", "HALF_OPEN"]
+    category: str | None = None
+    service: str | None = None
+    operation: str | None = None
+    failure_count: int
+    success_count: int
+    last_failure_time: float | None = None
+    last_state_change_time: float | None = None
+    half_open_calls: int
+    current_recovery_timeout: float
+    # "memory": in-process only, "persistent": store-only row, "mixed": both
+    # (common in persistent mode for active in-process breakers)
+    source: Literal["memory", "persistent", "mixed"] = "memory"
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminCircuitBreakerListResponse(BaseModel):
+    """List response for unified circuit breaker admin endpoint."""
+
+    items: list[AdminCircuitBreakerStatus]
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminCircuitBreakerListFilters(BaseModel):
+    """Filter contract for unified circuit breaker admin listing."""
+
+    state: Literal["CLOSED", "OPEN", "HALF_OPEN"] | None = None
+    category: str | None = None
+    service: str | None = None
+    name_prefix: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #
 ## End of admin_schemas.py
 #######################################################################################################################

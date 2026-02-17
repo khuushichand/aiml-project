@@ -83,11 +83,69 @@ const getFirstModelId = (payload: any): string | null => {
   return id ? String(id) : null
 }
 
-const getCharacterTrigger = (page: any) =>
-  page
-    .getByRole("button", { name: /select character/i })
-    .or(page.getByRole("button", { name: /clear character/i }))
-    .first()
+const ensureComposerActionBarVisible = async (page: any) => {
+  const composerInput = page.locator("#textarea-message")
+  await expect(composerInput).toBeVisible({ timeout: 15000 })
+  await composerInput.click({ timeout: 5000 })
+  await composerInput.hover().catch(() => {})
+  await page.waitForTimeout(100)
+}
+
+const findVisibleButton = async (locator: any) => {
+  const count = Math.min(await locator.count(), 10)
+  for (let index = 0; index < count; index += 1) {
+    const candidate = locator.nth(index)
+    const visible = await candidate
+      .isVisible({ timeout: 500 })
+      .then(() => true)
+      .catch(() => false)
+    if (visible) return candidate
+  }
+  return null
+}
+
+const openCharacterSelector = async (page: any) => {
+  await ensureComposerActionBarVisible(page)
+
+  const candidates = [
+    page.getByRole("button", { name: /select( a)? character/i }),
+    page.getByRole("button", { name: /clear character/i }),
+    page.getByTestId("chat-character-select")
+  ]
+
+  for (const locator of candidates) {
+    const visibleButton = await findVisibleButton(locator)
+    if (!visibleButton) continue
+    await visibleButton.click({ timeout: 5000 })
+    return
+  }
+
+  const visibleButtons = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("button"))
+      .map((button) => {
+        const style = window.getComputedStyle(button)
+        const rect = button.getBoundingClientRect()
+        const visible =
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number(style.opacity || "1") > 0 &&
+          rect.width > 0 &&
+          rect.height > 0
+        return {
+          ariaLabel: button.getAttribute("aria-label") || null,
+          title: button.getAttribute("title") || null,
+          text: (button.textContent || "").trim().slice(0, 80),
+          visible
+        }
+      })
+      .filter((entry) => entry.visible)
+      .slice(0, 50)
+  )
+
+  throw new Error(
+    `Character trigger button was not visible. Visible buttons: ${JSON.stringify(visibleButtons)}`
+  )
+}
 
 const confirmCharacterSwitchIfNeeded = async (
   page: any,
@@ -184,6 +242,42 @@ const waitForGreeting = async (page: any, characterName: string) => {
   return greetingMessage
 }
 
+const dismissWorkflowHubIfVisible = async (page: any) => {
+  const hubHeading = page.getByText(/What would you like to do\?/i).first()
+  const hubDialog = page
+    .locator("[role='dialog']")
+    .filter({ has: hubHeading })
+    .first()
+
+  const visible = await hubDialog
+    .isVisible({ timeout: 3000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!visible) return
+
+  const startChat = hubDialog.getByText(/Start Chatting/i).first()
+  const startChatVisible = await startChat
+    .isVisible({ timeout: 2000 })
+    .then(() => true)
+    .catch(() => false)
+  if (startChatVisible) {
+    await startChat.click().catch(() => {})
+  } else {
+    const closeButton = hubDialog.getByRole("button", { name: /close|x/i }).first()
+    const closeVisible = await closeButton
+      .isVisible({ timeout: 1000 })
+      .then(() => true)
+      .catch(() => false)
+    if (closeVisible) {
+      await closeButton.click().catch(() => {})
+    } else {
+      await page.keyboard.press("Escape").catch(() => {})
+    }
+  }
+
+  await hubDialog.waitFor({ state: "hidden", timeout: 10000 }).catch(() => {})
+}
+
 const createCharacter = async (
   serverUrl: string,
   apiKey: string,
@@ -258,7 +352,11 @@ const ensureCharacters = async (
   )
   const characters = parseListPayload(list)
   const existing = characters.filter(
-    (c: any) => c?.id && c?.name && collectGreetings(c).length > 0
+    (c: any) =>
+      c?.id &&
+      c?.name &&
+      !/^default assistant$/i.test(String(c.name).trim()) &&
+      collectGreetings(c).length > 0
   )
   const results: { id: string; name: string; greetings: string[] }[] = []
   const createdIds: string[] = []
@@ -336,6 +434,12 @@ test.describe("Playground character selection", () => {
       await launchWithExtension("", {
         seedConfig: {
           __tldw_first_run_complete: true,
+          tldw_skip_landing_hub: true,
+          "tldw:workflow:landing-config": {
+            showOnFirstRun: true,
+            dismissedAt: Date.now(),
+            completedWorkflows: []
+          },
           tldwConfig: {
             serverUrl: normalizedServerUrl,
             authMode: "single-user",
@@ -370,6 +474,7 @@ test.describe("Playground character selection", () => {
         "character-playground:force-connect"
       )
       await setSelectedModel(page, selectedModelId)
+      await dismissWorkflowHubIfVisible(page)
       await page.evaluate(() => {
         const w = window as any
         if (w.__tldwStorageWrapped) return
@@ -403,9 +508,7 @@ test.describe("Playground character selection", () => {
       const composerInput = page.locator("#textarea-message")
       await expect(composerInput).toBeVisible({ timeout: 15000 })
 
-      const trigger = getCharacterTrigger(page)
-      await expect(trigger).toBeVisible({ timeout: 15000 })
-      await trigger.click()
+      await openCharacterSelector(page)
 
       const searchInput = page.getByPlaceholder(/Search characters/i)
       if ((await searchInput.count()) > 0) {
@@ -422,14 +525,15 @@ test.describe("Playground character selection", () => {
       await expect(menuItem).toBeVisible({ timeout: 15000 })
       await menuItem.click()
       await confirmCharacterSwitchIfNeeded(page)
-      await expect(
-        page.getByRole("button", {
-          name: new RegExp(
-            `${character.name}.*clear character`,
-            "i"
-          )
-        })
-      ).toBeVisible({ timeout: 15000 })
+      await expect
+        .poll(
+          async () => {
+            const selection = await readSelectedCharacterFromStorage(page)
+            return selection?.id ? String(selection.id) : ""
+          },
+          { timeout: 15000 }
+        )
+        .toBe(String(character.id))
 
       const storageSnapshot = await readSelectedCharacterFromStorage(page)
       if (!storageSnapshot?.id) {
@@ -446,7 +550,7 @@ test.describe("Playground character selection", () => {
 
       await waitForGreeting(page, character.name)
 
-      await trigger.click()
+      await openCharacterSelector(page)
       if ((await searchInput.count()) > 0) {
         await searchInput.fill(secondCharacter.name)
       }
@@ -461,14 +565,6 @@ test.describe("Playground character selection", () => {
       await expect(secondItem).toBeVisible({ timeout: 15000 })
       await secondItem.click()
       await confirmCharacterSwitchIfNeeded(page)
-      await expect(
-        page.getByRole("button", {
-          name: new RegExp(
-            `${secondCharacter.name}.*clear character`,
-            "i"
-          )
-        })
-      ).toBeVisible({ timeout: 15000 })
       await expect
         .poll(
           async () => {

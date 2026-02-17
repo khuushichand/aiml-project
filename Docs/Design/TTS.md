@@ -19,6 +19,10 @@ https://github.com/liampetti/fulloch
 https://huggingface.co/OpenMOSS-Team/models?sort=created
 https://github.com/gokhaneraslan/chatterbox-finetuning
 
+
+https://huggingface.co/nineninesix/kani-tts-2-en
+https://github.com/nineninesix-ai/kani-tts-2
+
 https://github.com/ekwek1/soprano?tab=readme-ov-file#installation
 https://huggingface.co/kyutai
 https://huggingface.co/Echo9Zulu/Kokoro-82M-FP16-OpenVINO

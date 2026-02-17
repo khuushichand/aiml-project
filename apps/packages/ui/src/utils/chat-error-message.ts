@@ -51,6 +51,20 @@ export const buildFriendlyErrorMessage = (rawError: unknown): string => {
       "Your API key may be invalid. Open Settings → tldw server to check your URL and API key, then try again."
     )
   } else if (
+    lower.includes("not a valid model id") ||
+    lower.includes("invalid model id") ||
+    lower.includes("model_not_found") ||
+    lower.includes("no such model")
+  ) {
+    summary = i18n.t(
+      "common:error.friendlyModelUnavailableSummary",
+      "The selected model is not available."
+    )
+    hint = i18n.t(
+      "common:error.friendlyModelUnavailableHint",
+      "Choose a different model or refresh the model list, then try again."
+    )
+  } else if (
     lower.includes("/api/v1/files/create") &&
     (lower.includes("body.file_type") ||
       lower.includes("file_type") ||

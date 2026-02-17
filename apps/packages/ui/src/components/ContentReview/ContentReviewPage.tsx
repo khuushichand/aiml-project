@@ -332,6 +332,8 @@ export const ContentReviewPage: React.FC = () => {
   }, [location.search])
   const batchFromQuery = query.get("batch")
   const draftFromQuery = query.get("draft")
+  const draftFromQueryRef = React.useRef<string | null>(draftFromQuery)
+  draftFromQueryRef.current = draftFromQuery
 
   const refreshBatches = React.useCallback(async () => {
     const data = await getDraftBatches()
@@ -396,12 +398,21 @@ export const ContentReviewPage: React.FC = () => {
       if (batchId) params.set("batch", batchId)
       if (draftId) params.set("draft", draftId)
       const search = params.toString()
-      navigate(`/content-review${search ? `?${search}` : ""}`, {
+      const nextSearch = search ? `?${search}` : ""
+      if (
+        location.pathname === "/content-review" &&
+        location.search === nextSearch
+      ) {
+        return
+      }
+      navigate(`/content-review${nextSearch}`, {
         replace: true
       })
     },
-    [navigate]
+    [location.pathname, location.search, navigate]
   )
+  const syncRouteRef = React.useRef(syncRoute)
+  syncRouteRef.current = syncRoute
 
   React.useEffect(() => {
     let mounted = true
@@ -416,7 +427,7 @@ export const ContentReviewPage: React.FC = () => {
           null
         setActiveBatchId(initialBatch)
         if (initialBatch) {
-          syncRoute(initialBatch, draftFromQuery || null)
+          syncRouteRef.current(initialBatch, draftFromQueryRef.current)
         }
       })
       .finally(() => {
@@ -425,7 +436,7 @@ export const ContentReviewPage: React.FC = () => {
     return () => {
       mounted = false
     }
-  }, [batchFromQuery, draftFromQuery, refreshBatches, syncRoute])
+  }, [batchFromQuery, refreshBatches])
 
   React.useEffect(() => {
     if (!activeBatchId) {
@@ -446,7 +457,7 @@ export const ContentReviewPage: React.FC = () => {
           null
         setActiveDraftId(preferred)
         if (activeBatchId) {
-          syncRoute(activeBatchId, preferred)
+          syncRouteRef.current(activeBatchId, preferred)
         }
       })
       .finally(() => {
@@ -455,7 +466,7 @@ export const ContentReviewPage: React.FC = () => {
     return () => {
       mounted = false
     }
-  }, [activeBatchId, draftFromQuery, refreshDrafts, syncRoute])
+  }, [activeBatchId, draftFromQuery, refreshDrafts])
 
   React.useEffect(() => {
     if (!activeDraftId) {
@@ -1479,7 +1490,7 @@ export const ContentReviewPage: React.FC = () => {
                       <Typography.Text strong>
                         {t("contentReview.actionsLabel", "Actions")}
                       </Typography.Text>
-                      <Space direction="vertical" className="mt-3 w-full">
+                      <Space orientation="vertical" className="mt-3 w-full">
                         <Button
                           type="primary"
                           onClick={handleCommit}

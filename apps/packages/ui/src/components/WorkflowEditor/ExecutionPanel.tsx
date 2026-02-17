@@ -321,7 +321,7 @@ export const ExecutionPanel = ({ className = "" }: ExecutionPanelProps) => {
         {error && (
           <Alert
             type="error"
-            message="Execution Error"
+            title="Execution Error"
             description={error}
             showIcon
             className="mb-3"

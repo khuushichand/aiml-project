@@ -33,7 +33,7 @@
   - Vector store: `ChromaDB_Library.py` manages per-user collections and safe pathing; pgvector via RAG vector store factory
   - Redis worker: `services/redis_worker.py` (media embeddings via Redis Streams; root Jobs status)
 - Key Components:
-  - Circuit breaker and registry — `circuit_breaker.py`
+  - Circuit breaker and registry — `tldw_Server_API/app/core/Infrastructure/circuit_breaker.py`
   - Connection pooling — `connection_pool.py` (aiohttp clients)
   - Request batching — `request_batching.py`
   - Cache — `multi_tier_cache.py` (TTL, size, hit/miss metrics)

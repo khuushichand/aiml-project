@@ -19,10 +19,17 @@ make quickstart-install
 
 ## Prerequisites
 
+Python support:
+- Minimum: Python 3.10+
+- CI-tested: Python 3.11, 3.12, and 3.13
+- Recommended for local development: Python 3.12
+
 | Requirement | All Guides | Docker Guides |
 |-------------|------------|---------------|
 | Python 3.10+ | Required (except Docker) | Not needed |
 | ffmpeg | Required (except Docker) | Not needed |
+| PyAudio/PortAudio | Optional (audio capture paths) | Not needed |
+| Bun | Optional (WebUI local dev) | Not needed |
 | Docker | Not needed | Required |
 | Domain name | Not needed | Production only |
 

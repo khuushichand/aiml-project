@@ -16,19 +16,24 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
-    getConfig: (...args: unknown[]) => mocks.getConfig(...args),
-    getOpenAPISpec: (...args: unknown[]) => mocks.getOpenAPISpec(...args)
+    getConfig: (...args: unknown[]) =>
+      (mocks.getConfig as (...args: unknown[]) => unknown)(...args),
+    getOpenAPISpec: (...args: unknown[]) =>
+      (mocks.getOpenAPISpec as (...args: unknown[]) => unknown)(...args)
   }
 }))
 
 vi.mock("@/services/background-proxy", () => ({
-  bgRequest: (...args: unknown[]) => mocks.bgRequest(...args)
+  bgRequest: (...args: unknown[]) =>
+    (mocks.bgRequest as (...args: unknown[]) => unknown)(...args)
 }))
 
 vi.mock("@/utils/safe-storage", () => ({
   createSafeStorage: () => ({
-    get: (...args: unknown[]) => mocks.storageGet(...args),
-    set: (...args: unknown[]) => mocks.storageSet(...args)
+    get: (...args: unknown[]) =>
+      (mocks.storageGet as (...args: unknown[]) => unknown)(...args),
+    set: (...args: unknown[]) =>
+      (mocks.storageSet as (...args: unknown[]) => unknown)(...args)
   })
 }))
 

@@ -40,16 +40,13 @@ const CONTROLLED_ALIAS_FLOWS: AliasFlow[] = [
   { from: '/search?q=wk2-1', expectedPath: '/knowledge', expectedSearchIncludes: ['q=wk2-1'] },
   { from: '/search?q=wk2-2', expectedPath: '/knowledge', expectedSearchIncludes: ['q=wk2-2'] },
   { from: '/search?q=wk2-3', expectedPath: '/knowledge', expectedSearchIncludes: ['q=wk2-3'] },
-  { from: '/config', expectedPath: '/settings' },
-  { from: '/profile', expectedPath: '/settings' },
   { from: '/privileges', expectedPath: '/settings' },
   { from: '/audio', expectedPath: '/speech' },
   { from: '/reading', expectedPath: '/collections' },
+  { from: '/prompt-studio', expectedPath: '/prompts', expectedSearchIncludes: ['tab=studio'] },
   { from: '/claims-review', expectedPath: '/content-review' },
   { from: '/review', expectedPath: '/media-multi' },
   { from: '/admin', expectedPath: '/admin/server' },
-  { from: '/admin/data-ops', expectedPath: '/admin/server' },
-  { from: '/connectors/jobs', expectedPath: '/settings' },
   { from: '/media/123/view', expectedPath: '/media' },
 ];
 

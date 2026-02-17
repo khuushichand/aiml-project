@@ -123,6 +123,22 @@ $ARGUMENTS will be replaced.
             await service.create_skill("duplicate", content)
 
     @pytest.mark.asyncio
+    async def test_create_skill_invalid_name_rejected(self, service):
+        """Service-level name validation should reject invalid skill names."""
+        with pytest.raises(SkillValidationError, match="Invalid skill name"):
+            await service.create_skill("Invalid_Name!", "content")
+
+    @pytest.mark.asyncio
+    async def test_create_skill_supporting_file_traversal_rejected(self, service):
+        """Supporting file names must not include traversal or path separators."""
+        with pytest.raises(SkillValidationError, match="Invalid supporting file name"):
+            await service.create_skill(
+                "safe-skill",
+                "Content",
+                supporting_files={"../escape.md": "bad"},
+            )
+
+    @pytest.mark.asyncio
     async def test_create_skill_normalizes_name(self, service):
         """Test that skill names are normalized to lowercase."""
         content = "Skill content"
@@ -332,6 +348,27 @@ Content.
         assert result["name"] == "override-name"
 
     @pytest.mark.asyncio
+    async def test_import_skill_invalid_name_param_rejected(self, service):
+        """Invalid override names should be rejected by service validation."""
+        content = """---
+name: valid-name
+---
+content"""
+        with pytest.raises(SkillValidationError, match="Invalid skill name"):
+            await service.import_skill(content=content, name="Invalid_Name!")
+
+    @pytest.mark.asyncio
+    async def test_import_skill_invalid_frontmatter_name_rejected(self, service):
+        """Invalid frontmatter names should be rejected even when importing directly."""
+        content = """---
+name: Invalid_Name!
+---
+content"""
+
+        with pytest.raises(SkillValidationError, match="frontmatter skill name"):
+            await service.import_skill(content=content)
+
+    @pytest.mark.asyncio
     async def test_import_skill_overwrite(self, service):
         """Test overwriting an existing skill on import."""
         await service.create_skill("existing", "Original")
@@ -416,6 +453,35 @@ Content B""")
         assert "skill-a" in payload["context_text"]
         assert "skill-b" in payload["context_text"]
         assert "Skill A does things" in payload["context_text"]
+
+    @pytest.mark.asyncio
+    async def test_get_context_payload_async_uses_async_sync(self, service, monkeypatch):
+        """Async context payload should use _sync_registry_async (not sync path)."""
+        await service.create_skill(
+            "async-context-skill",
+            """---
+description: Async context
+---
+Body""",
+        )
+
+        calls = {"sync": 0, "async": 0}
+
+        def _sync_stub(*_args, **_kwargs):
+            calls["sync"] += 1
+            raise AssertionError("sync registry should not be called by get_context_payload_async")
+
+        async def _async_stub(*_args, **_kwargs):
+            calls["async"] += 1
+
+        monkeypatch.setattr(service, "_sync_registry", _sync_stub)
+        monkeypatch.setattr(service, "_sync_registry_async", _async_stub)
+
+        payload = await service.get_context_payload_async()
+
+        assert calls["async"] == 1
+        assert calls["sync"] == 0
+        assert "async-context-skill" in payload["context_text"]
 
     @pytest.mark.asyncio
     async def test_get_context_payload_excludes_model_invocation_disabled(self, service):
@@ -506,6 +572,21 @@ Content""")
         with pytest.raises(SkillValidationError, match="Invalid skill name"):
             await service.import_from_zip(zip_data)
 
+    @pytest.mark.asyncio
+    async def test_import_from_zip_path_traversal_rejected(self, service):
+        """Zip import must reject traversal entries in supporting files."""
+        import zipfile
+        from io import BytesIO
+
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr("safe-skill/SKILL.md", "---\nname: safe-skill\n---\nContent")
+            zf.writestr("safe-skill/../escape.md", "evil")
+        zip_data = buffer.getvalue()
+
+        with pytest.raises(SkillValidationError, match="path traversal"):
+            await service.import_from_zip(zip_data)
+
 
 class TestSkillSchemaValidation:
     """Tests for schema-level validation (Bug 7 regression)."""
@@ -532,6 +613,43 @@ class TestSkillSchemaValidation:
         with pytest.raises(pydantic.ValidationError, match="Total supporting files size"):
             SkillCreate(name="test-skill", content="content", supporting_files=files)
 
+    def test_skill_update_supporting_files_allows_null_delete(self):
+        """SkillUpdate should accept null values to indicate delete semantics."""
+        from tldw_Server_API.app.api.v1.schemas.skills_schemas import SkillUpdate
+
+        payload = SkillUpdate(supporting_files={"remove.md": None, "keep.md": "updated"})
+        assert payload.supporting_files is not None
+        assert payload.supporting_files["remove.md"] is None
+        assert payload.supporting_files["keep.md"] == "updated"
+
+    def test_skill_import_name_optional_uses_frontmatter(self):
+        """SkillImportRequest name should be optional (frontmatter fallback)."""
+        from tldw_Server_API.app.api.v1.schemas.skills_schemas import SkillImportRequest
+
+        payload = SkillImportRequest(content="---\nname: from-frontmatter\n---\nBody")
+        assert payload.name is None
+
+    def test_skill_import_supporting_files_count_limit(self):
+        """Import schema should enforce supporting-files count limit."""
+        import pydantic
+
+        from tldw_Server_API.app.api.v1.schemas.skills_schemas import SkillImportRequest
+
+        files = {f"file{i:02d}.md": "content" for i in range(25)}
+        with pytest.raises(pydantic.ValidationError, match="Too many supporting files"):
+            SkillImportRequest(content="content", supporting_files=files)
+
+    def test_skill_import_supporting_files_aggregate_limit(self):
+        """Import schema should enforce supporting-files aggregate size limit."""
+        import pydantic
+
+        from tldw_Server_API.app.api.v1.schemas.skills_schemas import SkillImportRequest
+
+        big_content = "x" * 400_000
+        files = {f"file{i:02d}.md": big_content for i in range(15)}
+        with pytest.raises(pydantic.ValidationError, match="Total supporting files size"):
+            SkillImportRequest(content="content", supporting_files=files)
+
 
 class TestSeedBuiltinSkills:
     """Tests for seed_builtin_skills method."""
@@ -542,53 +660,111 @@ class TestSeedBuiltinSkills:
             yield Path(tmpdir)
 
     @pytest.fixture
-    def service(self, temp_base_path):
+    def builtin_source_dir(self, temp_base_path):
+        builtin_root = temp_base_path / "builtin_source"
+
+        summarize_dir = builtin_root / "summarize"
+        summarize_dir.mkdir(parents=True, exist_ok=True)
+        (summarize_dir / "SKILL.md").write_text(
+            """---
+name: summarize
+description: Summarize content
+---
+
+Summarize this: $ARGUMENTS
+""",
+            encoding="utf-8",
+        )
+        (summarize_dir / "guide.md").write_text("Summarization guide", encoding="utf-8")
+        templates_dir = summarize_dir / "templates"
+        templates_dir.mkdir(parents=True, exist_ok=True)
+        (templates_dir / "prompt.txt").write_text("Builtin prompt template", encoding="utf-8")
+
+        code_review_dir = builtin_root / "code-review"
+        code_review_dir.mkdir(parents=True, exist_ok=True)
+        (code_review_dir / "SKILL.md").write_text(
+            """---
+name: code-review
+description: Review code for issues
+---
+
+Review this code: $ARGUMENTS
+""",
+            encoding="utf-8",
+        )
+        (code_review_dir / "checklist.md").write_text("Security\nPerformance\nStyle", encoding="utf-8")
+
+        return builtin_root
+
+    @pytest.fixture
+    def service(self, temp_base_path, builtin_source_dir, monkeypatch):
         db_path = temp_base_path / "ChaChaNotes.db"
         chacha_db = CharactersRAGDB(db_path=db_path, client_id="test_seed")
         service = SkillsService(user_id=1, base_path=temp_base_path, db=chacha_db)
+        monkeypatch.setattr(service, "_get_builtin_skills_dir", lambda: builtin_source_dir)
         yield service
         chacha_db.close_connection()
 
     @pytest.mark.asyncio
-    async def test_seed_builtin_skills(self, service):
-        """Verify seeding creates built-in skills."""
+    async def test_seed_builtin_skills_copies_full_directory(self, service):
+        """Verify seeding copies SKILL.md, supporting files, and nested content."""
         seeded = await service.seed_builtin_skills()
 
-        assert len(seeded) >= 2
+        assert len(seeded) == 2
         assert "summarize" in seeded
         assert "code-review" in seeded
 
-        # Verify they exist
-        skill = await service.get_skill("summarize")
-        assert skill["name"] == "summarize"
-        assert "Summarize" in skill["content"]
+        summarize_skill = await service.get_skill("summarize")
+        assert summarize_skill["name"] == "summarize"
+        assert "Summarize this" in summarize_skill["content"]
+        assert summarize_skill["supporting_files"] is not None
+        assert summarize_skill["supporting_files"]["guide.md"] == "Summarization guide"
+
+        nested_prompt = service.skills_dir / "summarize" / "templates" / "prompt.txt"
+        assert nested_prompt.exists()
+        assert nested_prompt.read_text(encoding="utf-8") == "Builtin prompt template"
 
     @pytest.mark.asyncio
     async def test_seed_builtin_skills_no_overwrite(self, service):
         """Verify existing skills are not replaced when overwrite=False."""
-        # Seed once
         await service.seed_builtin_skills()
-        # Modify a skill
-        await service.update_skill("summarize", "Custom content")
-        # Seed again without overwrite
+        await service.update_skill(
+            "summarize",
+            "Custom content",
+            supporting_files={"guide.md": "Custom guide"},
+        )
+        custom_prompt = service.skills_dir / "summarize" / "templates" / "prompt.txt"
+        custom_prompt.write_text("Custom prompt template", encoding="utf-8")
+
         seeded = await service.seed_builtin_skills(overwrite=False)
         assert "summarize" not in seeded
 
-        # Original modification should remain
-        skill = await service.get_skill("summarize")
-        assert "Custom content" in skill["content"]
+        summarize_skill = await service.get_skill("summarize")
+        assert "Custom content" in summarize_skill["content"]
+        assert summarize_skill["supporting_files"] is not None
+        assert summarize_skill["supporting_files"]["guide.md"] == "Custom guide"
+        assert custom_prompt.read_text(encoding="utf-8") == "Custom prompt template"
 
     @pytest.mark.asyncio
     async def test_seed_builtin_skills_overwrite(self, service):
         """Verify overwrite replaces existing skills."""
-        # Seed once
         await service.seed_builtin_skills()
-        # Modify a skill
-        await service.update_skill("summarize", "Custom content")
-        # Seed again with overwrite
+        await service.update_skill(
+            "summarize",
+            "Custom content",
+            supporting_files={"guide.md": "Custom guide"},
+        )
+        extra_file = service.skills_dir / "summarize" / "extra.md"
+        extra_file.write_text("Should be removed on overwrite", encoding="utf-8")
+        custom_prompt = service.skills_dir / "summarize" / "templates" / "prompt.txt"
+        custom_prompt.write_text("Custom prompt template", encoding="utf-8")
+
         seeded = await service.seed_builtin_skills(overwrite=True)
         assert "summarize" in seeded
 
-        # Should have original content again
-        skill = await service.get_skill("summarize")
-        assert "Summarize" in skill["content"]
+        summarize_skill = await service.get_skill("summarize")
+        assert "Summarize this" in summarize_skill["content"]
+        assert summarize_skill["supporting_files"] is not None
+        assert summarize_skill["supporting_files"]["guide.md"] == "Summarization guide"
+        assert not extra_file.exists()
+        assert custom_prompt.read_text(encoding="utf-8") == "Builtin prompt template"

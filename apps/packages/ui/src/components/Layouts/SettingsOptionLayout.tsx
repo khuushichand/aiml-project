@@ -27,10 +27,36 @@ const shouldHideForBrowser = (item: SettingsNavItem) =>
   // Hide Chrome-specific settings on non-Chrome targets
   !isChromeTarget && item.to === "/settings/chrome";
 
+const SETTINGS_HIDE_BETA_BADGES_STORAGE_KEY = "tldw:settings:hide-beta-badges";
+
+const readHideBetaBadgesPreference = (): boolean => {
+  try {
+    return localStorage.getItem(SETTINGS_HIDE_BETA_BADGES_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
+const writeHideBetaBadgesPreference = (hidden: boolean) => {
+  try {
+    if (hidden) {
+      localStorage.setItem(SETTINGS_HIDE_BETA_BADGES_STORAGE_KEY, "1");
+    } else {
+      localStorage.removeItem(SETTINGS_HIDE_BETA_BADGES_STORAGE_KEY);
+    }
+  } catch {
+    // localStorage may be unavailable
+  }
+};
+
 export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { t } = useTranslation(["settings", "common"]);
+  const [settingsFilterQuery, setSettingsFilterQuery] = React.useState("");
+  const [hideBetaBadges, setHideBetaBadges] = React.useState<boolean>(
+    readHideBetaBadgesPreference,
+  );
   const { capabilities, loading: capabilitiesLoading } =
     useServerCapabilities();
   const sidepanelSupported = isSidepanelSupported();
@@ -38,6 +64,32 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
     () => getSettingsNavGroups(capabilitiesLoading ? undefined : capabilities),
     [capabilities, capabilitiesLoading],
   );
+  const settingsNavItemCount = React.useMemo(
+    () =>
+      settingsNavGroups.reduce((count, group) => {
+        return (
+          count +
+          group.items.filter((item) => !shouldHideForBrowser(item)).length
+        );
+      }, 0),
+    [settingsNavGroups],
+  );
+  const showSettingsFilter = settingsNavItemCount > 12;
+  const normalizedFilterQuery = settingsFilterQuery.trim().toLowerCase();
+  const visibleSettingsNavGroups = React.useMemo(() => {
+    if (!showSettingsFilter || !normalizedFilterQuery) {
+      return settingsNavGroups;
+    }
+    return settingsNavGroups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => {
+          const label = t(item.labelToken).toLowerCase();
+          return label.includes(normalizedFilterQuery);
+        }),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [normalizedFilterQuery, settingsNavGroups, showSettingsFilter, t]);
   const currentNavItem = React.useMemo(() => {
     return resolveCurrentSettingsNavItem(location.pathname, settingsNavGroups);
   }, [location.pathname, settingsNavGroups]);
@@ -45,6 +97,20 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
   const currentBreadcrumbLabel = currentNavItem
     ? t(currentNavItem.labelToken)
     : null;
+  const hasVisibleBetaItems = React.useMemo(
+    () =>
+      settingsNavGroups.some((group) =>
+        group.items.some((item) => !shouldHideForBrowser(item) && item.beta),
+      ),
+    [settingsNavGroups],
+  );
+  const toggleBetaBadgesVisibility = React.useCallback(() => {
+    setHideBetaBadges((prev) => {
+      const next = !prev;
+      writeHideBetaBadgesPreference(next);
+      return next;
+    });
+  }, []);
 
   return (
     <div className="flex min-h-screen  w-full flex-col">
@@ -77,8 +143,32 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
                     {t("settings:switchToSidebar", "Switch to Sidebar")}
                   </button>
                 </div>
+                {showSettingsFilter ? (
+                  <div className="mb-3">
+                    <label htmlFor="settings-nav-filter" className="sr-only">
+                      {t(
+                        "settings:navigation.filterLabel",
+                        "Filter settings",
+                      )}
+                    </label>
+                    <input
+                      id="settings-nav-filter"
+                      type="text"
+                      value={settingsFilterQuery}
+                      onChange={(event) =>
+                        setSettingsFilterQuery(event.target.value)
+                      }
+                      placeholder={t(
+                        "settings:navigation.filterPlaceholder",
+                        "Find a setting",
+                      )}
+                      className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text placeholder:text-text-subtle"
+                      data-testid="settings-nav-filter"
+                    />
+                  </div>
+                ) : null}
                 <div className="flex flex-col gap-6">
-                  {settingsNavGroups.map((group) => {
+                  {visibleSettingsNavGroups.map((group) => {
                     const items = group.items.filter(
                       (item) => !shouldHideForBrowser(item),
                     );
@@ -138,7 +228,7 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
                                     />
                                   ) : null}
                                 </Link>
-                                {item.beta && <BetaTag />}
+                                {item.beta && !hideBetaBadges ? <BetaTag /> : null}
                               </li>
                             );
                           })}
@@ -146,7 +236,34 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
                       </div>
                     );
                   })}
+                  {showSettingsFilter &&
+                  normalizedFilterQuery &&
+                  visibleSettingsNavGroups.length === 0 ? (
+                    <p
+                      className="rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text-muted"
+                      data-testid="settings-nav-filter-empty"
+                    >
+                      {t(
+                        "settings:navigation.filterEmpty",
+                        "No settings match this search.",
+                      )}
+                    </p>
+                  ) : null}
                 </div>
+                {hasVisibleBetaItems ? (
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      className="text-xs border rounded px-2 py-1 text-text-muted hover:text-text hover:bg-surface2"
+                      onClick={toggleBetaBadgesVisibility}
+                      data-testid="settings-beta-badges-toggle"
+                    >
+                      {hideBetaBadges
+                        ? t("settings:showBetaBadges", "Show beta badges")
+                        : t("settings:hideBetaBadges", "Hide beta badges")}
+                    </button>
+                  </div>
+                ) : null}
               </nav>
             </aside>
             <main className="relative flex-1 px-4 py-8 sm:px-6 lg:px-0 lg:py-20">

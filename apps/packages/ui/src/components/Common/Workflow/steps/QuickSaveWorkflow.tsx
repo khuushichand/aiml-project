@@ -194,7 +194,7 @@ const CaptureStep: React.FC = () => {
           type="success"
           showIcon
           icon={<CheckCircle className="h-4 w-4" />}
-          message={
+          title={
             capturedContent.type === "selection"
               ? t("workflows:quickSave.selectionCaptured", "Selection captured")
               : t("workflows:quickSave.pageCaptured", "Page captured")

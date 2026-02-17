@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { startTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { trackRouteAliasRedirect } from '@/utils/route-alias-telemetry';
@@ -70,7 +70,9 @@ export const RouteRedirect: React.FC<RouteRedirectProps> = ({
       preserveParams,
     });
 
-    void router.replace(destination);
+    startTransition(() => {
+      void router.replace(destination);
+    });
   }, [destination, preserveParams, router]);
 
   return (

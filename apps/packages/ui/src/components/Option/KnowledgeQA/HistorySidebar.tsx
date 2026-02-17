@@ -17,6 +17,7 @@ import { useKnowledgeQA } from "./KnowledgeQAProvider"
 import { KNOWLEDGE_QA_KEYWORD } from "./constants"
 import { cn } from "@/lib/utils"
 import type { SearchHistoryItem } from "./types"
+import { useMobile } from "@/hooks/useMediaQuery"
 
 type HistorySidebarProps = {
   className?: string
@@ -102,6 +103,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
 
   // Initial loading state for better UX feedback
   const [isInitialLoad, setIsInitialLoad] = useState(true)
+  const isMobile = useMobile()
 
   // Clear initial load state after brief delay or when history is available
   useEffect(() => {
@@ -128,41 +130,8 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
     [filteredHistory]
   )
 
-  // Collapsed state
-  if (!historySidebarOpen) {
-    return (
-      <div className={cn("flex flex-col items-center py-4 px-2 border-r border-border bg-muted/30", className)}>
-        <button
-          onClick={() => setHistorySidebarOpen(true)}
-          className="p-2 rounded-lg hover:bg-muted transition-colors"
-          title="Expand sidebar"
-        >
-          <ChevronRight className="w-5 h-5 text-text-muted" />
-        </button>
-
-        <div className="mt-4 flex flex-col gap-2">
-          <button
-            onClick={() => setHistorySidebarOpen(true)}
-            className="p-2 rounded-lg hover:bg-muted transition-colors"
-            title="Search history"
-          >
-            <History className="w-5 h-5 text-text-muted" />
-          </button>
-
-          <button
-            onClick={() => setSettingsPanelOpen(true)}
-            className="p-2 rounded-lg hover:bg-muted transition-colors"
-            title="Settings"
-          >
-            <Settings className="w-5 h-5 text-text-muted" />
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className={cn("flex flex-col w-64 border-r border-border bg-muted/30", className)}>
+  const renderExpandedContent = () => (
+    <>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2">
@@ -232,6 +201,94 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
           <span>Advanced Settings</span>
         </button>
       </div>
+    </>
+  )
+
+  if (isMobile) {
+    return (
+      <>
+        {!historySidebarOpen && (
+          <button
+            type="button"
+            onClick={() => setHistorySidebarOpen(true)}
+            className="absolute left-3 top-3 z-20 rounded-lg border border-border bg-surface p-2 shadow-sm"
+            aria-label="Open history panel"
+            title="Open history panel"
+            data-testid="knowledge-history-mobile-open"
+          >
+            <History className="w-4 h-4 text-text-muted" />
+          </button>
+        )}
+
+        {historySidebarOpen && (
+          <div
+            className="fixed inset-0 z-40 lg:hidden"
+            data-testid="knowledge-history-mobile-overlay"
+          >
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/45"
+              onClick={() => setHistorySidebarOpen(false)}
+              aria-label="Close history panel"
+            />
+            <aside
+              className={cn(
+                "relative h-full w-[85vw] max-w-sm border-r border-border bg-muted/95 backdrop-blur",
+                className
+              )}
+            >
+              <div className="flex h-full flex-col">
+                {renderExpandedContent()}
+              </div>
+            </aside>
+          </div>
+        )}
+      </>
+    )
+  }
+
+  // Collapsed state
+  if (!historySidebarOpen) {
+    return (
+      <div
+        className={cn("flex flex-col items-center py-4 px-2 border-r border-border bg-muted/30", className)}
+        data-testid="knowledge-history-desktop-collapsed"
+      >
+        <button
+          onClick={() => setHistorySidebarOpen(true)}
+          className="p-2 rounded-lg hover:bg-muted transition-colors"
+          title="Expand sidebar"
+        >
+          <ChevronRight className="w-5 h-5 text-text-muted" />
+        </button>
+
+        <div className="mt-4 flex flex-col gap-2">
+          <button
+            onClick={() => setHistorySidebarOpen(true)}
+            className="p-2 rounded-lg hover:bg-muted transition-colors"
+            title="Search history"
+          >
+            <History className="w-5 h-5 text-text-muted" />
+          </button>
+
+          <button
+            onClick={() => setSettingsPanelOpen(true)}
+            className="p-2 rounded-lg hover:bg-muted transition-colors"
+            title="Settings"
+          >
+            <Settings className="w-5 h-5 text-text-muted" />
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className={cn("flex flex-col w-64 border-r border-border bg-muted/30", className)}
+      data-testid="knowledge-history-desktop-open"
+    >
+      {renderExpandedContent()}
     </div>
   )
 }

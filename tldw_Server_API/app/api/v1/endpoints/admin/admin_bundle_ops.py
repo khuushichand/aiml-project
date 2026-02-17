@@ -142,6 +142,15 @@ def _handle_bundle_error(exc: BundleError) -> HTTPException:
 
     # --- Import errors ---
     if isinstance(exc, BundleImportError):
+        if code == "restore_failed":
+            detail: dict[str, Any] = {
+                "error_code": code,
+                "message": str(exc),
+            }
+            rollback_failures = getattr(exc, "rollback_failures", None)
+            if rollback_failures:
+                detail["rollback_failures"] = list(rollback_failures)
+            return HTTPException(status_code=400, detail=detail)
         if code in (
             "checksum_verification_failed",
             "unsupported_manifest_version",
@@ -312,6 +321,7 @@ async def import_bundle(
             datasets_restored=result.get("datasets_restored", []),
             warnings=result.get("warnings", []),
             safety_snapshots=result.get("safety_snapshots", {}),
+            rollback_failures=result.get("rollback_failures", []),
             validations=[
                 BundleImportValidation(**v) for v in result.get("validations", [])
             ],

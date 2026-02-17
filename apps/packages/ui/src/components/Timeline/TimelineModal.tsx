@@ -107,7 +107,7 @@ export const TimelineModal: React.FC = () => {
             <div className="timeline-error">
               <Alert
                 type="error"
-                message="Failed to load timeline"
+                title="Failed to load timeline"
                 description={error}
                 showIcon
               />
@@ -124,7 +124,7 @@ export const TimelineModal: React.FC = () => {
             <div className="timeline-empty">
               <Alert
                 type="info"
-                message="No conversation data"
+                title="No conversation data"
                 description="This conversation doesn't have any messages yet."
                 showIcon
               />

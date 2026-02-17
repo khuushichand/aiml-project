@@ -13,6 +13,8 @@ import { ChatHistory, useStoreMessageOption } from "@/store/option"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { buildAssistantErrorContent } from "@/utils/chat-error-message"
 
+let didLogSetHistoryMissing = false
+
 const resolveHistorySetter = (
   candidate: unknown
 ): ((history: ChatHistory) => void) | null => {
@@ -22,16 +24,15 @@ const resolveHistorySetter = (
 
   const fallback = useStoreMessageOption.getState().setHistory
   if (typeof fallback === "function") {
-    console.error(
-      "[chat] saveMessageOnError received non-callable setHistory; using store fallback",
-      { setHistoryType: typeof candidate }
-    )
     return fallback
   }
 
-  console.error("[chat] saveMessageOnError could not resolve setHistory setter", {
-    setHistoryType: typeof candidate
-  })
+  if (!didLogSetHistoryMissing) {
+    didLogSetHistoryMissing = true
+    console.error("[chat] saveMessageOnError could not resolve setHistory setter", {
+      setHistoryType: typeof candidate
+    })
+  }
   return null
 }
 

@@ -32,6 +32,7 @@ import { useServerOnline } from "@/hooks/useServerOnline"
 import { ChatSidebar } from "@/components/Common/ChatSidebar"
 import { EventOnlyHosts } from "@/components/Common/EventHosts"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
+import { useMobile } from "@/hooks/useMediaQuery"
 import { setSettingsReturnTo } from "@/utils/settings-return"
 import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
 import { useSetting } from "@/hooks/useSetting"
@@ -75,6 +76,7 @@ import { DemoModeProvider, useDemoMode } from "@/context/demo-mode"
 type OptionLayoutProps = {
   children: React.ReactNode
   hideHeader?: boolean
+  hideSidebar?: boolean
 }
 
 const SHORTCUT_LOADING_MIN_MS = 0
@@ -96,7 +98,8 @@ const OptionLayoutEffects = () => {
 
 const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   children,
-  hideHeader = false
+  hideHeader = false,
+  hideSidebar = false
 }) => {
   const confirmDanger = useConfirmDanger()
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -111,8 +114,10 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { isLoading: migrationLoading } = useMigration()
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
+  const isMobile = useMobile()
   useServerOnline()
   const location = useLocation()
+  const mobileSidebarPathRef = React.useRef(location.pathname)
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const isChatScreen = location.pathname === "/chat"
   const isDocumentWorkspace = location.pathname === DOCUMENT_WORKSPACE_PATH
@@ -142,12 +147,35 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
 
   // Create toggle function for sidebar
   const toggleSidebar = () => {
+    if (hideSidebar) return
     if (showChatSidebar && !hideHeader) {
+      if (isMobile) {
+        setSidebarOpen((prev) => !prev)
+        return
+      }
       setChatSidebarCollapsed((prev) => !prev)
       return
     }
     setSidebarOpen((prev) => !prev)
   }
+
+  React.useEffect(() => {
+    if (isMobile && !showChatSidebar) return
+    if (!isMobile && sidebarOpen) {
+      setSidebarOpen(false)
+    }
+  }, [isMobile, showChatSidebar, sidebarOpen])
+
+  React.useEffect(() => {
+    if (!isMobile || !showChatSidebar) {
+      mobileSidebarPathRef.current = location.pathname
+      return
+    }
+    if (location.pathname !== mobileSidebarPathRef.current && sidebarOpen) {
+      setSidebarOpen(false)
+    }
+    mobileSidebarPathRef.current = location.pathname
+  }, [isMobile, showChatSidebar, sidebarOpen, location.pathname])
 
   const handleIngestPage = () => {
     if (typeof window !== "undefined") {
@@ -281,7 +309,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         style={chatScreenBackgroundStyle}
       >
       {/* Persistent ChatSidebar when feature flag enabled */}
-      {showChatSidebar && !hideHeader && (
+      {showChatSidebar && !hideHeader && !hideSidebar && !isMobile && (
         <ChatSidebar
           collapsed={chatSidebarCollapsed}
           onToggleCollapse={() => setChatSidebarCollapsed((prev) => !prev)}
@@ -308,8 +336,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
           >
             <div className="relative z-20 w-full">
               <Header
-                onToggleSidebar={toggleSidebar}
-                sidebarCollapsed={chatSidebarCollapsed}
+                onToggleSidebar={hideSidebar ? undefined : toggleSidebar}
+                sidebarCollapsed={showChatSidebar && isMobile ? !sidebarOpen : chatSidebarCollapsed}
               />
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
@@ -318,8 +346,36 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
             </div>
           </div>
         )}
+        {/* Mobile Drawer for ChatSidebar when the persistent sidebar is enabled */}
+        {!hideHeader && showChatSidebar && !hideSidebar && isMobile && (
+          <Drawer
+            title={
+              <div className="flex items-center justify-between">
+                <span>{t("common:chatSidebar.title", "Chats")}</span>
+                <IconButton
+                  onClick={() => setSidebarOpen(false)}
+                  ariaLabel={t("common:close", { defaultValue: "Close" }) as string}
+                  title={t("common:close", { defaultValue: "Close" }) as string}
+                  className="h-10 w-10 sm:h-7 sm:w-7 sm:min-h-0 sm:min-w-0"
+                >
+                  <XIcon className="h-5 w-5 text-text-muted" />
+                </IconButton>
+              </div>
+            }
+            placement="left"
+            closeIcon={null}
+            onClose={() => setSidebarOpen(false)}
+            open={sidebarOpen}
+          >
+            <ChatSidebar
+              collapsed={false}
+              onToggleCollapse={() => setSidebarOpen(false)}
+            />
+          </Drawer>
+        )}
+
         {/* Legacy Drawer sidebar - only shown when new ChatSidebar feature is disabled */}
-        {!hideHeader && !showChatSidebar && (
+        {!hideHeader && !showChatSidebar && !hideSidebar && (
           <Drawer
             title={
               <div className="flex items-center justify-between">
@@ -400,7 +456,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         )}
 
         {/* Quick Chat Helper floating button (legacy layout only) */}
-        {!hideHeader && !showChatSidebar && (
+        {!hideHeader && !showChatSidebar && !hideSidebar && (
           <QuickChatHelperButton
             ariaLabel={t(
               "option:quickChatHelper.tooltipFloating",
@@ -505,10 +561,11 @@ function NestedLayoutContent({
   const requestedOverrides = React.useMemo(() => {
     const overrides: LayoutShellOverrides = {}
     if (props.hideHeader) overrides.hideHeader = true
+    if (props.hideSidebar) overrides.hideSidebar = true
     if (Object.keys(overrides).length === 0) return null
     overrides.sourcePath = location.pathname
     return overrides
-  }, [location.pathname, props.hideHeader])
+  }, [location.pathname, props.hideHeader, props.hideSidebar])
 
   React.useEffect(() => {
     const setOverrides = shell.setOverrides || globalShell?.setOverrides
@@ -542,6 +599,8 @@ function RootLayoutShell({
     !overrides?.sourcePath || overrides.sourcePath === location.pathname
   const effectiveHideHeader =
     (overridesMatch && overrides?.hideHeader) || props.hideHeader || false
+  const effectiveHideSidebar =
+    (overridesMatch && overrides?.hideSidebar) || props.hideSidebar || false
 
   React.useEffect(() => {
     if (!globalShell) return
@@ -570,7 +629,11 @@ function RootLayoutShell({
   return (
     <DemoModeProvider>
       <LayoutShellContext.Provider value={{ inShell: true, setOverrides }}>
-        <OptionLayoutInner {...props} hideHeader={effectiveHideHeader} />
+        <OptionLayoutInner
+          {...props}
+          hideHeader={effectiveHideHeader}
+          hideSidebar={effectiveHideSidebar}
+        />
       </LayoutShellContext.Provider>
     </DemoModeProvider>
   )

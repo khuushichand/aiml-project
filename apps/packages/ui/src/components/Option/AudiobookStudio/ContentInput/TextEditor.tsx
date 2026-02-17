@@ -281,7 +281,7 @@ export const TextEditor: React.FC<TextEditorProps> = ({ onSplitComplete }) => {
           {chapters.length > 0 && (
             <Alert
               type="info"
-              message={t(
+              title={t(
                 "audiobook:split.existingChapters",
                 "You have {{count}} chapters. Splitting again will replace them.",
                 { count: chapters.length }

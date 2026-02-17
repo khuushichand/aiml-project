@@ -173,6 +173,14 @@ jobs:
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
 
+      - name: Run Stage 5 critical UX release gate
+        working-directory: apps/tldw-frontend
+        run: npm run e2e:smoke:stage5
+
+      - name: Run Stage 6 interaction regression gate
+        working-directory: apps/tldw-frontend
+        run: npm run e2e:smoke:interaction
+
       - name: Run all-pages UX smoke gate
         working-directory: apps/tldw-frontend
         run: npx playwright test e2e/smoke/all-pages.spec.ts --reporter=line

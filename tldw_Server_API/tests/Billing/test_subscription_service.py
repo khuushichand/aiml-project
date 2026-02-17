@@ -23,6 +23,7 @@ class _FakeBillingRepo:
         self.last_log_action: Optional[Dict[str, Any]] = None
         self.last_updated_subscription: Optional[Dict[str, Any]] = None
         self.last_payment: Optional[Dict[str, Any]] = None
+        self._org_subscriptions: Dict[int, Dict[str, Any]] = {}
 
     async def get_plan_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         if name == "free":
@@ -45,16 +46,22 @@ class _FakeBillingRepo:
         self.last_create_args = {
             "org_id": org_id,
             "plan_id": plan_id,
+            "stripe_customer_id": stripe_customer_id,
+            "stripe_subscription_id": stripe_subscription_id,
             "billing_cycle": billing_cycle,
             "status": status,
             "trial_days": trial_days,
         }
-        return {
+        created = {
             "org_id": org_id,
             "plan_id": plan_id,
+            "stripe_customer_id": stripe_customer_id,
+            "stripe_subscription_id": stripe_subscription_id,
             "billing_cycle": billing_cycle,
             "status": status,
         }
+        self._org_subscriptions[org_id] = dict(created)
+        return created
 
     async def log_billing_action(
         self,
@@ -76,19 +83,14 @@ class _FakeBillingRepo:
             "details": details,
         }
 
-    # Checkout-specific helpers ------------------------------------------------
-
     async def get_org_subscription(self, org_id: int) -> Optional[Dict[str, Any]]:
-        # In checkout tests we want the "no existing subscription" branch.
-        return None
-
-    async def update_org_subscription(self, org_id: int, **updates: Any) -> None:  # pragma: no cover - defensive
-        # For checkout/creation tests we do not expect this to be called.
-        raise AssertionError("update_org_subscription should not be called in these tests")
-
-    # Webhook-related helpers --------------------------------------------------
+        sub = self._org_subscriptions.get(org_id)
+        return dict(sub) if sub else None
 
     async def get_subscription_by_stripe_customer(self, stripe_customer_id: str) -> Optional[Dict[str, Any]]:
+        for sub in self._org_subscriptions.values():
+            if sub.get("stripe_customer_id") == stripe_customer_id:
+                return dict(sub)
         # Default: pretend we have a pro subscription for org 1
         if stripe_customer_id == "cus_pro_1":
             return {
@@ -118,6 +120,9 @@ class _FakeBillingRepo:
     async def update_org_subscription(self, org_id: int, **updates: Any) -> None:
         # Record last update for assertions in webhook tests.
         self.last_updated_subscription = {"org_id": org_id, **updates}
+        existing = self._org_subscriptions.get(org_id)
+        if existing:
+            existing.update(updates)
 
     async def add_payment(
         self,
@@ -170,22 +175,138 @@ class _FakeStripeClient:
         return CheckoutSession(id="sess_test_123", url="https://example.com/checkout")
 
 
+class _RepoForCancelResume:
+    def __init__(self) -> None:
+        self.updated_rows: list[Dict[str, Any]] = []
+        self.logged_actions: list[Dict[str, Any]] = []
+
+    async def get_org_subscription(self, org_id: int) -> Optional[Dict[str, Any]]:
+        return {
+            "org_id": org_id,
+            "stripe_subscription_id": "sub_live_123",
+            "status": "active",
+            "cancel_at_period_end": False,
+        }
+
+    async def update_org_subscription(self, org_id: int, **updates: Any) -> Dict[str, Any]:
+        row = {"org_id": org_id, **updates}
+        self.updated_rows.append(row)
+        return row
+
+    async def log_billing_action(self, **kwargs: Any) -> Dict[str, Any]:
+        self.logged_actions.append(dict(kwargs))
+        return dict(kwargs)
+
+
+class _StripeUnavailableClient:
+    is_available = False
+
+
+class _StripeFailingClient:
+    is_available = True
+
+    async def cancel_subscription(self, subscription_id: str, *, at_period_end: bool = True) -> Dict[str, Any]:
+        raise RuntimeError("stripe cancel failed")
+
+    async def resume_subscription(self, subscription_id: str) -> Dict[str, Any]:
+        raise RuntimeError("stripe resume failed")
+
+
 @pytest.mark.asyncio
-async def test_get_plan_for_checkout_requires_active_plan() -> None:
-    """get_plan_for_checkout should return None for inactive plans."""
+async def test_cancel_subscription_fails_closed_when_stripe_unavailable(monkeypatch) -> None:
+    """Stripe-backed cancellations should fail closed when Stripe is unavailable."""
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Billing.subscription_service.is_billing_enabled",
+        lambda: True,
+    )
+
+    repo = _RepoForCancelResume()
+    service = SubscriptionService(billing_repo=repo, stripe_client=_StripeUnavailableClient())
+
+    with pytest.raises(RuntimeError, match="Stripe is not configured"):
+        await service.cancel_subscription(9, at_period_end=False, user_id=1)
+
+    assert repo.updated_rows == []
+    assert repo.logged_actions == []
+
+
+@pytest.mark.asyncio
+async def test_resume_subscription_fails_closed_when_stripe_unavailable(monkeypatch) -> None:
+    """Stripe-backed resumes should fail closed when Stripe is unavailable."""
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Billing.subscription_service.is_billing_enabled",
+        lambda: True,
+    )
+
+    repo = _RepoForCancelResume()
+    service = SubscriptionService(billing_repo=repo, stripe_client=_StripeUnavailableClient())
+
+    with pytest.raises(RuntimeError, match="Stripe is not configured"):
+        await service.resume_subscription(9, user_id=1)
+
+    assert repo.updated_rows == []
+    assert repo.logged_actions == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_subscription_propagates_runtime_error_without_local_mutation(monkeypatch) -> None:
+    """Stripe cancellation failures should bubble as RuntimeError and avoid local updates."""
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Billing.subscription_service.is_billing_enabled",
+        lambda: True,
+    )
+
+    repo = _RepoForCancelResume()
+    service = SubscriptionService(billing_repo=repo, stripe_client=_StripeFailingClient())
+
+    with pytest.raises(RuntimeError, match="Failed to cancel subscription in Stripe"):
+        await service.cancel_subscription(11, at_period_end=True, user_id=1)
+
+    assert repo.updated_rows == []
+    assert repo.logged_actions == []
+
+
+@pytest.mark.asyncio
+async def test_resume_subscription_propagates_runtime_error_without_local_mutation(monkeypatch) -> None:
+    """Stripe resume failures should bubble as RuntimeError and avoid local updates."""
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Billing.subscription_service.is_billing_enabled",
+        lambda: True,
+    )
+
+    repo = _RepoForCancelResume()
+    service = SubscriptionService(billing_repo=repo, stripe_client=_StripeFailingClient())
+
+    with pytest.raises(RuntimeError, match="Failed to resume subscription in Stripe"):
+        await service.resume_subscription(11, user_id=1)
+
+    assert repo.updated_rows == []
+    assert repo.logged_actions == []
+
+
+@pytest.mark.asyncio
+async def test_get_plan_for_checkout_requires_active_public_plan() -> None:
+    """get_plan_for_checkout should return None for inactive or hidden plans."""
 
     class _PlanRepo:
         async def get_plan_by_name(self, name: str) -> Optional[Dict[str, Any]]:
             if name == "inactive":
                 return {"id": 99, "name": name, "is_active": False}
+            if name == "hidden":
+                return {"id": 100, "name": name, "is_active": True, "is_public": False}
             if name == "active":
-                return {"id": 100, "name": name, "is_active": True}
+                return {"id": 101, "name": name, "is_active": True, "is_public": True}
             return None
 
     service = SubscriptionService(billing_repo=_PlanRepo())
 
     assert await service.get_plan_for_checkout("active") is not None
     assert await service.get_plan_for_checkout("inactive") is None
+    assert await service.get_plan_for_checkout("hidden") is None
     assert await service.get_plan_for_checkout("missing") is None
 
 
@@ -277,6 +398,13 @@ async def test_create_checkout_session_unknown_plan_raises_value_error(monkeypat
 async def test_handle_checkout_completed_updates_plan_and_cycle() -> None:
     """checkout.session.completed should persist plan_id and billing_cycle from metadata."""
     repo = _FakeBillingRepo()
+    repo._org_subscriptions[7] = {
+        "org_id": 7,
+        "plan_id": 1,
+        "stripe_customer_id": "cus_456",
+        "billing_cycle": "monthly",
+        "status": "pending",
+    }
     service = SubscriptionService(billing_repo=repo)
 
     event_data = {
@@ -302,6 +430,38 @@ async def test_handle_checkout_completed_updates_plan_and_cycle() -> None:
     assert repo.last_updated_subscription["status"] == "active"
     assert repo.last_updated_subscription["stripe_subscription_id"] == "sub_123"
     assert repo.last_updated_subscription["stripe_customer_id"] == "cus_456"
+
+
+@pytest.mark.asyncio
+async def test_handle_checkout_completed_creates_subscription_when_missing() -> None:
+    """checkout.session.completed should create an org subscription when none exists."""
+    repo = _FakeBillingRepo()
+    service = SubscriptionService(billing_repo=repo)
+
+    event_data = {
+        "object": {
+            "id": "cs_test_new",
+            "subscription": "sub_new_123",
+            "customer": "cus_new_456",
+            "metadata": {
+                "org_id": "9",
+                "plan_name": "pro",
+                "billing_cycle": "yearly",
+            },
+        }
+    }
+
+    result = await service._handle_checkout_completed(event_data, repo)  # type: ignore[attr-defined]
+
+    assert result["handled"] is True
+    assert repo.last_create_args is not None
+    assert repo.last_create_args["org_id"] == 9
+    assert repo.last_create_args["plan_id"] == 2
+    assert repo.last_create_args["status"] == "active"
+    created = await repo.get_org_subscription(9)
+    assert created is not None
+    assert created["stripe_subscription_id"] == "sub_new_123"
+    assert created["billing_cycle"] == "yearly"
 
 
 @pytest.mark.asyncio
@@ -444,3 +604,66 @@ async def test_handle_payment_failed_uses_default_currency_when_missing(monkeypa
     assert repo.last_payment is not None
     assert repo.last_payment["currency"] == "usd"
     assert repo.last_payment["invoice_pdf_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_handle_subscription_deleted_downgrades_to_free_plan() -> None:
+    """customer.subscription.deleted should downgrade to the free plan when available."""
+    repo = _FakeBillingRepo()
+    repo._org_subscriptions[1] = {
+        "org_id": 1,
+        "plan_id": 2,
+        "stripe_customer_id": "cus_pro_1",
+        "status": "active",
+    }
+    service = SubscriptionService(billing_repo=repo)
+
+    event_data = {
+        "object": {
+            "customer": "cus_pro_1",
+        }
+    }
+
+    result = await service._handle_subscription_deleted(event_data, repo)  # type: ignore[attr-defined]
+
+    assert result["handled"] is True
+    assert result["downgraded_to"] == "free"
+    assert repo.last_updated_subscription is not None
+    assert repo.last_updated_subscription["org_id"] == 1
+    assert repo.last_updated_subscription["plan_id"] == 1
+    assert repo.last_updated_subscription["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_handle_subscription_deleted_without_free_plan_marks_canceled() -> None:
+    """Missing free plan should not fall back to hardcoded plan IDs."""
+
+    class _RepoNoFreePlan(_FakeBillingRepo):
+        async def get_plan_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+            if name == "free":
+                return None
+            return await super().get_plan_by_name(name)
+
+    repo = _RepoNoFreePlan()
+    repo._org_subscriptions[1] = {
+        "org_id": 1,
+        "plan_id": 2,
+        "stripe_customer_id": "cus_pro_1",
+        "status": "active",
+    }
+    service = SubscriptionService(billing_repo=repo)
+
+    event_data = {
+        "object": {
+            "customer": "cus_pro_1",
+        }
+    }
+
+    result = await service._handle_subscription_deleted(event_data, repo)  # type: ignore[attr-defined]
+
+    assert result["handled"] is True
+    assert result["downgraded_to"] == "canceled_no_free_plan"
+    assert repo.last_updated_subscription is not None
+    assert repo.last_updated_subscription["org_id"] == 1
+    assert repo.last_updated_subscription["status"] == "canceled"
+    assert "plan_id" not in repo.last_updated_subscription

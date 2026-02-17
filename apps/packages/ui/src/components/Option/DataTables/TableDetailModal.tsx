@@ -216,7 +216,7 @@ export const TableDetailModal: React.FC<TableDetailModalProps> = ({
     <Drawer
       title={currentTable?.name || t("dataTables:tableDetails", "Table Details")}
       placement="right"
-      width={900}
+      size={900}
       open={open}
       onClose={handleClose}
       extra={
@@ -239,7 +239,7 @@ export const TableDetailModal: React.FC<TableDetailModalProps> = ({
       {error && (
         <Alert
           type="error"
-          message={t("common:error", "Error")}
+          title={t("common:error", "Error")}
           description={error}
           showIcon
         />

@@ -61,6 +61,7 @@ vi.mock("react-i18next", () => ({
 
 describe("GuardianSettings", () => {
   const originalMatchMedia = window.matchMedia
+  const originalResizeObserver = globalThis.ResizeObserver
 
   const makeQueryResult = (overrides: Record<string, unknown> = {}) =>
     ({
@@ -151,12 +152,25 @@ describe("GuardianSettings", () => {
         dispatchEvent: vi.fn()
       }))
     })
+    class ResizeObserverMock {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      writable: true,
+      value: ResizeObserverMock
+    })
   })
 
   afterAll(() => {
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: originalMatchMedia
+    })
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      writable: true,
+      value: originalResizeObserver
     })
   })
 
@@ -228,6 +242,29 @@ describe("GuardianSettings", () => {
     expect(screen.queryByRole("tab", { name: /Self-Monitoring/i })).not.toBeInTheDocument()
   })
 
+  it("shows self-monitoring fallback guidance when endpoints are missing", () => {
+    const notFoundError = Object.assign(new Error("Request failed: 404"), {
+      status: 404
+    })
+    vi.mocked(useQuery).mockImplementation((options: any) => {
+      const queryKey = Array.isArray(options?.queryKey) ? options.queryKey : []
+      if (queryKey[0] === "guardian" && queryKey[1] === "rules") {
+        return makeQueryResult({
+          data: undefined,
+          error: notFoundError,
+          isError: true
+        })
+      }
+      return makeQueryResult()
+    })
+
+    render(<GuardianSettings />)
+
+    expect(
+      screen.getByText("Self-Monitoring endpoints unavailable")
+    ).toBeInTheDocument()
+  })
+
   it("does not offer warn as a self-monitoring rule action", async () => {
     render(<GuardianSettings />)
 
@@ -236,9 +273,7 @@ describe("GuardianSettings", () => {
     const dialog = await screen.findByRole("dialog")
     const actionLabel = within(dialog).getByText("Action")
     const actionFormItem = actionLabel.closest(".ant-form-item")
-    expect(actionFormItem).not.toBeNull()
-
-    const actionSelector = actionFormItem?.querySelector(".ant-select-selector")
+    const actionSelector = actionFormItem?.querySelector('[role="combobox"]')
     expect(actionSelector).not.toBeNull()
     fireEvent.mouseDown(actionSelector as Element)
 

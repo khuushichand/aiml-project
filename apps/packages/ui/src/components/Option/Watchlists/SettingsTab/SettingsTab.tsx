@@ -256,7 +256,7 @@ export const SettingsTab: React.FC = () => {
             </Descriptions>
             <Alert
               className="mt-4"
-              message={t("watchlists:settings.ttl.note", "TTL values are configured on the server.")}
+              title={t("watchlists:settings.ttl.note", "TTL values are configured on the server.")}
               type="info"
               showIcon
             />
@@ -284,7 +284,7 @@ export const SettingsTab: React.FC = () => {
               className="mt-4"
               type="info"
               showIcon
-              message={t(
+              title={t(
                 "watchlists:settings.phase3.note",
                 "Phase-3 execution focuses on forum productionization, sharing model rollout, and Postgres parity."
               )}
@@ -328,7 +328,7 @@ export const SettingsTab: React.FC = () => {
                 <Alert
                   type="info"
                   showIcon
-                  message={t(
+                  title={t(
                     "watchlists:settings.clusters.selectJob",
                     "Select a job to manage cluster subscriptions."
                   )}
@@ -336,7 +336,7 @@ export const SettingsTab: React.FC = () => {
               )}
 
               {clustersError ? (
-                <Alert type="warning" showIcon message={clustersError} />
+                <Alert type="warning" showIcon title={clustersError} />
               ) : clusters.length === 0 && !clustersLoading ? (
                 <Empty
                   description={t("watchlists:settings.clusters.empty", "No clusters found")}
@@ -357,7 +357,7 @@ export const SettingsTab: React.FC = () => {
         </div>
       ) : (
         <Alert
-          message={t("watchlists:settings.unavailable", "Settings unavailable")}
+          title={t("watchlists:settings.unavailable", "Settings unavailable")}
           description={t("watchlists:settings.unavailableDesc", "Could not load server settings. Make sure the server is running.")}
           type="warning"
           showIcon

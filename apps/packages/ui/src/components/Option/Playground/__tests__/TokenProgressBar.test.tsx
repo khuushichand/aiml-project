@@ -49,4 +49,18 @@ describe("TokenProgressBar", () => {
     ).toBeNull()
     expect(screen.getByText(/used/i)).toBeInTheDocument()
   })
+
+  it("falls back to a resolved memory label when interpolation tokens are unresolved", () => {
+    render(
+      <TokenProgressBar
+        conversationTokens={500}
+        draftTokens={100}
+        maxTokens={1000}
+        compact
+      />
+    )
+
+    expect(screen.getByText("Memory: 60% full")).toBeInTheDocument()
+    expect(screen.queryByText(/{{percentage}}/)).toBeNull()
+  })
 })

@@ -12,6 +12,7 @@ import {
   Popover,
   Radio,
   Select,
+  Space,
   Switch,
   Tooltip,
   message
@@ -1837,6 +1838,7 @@ export const SidepanelForm = ({
                     multiple={false}
                     tabIndex={-1}
                     aria-hidden="true"
+                    aria-label={t("playground:actions.attachImage", "Attach image") as string}
                     onChange={onInputChange}
                   />
                   <input
@@ -1848,6 +1850,7 @@ export const SidepanelForm = ({
                     multiple
                     tabIndex={-1}
                     aria-hidden="true"
+                    aria-label={t("playground:actions.attachDocument", "Attach document") as string}
                     onChange={handleContextFileChange}
                   />
                   <div
@@ -2208,100 +2211,18 @@ export const SidepanelForm = ({
                                       </button>
                                     </Tooltip>
                                   )}
-                                  <Dropdown.Button
-                                    aria-label={t(
-                                      "playground:composer.submitAria",
-                                      "Send message"
-                                    )}
-                                    data-testid="chat-send"
-                                    title={sendButtonTitle}
-                                    htmlType="submit"
-                                    disabled={isSending || !isConnectionReady}
-                                    className="!justify-end !w-auto"
-                                    icon={
-                                      <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        fill="none"
-                                        viewBox="0 0 24 24"
-                                        strokeWidth={1.5}
-                                        stroke="currentColor"
-                                        className="w-4 h-4">
-                                        <path
-                                          strokeLinecap="round"
-                                          strokeLinejoin="round"
-                                          d="m19.5 8.25-7.5 7.5-7.5-7.5"
-                                        />
-                                      </svg>
-                                    }
-                                    menu={{
-                                      items: [
-                                        {
-                                          key: "send-section",
-                                          type: "group",
-                                          label: t(
-                                            "playground:composer.actions",
-                                            "Send options"
-                                          ),
-                                          children: [
-                                            {
-                                              key: 1,
-                                              label: (
-                                                <Checkbox
-                                                  checked={sendWhenEnter}
-                                                  onChange={(e) =>
-                                                    setSendWhenEnter(e.target.checked)
-                                                  }>
-                                                  {t("sendWhenEnter")}
-                                                </Checkbox>
-                                              )
-                                            }
-                                          ]
-                                        },
-                                        {
-                                          type: "divider",
-                                          key: "divider-1"
-                                        },
-                                        {
-                                          key: "context-section",
-                                          type: "group",
-                                          label: t(
-                                            "playground:composer.coreTools",
-                                            "Conversation options"
-                                          ),
-                                          children: [
-                                            {
-                                              key: 2,
-                                              label: (
-                                                <Checkbox
-                                                  checked={chatMode === "rag"}
-                                                  onChange={(e) => {
-                                                    setChatMode(
-                                                      e.target.checked
-                                                        ? "rag"
-                                                        : "normal"
-                                                    )
-                                                  }}>
-                                                  {t("common:chatWithCurrentPage")}
-                                                </Checkbox>
-                                              )
-                                            },
-                                            {
-                                              key: 3,
-                                              label: (
-                                                <Checkbox
-                                                  checked={useOCR}
-                                                  onChange={(e) =>
-                                                    setUseOCR(e.target.checked)
-                                                  }>
-                                                  {t("useOCR")}
-                                                </Checkbox>
-                                              )
-                                            }
-                                          ]
-                                        }
-                                      ]
-                                    }}>
-                                    <div className="inline-flex gap-2">
+                                  <Space.Compact>
+                                    <button
+                                      aria-label={t(
+                                        "playground:composer.submitAria",
+                                        "Send message"
+                                      )}
+                                      data-testid="chat-send"
+                                      title={sendButtonTitle}
+                                      type="submit"
+                                      disabled={isSending || !isConnectionReady}
+                                      className="inline-flex min-h-[44px] items-center gap-2 rounded-l-md border border-border bg-surface px-3 text-sm text-text transition-colors hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
                                       {sendWhenEnter ? (
                                         <svg
                                           xmlns="http://www.w3.org/2000/svg"
@@ -2311,14 +2232,120 @@ export const SidepanelForm = ({
                                           strokeLinejoin="round"
                                           strokeWidth="2"
                                           className="h-4 w-4"
-                                          viewBox="0 0 24 24">
+                                          viewBox="0 0 24 24"
+                                        >
                                           <path d="M9 10L4 15 9 20"></path>
                                           <path d="M20 4v7a4 4 0 01-4 4H4"></path>
                                         </svg>
                                       ) : null}
                                       {t("common:send", "Send")}
-                                    </div>
-                                  </Dropdown.Button>
+                                    </button>
+                                    <Dropdown
+                                      disabled={isSending || !isConnectionReady}
+                                      trigger={["click"]}
+                                      menu={{
+                                        items: [
+                                          {
+                                            key: "send-section",
+                                            type: "group",
+                                            label: t(
+                                              "playground:composer.actions",
+                                              "Send options"
+                                            ),
+                                            children: [
+                                              {
+                                                key: 1,
+                                                label: (
+                                                  <Checkbox
+                                                    checked={sendWhenEnter}
+                                                    onChange={(e) =>
+                                                      setSendWhenEnter(e.target.checked)
+                                                    }>
+                                                    {t("sendWhenEnter")}
+                                                  </Checkbox>
+                                                )
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            type: "divider",
+                                            key: "divider-1"
+                                          },
+                                          {
+                                            key: "context-section",
+                                            type: "group",
+                                            label: t(
+                                              "playground:composer.coreTools",
+                                              "Conversation options"
+                                            ),
+                                            children: [
+                                              {
+                                                key: 2,
+                                                label: (
+                                                  <Checkbox
+                                                    checked={chatMode === "rag"}
+                                                    onChange={(e) => {
+                                                      setChatMode(
+                                                        e.target.checked
+                                                          ? "rag"
+                                                          : "normal"
+                                                      )
+                                                    }}>
+                                                    {t("common:chatWithCurrentPage")}
+                                                  </Checkbox>
+                                                )
+                                              },
+                                              {
+                                                key: 3,
+                                                label: (
+                                                  <Checkbox
+                                                    checked={useOCR}
+                                                    onChange={(e) =>
+                                                      setUseOCR(e.target.checked)
+                                                    }>
+                                                    {t("useOCR")}
+                                                  </Checkbox>
+                                                )
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }}
+                                    >
+                                      <button
+                                        type="button"
+                                        aria-label={
+                                          t(
+                                            "playground:composer.sendOptions",
+                                            "Open send options"
+                                          ) as string
+                                        }
+                                        title={
+                                          t(
+                                            "playground:composer.sendOptions",
+                                            "Open send options"
+                                          ) as string
+                                        }
+                                        disabled={isSending || !isConnectionReady}
+                                        className="inline-flex min-h-[44px] items-center rounded-r-md border border-l-0 border-border bg-surface px-2 text-text transition-colors hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+                                      >
+                                        <svg
+                                          xmlns="http://www.w3.org/2000/svg"
+                                          fill="none"
+                                          viewBox="0 0 24 24"
+                                          strokeWidth={1.5}
+                                          stroke="currentColor"
+                                          className="w-4 h-4"
+                                        >
+                                          <path
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            d="m19.5 8.25-7.5 7.5-7.5-7.5"
+                                          />
+                                        </svg>
+                                      </button>
+                                    </Dropdown>
+                                  </Space.Compact>
                                   {/* Current Conversation Settings button to the right of submit */}
                                   <Tooltip
                                     title={
@@ -2395,125 +2422,145 @@ export const SidepanelForm = ({
                         </>
                       ) : (
                         <>
-                          <div className="flex items-center gap-2">
-                            <Tooltip
-                              title={t("playground:actions.upload", "Attach image")}
-                            >
-                              <button
-                                type="button"
-                                onClick={openUploadDialog}
-                                className="h-9 w-9 rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                                aria-label={t(
-                                  "playground:actions.upload",
-                                  "Attach image"
-                                )}
-                                title={t(
-                                  "playground:actions.upload",
-                                  "Attach image"
-                                )}
+                          <div className="flex flex-wrap items-end gap-2">
+                            <div className="flex flex-col items-center gap-1">
+                              <Tooltip
+                                title={t("playground:actions.upload", "Attach image")}
                               >
-                                <ImageIcon className="h-4 w-4" />
-                              </button>
-                            </Tooltip>
+                                <button
+                                  type="button"
+                                  onClick={openUploadDialog}
+                                  className="h-11 w-11 min-h-[44px] min-w-[44px] rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                                  aria-label={t(
+                                    "playground:actions.upload",
+                                    "Attach image"
+                                  )}
+                                  title={t(
+                                    "playground:actions.upload",
+                                    "Attach image"
+                                  )}
+                                >
+                                  <ImageIcon className="h-4 w-4" />
+                                </button>
+                              </Tooltip>
+                              <span className="text-[10px] font-medium leading-none text-text-subtle">
+                                {t("playground:actions.uploadShort", "Image")}
+                              </span>
+                            </div>
                             {(browserSupportsSpeechRecognition || hasServerAudio) && (
-                              <div className="flex items-center gap-1">
-                                <Tooltip
-                                  title={
-                                    voiceChatAvailable
-                                      ? voiceChatStatusLabel
-                                      : t(
-                                          "playground:voiceChat.unavailableTitle",
-                                          "Voice chat unavailable"
-                                        )
-                                  }
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={handleVoiceChatToggle}
-                                    disabled={!voiceChatAvailable || streaming}
-                                    className={`h-9 w-9 rounded-full border p-0 transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${voiceChatToneClass}`}
-                                    aria-label={voiceChatStatusLabel}
-                                  >
-                                    <Headphones className="h-4 w-4" />
-                                  </button>
-                                </Tooltip>
-                                <Popover content={voiceChatSettingsContent} trigger="click">
-                                  <button
-                                    type="button"
-                                    className="h-9 w-9 rounded-full border border-border p-0 text-text-muted hover:bg-surface2"
-                                    aria-label={t(
-                                      "playground:voiceChat.settingsButton",
-                                      "Voice chat settings"
-                                    )}
-                                  >
-                                    <Settings2 className="h-3.5 w-3.5" />
-                                  </button>
-                                </Popover>
-                                <Tooltip
-                                  title={
-                                    !speechAvailable
-                                      ? t(
-                                          "playground:actions.speechUnavailableBody",
-                                          "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
-                                        )
-                                      : speechUsesServer
-                                        ? t(
-                                            "playground:tooltip.speechToTextServer",
-                                            "Dictation via your tldw server"
-                                          )
+                              <div className="flex flex-wrap items-end gap-1.5">
+                                <div className="flex flex-col items-center gap-1">
+                                  <Tooltip
+                                    title={
+                                      voiceChatAvailable
+                                        ? voiceChatStatusLabel
                                         : t(
-                                            "playground:tooltip.speechToTextBrowser",
-                                            "Dictation via browser speech recognition"
+                                            "playground:voiceChat.unavailableTitle",
+                                            "Voice chat unavailable"
                                           )
-                                  }
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={speechUsesServer ? startServerDictation : handleSpeechToggle}
-                                    disabled={!speechAvailable || voiceChatEnabled}
-                                    className={`h-9 w-9 rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50 ${
-                                      speechAvailable &&
-                                      ((speechUsesServer && isServerDictating) ||
-                                        (!speechUsesServer && isListening))
-                                        ? "border-primary text-primaryStrong"
-                                        : ""
-                                    }`}
-                                    aria-label={
-                                      !speechAvailable
-                                        ? (t(
-                                            "playground:actions.speechUnavailableTitle",
-                                            "Dictation unavailable"
-                                          ) as string)
-                                        : speechUsesServer
-                                          ? (isServerDictating
-                                              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                              : (t("playground:actions.speechStart", "Start dictation") as string))
-                                          : (isListening
-                                              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                              : (t("playground:actions.speechStart", "Start dictation") as string))
                                     }
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={handleVoiceChatToggle}
+                                      disabled={!voiceChatAvailable || streaming}
+                                      className={`h-11 w-11 min-h-[44px] min-w-[44px] rounded-full border p-0 transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${voiceChatToneClass}`}
+                                      aria-label={voiceChatStatusLabel}
+                                    >
+                                      <Headphones className="h-4 w-4" />
+                                    </button>
+                                  </Tooltip>
+                                  <span className="text-[10px] font-medium leading-none text-text-subtle">
+                                    {t("playground:voiceChat.toggleShort", "Voice")}
+                                  </span>
+                                </div>
+                                <div className="flex flex-col items-center gap-1">
+                                  <Popover content={voiceChatSettingsContent} trigger="click">
+                                    <button
+                                      type="button"
+                                      className="h-11 w-11 min-h-[44px] min-w-[44px] rounded-full border border-border p-0 text-text-muted hover:bg-surface2"
+                                      aria-label={t(
+                                        "playground:voiceChat.settingsButton",
+                                        "Voice chat settings"
+                                      )}
+                                    >
+                                      <Settings2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </Popover>
+                                  <span className="text-[10px] font-medium leading-none text-text-subtle">
+                                    {t("playground:voiceChat.settingsShort", "Config")}
+                                  </span>
+                                </div>
+                                <div className="flex flex-col items-center gap-1">
+                                  <Tooltip
                                     title={
                                       !speechAvailable
-                                        ? (t(
-                                            "playground:actions.speechUnavailableTitle",
-                                            "Dictation unavailable"
-                                          ) as string)
+                                        ? t(
+                                            "playground:actions.speechUnavailableBody",
+                                            "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
+                                          )
                                         : speechUsesServer
-                                          ? (isServerDictating
-                                              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                              : (t("playground:actions.speechStart", "Start dictation") as string))
-                                          : (isListening
-                                              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                              : (t("playground:actions.speechStart", "Start dictation") as string))
+                                          ? t(
+                                              "playground:tooltip.speechToTextServer",
+                                              "Dictation via your tldw server"
+                                            )
+                                          : t(
+                                              "playground:tooltip.speechToTextBrowser",
+                                              "Dictation via browser speech recognition"
+                                            )
                                     }
                                   >
-                                    <MicIcon className="h-4 w-4" />
-                                  </button>
-                                </Tooltip>
+                                    <button
+                                      type="button"
+                                      onClick={speechUsesServer ? startServerDictation : handleSpeechToggle}
+                                      disabled={!speechAvailable || voiceChatEnabled}
+                                      className={`h-11 w-11 min-h-[44px] min-w-[44px] rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50 ${
+                                        speechAvailable &&
+                                        ((speechUsesServer && isServerDictating) ||
+                                          (!speechUsesServer && isListening))
+                                          ? "border-primary text-primaryStrong"
+                                          : ""
+                                      }`}
+                                      aria-label={
+                                        !speechAvailable
+                                          ? (t(
+                                              "playground:actions.speechUnavailableTitle",
+                                              "Dictation unavailable"
+                                            ) as string)
+                                          : speechUsesServer
+                                            ? (isServerDictating
+                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                : (t("playground:actions.speechStart", "Start dictation") as string))
+                                            : (isListening
+                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                : (t("playground:actions.speechStart", "Start dictation") as string))
+                                      }
+                                      title={
+                                        !speechAvailable
+                                          ? (t(
+                                              "playground:actions.speechUnavailableTitle",
+                                              "Dictation unavailable"
+                                            ) as string)
+                                          : speechUsesServer
+                                            ? (isServerDictating
+                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                : (t("playground:actions.speechStart", "Start dictation") as string))
+                                            : (isListening
+                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
+                                                : (t("playground:actions.speechStart", "Start dictation") as string))
+                                      }
+                                    >
+                                      <MicIcon className="h-4 w-4" />
+                                    </button>
+                                  </Tooltip>
+                                  <span className="text-[10px] font-medium leading-none text-text-subtle">
+                                    {t("playground:actions.speechShort", "Dictate")}
+                                  </span>
+                                </div>
                               </div>
                             )}
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-end gap-2">
                             {!streaming ? (
                               <Button
                                 type="submit"
@@ -2525,29 +2572,34 @@ export const SidepanelForm = ({
                                   "Send message"
                                 )}
                                 title={sendButtonTitle}
-                                className="rounded-full px-4 text-[11px] font-semibold uppercase tracking-[0.12em]"
+                                className="min-h-[44px] rounded-full px-4 text-[11px] font-semibold uppercase tracking-[0.12em]"
                               >
                                 {t("common:send", "Send")}
                               </Button>
                             ) : (
-                              <Tooltip title={t("tooltip.stopStreaming")}>
-                                <button
-                                  type="button"
-                                  onClick={stopStreamingRequest}
-                                  data-testid="chat-stop-streaming"
-                                  className="h-9 w-9 rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text"
-                                  aria-label={t(
-                                    "playground:composer.stopStreaming",
-                                    "Stop streaming response"
-                                  )}
-                                  title={t(
-                                    "playground:composer.stopStreaming",
-                                    "Stop streaming response"
-                                  )}
-                                >
-                                  <StopCircleIcon className="h-4 w-4" />
-                                </button>
-                              </Tooltip>
+                              <div className="flex flex-col items-center gap-1">
+                                <Tooltip title={t("tooltip.stopStreaming")}>
+                                  <button
+                                    type="button"
+                                    onClick={stopStreamingRequest}
+                                    data-testid="chat-stop-streaming"
+                                    className="h-11 w-11 min-h-[44px] min-w-[44px] rounded-full border border-border p-0 text-text-muted hover:bg-surface2 hover:text-text"
+                                    aria-label={t(
+                                      "playground:composer.stopStreaming",
+                                      "Stop streaming response"
+                                    )}
+                                    title={t(
+                                      "playground:composer.stopStreaming",
+                                      "Stop streaming response"
+                                    )}
+                                  >
+                                    <StopCircleIcon className="h-4 w-4" />
+                                  </button>
+                                </Tooltip>
+                                <span className="text-[10px] font-medium leading-none text-text-subtle">
+                                  {t("playground:composer.stopShort", "Stop")}
+                                </span>
+                              </div>
                             )}
                           </div>
                         </>

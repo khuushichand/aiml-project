@@ -1,3 +1,5 @@
-import dynamic from "next/dynamic"
+import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
 
-export default dynamic(() => import("@/routes/sidepanel-settings"), { ssr: false })
+export default function ChatSettingsRedirectPage() {
+  return <RouteRedirect to="/settings/chat" preserveParams={false} />;
+}

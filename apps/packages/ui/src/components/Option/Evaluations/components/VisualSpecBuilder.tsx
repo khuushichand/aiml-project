@@ -93,7 +93,7 @@ export const VisualSpecBuilder: React.FC<VisualSpecBuilderProps> = ({
         <Alert
           type="info"
           showIcon
-          message={t("evaluations:specBuilderJsonOnly", {
+          title={t("evaluations:specBuilderJsonOnly", {
             defaultValue:
               "This evaluation type uses JSON configuration. Use the editor below."
           })}
@@ -165,7 +165,7 @@ export const VisualSpecBuilder: React.FC<VisualSpecBuilderProps> = ({
         <Alert
           type="warning"
           showIcon
-          message={t("evaluations:specBuilderParseWarning", {
+          title={t("evaluations:specBuilderParseWarning", {
             defaultValue:
               "Spec JSON is invalid. Fix the JSON to use the visual builder."
           })}

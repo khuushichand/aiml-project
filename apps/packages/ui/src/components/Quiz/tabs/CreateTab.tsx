@@ -126,7 +126,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake }) => {
           />
         }
       >
-        <Space direction="vertical" className="w-full">
+        <Space orientation="vertical" className="w-full">
           <Select
             value={question.question_type}
             onChange={(value) => {

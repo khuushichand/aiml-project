@@ -36,6 +36,7 @@ from tldw_Server_API.app.core.Billing.enforcement import (
     EnforcementAction,
     LimitCheckResult,
     UsageSummary,
+    check_billing_with_rg,
     get_billing_enforcer,
     billing_enabled,
     enforcement_enabled,
@@ -388,12 +389,49 @@ class TestBillingEnforcer:
         await enforcer._get_llm_tokens_month(org_id=1)
 
         assert fake_conn.params is not None
-        assert len(fake_conn.params) == 4
+        assert len(fake_conn.params) == 3
 
-        ts_params = [fake_conn.params[1], fake_conn.params[3]]
-        for ts_param in ts_params:
-            assert isinstance(ts_param, str)
-            assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", ts_param)
+        ts_param = fake_conn.params[0]
+        assert isinstance(ts_param, str)
+        assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", ts_param)
+
+    @pytest.mark.asyncio
+    async def test_get_org_limits_uses_restrictive_fallback_when_fail_closed(self, monkeypatch):
+        """Closed failure mode should use restrictive limits when billing data source fails."""
+
+        async def _raise_subscription_service_error():
+            raise RuntimeError("billing limits backend unavailable")
+
+        monkeypatch.setenv("BILLING_ENFORCEMENT_FAILURE_MODE", "closed")
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Billing.subscription_service.get_subscription_service",
+            _raise_subscription_service_error,
+            raising=False,
+        )
+
+        enforcer = BillingEnforcer()
+        limits = await enforcer.get_org_limits(org_id=23)
+
+        assert limits["api_calls_day"] == 0
+        assert limits["llm_tokens_month"] == 0
+        assert limits["storage_mb"] == 0
+        assert limits["advanced_analytics"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_org_usage_uses_restrictive_fallback_when_fail_closed(self, monkeypatch):
+        """Closed failure mode should return restrictive usage when no cached usage is available."""
+
+        monkeypatch.setenv("BILLING_ENFORCEMENT_FAILURE_MODE", "closed")
+
+        enforcer = BillingEnforcer()
+        enforcer._get_api_calls_today = AsyncMock(side_effect=RuntimeError("usage backend unavailable"))
+
+        usage = await enforcer.get_org_usage(org_id=77)
+
+        assert usage.org_id == 77
+        assert usage.api_calls_today == 2_147_483_647
+        assert usage.llm_tokens_month == 2_147_483_647
+        assert usage.rag_queries_today == 2_147_483_647
 
     @pytest.mark.asyncio
     async def test_check_feature_access_enabled(self, enforcer):
@@ -531,3 +569,59 @@ class TestModuleFunctions:
         enforcer1 = get_billing_enforcer()
         enforcer2 = get_billing_enforcer()
         assert enforcer1 is enforcer2
+
+    @pytest.mark.asyncio
+    async def test_check_billing_with_rg_allows_on_error_in_fail_open_mode(self, monkeypatch):
+        """Fail-open mode should allow requests when billing checks error."""
+
+        class _ExplodingEnforcer:
+            async def check_limit(self, org_id, category, requested_units=1):  # noqa: ARG002
+                raise RuntimeError("transient billing failure")
+
+        monkeypatch.setenv("BILLING_ENFORCEMENT_FAILURE_MODE", "open")
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Billing.enforcement.importlib.import_module",
+            lambda _: object(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Billing.enforcement.get_billing_enforcer",
+            lambda: _ExplodingEnforcer(),
+            raising=False,
+        )
+
+        allowed = await check_billing_with_rg(
+            org_id=1,
+            category=LimitCategory.API_CALLS_DAY,
+            units=1,
+        )
+
+        assert allowed is True
+
+    @pytest.mark.asyncio
+    async def test_check_billing_with_rg_denies_on_error_in_fail_closed_mode(self, monkeypatch):
+        """Fail-closed mode should deny requests when billing checks error."""
+
+        class _ExplodingEnforcer:
+            async def check_limit(self, org_id, category, requested_units=1):  # noqa: ARG002
+                raise RuntimeError("transient billing failure")
+
+        monkeypatch.setenv("BILLING_ENFORCEMENT_FAILURE_MODE", "closed")
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Billing.enforcement.importlib.import_module",
+            lambda _: object(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Billing.enforcement.get_billing_enforcer",
+            lambda: _ExplodingEnforcer(),
+            raising=False,
+        )
+
+        allowed = await check_billing_with_rg(
+            org_id=1,
+            category=LimitCategory.API_CALLS_DAY,
+            units=1,
+        )
+
+        assert allowed is False

@@ -85,4 +85,45 @@ describe("createRegenerateLastMessage", () => {
     expect(consoleErrorSpy).toHaveBeenCalled()
     consoleErrorSpy.mockRestore()
   })
+
+  it("allows pre-submit hooks to override regenerate payload", async () => {
+    const history = buildHistory()
+    const messages = buildMessages()
+    const setHistory = vi.fn()
+    const setMessages = vi.fn()
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    const beforeSubmit = vi.fn().mockResolvedValue({
+      memory: [
+        {
+          role: "user",
+          content: "Override memory"
+        }
+      ] satisfies ChatHistory,
+      messages: [messages[0]],
+      submitExtras: {
+        serverChatIdOverride: "branched-chat-id"
+      }
+    })
+
+    const regenerate = createRegenerateLastMessage({
+      validateBeforeSubmitFn: () => true,
+      history,
+      messages,
+      setHistory,
+      setMessages,
+      onSubmit,
+      beforeSubmit
+    })
+
+    await regenerate()
+
+    expect(beforeSubmit).toHaveBeenCalledTimes(1)
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memory: [{ role: "user", content: "Override memory" }],
+        messages: [messages[0]],
+        serverChatIdOverride: "branched-chat-id"
+      })
+    )
+  })
 })

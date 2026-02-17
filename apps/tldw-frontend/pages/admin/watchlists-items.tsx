@@ -1,5 +1,13 @@
-import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
+import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
 
 export default function AdminWatchlistsItemsRedirectPage() {
-  return <RouteRedirect to="/admin/server" />;
+  return (
+    <RoutePlaceholder
+      title="Watchlist Items Admin Is Coming Soon"
+      description="Administrative item-level review for watchlists will be available on this route."
+      plannedPath="/admin/watchlists-items"
+      primaryCtaHref="/watchlists"
+      primaryCtaLabel="Open Watchlists"
+    />
+  );
 }

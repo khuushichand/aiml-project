@@ -52,6 +52,8 @@ import { copyToClipboard } from "@/utils/clipboard"
 import { TtsProviderPanel } from "@/components/Option/TTS/TtsProviderPanel"
 import { estimateTtsDurationSeconds, splitMessageContent } from "@/utils/tts"
 import { markdownToText } from "@/utils/markdown-to-text"
+import { isTimeoutLikeError } from "@/utils/request-timeout"
+import { withTemplateFallback } from "@/utils/template-guards"
 import { VoiceCloningManager } from "../TTS/VoiceCloningManager"
 import { listCustomVoices, type TldwCustomVoice } from "@/services/tldw/voice-cloning"
 import { normalizeTtsProviderKey, toServerTtsProviderKey } from "@/services/tldw/tts-provider-keys"
@@ -196,7 +198,7 @@ type SpeechPlaygroundPageProps = {
 export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   initialMode
 }) => {
-  const { t } = useTranslation(["playground", "settings", "option"])
+  const { t } = useTranslation(["playground", "settings", "option", "common"])
   const queryClient = useQueryClient()
 
   const [mode, setMode] = useStorage<SpeechMode>("speechPlaygroundMode", "roundtrip")
@@ -276,6 +278,10 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
 
   const [serverModels, setServerModels] = React.useState<string[]>([])
   const [serverModelsLoading, setServerModelsLoading] = React.useState(false)
+  const [serverModelsError, setServerModelsError] = React.useState<string | null>(
+    null
+  )
+  const [modelsLoadAttempt, setModelsLoadAttempt] = React.useState(0)
   const [activeModel, setActiveModel] = React.useState<string | undefined>()
   const [isRecording, setIsRecording] = React.useState(false)
   const [isTranscribing, setIsTranscribing] = React.useState(false)
@@ -294,8 +300,11 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     let cancelled = false
     const fetchModels = async () => {
       setServerModelsLoading(true)
+      setServerModelsError(null)
       try {
-        const res = await tldwClient.getTranscriptionModels()
+        const res = await tldwClient.getTranscriptionModels({
+          timeoutMs: 10_000
+        })
         const all = Array.isArray(res?.all_models) ? (res.all_models as string[]) : []
         if (!cancelled && all.length > 0) {
           const unique = Array.from(new Set(all)).sort()
@@ -306,6 +315,19 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
           }
         }
       } catch (e) {
+        if (!cancelled) {
+          setServerModelsError(
+            isTimeoutLikeError(e)
+              ? (t(
+                  "playground:stt.modelsTimeout",
+                  "Model list took longer than 10 seconds. Check server health and retry."
+                ) as string)
+              : (t(
+                  "playground:stt.modelsLoadError",
+                  "Unable to load transcription models. Retry or check server settings."
+                ) as string)
+          )
+        }
         if ((import.meta as any)?.env?.DEV) {
           // eslint-disable-next-line no-console
           console.warn("Failed to load transcription models for Speech Playground", e)
@@ -320,7 +342,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     return () => {
       cancelled = true
     }
-  }, [activeModel, sttModel])
+  }, [activeModel, modelsLoadAttempt, sttModel, t])
 
   const appendLiveText = React.useCallback((textChunk: string) => {
     if (!textChunk) return
@@ -715,7 +737,10 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     providersInfo,
     tldwTtsModels,
     tldwVoiceCatalog,
-    elevenLabsData
+    elevenLabsData,
+    elevenLabsLoading,
+    elevenLabsError,
+    refetchElevenLabs
   } = useTtsProviderData({
     provider,
     elevenLabsApiKey: ttsSettings?.elevenLabsApiKey,
@@ -1521,6 +1546,35 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const canStop = Boolean(segments.length || audioRef.current || isStreamingActive || isTtsJobRunning)
   const stopDisabledReason =
     !canStop && t("playground:tts.stopDisabled", "Stop activates after audio starts.")
+  const hasElevenLabsKey = Boolean(ttsSettings?.elevenLabsApiKey)
+  const showElevenLabsHint =
+    provider === "elevenlabs" &&
+    !elevenLabsData &&
+    !elevenLabsLoading
+  const hasElevenLabsLoadError =
+    hasElevenLabsKey && Boolean(elevenLabsError)
+  const elevenLabsHintTitle = hasElevenLabsKey
+    ? t(
+        "playground:tts.elevenLabsUnavailableTitle",
+        "ElevenLabs voices unavailable"
+      )
+    : t(
+        "playground:tts.elevenLabsMissingTitle",
+        "ElevenLabs needs an API key"
+      )
+  const elevenLabsHintBody = hasElevenLabsKey
+    ? t(
+        "playground:tts.elevenLabsUnavailableBody",
+        "We couldn't load voices or models. Check your API key and try again."
+      )
+    : t(
+        "playground:tts.elevenLabsMissingBody",
+        "Add your ElevenLabs API key in Settings to load voices and models."
+      )
+  const elevenLabsTimeoutBody = t(
+    "playground:tts.elevenLabsTimeoutBody",
+    "Loading voices/models took longer than 10 seconds. Retry or verify network access."
+  )
   const activeStreamError = streamError || streamState.error
   const streamStatusLabel = React.useMemo(() => {
     switch (streamStatus) {
@@ -1548,9 +1602,18 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
       ? "red"
       : streamStatus === "complete"
         ? "green"
-      : streamStatus === "streaming"
+        : streamStatus === "streaming"
         ? "blue"
         : "default"
+
+  const handleElevenLabsApiKeyFocus = React.useCallback(() => {
+    const el = document.getElementById("elevenlabs-api-key")
+    if (!el) return
+    try {
+      el.scrollIntoView({ block: "center" })
+    } catch {}
+    ;(el as HTMLElement).focus()
+  }, [])
 
   const handleAddVoiceCard = () => {
     if (voiceCards.length >= 4) return
@@ -1795,7 +1858,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
       <div className="mt-4 space-y-4">
         <Card>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <Space direction="vertical" size={2}>
+            <Space orientation="vertical" size={2}>
               <Text strong>{t("playground:speech.modeLabel", "Mode")}</Text>
               <Segmented
                 value={mode}
@@ -1819,7 +1882,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
         <div className={mode === "roundtrip" ? "grid gap-4 lg:grid-cols-2" : "space-y-4"}>
           {mode !== "listen" && (
             <Card className="h-full">
-              <Space direction="vertical" className="w-full" size="middle">
+              <Space orientation="vertical" className="w-full" size="middle">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="space-y-1">
                     <Text strong>
@@ -1851,6 +1914,24 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                         "Language, task, response format, segmentation, and prompt reuse your Speech-to-Text defaults from Settings."
                       )}
                     </div>
+                    {serverModelsError && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        title={serverModelsError}
+                        action={
+                          <Button
+                            size="small"
+                            onClick={() =>
+                              setModelsLoadAttempt((prev) => prev + 1)
+                            }
+                            disabled={serverModelsLoading}
+                          >
+                            {t("common:retry", "Retry")}
+                          </Button>
+                        }
+                      />
+                    )}
                   </div>
                   <div className="space-y-1">
                     <Text type="secondary" className="block text-xs">
@@ -1930,15 +2011,22 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                 </div>
 
                 <div className="text-xs text-text-subtle">
-                  {t(
-                    "playground:tooltip.speechToTextDetails",
-                    "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.",
-                    {
-                      model: activeModel || sttModel || "whisper-1",
-                      task: sttTask === "translate" ? "translate" : "transcribe",
-                      format: (sttResponseFormat || "json").toUpperCase()
-                    } as any
-                  ) as string}
+                  {withTemplateFallback(
+                    t(
+                      "playground:tooltip.speechToTextDetails",
+                      "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.",
+                      {
+                        model: activeModel || sttModel || "whisper-1",
+                        task: sttTask === "translate" ? "translate" : "transcribe",
+                        format: (sttResponseFormat || "json").toUpperCase()
+                      } as any
+                    ),
+                    `Uses ${
+                      activeModel || sttModel || "whisper-1"
+                    } · ${sttTask === "translate" ? "translate" : "transcribe"} · ${(
+                      sttResponseFormat || "json"
+                    ).toUpperCase()}. Configure in Settings -> General -> Speech-to-Text.`
+                  )}
                 </div>
 
                 <WaveformCanvas
@@ -2024,7 +2112,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
 
           {mode !== "speak" && (
             <Card className="h-full">
-              <Space direction="vertical" className="w-full" size="middle">
+              <Space orientation="vertical" className="w-full" size="middle">
                 <TtsProviderPanel
                   withCard={false}
                   providerLabel={providerLabel}
@@ -2101,6 +2189,44 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                     />
                   )}
                 </div>
+
+                {showElevenLabsHint && (
+                  <Alert
+                    type={hasElevenLabsKey ? "warning" : "info"}
+                    showIcon
+                    title={elevenLabsHintTitle}
+                    description={
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>
+                          {hasElevenLabsLoadError && isTimeoutLikeError(elevenLabsError)
+                            ? elevenLabsTimeoutBody
+                            : elevenLabsHintBody}
+                        </span>
+                        {hasElevenLabsKey && (
+                          <Button
+                            size="small"
+                            type="link"
+                            onClick={() => {
+                              void refetchElevenLabs()
+                            }}
+                          >
+                            {t("common:retry", "Retry")}
+                          </Button>
+                        )}
+                        <Button
+                          size="small"
+                          type="link"
+                          onClick={handleElevenLabsApiKeyFocus}
+                        >
+                          {t(
+                            "playground:tts.elevenLabsMissingCta",
+                            "Set API key in Settings"
+                          )}
+                        </Button>
+                      </div>
+                    }
+                  />
+                )}
 
                 {ttsSettings?.ttsProvider === "elevenlabs" && elevenLabsData && (
                   <div className="flex flex-col gap-2">
@@ -2333,7 +2459,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                           <Alert
                             type="warning"
                             showIcon
-                            message="Voice roles need attention"
+                            title="Voice roles need attention"
                             description={voiceRoleError}
                           />
                         )}
@@ -2745,7 +2871,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   <Alert
                     type="error"
                     showIcon
-                    message="Long-form TTS error"
+                    title="Long-form TTS error"
                     description={ttsJobError}
                   />
                 )}
@@ -2753,7 +2879,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   <Alert
                     type="error"
                     showIcon
-                    message="Streaming error"
+                    title="Streaming error"
                     description={activeStreamError}
                   />
                 )}
@@ -2828,7 +2954,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   <Alert
                     type="warning"
                     showIcon
-                    message={t(
+                    title={t(
                       "playground:tts.tldwWarningTitle",
                       "tldw audio/speech API not detected"
                     )}
@@ -2881,10 +3007,13 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
             </Space>
           </div>
           <Text type="secondary" className="text-xs">
-            {t(
-              "playground:speech.historyRetentionHint",
-              "Keeps the most recent {{count}} items. Use Clear all to remove everything.",
-              { count: MAX_HISTORY_ITEMS }
+            {withTemplateFallback(
+              t(
+                "playground:speech.historyRetentionHint",
+                "Keeps the most recent {{count}} items. Use Clear all to remove everything.",
+                { count: MAX_HISTORY_ITEMS }
+              ),
+              `Keeps the most recent ${MAX_HISTORY_ITEMS} items. Use Clear all to remove everything.`
             )}
           </Text>
 

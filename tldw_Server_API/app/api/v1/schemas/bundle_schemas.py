@@ -23,7 +23,7 @@ class BundleCreateRequest(BaseModel):
     retention_hours: int | None = Field(
         None,
         ge=1,
-        description="Auto-delete bundles older than this many hours (not yet enforced).",
+        description="Auto-delete older bundles in the same user scope after creation.",
     )
     notes: str | None = Field(None, max_length=2000)
 

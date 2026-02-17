@@ -22,6 +22,9 @@ import {
   MessageSquare,
   ClipboardList,
   MicIcon,
+  ImageIcon,
+  SlidersHorizontal,
+  Sparkles,
   Trash2,
   Table2,
   Library,
@@ -29,8 +32,6 @@ import {
   ShieldCheck
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
-import OptionLayout from "@web/components/layout/WebLayout"
-import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import { createSettingsRoute } from "./settings-route"
 import { Navigate } from "react-router-dom"
 
@@ -55,6 +56,7 @@ export type RouteDefinition = {
 }
 
 const OptionIndex = lazy(() => import("./option-index"))
+const OptionOnboardingTest = lazy(() => import("./option-onboarding-test"))
 const OptionSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/general-settings"),
   "GeneralSettings"
@@ -132,6 +134,10 @@ const OptionSpeechSettings = createSettingsRoute(
   () => import("@/components/Option/Settings/SpeechSettings"),
   "SpeechSettings"
 )
+const OptionImageGenerationSettings = createSettingsRoute(
+  () => import("~/components/Option/Settings/ImageGenerationSettings"),
+  "ImageGenerationSettings"
+)
 // Note: OptionPromptStudio has been unified with OptionPromptsWorkspace (/prompts)
 // The /prompt-studio route now redirects to /prompts?tab=studio
 const OptionSettingsPromptStudio = createSettingsRoute(
@@ -144,6 +150,14 @@ const OptionAdminMlx = lazy(() => import("./option-admin-mlx"))
 const OptionChatSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/ChatSettings"),
   "ChatSettings"
+)
+const OptionUiCustomization = createSettingsRoute(
+  () => import("~/components/Option/Settings/ui-customization"),
+  "UiCustomizationSettings"
+)
+const OptionSplashSettings = createSettingsRoute(
+  () => import("~/components/Option/Settings/splash"),
+  "SplashSettings"
 )
 const OptionQuickIngestSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/QuickIngestSettings"),
@@ -180,11 +194,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   {
     kind: "options",
     path: "/onboarding-test",
-    element: (
-      <OptionLayout hideHeader>
-        <OnboardingWizard />
-      </OptionLayout>
-    ),
+    element: <OptionOnboardingTest />,
     targets: ALL_TARGETS
   },
   {
@@ -256,6 +266,28 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
+    path: "/settings/ui",
+    element: <OptionUiCustomization />,
+    nav: {
+      group: "server",
+      labelToken: "settings:uiCustomizationNav",
+      icon: SlidersHorizontal,
+      order: 3.5
+    }
+  },
+  {
+    kind: "options",
+    path: "/settings/splash",
+    element: <OptionSplashSettings />,
+    nav: {
+      group: "server",
+      labelToken: "settings:splashSettingsNav",
+      icon: Sparkles,
+      order: 3.6
+    }
+  },
+  {
+    kind: "options",
     path: "/settings/quick-ingest",
     element: <OptionQuickIngestSettings />,
     nav: {
@@ -275,6 +307,22 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       icon: MicIcon,
       order: 5
     }
+  },
+  {
+    kind: "options",
+    path: "/settings/image-generation",
+    element: <OptionImageGenerationSettings />,
+    nav: {
+      group: "server",
+      labelToken: "settings:imageGenerationSettingsNav",
+      icon: ImageIcon,
+      order: 7
+    }
+  },
+  {
+    kind: "options",
+    path: "/settings/image-gen",
+    element: <Navigate to="/settings/image-generation" replace />
   },
   {
     kind: "options",

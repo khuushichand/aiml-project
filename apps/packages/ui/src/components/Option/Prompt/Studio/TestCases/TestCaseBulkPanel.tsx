@@ -152,7 +152,7 @@ export const TestCaseBulkPanel: React.FC<TestCaseBulkPanelProps> = ({
       title={t("managePrompts.studio.testCases.bulkTitle", {
         defaultValue: "Import / Export Test Cases"
       })}
-      width={500}
+      size={500}
       destroyOnHidden
     >
       <Tabs
@@ -172,7 +172,7 @@ export const TestCaseBulkPanel: React.FC<TestCaseBulkPanelProps> = ({
                 <Alert
                   type="info"
                   showIcon
-                  message={t("managePrompts.studio.testCases.exportInfo", {
+                  title={t("managePrompts.studio.testCases.exportInfo", {
                     defaultValue:
                       "Export all test cases from this project to a file."
                   })}
@@ -239,7 +239,7 @@ export const TestCaseBulkPanel: React.FC<TestCaseBulkPanelProps> = ({
                 <Alert
                   type="info"
                   showIcon
-                  message={t("managePrompts.studio.testCases.importInfo", {
+                  title={t("managePrompts.studio.testCases.importInfo", {
                     defaultValue:
                       "Import test cases from a JSON or CSV file. New test cases will be added to the project."
                   })}

@@ -304,7 +304,7 @@ export const GeneralSettings = () => {
           <Alert
             type="info"
             showIcon
-            message={t(
+            title={t(
               "generalSettings.settings.enableOcrAssets.downloadNotice",
               "Enable to download OCR language assets for image text recognition"
             )}
@@ -315,7 +315,7 @@ export const GeneralSettings = () => {
           <Alert
             type="success"
             showIcon
-            message={t(
+            title={t(
               "generalSettings.settings.enableOcrAssets.assetsEnabled",
               "OCR assets enabled and ready"
             )}

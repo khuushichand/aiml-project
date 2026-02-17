@@ -473,6 +473,7 @@ async def setup_database():
             from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
                 ensure_api_keys_tables_pg,
                 ensure_authnz_core_tables_pg,
+                ensure_billing_tables_pg,
                 ensure_generated_files_table_pg,
                 ensure_org_provider_secrets_pg,
                 ensure_usage_tables_pg,
@@ -484,6 +485,11 @@ async def setup_database():
 
             # Ensure core AuthNZ tables (audit_logs, sessions, registration_codes, RBAC, orgs/teams)
             await ensure_authnz_core_tables_pg(pool)
+
+            # Ensure billing tables used by webhook/invoice/audit paths.
+            ok_billing_tables = await ensure_billing_tables_pg(pool)
+            if not ok_billing_tables:
+                raise RuntimeError("Failed to ensure Postgres billing tables")
 
             # Seed baseline RBAC roles and permissions (centralized helper to avoid drift)
             from tldw_Server_API.app.core.AuthNZ.rbac_seed import ensure_baseline_rbac_seed

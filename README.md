@@ -204,7 +204,12 @@ Already have dependencies installed locally? Use `make quickstart`.
 
 ### Manual Setup
 
-Prerequisites: Python 3.11+, ffmpeg, and (for audio capture paths) PyAudio/PortAudio.
+Supported Python versions for quickstart/manual setup:
+- Minimum: Python 3.10+
+- CI-tested: Python 3.11, 3.12, and 3.13
+- Recommended for local development: Python 3.12
+
+Prerequisites: Python, ffmpeg, and (for audio capture paths) PyAudio/PortAudio.
 
 Platform setup examples:
 ```bash
@@ -221,9 +226,24 @@ sudo dnf install -y ffmpeg portaudio-devel python3-pyaudio
 
 1) **Install**
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+# macOS/Linux: choose a supported interpreter explicitly (3.12 recommended)
+python3.12 -m venv .venv  # or python3.11 / python3.10
+source .venv/bin/activate
+
+# Windows (PowerShell)
+py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
+
+# Confirm venv interpreter version
+python --version
+
 pip install -e .
 ```
+
+PyAudio/PortAudio install notes by platform:
+- Linux: install distro packages (`portaudio19-dev` + `python3-pyaudio` on Debian/Ubuntu, `portaudio-devel` + `python3-pyaudio` on Fedora/RHEL).
+- macOS: `brew install portaudio` then `pip install pyaudio`.
+- Windows: `pip install pyaudio` inside the venv; if wheel build fails, install Microsoft C++ Build Tools and retry.
 
 2) **Configure** (minimal `tldw_Server_API/Config_Files/.env`)
 ```bash
@@ -266,6 +286,7 @@ pip install -e ".[otel]"          # OpenTelemetry metrics/tracing
 # Linux (Ubuntu/Debian): sudo apt install -y portaudio19-dev python3-pyaudio
 # Linux (Fedora/RHEL):   sudo dnf install -y portaudio-devel python3-pyaudio
 # macOS: brew install portaudio && pip install pyaudio
+# Windows (PowerShell):   pip install pyaudio  # if build fails, install Microsoft C++ Build Tools
 ```
 
 MCP secrets (`MCP_JWT_SECRET`, `MCP_API_KEY_SALT`) are auto-generated per-process
@@ -304,6 +325,9 @@ Install Bun (if needed):
 # macOS/Linux
 curl -fsSL https://bun.sh/install | bash
 
+# Windows (PowerShell)
+powershell -c "irm bun.sh/install.ps1 | iex"
+
 # Open a new terminal, then verify:
 bun --version
 ```
@@ -320,7 +344,7 @@ bun install
 Run the WebUI:
 
 ```bash
-bun run dev --port 8080
+bun run dev -- -p 8080
 ```
 
 Confirm `.env.local` contains:
@@ -351,7 +375,7 @@ In-process workers are fine for light dev use, but SQLite + multiple Uvicorn wor
 ### Run the Web UI (WIP)
 
 The current Next.js UI is a work in progress and may be unstable, buggy, or rough around the edges.
-Requires Node.js and npm (or yarn/pnpm).
+Use Bun (recommended) or Node.js with npm/yarn/pnpm.
 
 Quickest full-stack path (containerized API + WebUI):
 ```bash
@@ -377,8 +401,12 @@ NEXT_PUBLIC_API_VERSION=v1
 ```
 3) Install and run the dev server (use port 8080 to match default CORS):
 ```bash
-npm install
-npm run dev -- -p 8080
+bun install
+bun run dev -- -p 8080
+
+# npm fallback:
+# npm install
+# npm run dev -- -p 8080
 ```
 Open http://localhost:8080
 

@@ -59,6 +59,23 @@ describe("fetchAllServerChatPages", () => {
     expect(result).toHaveLength(4)
     expect(fetchPage).toHaveBeenCalledTimes(2)
   })
+
+  it("returns already-fetched chats when a later page is rate-limited", async () => {
+    const rateLimitedError = new Error("rate_limited (GET /api/v1/chats/)")
+    ;(rateLimitedError as Error & { status?: number }).status = 429
+    const fetchPage = vi
+      .fn()
+      .mockResolvedValueOnce({ chats: [createChat(1), createChat(2)], total: 6 })
+      .mockRejectedValueOnce(rateLimitedError)
+
+    const result = await fetchAllServerChatPages(fetchPage, {
+      limit: 2,
+      maxPages: 10
+    })
+
+    expect(result.map((chat) => chat.id)).toEqual(["chat-1", "chat-2"])
+    expect(fetchPage).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe("filterServerChatHistoryItems", () => {
@@ -115,6 +132,21 @@ describe("isRecoverableServerChatHistoryError", () => {
       isRecoverableServerChatHistoryError(
         new Error("The operation was aborted. (GET /api/v1/chats/)")
       )
+    ).toBe(true)
+
+    expect(
+      isRecoverableServerChatHistoryError(
+        new Error("rate_limited (GET /api/v1/chats/)")
+      )
+    ).toBe(true)
+  })
+
+  it("returns true for HTTP 429 rate-limit status", () => {
+    expect(
+      isRecoverableServerChatHistoryError({
+        message: "Too Many Requests (GET /api/v1/chats/)",
+        status: 429
+      })
     ).toBe(true)
   })
 

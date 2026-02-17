@@ -87,11 +87,33 @@ export const AUTH_CONFIG = {
   allowOffline: process.env.TLDW_E2E_ALLOW_OFFLINE !== "0"
 }
 
+type SeedAuthOverrides = {
+  serverUrl?: string
+  authMode?: "single-user" | "multi-user"
+  apiKey?: string
+  accessToken?: string
+  allowOffline?: boolean
+}
+
 /**
  * Seed authentication config in localStorage before page loads
  * Pattern from login.spec.ts:35-44 and playwright-login.mjs:118-137
  */
-export async function seedAuth(page: Page): Promise<void> {
+export async function seedAuth(
+  page: Page,
+  overrides: SeedAuthOverrides = {}
+): Promise<void> {
+  const cfg = {
+    serverUrl: overrides.serverUrl || AUTH_CONFIG.serverUrl,
+    authMode: overrides.authMode || "single-user",
+    apiKey: overrides.apiKey || AUTH_CONFIG.apiKey,
+    accessToken: overrides.accessToken || "",
+    allowOffline:
+      typeof overrides.allowOffline === "boolean"
+        ? overrides.allowOffline
+        : AUTH_CONFIG.allowOffline
+  }
+
   await page.addInitScript(
     (cfg) => {
       try {
@@ -99,8 +121,9 @@ export async function seedAuth(page: Page): Promise<void> {
           "tldwConfig",
           JSON.stringify({
             serverUrl: cfg.serverUrl,
-            authMode: "single-user",
-            apiKey: cfg.apiKey
+            authMode: cfg.authMode,
+            apiKey: cfg.apiKey,
+            accessToken: cfg.accessToken
           })
         )
       } catch {}
@@ -110,11 +133,36 @@ export async function seedAuth(page: Page): Promise<void> {
       try {
         if (cfg.allowOffline) {
           localStorage.setItem("__tldw_allow_offline", "true")
+        } else {
+          localStorage.removeItem("__tldw_allow_offline")
         }
       } catch {}
     },
-    AUTH_CONFIG
+    cfg
   )
+}
+
+/**
+ * Seed a deterministic admin fixture profile for smoke tests:
+ * - keeps auth in single-user mode
+ * - points serverUrl at the running WebUI base URL so Playwright route
+ *   intercepts can fully own admin API responses.
+ */
+export async function seedAdminFixtureProfile(
+  page: Page,
+  baseURL?: string
+): Promise<void> {
+  const targetServerUrl =
+    (typeof baseURL === "string" && baseURL.length > 0
+      ? baseURL
+      : process.env.TLDW_WEB_URL) || AUTH_CONFIG.serverUrl
+
+  await seedAuth(page, {
+    serverUrl: targetServerUrl,
+    authMode: "single-user",
+    apiKey: AUTH_CONFIG.apiKey,
+    allowOffline: false
+  })
 }
 
 /**
@@ -176,15 +224,6 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
     routes: ["/connectors", "/connectors/browse", "/connectors/jobs", "/connectors/sources", "/settings", "/config", "/profile", "/privileges"]
   },
   {
-    id: "m5-react-defaultprops-warning",
-    scope: "console",
-    pattern: /Support for defaultProps will be removed from function components/i,
-    rationale: "Legacy ReactMarkdown warning; tracked for component modernization.",
-    owner: "WebUI",
-    expiresOn: "2026-03-31",
-    routes: ["/flashcards"]
-  },
-  {
     id: "m5-react-non-boolean-attribute-warning",
     scope: "console",
     pattern: /Received `%s` for a non-boolean attribute `%s`/i,
@@ -206,10 +245,11 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
     id: "m5-media-max-update-depth-warning",
     scope: "console",
     pattern: /Maximum update depth exceeded/i,
-    rationale: "Known high-frequency state-update warning in media/review surfaces under sweep load.",
+    rationale:
+      "Known media route warning remains scoped to legacy review/media surfaces; Stage 3 critical audited routes are enforced separately.",
     owner: "WebUI",
-    expiresOn: "2026-03-15",
-    routes: ["/media", "/media/*", "/content-review", "/claims-review"]
+    expiresOn: "2026-03-31",
+    routes: ["/media", "/media/*", "/media-multi"]
   },
   {
     id: "m5-optional-resource-404-noise",

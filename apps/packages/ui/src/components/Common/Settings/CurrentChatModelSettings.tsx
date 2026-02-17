@@ -748,7 +748,7 @@ export const CurrentChatModelSettings = ({
         placement="right"
         open={open}
         onClose={() => setOpen(false)}
-        width={500}
+        size={500}
         title={t("currentChatModelSettings")}>
         {renderBody()}
       </Drawer>

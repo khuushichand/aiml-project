@@ -2101,7 +2101,7 @@ const SidepanelChat = () => {
             activeTitle={activeTabLabel}
             onRenameTitle={handleRenameActiveTab}
           />
-          <ConnectionBanner className="pt-12" />
+          {messages.length > 0 ? <ConnectionBanner className="pt-12" /> : null}
         </div>
         <div
           ref={drop}

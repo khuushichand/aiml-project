@@ -824,8 +824,10 @@ export class TldwApiClient {
     })
   }
 
-  async getModels(): Promise<TldwModel[]> {
-    const meta = await this.getModelsMetadata()
+  async getModels(options?: {
+    refreshOpenRouter?: boolean
+  }): Promise<TldwModel[]> {
+    const meta = await this.getModelsMetadata(options)
     const list =
       Array.isArray(meta) && meta.length > 0
         ? meta
@@ -898,10 +900,14 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: '/api/v1/llm/providers', method: 'GET' })
   }
 
-  async getModelsMetadata(): Promise<any> {
+  async getModelsMetadata(options?: {
+    refreshOpenRouter?: boolean
+  }): Promise<any> {
     // tldw_server returns either an array or an object
     // of the form { models: [...], total: N }.
-    return await bgRequest<any>({ path: '/api/v1/llm/models/metadata', method: 'GET' })
+    const query = options?.refreshOpenRouter ? "?refresh_openrouter=true" : ""
+    const path = appendPathQuery("/api/v1/llm/models/metadata", query)
+    return await bgRequest<any>({ path, method: 'GET' })
   }
 
   async getImageBackends(): Promise<ImageBackend[]> {
@@ -1018,10 +1024,11 @@ export class TldwApiClient {
   }
 
   // Admin / diagnostics helpers
-  async getSystemStats(): Promise<any> {
+  async getSystemStats(options?: { timeoutMs?: number }): Promise<any> {
     return await bgRequest<any>({
       path: "/api/v1/admin/stats",
-      method: "GET"
+      method: "GET",
+      timeoutMs: options?.timeoutMs
     })
   }
 
@@ -3416,11 +3423,12 @@ export class TldwApiClient {
   }
 
   // STT Methods
-  async getTranscriptionModels(): Promise<any> {
+  async getTranscriptionModels(options?: { timeoutMs?: number }): Promise<any> {
     await this.ensureConfigForRequest(true)
     return await bgRequest<any>({
       path: "/api/v1/media/transcription-models",
-      method: "GET"
+      method: "GET",
+      timeoutMs: options?.timeoutMs
     })
   }
 
@@ -4953,7 +4961,10 @@ export class TldwApiClient {
 
   async updateSkill(
     name: string,
-    payload: { content?: string; supporting_files?: Record<string, string> | null },
+    payload: {
+      content?: string
+      supporting_files?: Record<string, string | null> | null
+    },
     version?: number
   ): Promise<any> {
     const base = await this.resolveApiPath("skills.update", [
@@ -4978,7 +4989,7 @@ export class TldwApiClient {
   }
 
   async importSkill(payload: {
-    name: string
+    name?: string
     content: string
     supporting_files?: Record<string, string> | null
     overwrite?: boolean

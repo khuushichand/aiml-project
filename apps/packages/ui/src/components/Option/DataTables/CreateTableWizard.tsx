@@ -124,7 +124,7 @@ export const CreateTableWizard: React.FC = () => {
       {/* Intro tip */}
       {wizardStep === "sources" && (
         <Alert
-          message={
+          title={
             <span className="flex items-center gap-2">
               <Sparkles className="h-4 w-4" />
               {t("dataTables:wizard.tip", "Tip")}

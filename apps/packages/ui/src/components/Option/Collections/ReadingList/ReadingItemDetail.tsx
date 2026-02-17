@@ -859,7 +859,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
         title={null}
         open={itemDetailOpen}
         onClose={handleClose}
-        width={640}
+        size={640}
         className="reading-item-detail-drawer"
         styles={{ body: { padding: 0 } }}
       >

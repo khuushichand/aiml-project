@@ -316,7 +316,7 @@ export const GenerateCharacterPanel: React.FC<GenerateCharacterPanelProps> = ({
       <Alert
         type="info"
         showIcon
-        message={t("settings:manageCharacters.generate.noModelsTitle", {
+        title={t("settings:manageCharacters.generate.noModelsTitle", {
           defaultValue: "No models available"
         })}
         description={
@@ -357,7 +357,7 @@ export const GenerateCharacterPanel: React.FC<GenerateCharacterPanelProps> = ({
         <Alert
           type="error"
           showIcon
-          message={parsedError.message}
+          title={parsedError.message}
           description={
             <div className="flex items-center justify-between gap-2 mt-1">
               <span className="text-sm">{parsedError.action}</span>

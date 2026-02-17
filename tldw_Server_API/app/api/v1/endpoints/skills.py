@@ -154,7 +154,7 @@ async def get_skills_context(
     Returns formatted skill descriptions suitable for including in chat context.
     """
     try:
-        payload = service.get_context_payload()
+        payload = await service.get_context_payload_async()
         return SkillContextPayload(
             available_skills=[
                 SkillSummary(**s) for s in payload["available_skills"]

@@ -692,7 +692,7 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
             className="mt-2 rounded-2xl border border-border/70 bg-surface2/70 text-xs"
             type="info"
             showIcon
-            message={t(
+            title={t(
               'settings:onboarding.path.noServerTitle',
               'No server yet? You can still explore.'
             )}
@@ -765,7 +765,7 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
             className="mt-2 rounded-2xl border border-border/70 bg-surface2/70 text-xs"
             type="info"
             showIcon
-            message={t(
+            title={t(
               'settings:onboarding.path.demoTitle',
               'Explore the extension in demo mode'
             )}
@@ -972,7 +972,7 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
               (serverHint.tone === 'error'
                 ? 'text-danger'
                 : serverHint.tone === 'success'
-                ? 'text-success'
+                ? 'text-text font-medium'
                 : 'text-text-subtle')
             }
           >
@@ -1149,7 +1149,7 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
               className="mt-2"
               type="error"
               showIcon
-              message={t('settings:onboarding.connectionFailed')}
+              title={t('settings:onboarding.connectionFailed')}
               description={
                 <span className="inline-flex flex-col gap-1 text-xs">{authError}</span>
               }
@@ -1311,7 +1311,7 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
             <Alert
               type="error"
               showIcon
-              message={t('settings:onboarding.connectionFailed')}
+              title={t('settings:onboarding.connectionFailed')}
               className="rounded-2xl border border-danger/30 bg-danger/10"
               description={
                 <span className="inline-flex flex-col gap-1 text-xs">
@@ -1328,7 +1328,11 @@ const LegacyOnboardingWizard: React.FC<Props> = ({ onFinish }) => {
           )}
           <div className="flex justify-end">
             <Space>
-              <Button onClick={finish} className="rounded-full">
+              <Button
+                onClick={finish}
+                type="link"
+                className="rounded-full !text-text-muted underline decoration-text-muted/80 underline-offset-4 hover:!text-text"
+              >
                 {t('settings:onboarding.buttons.skip')}
               </Button>
               <Button

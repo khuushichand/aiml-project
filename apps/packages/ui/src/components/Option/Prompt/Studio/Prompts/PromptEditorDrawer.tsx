@@ -339,7 +339,7 @@ export const PromptEditorDrawer: React.FC<PromptEditorDrawerProps> = ({
                     <Alert
                       type="info"
                       showIcon
-                      message={t(
+                      title={t(
                         "managePrompts.studio.prompts.form.advancedInfo",
                         {
                           defaultValue:

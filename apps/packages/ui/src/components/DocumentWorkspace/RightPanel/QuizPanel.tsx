@@ -74,7 +74,7 @@ const QuestionCard: React.FC<{
             disabled={showAnswer}
             className="w-full"
           >
-            <Space direction="vertical" className="w-full">
+            <Space orientation="vertical" className="w-full">
               {question.options.map((option, i) => {
                 const isThisCorrect = option === question.correctAnswer
                 const isSelected = selectedAnswer === option

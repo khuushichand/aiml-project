@@ -324,7 +324,7 @@ export const DigestSchedulesPanel: React.FC = () => {
       {error && (
         <Alert
           type="error"
-          message={error}
+          title={error}
           action={
             <Button size="small" onClick={() => void loadSchedules()}>
               {t("common:retry", "Retry")}

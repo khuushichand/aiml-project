@@ -364,7 +364,7 @@ export const PromptSearch: React.FC<Props> = ({ onInsertMessage, onInsertSystem,
         destroyOnHidden
         centered
       >
-        <Space direction="vertical" className="w-full" onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); handleInsert() } }}>
+        <Space orientation="vertical" className="w-full" onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); handleInsert() } }}>
           <label className="text-xs text-text-subtle">{t('promptSearch.title')}</label>
           <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
           <label className="text-xs text-text-subtle">{t('promptSearch.content')}</label>
@@ -392,23 +392,35 @@ export const PromptSearch: React.FC<Props> = ({ onInsertMessage, onInsertSystem,
             </Link>
             <div className="flex gap-2 items-center">
               <Button onClick={() => setEditorOpen(false)}>{t('promptSearch.cancel')}</Button>
-              <Dropdown.Button
-                type="primary"
-                onClick={handleInsert}
-                loading={saving}
-                disabled={saving}
-                menu={{
-                  items: actionMenuItems
-                }}
-                icon={<ChevronDown className="size-3" />}
-              >
-                <span className="inline-flex items-center gap-1">
-                  {t('promptSearch.insert')}
-                  <kbd className="hidden sm:inline text-[10px] px-1 py-0.5 rounded bg-white/20 font-mono">
-                    {modifierKey}↵
-                  </kbd>
-                </span>
-              </Dropdown.Button>
+              <Space.Compact>
+                <Button
+                  type="primary"
+                  onClick={handleInsert}
+                  loading={saving}
+                  disabled={saving}
+                >
+                  <span className="inline-flex items-center gap-1">
+                    {t('promptSearch.insert')}
+                    <kbd className="hidden sm:inline text-[10px] px-1 py-0.5 rounded bg-white/20 font-mono">
+                      {modifierKey}↵
+                    </kbd>
+                  </span>
+                </Button>
+                <Dropdown
+                  menu={{
+                    items: actionMenuItems
+                  }}
+                  disabled={saving}
+                  trigger={['click']}
+                >
+                  <Button
+                    type="primary"
+                    icon={<ChevronDown className="size-3" />}
+                    aria-label={t('promptSearch.insertOptions', 'Open insert options') as string}
+                    title={t('promptSearch.insertOptions', 'Open insert options') as string}
+                  />
+                </Dropdown>
+              </Space.Compact>
             </div>
           </div>
         </Space>

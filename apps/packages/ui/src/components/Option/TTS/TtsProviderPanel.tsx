@@ -62,7 +62,7 @@ export const TtsProviderPanel: React.FC<Props> = ({
   }
 
   const content = (
-    <Space direction="vertical" className="w-full" size="middle">
+    <Space orientation="vertical" className="w-full" size="middle">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <div className="space-y-1">
             <Text strong>

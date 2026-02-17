@@ -126,7 +126,7 @@ const notifyChanges = (summary: string, details: string[]) => {
   const description = details.join(" · ")
   if (!description) return
   staticNotification.info({
-    message,
+    title: message,
     description,
     duration: 2
   })

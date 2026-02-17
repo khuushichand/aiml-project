@@ -126,7 +126,7 @@ https://uxdesign.cc/error-messages-a-guide-for-people-who-never-write-28206fcbdf
 https://uxdesign.cc/brands-that-are-totally-killing-it-with-voice-tone-style-and-how-you-can-too-47792613b267
 https://designerup.co/blog/i-stopped-using-figma-for-70-of-my-product-design-work-and-my-output-doubled/
 https://luisladino.github.io/adversarial-design-thinking/
-
+https://github.com/mitsuhiko/agent-stuff/blob/main/skills/frontend-design/SKILL.md
 
 Dashboards
     https://medium.com/@Santhanalakshmip/how-to-structure-your-dashboard-so-users-find-what-they-need-without-thinking-b971e9dc6c45

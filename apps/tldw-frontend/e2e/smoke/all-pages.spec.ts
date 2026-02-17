@@ -11,6 +11,7 @@
  */
 
 import type { Page } from '@playwright/test';
+import type { DiagnosticsData } from './smoke.setup';
 import {
   test,
   expect,
@@ -26,6 +27,14 @@ const ELEMENT_TIMEOUT = 15_000; // 15s max for element visibility
 const VERBOSE_CONSOLE = process.env.TLDW_SMOKE_VERBOSE_CONSOLE === '1';
 const ALLOWLIST_LOG_LIMIT = Number(process.env.TLDW_SMOKE_ALLOWLIST_LOG_LIMIT || 10);
 const SMOKE_HARD_GATE = process.env.TLDW_SMOKE_HARD_GATE !== '0';
+const TRANSIENT_RUNTIME_RETRY_ATTEMPTS = Math.max(
+  0,
+  Number(process.env.TLDW_SMOKE_TRANSIENT_RUNTIME_RETRIES || 1)
+);
+const TRANSIENT_RUNTIME_RETRY_DELAY_MS = Math.max(
+  0,
+  Number(process.env.TLDW_SMOKE_TRANSIENT_RUNTIME_RETRY_DELAY_MS || 500)
+);
 const KEY_NAV_TARGETS = ['/chat', '/media', '/knowledge', '/notes', '/prompts', '/settings/tldw'];
 const WAYFINDING_404_PATH = '/__wayfinding-missing-route__';
 const ROUTE_ERROR_FIXTURE_QUERY_KEY = '__forceRouteError';
@@ -98,6 +107,7 @@ const RUNTIME_OVERLAY_PATTERNS = [
   /Objects are not valid as a React child/i,
   /message\.error is not a function/i,
 ];
+const TRANSIENT_RUNTIME_OVERLAY_PATTERNS = [/Runtime SyntaxError/i, /Invalid or unexpected token/i];
 
 const keyNavEntries: PageEntry[] = KEY_NAV_TARGETS.map((targetPath) =>
   PAGES.find((entry) => entry.path === targetPath)
@@ -202,6 +212,86 @@ function hasRuntimeOverlaySignal(input: string): boolean {
   return RUNTIME_OVERLAY_PATTERNS.some((pattern) => pattern.test(input));
 }
 
+function hasTransientRuntimeOverlaySignal(input: string): boolean {
+  return TRANSIENT_RUNTIME_OVERLAY_PATTERNS.some((pattern) => pattern.test(input));
+}
+
+function resetDiagnostics(diagnostics: DiagnosticsData): void {
+  diagnostics.console.length = 0;
+  diagnostics.pageErrors.length = 0;
+  diagnostics.requestFailures.length = 0;
+}
+
+type RouteVisitResult = {
+  response: Awaited<ReturnType<Page['goto']>>;
+  issues: ReturnType<typeof getCriticalIssues>;
+  classifiedIssues: ReturnType<typeof classifySmokeIssues>;
+  retriesUsed: number;
+};
+
+async function visitRouteWithTransientRetry(
+  page: Page,
+  diagnostics: DiagnosticsData,
+  routePath: string
+): Promise<RouteVisitResult> {
+  let retriesUsed = 0;
+  let response: Awaited<ReturnType<Page['goto']>> = null;
+  let issues: ReturnType<typeof getCriticalIssues> = {
+    pageErrors: [],
+    consoleErrors: [],
+    requestFailures: [],
+  };
+  let classifiedIssues: ReturnType<typeof classifySmokeIssues> = {
+    pageErrors: [],
+    allowlistedConsoleErrors: [],
+    unexpectedConsoleErrors: [],
+    allowlistedRequestFailures: [],
+    unexpectedRequestFailures: [],
+  };
+
+  for (let attempt = 0; attempt <= TRANSIENT_RUNTIME_RETRY_ATTEMPTS; attempt += 1) {
+    resetDiagnostics(diagnostics);
+    response = await page.goto(routePath, {
+      waitUntil: 'domcontentloaded',
+      timeout: LOAD_TIMEOUT,
+    });
+    await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+
+    issues = getCriticalIssues(diagnostics);
+    classifiedIssues = classifySmokeIssues(routePath, issues);
+
+    const bodyText = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '');
+    const transientSignals = [
+      ...issues.pageErrors.map((entry) => entry.message).filter(hasTransientRuntimeOverlaySignal),
+      ...issues.consoleErrors.map((entry) => entry.text).filter(hasTransientRuntimeOverlaySignal),
+    ];
+    if (hasTransientRuntimeOverlaySignal(bodyText)) {
+      transientSignals.push('runtime-overlay-body-signal');
+    }
+
+    const shouldRetry =
+      transientSignals.length > 0 && attempt < TRANSIENT_RUNTIME_RETRY_ATTEMPTS;
+    if (!shouldRetry) {
+      break;
+    }
+
+    retriesUsed = attempt + 1;
+    console.warn(
+      `[smoke-transient-runtime-retry] ${routePath} retry ${retriesUsed}/${TRANSIENT_RUNTIME_RETRY_ATTEMPTS} after transient runtime overlay signal: ${transientSignals[0]}`
+    );
+    if (TRANSIENT_RUNTIME_RETRY_DELAY_MS > 0) {
+      await page.waitForTimeout(TRANSIENT_RUNTIME_RETRY_DELAY_MS);
+    }
+  }
+
+  return {
+    response,
+    issues,
+    classifiedIssues,
+    retriesUsed,
+  };
+}
+
 async function assertNoRuntimeOverlay(
   page: Page,
   issues: ReturnType<typeof getCriticalIssues>,
@@ -250,16 +340,12 @@ test.describe('Smoke Tests - All Pages', () => {
   // Generate a test for each active page
   for (const entry of getActivePages()) {
     test(`${entry.name} (${entry.path})`, async ({ page, diagnostics }) => {
-      // Navigate to the page
-      const response = await page.goto(entry.path, {
-        waitUntil: 'domcontentloaded',
-        timeout: LOAD_TIMEOUT,
-      });
-
-      // Wait for network to settle (but don't fail if it times out)
-      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {
-        // Network didn't settle, that's okay - we'll check for errors
-      });
+      // Navigate to the page and retry once for transient dev-runtime syntax overlay flake.
+      const { response, issues, classifiedIssues, retriesUsed } = await visitRouteWithTransientRetry(
+        page,
+        diagnostics,
+        entry.path
+      );
 
       // Check HTTP response status
       const status = response?.status();
@@ -287,16 +373,17 @@ test.describe('Smoke Tests - All Pages', () => {
           timeout: ELEMENT_TIMEOUT,
         });
       }
-
-      // Get critical issues from diagnostics
-      const issues = getCriticalIssues(diagnostics);
-      const classifiedIssues = classifySmokeIssues(entry.path, issues);
       await assertNoRuntimeOverlay(page, issues, entry.path);
 
       // Log any issues found (useful for debugging)
       const diagnosticOutput = formatDiagnostics(entry, issues, classifiedIssues);
       if (diagnosticOutput) {
         console.log(diagnosticOutput);
+      }
+      if (retriesUsed > 0) {
+        console.log(
+          `[smoke-transient-runtime-retry] ${entry.path} stabilized after ${retriesUsed} retr${retriesUsed === 1 ? 'y' : 'ies'}`
+        );
       }
 
       // Assertions
@@ -325,11 +412,11 @@ test.describe('Smoke Tests - Chat', () => {
 
   for (const entry of PAGES.filter((p) => p.category === 'chat' && !p.skip)) {
     test(`${entry.name}`, async ({ page, diagnostics }) => {
-      await page.goto(entry.path, { waitUntil: 'domcontentloaded' });
-      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
-
-      const issues = getCriticalIssues(diagnostics);
-      const classifiedIssues = classifySmokeIssues(entry.path, issues);
+      const { issues, classifiedIssues } = await visitRouteWithTransientRetry(
+        page,
+        diagnostics,
+        entry.path
+      );
       assertWarningHardGate(entry.path, classifiedIssues);
       expect(issues.pageErrors).toHaveLength(0);
     });
@@ -343,11 +430,11 @@ test.describe('Smoke Tests - Settings', () => {
 
   for (const entry of PAGES.filter((p) => p.category === 'settings' && !p.skip)) {
     test(`${entry.name}`, async ({ page, diagnostics }) => {
-      await page.goto(entry.path, { waitUntil: 'domcontentloaded' });
-      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
-
-      const issues = getCriticalIssues(diagnostics);
-      const classifiedIssues = classifySmokeIssues(entry.path, issues);
+      const { issues, classifiedIssues } = await visitRouteWithTransientRetry(
+        page,
+        diagnostics,
+        entry.path
+      );
       assertWarningHardGate(entry.path, classifiedIssues);
       expect(issues.pageErrors).toHaveLength(0);
     });
@@ -361,11 +448,11 @@ test.describe('Smoke Tests - Admin', () => {
 
   for (const entry of PAGES.filter((p) => p.category === 'admin' && !p.skip)) {
     test(`${entry.name}`, async ({ page, diagnostics }) => {
-      await page.goto(entry.path, { waitUntil: 'domcontentloaded' });
-      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
-
-      const issues = getCriticalIssues(diagnostics);
-      const classifiedIssues = classifySmokeIssues(entry.path, issues);
+      const { issues, classifiedIssues } = await visitRouteWithTransientRetry(
+        page,
+        diagnostics,
+        entry.path
+      );
       assertWarningHardGate(entry.path, classifiedIssues);
       expect(issues.pageErrors).toHaveLength(0);
     });
@@ -379,11 +466,11 @@ test.describe('Smoke Tests - Workspace', () => {
 
   for (const entry of PAGES.filter((p) => p.category === 'workspace' && !p.skip)) {
     test(`${entry.name}`, async ({ page, diagnostics }) => {
-      await page.goto(entry.path, { waitUntil: 'domcontentloaded' });
-      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
-
-      const issues = getCriticalIssues(diagnostics);
-      const classifiedIssues = classifySmokeIssues(entry.path, issues);
+      const { issues, classifiedIssues } = await visitRouteWithTransientRetry(
+        page,
+        diagnostics,
+        entry.path
+      );
       assertWarningHardGate(entry.path, classifiedIssues);
       expect(issues.pageErrors).toHaveLength(0);
     });
@@ -397,11 +484,11 @@ test.describe('Smoke Tests - Knowledge', () => {
 
   for (const entry of PAGES.filter((p) => p.category === 'knowledge' && !p.skip)) {
     test(`${entry.name}`, async ({ page, diagnostics }) => {
-      await page.goto(entry.path, { waitUntil: 'domcontentloaded' });
-      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
-
-      const issues = getCriticalIssues(diagnostics);
-      const classifiedIssues = classifySmokeIssues(entry.path, issues);
+      const { issues, classifiedIssues } = await visitRouteWithTransientRetry(
+        page,
+        diagnostics,
+        entry.path
+      );
       assertWarningHardGate(entry.path, classifiedIssues);
       expect(issues.pageErrors).toHaveLength(0);
     });
@@ -415,10 +502,7 @@ test.describe('Smoke Tests - Audio', () => {
 
   for (const entry of PAGES.filter((p) => p.category === 'audio' && !p.skip)) {
     test(`${entry.name}`, async ({ page, diagnostics }) => {
-      await page.goto(entry.path, { waitUntil: 'domcontentloaded' });
-      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
-
-      const issues = getCriticalIssues(diagnostics);
+      const { issues } = await visitRouteWithTransientRetry(page, diagnostics, entry.path);
       expect(issues.pageErrors).toHaveLength(0);
     });
   }

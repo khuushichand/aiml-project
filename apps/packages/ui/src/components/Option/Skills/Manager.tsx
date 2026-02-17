@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Button,
+  Form,
   Input,
   Table,
   Tag,
@@ -8,7 +9,8 @@ import {
   Dropdown,
   Upload,
   Pagination,
-  Modal
+  Modal,
+  Switch
 } from "antd"
 import type { ColumnsType } from "antd/es/table"
 import React from "react"
@@ -20,7 +22,8 @@ import {
   Download,
   Upload as UploadIcon,
   Play,
-  FileDown
+  FileDown,
+  FileText
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
@@ -33,6 +36,13 @@ import type {
 } from "@/types/skill"
 
 const DEFAULT_PAGE_SIZE = 10
+const SKILL_NAME_REGEX = /^[a-z][a-z0-9-]{0,63}$/
+
+interface ImportTextFormValues {
+  name?: string
+  content: string
+  overwrite?: boolean
+}
 
 export const SkillsManager: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
@@ -43,8 +53,10 @@ export const SkillsManager: React.FC = () => {
   const [pageSize, setPageSize] = React.useState(DEFAULT_PAGE_SIZE)
   const [search, setSearch] = React.useState("")
   const [drawerOpen, setDrawerOpen] = React.useState(false)
+  const [importTextOpen, setImportTextOpen] = React.useState(false)
   const [editingSkill, setEditingSkill] = React.useState<SkillResponse | null>(null)
   const [previewSkill, setPreviewSkill] = React.useState<string | null>(null)
+  const [importTextForm] = Form.useForm<ImportTextFormValues>()
 
   const offset = (page - 1) * pageSize
 
@@ -75,6 +87,28 @@ export const SkillsManager: React.FC = () => {
     onError: (err: any) => {
       notification.error({
         message: t("option:skills.deleteError", { defaultValue: "Failed to delete skill" }),
+        description: err?.message
+      })
+    }
+  })
+
+  const importTextMutation = useMutation({
+    mutationFn: (payload: {
+      name?: string
+      content: string
+      overwrite?: boolean
+    }) => tldwClient.importSkill(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["skills"] })
+      setImportTextOpen(false)
+      importTextForm.resetFields()
+      notification.success({
+        message: t("option:skills.importSuccess", { defaultValue: "Skill imported" })
+      })
+    },
+    onError: (err: any) => {
+      notification.error({
+        message: t("option:skills.importError", { defaultValue: "Failed to import skill" }),
         description: err?.message
       })
     }
@@ -147,6 +181,33 @@ export const SkillsManager: React.FC = () => {
       })
     }
     return false // prevent antd Upload default behavior
+  }
+
+  const openImportTextModal = () => {
+    importTextForm.resetFields()
+    importTextForm.setFieldsValue({ overwrite: false, content: "" })
+    setImportTextOpen(true)
+  }
+
+  const handleImportTextSubmit = async () => {
+    try {
+      const values = await importTextForm.validateFields()
+      const payload: {
+        name?: string
+        content: string
+        overwrite?: boolean
+      } = {
+        content: values.content,
+        overwrite: Boolean(values.overwrite)
+      }
+      const trimmedName = values.name?.trim()
+      if (trimmedName) {
+        payload.name = trimmedName
+      }
+      await importTextMutation.mutateAsync(payload)
+    } catch {
+      // validation errors handled by antd
+    }
   }
 
   const handleDrawerClose = () => {
@@ -232,6 +293,16 @@ export const SkillsManager: React.FC = () => {
 
   const importMenuItems = [
     {
+      key: "text",
+      label: (
+        <span className="flex items-center gap-2">
+          <FileText size={14} />
+          {t("option:skills.importText", { defaultValue: "Import Text" })}
+        </span>
+      ),
+      onClick: openImportTextModal
+    },
+    {
       key: "file",
       label: (
         <Upload
@@ -296,6 +367,79 @@ export const SkillsManager: React.FC = () => {
           />
         </div>
       )}
+
+      <Modal
+        title={t("option:skills.importTextTitle", {
+          defaultValue: "Import Skill from Text"
+        })}
+        open={importTextOpen}
+        onCancel={() => setImportTextOpen(false)}
+        onOk={handleImportTextSubmit}
+        okText={t("option:skills.import", { defaultValue: "Import" })}
+        okButtonProps={{ loading: importTextMutation.isPending }}
+        destroyOnHidden
+      >
+        <Form
+          form={importTextForm}
+          layout="vertical"
+          initialValues={{ overwrite: false }}
+          autoComplete="off"
+        >
+          <Form.Item
+            name="name"
+            label={t("option:skills.nameLabel", { defaultValue: "Name" })}
+            rules={[
+              {
+                validator: async (_, value: string | undefined) => {
+                  const trimmed = (value ?? "").trim()
+                  if (!trimmed) return
+                  if (!SKILL_NAME_REGEX.test(trimmed)) {
+                    throw new Error(
+                      t("option:skills.nameInvalid", {
+                        defaultValue:
+                          "Must start with a letter, use only lowercase letters, numbers, and hyphens (max 64 chars)"
+                      })
+                    )
+                  }
+                }
+              }
+            ]}
+            extra={t("option:skills.importNameOptional", {
+              defaultValue: "Optional. If omitted, name from frontmatter will be used."
+            })}
+          >
+            <Input placeholder="my-skill-name" maxLength={64} className="font-mono" />
+          </Form.Item>
+
+          <Form.Item
+            name="content"
+            label={t("option:skills.contentLabel", {
+              defaultValue: "SKILL.md Content"
+            })}
+            rules={[
+              {
+                required: true,
+                whitespace: true,
+                message: t("option:skills.contentRequired", {
+                  defaultValue: "Content is required"
+                })
+              }
+            ]}
+          >
+            <Input.TextArea rows={14} className="font-mono text-xs" />
+          </Form.Item>
+
+          <Form.Item
+            name="overwrite"
+            valuePropName="checked"
+            label={t("option:skills.importOverwrite", {
+              defaultValue: "Overwrite existing skill"
+            })}
+          >
+            <Switch />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <SkillDrawer
         open={drawerOpen}

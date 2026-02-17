@@ -11,6 +11,7 @@ import { getQueryClient } from "@/services/query-client"
 import { SplashOverlay } from "@/components/Common/SplashScreen"
 import { useSplashScreen } from "@/hooks/useSplashScreen"
 import { SPLASH_TRIGGER_EVENT } from "@/services/splash-events"
+import { patchStaticAntdNotificationCompat } from "@/utils/antd-notification-compat"
 
 type AppProvidersProps = {
   children: React.ReactNode
@@ -18,6 +19,7 @@ type AppProvidersProps = {
 
 const queryClient = getQueryClient()
 const EMPTY_STYLES = { image: { height: 60 } }
+patchStaticAntdNotificationCompat()
 
 export const AppProviders: React.FC<AppProvidersProps> = ({ children }) => {
   const { antdTheme } = useTheme()

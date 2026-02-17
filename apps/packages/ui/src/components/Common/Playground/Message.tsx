@@ -1211,12 +1211,20 @@ export const PlaygroundMessage = (props: Props) => {
                     }}
                   />
                 ) : renderGreetingMarkdown ? (
-                  <Markdown
-                    message={props.message}
-                    className={`${MARKDOWN_BASE_CLASSES} ${assistantTextClass}`}
-                    searchQuery={props.searchQuery}
-                    codeBlockVariant="compact"
-                  />
+                  <React.Suspense
+                    fallback={
+                      <p
+                        className={`text-body text-text-muted ${assistantTextClass}`}>
+                        {t("loading.content")}
+                      </p>
+                    }>
+                    <Markdown
+                      message={props.message}
+                      className={`${MARKDOWN_BASE_CLASSES} ${assistantTextClass}`}
+                      searchQuery={props.searchQuery}
+                      codeBlockVariant="compact"
+                    />
+                  </React.Suspense>
                 ) : (
                   <>
                     {parseReasoning(props.message).map((e, i) => {

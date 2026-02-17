@@ -159,7 +159,7 @@ export const ImportPanel = ({ onImported }: ImportPanelProps) => {
       <Alert
         type="info"
         className="mb-4"
-        message="Supported formats"
+        title="Supported formats"
         description={
           <ul className="list-disc ml-4 mt-2">
             <li>

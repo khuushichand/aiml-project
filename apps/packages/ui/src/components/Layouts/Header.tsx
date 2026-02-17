@@ -8,6 +8,7 @@ import { useSetting } from "@/hooks/useSetting"
 import { HEADER_SHORTCUTS_EXPANDED_SETTING } from "@/services/settings/ui-settings"
 import { ChatHeader } from "./ChatHeader"
 import { TtsClipsDrawer } from "@/components/Sidepanel/Chat/TtsClipsDrawer"
+import { useDarkMode } from "@/hooks/useDarkmode"
 
 type Props = {
   onToggleSidebar?: () => void
@@ -28,6 +29,7 @@ export const Header: React.FC<Props> = ({
   const [headerShortcutsExpanded, setHeaderShortcutsExpanded] = useSetting(
     HEADER_SHORTCUTS_EXPANDED_SETTING
   )
+  const { mode: themeMode, toggleDarkMode } = useDarkMode()
   const { clearChat, historyId, temporaryChat } = useMessageOption()
   const navigate = useNavigate()
   const [chatTitle, setChatTitle] = React.useState("")
@@ -103,6 +105,8 @@ export const Header: React.FC<Props> = ({
         onOpenCommandPalette={openCommandPalette}
         onOpenShortcutsModal={openShortcutsModal}
         onOpenSettings={() => navigate("/settings/tldw")}
+        onToggleTheme={toggleDarkMode}
+        themeMode={themeMode}
         onClearChat={clearChat}
         shortcutsExpanded={headerShortcutsExpanded}
         onToggleShortcuts={toggleHeaderShortcuts}

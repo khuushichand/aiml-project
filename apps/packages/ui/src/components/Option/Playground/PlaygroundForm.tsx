@@ -14,7 +14,8 @@ import {
   Tooltip,
   Popover,
   Modal,
-  Button
+  Button,
+  Space
 } from "antd"
 import { useWebUI } from "~/store/webui"
 import { defaultEmbeddingModelForRag } from "~/services/tldw-server"
@@ -117,6 +118,7 @@ import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useStoreMessageOption } from "@/store/option"
 import { trackOnboardingChatSubmitSuccess } from "@/utils/onboarding-ingestion-telemetry"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
+import { withTemplateFallback } from "@/utils/template-guards"
 import {
   buildAvailableChatModelIds,
   findUnavailableChatModel,
@@ -1642,14 +1644,21 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       ) as string
     }
     if (speechUsesServer) {
+      const sttModelLabel = sttModel || "whisper-1"
+      const sttTaskLabel = sttTask === "translate" ? "translate" : "transcribe"
+      const sttFormatLabel = (sttResponseFormat || "json").toUpperCase()
+      const speechDetails = withTemplateFallback(
+        t("playground:tooltip.speechToTextDetails", "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.", {
+          model: sttModelLabel,
+          task: sttTaskLabel,
+          format: sttFormatLabel
+        } as any),
+        `Uses ${sttModelLabel} · ${sttTaskLabel} · ${sttFormatLabel}. Configure in Settings -> General -> Speech-to-Text.`
+      )
       return (
         (t("playground:tooltip.speechToTextServer", "Dictation via your tldw server") as string) +
         " " +
-        (t("playground:tooltip.speechToTextDetails", "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.", {
-          model: sttModel || "whisper-1",
-          task: sttTask === "translate" ? "translate" : "transcribe",
-          format: (sttResponseFormat || "json").toUpperCase()
-        } as any) as string)
+        speechDetails
       )
     }
     return t("playground:tooltip.speechToTextBrowser", "Dictation via browser speech recognition") as string
@@ -3891,7 +3900,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
     if (!actionBarVisible || wasVisible) return
 
-    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    let timeoutId: number | null = null
     const rafId = window.requestAnimationFrame(() => {
       keepComposerBottomInView()
       timeoutId = window.setTimeout(() => {
@@ -4107,7 +4116,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         <span>
           <TldwButton
             variant="outline"
-            size="sm"
+            size={isMobileViewport ? "lg" : "sm"}
             shape={isProMode ? "rounded" : "pill"}
             iconOnly={!isProMode}
             ariaLabel={t("playground:actions.attachImage", "Attach image") as string}
@@ -4143,7 +4152,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       >
         <TldwButton
           variant="outline"
-          size="sm"
+          size={isMobileViewport ? "lg" : "sm"}
           shape={isProMode ? "rounded" : "pill"}
           iconOnly
           ariaLabel={t("playground:actions.attachMore", "More attachments") as string}
@@ -4157,91 +4166,118 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   )
 
   const sendControl = !isSending ? (
-    <Dropdown.Button
-      size={isProMode ? "middle" : "small"}
-      open={sendMenuOpen}
-      onOpenChange={(open) => setSendMenuOpen(open)}
-      htmlType="submit"
-      disabled={isSending || !isConnectionReady}
-      title={
-        !isConnectionReady
-          ? (t(
-              "playground:composer.connectToSend",
-              "Connect to your tldw server to start chatting."
-            ) as string)
-          : sendWhenEnter
-            ? (t("playground:composer.submitAriaEnter", "Send message (Enter)") as string)
-            : (t(
-                "playground:composer.submitAriaModEnter",
-                isMac ? "Send message (⌘+Enter)" : "Send message (Ctrl+Enter)"
-              ) as string)
-      }
-      aria-label={
-        t("playground:composer.submitAria", "Send message") as string
-      }
+    <Space.Compact
       className={`!justify-end !w-auto ${
         isProMode ? "" : "!h-9 !rounded-full !px-3 !text-xs"
       }`}
-      icon={
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          strokeWidth={1.5}
-          stroke="currentColor"
-          className={isProMode ? "w-5 h-5" : "w-4 h-4"}>
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="m19.5 8.25-7.5 7.5-7.5-7.5"
-          />
-        </svg>
-      }
-      menu={{
-        items: [
-          {
-            key: 1,
-            label: (
-              <Checkbox
-                checked={sendWhenEnter}
-                onChange={(e) =>
-                  setSendWhenEnter(e.target.checked)
-                }>
-                {t("sendWhenEnter")}
-              </Checkbox>
-            )
-          }
-        ]
-      }}>
-      <div
-        className={`inline-flex items-center ${
-          isProMode ? "gap-2" : "gap-1"
-        }`}
+    >
+      <Button
+        size={isMobileViewport ? "large" : isProMode ? "middle" : "small"}
+        htmlType="submit"
+        disabled={isSending || !isConnectionReady}
+        className={isMobileViewport ? "min-h-[44px] min-w-[44px]" : undefined}
+        title={
+          !isConnectionReady
+            ? (t(
+                "playground:composer.connectToSend",
+                "Connect to your tldw server to start chatting."
+              ) as string)
+            : sendWhenEnter
+              ? (t("playground:composer.submitAriaEnter", "Send message (Enter)") as string)
+              : (t(
+                  "playground:composer.submitAriaModEnter",
+                  isMac ? "Send message (⌘+Enter)" : "Send message (Ctrl+Enter)"
+                ) as string)
+        }
+        aria-label={
+          t("playground:composer.submitAria", "Send message") as string
+        }
       >
-        {sendWhenEnter ? (
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            stroke="currentColor"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth="2"
-            className="h-5 w-5"
-            viewBox="0 0 24 24">
-            <path d="M9 10L4 15 9 20"></path>
-            <path d="M20 4v7a4 4 0 01-4 4H4"></path>
-          </svg>
-        ) : null}
-        <span
-          className={
-            isProMode
-              ? ""
-              : "text-[11px] font-semibold uppercase tracking-[0.12em]"
-          }>
-          {sendLabel}
-        </span>
-      </div>
-    </Dropdown.Button>
+        <div
+          className={`inline-flex items-center ${
+            isProMode ? "gap-2" : "gap-1"
+          }`}
+        >
+          {sendWhenEnter ? (
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              className="h-5 w-5"
+              viewBox="0 0 24 24">
+              <path d="M9 10L4 15 9 20"></path>
+              <path d="M20 4v7a4 4 0 01-4 4H4"></path>
+            </svg>
+          ) : null}
+          <span
+            className={
+              isProMode
+                ? ""
+                : "text-[11px] font-semibold uppercase tracking-[0.12em]"
+            }>
+            {sendLabel}
+          </span>
+        </div>
+      </Button>
+      <Dropdown
+        open={sendMenuOpen}
+        onOpenChange={(open) => setSendMenuOpen(open)}
+        disabled={isSending || !isConnectionReady}
+        trigger={["click"]}
+        menu={{
+          items: [
+            {
+              key: 1,
+              label: (
+                <Checkbox
+                  checked={sendWhenEnter}
+                  onChange={(e) =>
+                    setSendWhenEnter(e.target.checked)
+                  }>
+                  {t("sendWhenEnter")}
+                </Checkbox>
+              )
+            }
+          ]
+        }}
+      >
+        <Button
+          size={isMobileViewport ? "large" : isProMode ? "middle" : "small"}
+          disabled={isSending || !isConnectionReady}
+          className={isMobileViewport ? "min-h-[44px] min-w-[44px]" : undefined}
+          aria-label={
+            t(
+              "playground:composer.sendOptions",
+              "Open send options"
+            ) as string
+          }
+          title={
+            t(
+              "playground:composer.sendOptions",
+              "Open send options"
+            ) as string
+          }
+          icon={
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={1.5}
+              stroke="currentColor"
+              className={isProMode ? "w-5 h-5" : "w-4 h-4"}>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m19.5 8.25-7.5 7.5-7.5-7.5"
+              />
+            </svg>
+          }
+        />
+      </Dropdown>
+    </Space.Compact>
   ) : (
     <Tooltip
       title={
@@ -4394,6 +4430,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                     ref={inputRef}
                     accept="image/*"
                     multiple={false}
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    aria-label={t("playground:actions.attachImage", "Attach image") as string}
                     onChange={onInputChange}
                   />
                   <input
@@ -4404,6 +4443,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                     ref={fileInputRef}
                     accept=".pdf,.doc,.docx,.txt,.csv,.md,.markdown,text/markdown"
                     multiple={false}
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    aria-label={t("playground:actions.attachDocument", "Attach document") as string}
                     onChange={onFileInputChange}
                   />
 

@@ -111,6 +111,10 @@ export const KanbanPlayground = () => {
   }, [queryClient])
 
   const boards = boardsData?.boards ?? []
+  const emptyDescription =
+    boards.length > 0
+      ? "Select an existing board to get started"
+      : "No boards yet. Create your first board"
 
   const boardSelectorOptions = boards.map((b) => ({
     value: b.id,
@@ -178,7 +182,7 @@ export const KanbanPlayground = () => {
             </div>
           ) : !selectedBoardId ? (
             <Empty
-              description="Select a board or create a new one"
+              description={emptyDescription}
               className="mt-20"
             >
               <Button

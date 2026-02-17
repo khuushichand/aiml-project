@@ -238,7 +238,7 @@ export const ChapterVoiceSelector: React.FC<ChapterVoiceSelectorProps> = ({
   }
 
   return (
-    <Space direction="vertical" className="w-full" size="small">
+    <Space orientation="vertical" className="w-full" size="small">
       <div>
         <Text type="secondary" className="text-xs block mb-1">
           {t("audiobook:voice.providerLabel", "Provider")}

@@ -109,7 +109,9 @@ const warmModels = async (
   backgroundDiagnostics.lastModelWarmAt = Date.now()
   backgroundDiagnostics.lastModelWarmError = null
   try {
-    const models = await tldwModels.warmCache(Boolean(force))
+    const models = await tldwModels.warmCache(Boolean(force), {
+      refreshOpenRouter: Boolean(force)
+    })
 
     // Sync models to local database
     if (models && models.length > 0) {

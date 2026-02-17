@@ -95,7 +95,10 @@ export class TldwModelsService {
    * Get available models from tldw server
    * Uses cache to avoid frequent API calls
    */
-  async getModels(forceRefresh: boolean = false): Promise<ModelInfo[]> {
+  async getModels(
+    forceRefresh: boolean = false,
+    options?: { refreshOpenRouter?: boolean }
+  ): Promise<ModelInfo[]> {
     await this.ensureStorageLoaded()
     const config = await tldwClient.getConfig().catch(() => null)
     const scopeKey = this.buildCacheScope(config)
@@ -121,7 +124,9 @@ export class TldwModelsService {
 
     const fetchPromise = (async () => {
       await tldwClient.initialize()
-      const models = await tldwClient.getModels()
+      const models = await tldwClient.getModels({
+        refreshOpenRouter: options?.refreshOpenRouter === true
+      })
       
       // Transform tldw models to our format
       this.cachedModels = models.map(model => this.transformModel(model))
@@ -156,24 +161,33 @@ export class TldwModelsService {
   /**
    * Get chat models only
    */
-  async getChatModels(forceRefresh: boolean = false): Promise<ModelInfo[]> {
-    const models = await this.getModels(forceRefresh)
+  async getChatModels(
+    forceRefresh: boolean = false,
+    options?: { refreshOpenRouter?: boolean }
+  ): Promise<ModelInfo[]> {
+    const models = await this.getModels(forceRefresh, options)
     return models.filter(m => m.type === 'chat')
   }
 
   /**
    * Get embedding models only
    */
-  async getEmbeddingModels(forceRefresh: boolean = false): Promise<ModelInfo[]> {
-    const models = await this.getModels(forceRefresh)
+  async getEmbeddingModels(
+    forceRefresh: boolean = false,
+    options?: { refreshOpenRouter?: boolean }
+  ): Promise<ModelInfo[]> {
+    const models = await this.getModels(forceRefresh, options)
     return models.filter(m => m.type === 'embedding')
   }
 
   /**
    * Get image models only
    */
-  async getImageModels(forceRefresh: boolean = false): Promise<ModelInfo[]> {
-    const models = await this.getModels(forceRefresh)
+  async getImageModels(
+    forceRefresh: boolean = false,
+    options?: { refreshOpenRouter?: boolean }
+  ): Promise<ModelInfo[]> {
+    const models = await this.getModels(forceRefresh, options)
     return models.filter(m => m.type === 'image')
   }
 
@@ -300,8 +314,11 @@ export class TldwModelsService {
   /**
    * Warm the cache and return the latest models.
    */
-  async warmCache(force: boolean = false): Promise<ModelInfo[]> {
-    return await this.getModels(force)
+  async warmCache(
+    force: boolean = false,
+    options?: { refreshOpenRouter?: boolean }
+  ): Promise<ModelInfo[]> {
+    return await this.getModels(force, options)
   }
 }
 

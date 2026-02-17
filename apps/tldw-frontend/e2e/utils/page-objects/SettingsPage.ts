@@ -35,6 +35,12 @@ export class SettingsPage {
       | "tldw"
       | "model"
       | "chat"
+      | "ui"
+      | "splash"
+      | "quick-ingest"
+      | "image-generation"
+      | "image-gen"
+      | "guardian"
       | "prompt"
       | "knowledge"
       | "rag"
@@ -52,11 +58,12 @@ export class SettingsPage {
    */
   async waitForReady(): Promise<void> {
     await waitForNetworkIdle(this.page, 10000)
-    // Wait for form or settings container
-    const settingsForm = this.page.locator(
-      "form, [data-testid='settings-form'], .settings-container"
-    )
-    await expect(settingsForm.first()).toBeVisible({ timeout: 20000 })
+    // Settings pages are no longer guaranteed to render a form wrapper.
+    await expect(this.page.getByTestId("settings-navigation")).toBeVisible({
+      timeout: 20000
+    })
+    const settingsLinks = this.page.locator("[data-testid^='settings-nav-link-']")
+    await expect(settingsLinks.first()).toBeVisible({ timeout: 20000 })
   }
 
   /**

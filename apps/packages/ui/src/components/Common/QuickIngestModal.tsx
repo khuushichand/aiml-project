@@ -3814,7 +3814,7 @@ export const QuickIngestModal: React.FC<Props> = ({
         badges={tabBadges}
       />
 
-      <Space direction="vertical" className="w-full">
+      <Space orientation="vertical" className="w-full">
         {/* Connection/Onboarding banners shown on all tabs */}
         {!isOnlineForIngest && connectionBannerTitle && (
           <div className="rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
@@ -4605,7 +4605,7 @@ export const QuickIngestModal: React.FC<Props> = ({
             </div>
           ),
           children: (
-        <Space direction="vertical" className="w-full">
+        <Space orientation="vertical" className="w-full">
               <div className="flex items-center gap-2">
                 <Input
                   allowClear
@@ -4680,7 +4680,7 @@ export const QuickIngestModal: React.FC<Props> = ({
                             )
                           : g}
                       </Typography.Title>
-                      <Space direction="vertical" className="w-full">
+                      <Space orientation="vertical" className="w-full">
                         {(g === "Recommended"
                           ? recommended
                           : grouped[g]

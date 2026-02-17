@@ -169,6 +169,8 @@ export const DataTablesList: React.FC = () => {
             <Button
               type="text"
               size="small"
+              aria-label={t("dataTables:view", "View")}
+              className="min-h-[44px] min-w-[44px] md:min-h-[32px] md:min-w-[32px]"
               icon={<Eye className="h-4 w-4" />}
               onClick={() => openTableDetail(record.id)}
             />
@@ -179,6 +181,8 @@ export const DataTablesList: React.FC = () => {
               type="text"
               size="small"
               danger
+              aria-label={t("dataTables:delete", "Delete")}
+              className="min-h-[44px] min-w-[44px] md:min-h-[32px] md:min-w-[32px]"
               icon={<Trash2 className="h-4 w-4" />}
               onClick={() => openDeleteConfirm(record.id)}
             />

@@ -10,12 +10,13 @@ import platform
 import shutil
 import sqlite3
 import tempfile
+import threading
 import time
 import zipfile
 from dataclasses import dataclass
 from types import MappingProxyType
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -48,7 +49,7 @@ _ALL_DATASETS = ("media", "chacha", "prompts", "evaluations", "audit", "authnz")
 _PER_USER_DATASETS = frozenset(_ALL_DATASETS) - {"authnz"}
 
 # Concurrency: only one bundle operation at a time
-_bundle_lock = asyncio.Lock()
+_bundle_lock = threading.Lock()
 
 # Rate limiting: 5 operations per hour per (user_id, op_type)
 _rate_limit_windows: dict[tuple[int, str], list[float]] = {}
@@ -148,6 +149,43 @@ def _compute_sha256(file_path: str) -> str:
                 break
             h.update(chunk)
     return h.hexdigest()
+
+
+def _check_import_disk_space(
+    *,
+    file_path: str,
+    required_bytes: int,
+    datasets: list[str],
+    user_id: int | None,
+) -> None:
+    """Verify free disk space for all import write targets.
+
+    Import writes can touch:
+    - system temp dir (staging extraction),
+    - upload/temp file directory,
+    - live DB directories for datasets in the manifest.
+    """
+    check_paths: set[str] = {
+        os.path.realpath(tempfile.gettempdir()),
+        os.path.realpath(os.path.dirname(file_path) or _bundle_base_dir()),
+    }
+
+    for ds in datasets:
+        ds_user_id = None if ds == "authnz" else user_id
+        try:
+            live_db_path, _ = _resolve_dataset_db_path(ds, ds_user_id)
+        except Exception as exc:
+            logger.warning(
+                "Skipping live DB disk-space precheck for dataset {}: {}",
+                ds,
+                exc,
+            )
+            continue
+        live_dir = os.path.dirname(live_db_path) or "."
+        check_paths.add(os.path.realpath(live_dir))
+
+    for path in sorted(check_paths):
+        _check_disk_space(path, required_bytes)
 
 
 def _get_app_version() -> str | None:
@@ -266,6 +304,94 @@ def _read_manifest_from_zip(zip_path: str) -> dict[str, Any]:
             return json.loads(mf.read())
 
 
+def _prune_expired_bundles(
+    *,
+    retention_hours: int,
+    user_id: int | None,
+    exclude_bundle_ids: set[str] | None = None,
+) -> int:
+    """Delete expired bundles for a specific bundle scope.
+
+    Scope is limited to bundles whose manifest user_id matches the provided
+    user_id (including ``None`` for global bundles). Bundles with unreadable
+    manifests are skipped safely and left untouched.
+    """
+    if retention_hours <= 0:
+        return 0
+
+    base = _bundle_base_dir()
+    if not os.path.isdir(base):
+        return 0
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=retention_hours)
+    excluded = exclude_bundle_ids or set()
+    removed = 0
+
+    for entry in os.scandir(base):
+        if (
+            not entry.is_file(follow_symlinks=False)
+            or entry.is_symlink()
+            or not entry.name.endswith(".zip")
+            or entry.name in excluded
+        ):
+            continue
+
+        try:
+            manifest = _read_manifest_cached(entry.path)
+        except Exception as exc:
+            logger.warning(
+                "Skipping bundle retention cleanup for unreadable manifest {}: {}",
+                entry.name,
+                exc,
+            )
+            continue
+
+        if manifest.get("user_id") != user_id:
+            continue
+
+        created_raw = manifest.get("created_at")
+        if not isinstance(created_raw, str):
+            logger.warning(
+                "Skipping bundle retention cleanup for {}: invalid created_at",
+                entry.name,
+            )
+            continue
+
+        try:
+            created_at = datetime.fromisoformat(created_raw)
+        except Exception as exc:
+            logger.warning(
+                "Skipping bundle retention cleanup for {}: invalid created_at ({})",
+                entry.name,
+                exc,
+            )
+            continue
+
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        else:
+            created_at = created_at.astimezone(timezone.utc)
+
+        if created_at >= cutoff:
+            continue
+
+        try:
+            os.remove(entry.path)
+            removed += 1
+        except OSError as exc:
+            logger.warning("Failed to prune bundle {}: {}", entry.path, exc)
+            continue
+
+        sc = _sidecar_path(entry.path)
+        if os.path.isfile(sc):
+            try:
+                os.remove(sc)
+            except OSError:
+                pass
+
+    return removed
+
+
 # ---------------------------------------------------------------------------
 # Core operations
 # ---------------------------------------------------------------------------
@@ -374,6 +500,22 @@ def create_bundle(
         # Write sidecar manifest cache for fast listing
         _write_sidecar_manifest(final_path, manifest)
 
+        if retention_hours is not None:
+            try:
+                pruned = _prune_expired_bundles(
+                    retention_hours=retention_hours,
+                    user_id=user_id,
+                    exclude_bundle_ids={zip_name},
+                )
+                if pruned > 0:
+                    logger.info(
+                        "Pruned {} expired bundle(s) for user_id={}",
+                        pruned,
+                        user_id,
+                    )
+            except Exception as exc:
+                logger.warning("Bundle retention cleanup failed: {}", exc)
+
         stat = os.stat(final_path)
         _record_rate_limit(admin_user_id, "export")
         return BundleMetadata(
@@ -401,20 +543,17 @@ async def create_bundle_async(
     retention_hours: int | None = None,
     admin_user_id: int = 0,
 ) -> BundleMetadata:
-    """Async wrapper that acquires the concurrency lock, then runs create_bundle in a thread."""
-    if _bundle_lock.locked():
-        raise BundleConcurrencyError("bundle_operation_in_progress")
-    async with _bundle_lock:
-        return await asyncio.to_thread(
-            create_bundle,
-            datasets=datasets,
-            user_id=user_id,
-            include_vector_store=include_vector_store,
-            notes=notes,
-            max_backups=max_backups,
-            retention_hours=retention_hours,
-            admin_user_id=admin_user_id,
-        )
+    """Async wrapper that runs create_bundle under an atomic non-blocking lock."""
+    return await _run_bundle_operation_with_lock(
+        create_bundle,
+        datasets=datasets,
+        user_id=user_id,
+        include_vector_store=include_vector_store,
+        notes=notes,
+        max_backups=max_backups,
+        retention_hours=retention_hours,
+        admin_user_id=admin_user_id,
+    )
 
 
 def list_bundles(
@@ -515,15 +654,9 @@ def import_bundle(
     if not os.path.isfile(file_path):
         raise BundleImportError("file_not_found", error_code="file_not_found")
 
-    # Check disk space (3x ZIP size) on all partitions that will be written:
-    # the system temp dir (staging extraction) and the live DB directory.
+    # Estimate required import space from bundle size.
     zip_size = os.path.getsize(file_path)
     required = zip_size * 3
-    _check_disk_space(tempfile.gettempdir(), required)
-    _check_disk_space(
-        os.path.dirname(file_path) or _bundle_base_dir(),
-        required,
-    )
 
     try:
         manifest = _read_manifest_from_zip(file_path)
@@ -553,6 +686,14 @@ def import_bundle(
             raise BundleImportError(
                 "user_id_required", error_code="user_id_required"
             ) from exc
+
+    # Check disk space across all import write targets.
+    _check_import_disk_space(
+        file_path=file_path,
+        required_bytes=required,
+        datasets=datasets,
+        user_id=user_id,
+    )
 
     warnings: list[str] = []
     validations: list[dict[str, Any]] = []
@@ -596,6 +737,7 @@ def import_bundle(
                 "warnings": warnings,
                 "safety_snapshots": {},
                 "validations": validations,
+                "rollback_failures": [],
             }
         raise BundleSchemaIncompatibleError(
             f"schema_incompatible: {', '.join(v['dataset'] for v in incompatible)}"
@@ -652,6 +794,7 @@ def import_bundle(
                 "warnings": warnings,
                 "safety_snapshots": {},
                 "validations": validations,
+                "rollback_failures": [],
             }
 
         for ds in datasets:
@@ -734,7 +877,13 @@ def import_bundle(
                     detail += (
                         f"; rollback_failures: {'; '.join(rollback_failures)}"
                     )
-                raise BundleImportError(detail) from exc
+                import_exc = BundleImportError(
+                    detail,
+                    error_code="restore_failed",
+                )
+                if rollback_failures:
+                    import_exc.rollback_failures = rollback_failures  # type: ignore[attr-defined]
+                raise import_exc from exc
 
         _record_rate_limit(admin_user_id, "import")
         return {
@@ -743,6 +892,7 @@ def import_bundle(
             "warnings": warnings,
             "safety_snapshots": safety_snapshots,
             "validations": validations,
+            "rollback_failures": [],
         }
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
@@ -756,15 +906,43 @@ async def import_bundle_async(
     allow_downgrade: bool = False,
     admin_user_id: int = 0,
 ) -> dict[str, Any]:
-    """Async wrapper that acquires the concurrency lock, then runs import_bundle in a thread."""
-    if _bundle_lock.locked():
+    """Async wrapper that runs import_bundle under an atomic non-blocking lock."""
+    return await _run_bundle_operation_with_lock(
+        import_bundle,
+        file_path=file_path,
+        user_id=user_id,
+        dry_run=dry_run,
+        allow_downgrade=allow_downgrade,
+        admin_user_id=admin_user_id,
+    )
+
+
+async def _run_bundle_operation_with_lock(
+    operation: Callable[..., Any],
+    **kwargs: Any,
+) -> Any:
+    """Run an operation under the global bundle lock without queuing.
+
+    Uses an atomic non-blocking acquire so overlapping requests fail fast with
+    BundleConcurrencyError instead of waiting for the lock.
+    """
+    if not _bundle_lock.acquire(blocking=False):
         raise BundleConcurrencyError("bundle_operation_in_progress")
-    async with _bundle_lock:
-        return await asyncio.to_thread(
-            import_bundle,
-            file_path=file_path,
-            user_id=user_id,
-            dry_run=dry_run,
-            allow_downgrade=allow_downgrade,
-            admin_user_id=admin_user_id,
-        )
+
+    work_task: asyncio.Task[Any] | None = None
+    try:
+        work_task = asyncio.create_task(asyncio.to_thread(operation, **kwargs))
+        return await asyncio.shield(work_task)
+    except asyncio.CancelledError:
+        # Keep lock ownership until the background operation exits.
+        if work_task is not None:
+            try:
+                await work_task
+            except Exception as exc:
+                logger.warning(
+                    "Bundle operation ended with error after cancellation: {}",
+                    exc,
+                )
+        raise
+    finally:
+        _bundle_lock.release()

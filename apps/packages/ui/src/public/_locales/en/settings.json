@@ -3933,7 +3933,7 @@
     "message": "Core: unreachable"
   },
   "tldw_connection_coreUnknown": {
-    "message": "Core: waiting"
+    "message": "Core: not checked yet"
   },
   "tldw_connection_ragChecking": {
     "message": "RAG: checking…"
@@ -3945,7 +3945,7 @@
     "message": "RAG: needs attention"
   },
   "tldw_connection_ragUnknown": {
-    "message": "RAG: waiting"
+    "message": "RAG: not checked yet"
   },
   "tldw_billing_title": {
     "message": "Billing & usage"

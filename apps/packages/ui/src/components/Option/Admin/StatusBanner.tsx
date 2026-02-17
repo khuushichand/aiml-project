@@ -1,6 +1,7 @@
 import React from "react"
 import { Tag, Button, Space, Spin, Alert } from "antd"
 import { RefreshCw, Square } from "lucide-react"
+import { sanitizeAdminErrorMessage } from "./admin-error-utils"
 
 type StatusState = "running" | "online" | "stopped" | "offline" | "loading" | "active" | "inactive" | "unknown"
 
@@ -75,11 +76,15 @@ export const StatusBanner: React.FC<StatusBannerProps> = ({
   }
 
   if (error) {
+    const safeError = sanitizeAdminErrorMessage(
+      error,
+      "Unable to load status details."
+    )
     return (
       <Alert
         type="error"
-        message="Status Error"
-        description={error}
+        title="Status Error"
+        description={safeError}
         showIcon
         className={className}
         action={

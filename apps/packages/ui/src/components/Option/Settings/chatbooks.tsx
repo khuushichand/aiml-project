@@ -257,7 +257,7 @@ export const ChatbooksSettings = () => {
             type="info"
             showIcon
             className="mt-3"
-            message={t(
+            title={t(
               "settings:chatbooks.unavailable",
               "Chatbooks are not available on this server."
             )}

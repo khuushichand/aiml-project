@@ -207,7 +207,7 @@ export const SaveAsTemplateModal: React.FC<SaveAsTemplateModalProps> = ({
         {error && (
           <Alert
             type="error"
-            message={error}
+            title={error}
             closable
             onClose={() => setError(null)}
           />
@@ -344,7 +344,7 @@ export const SaveAsTemplateModal: React.FC<SaveAsTemplateModalProps> = ({
                         "Priority"
                       )}
                     >
-                      <Space direction="vertical" size={4} className="w-full">
+                      <Space orientation="vertical" size={4} className="w-full">
                         <InputNumber
                           value={priority}
                           onChange={(v) => setPriority(v)}

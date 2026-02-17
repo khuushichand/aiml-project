@@ -29,6 +29,7 @@ import type {
 } from "@/types/message-steering"
 
 const STREAMING_UPDATE_INTERVAL_MS = 80
+let didLogPipelineSetHistoryMissing = false
 
 export type ChatModeParamsBase = {
   selectedModel: string
@@ -223,16 +224,15 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     }
     const fallback = useStoreMessageOption.getState().setHistory
     if (typeof fallback === "function") {
-      console.error(
-        "[chat] runChatPipeline received non-callable setHistory; using store fallback",
-        { setHistoryType: typeof setHistory }
-      )
       fallback(nextHistory)
       return
     }
-    console.error("[chat] runChatPipeline could not resolve setHistory setter", {
-      setHistoryType: typeof setHistory
-    })
+    if (!didLogPipelineSetHistoryMissing) {
+      didLogPipelineSetHistoryMissing = true
+      console.error("[chat] runChatPipeline could not resolve setHistory setter", {
+        setHistoryType: typeof setHistory
+      })
+    }
   }
 
   const flushStreamingUpdate = () => {

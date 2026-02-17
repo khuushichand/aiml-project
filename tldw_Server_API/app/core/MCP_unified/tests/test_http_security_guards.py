@@ -3,9 +3,13 @@
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from tldw_Server_API.app.core.MCP_unified.security import ip_filter
-from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
+from tldw_Server_API.app.core.MCP_unified.security.request_guards import (
+    enforce_http_security,
+    enforce_request_body_limit,
+)
 
 
 def _build_guarded_app() -> FastAPI:
@@ -13,6 +17,12 @@ def _build_guarded_app() -> FastAPI:
 
     @app.post("/guarded")
     async def guarded_endpoint(
+        _guard: None = Depends(enforce_http_security),  # pragma: no cover - dependency handles logic
+    ):
+        return {"status": "ok"}
+
+    @app.get("/guarded-get")
+    async def guarded_get_endpoint(
         _guard: None = Depends(enforce_http_security),  # pragma: no cover - dependency handles logic
     ):
         return {"status": "ok"}
@@ -57,6 +67,93 @@ def test_enforce_http_security_rejects_large_payload(monkeypatch):
         assert r_big.status_code == 413
     finally:
         client.close()
+
+
+def test_enforce_http_security_get_skips_body_read(monkeypatch):
+    from types import SimpleNamespace
+
+    cfg = SimpleNamespace(
+        allowed_client_ips=[],
+        blocked_client_ips=[],
+        trust_x_forwarded_for=False,
+        trusted_proxy_depth=0,
+        trusted_proxy_ips=[],
+        http_max_body_bytes=32,
+        client_cert_required=False,
+        client_cert_header=None,
+        client_cert_header_value=None,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.MCP_unified.security.request_guards.get_config",
+        lambda: cfg,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.MCP_unified.security.ip_filter.get_config",
+        lambda: cfg,
+    )
+    try:
+        ip_filter.get_ip_access_controller.cache_clear()  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    body_call_count = {"count": 0}
+
+    async def _raise_if_called(_self) -> bytes:
+        body_call_count["count"] += 1
+        raise AssertionError("request.body() should not be called for GET")
+
+    monkeypatch.setattr(Request, "body", _raise_if_called)
+
+    client = TestClient(_build_guarded_app())
+    try:
+        response = client.get("/guarded-get")
+        assert response.status_code == 200
+        assert body_call_count["count"] == 0
+    finally:
+        client.close()
+
+
+@pytest.mark.asyncio
+async def test_enforce_request_body_limit_handles_client_disconnect(monkeypatch):
+    from types import SimpleNamespace
+
+    cfg = SimpleNamespace(
+        allowed_client_ips=[],
+        blocked_client_ips=[],
+        trust_x_forwarded_for=False,
+        trusted_proxy_depth=0,
+        trusted_proxy_ips=[],
+        http_max_body_bytes=1024,
+        client_cert_required=False,
+        client_cert_header=None,
+        client_cert_header_value=None,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.MCP_unified.security.request_guards.get_config",
+        lambda: cfg,
+    )
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/v1/mcp/health",
+        "raw_path": b"/api/v1/mcp/health",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+
+    async def _receive_disconnect():
+        return {"type": "http.disconnect"}
+
+    request = Request(scope, _receive_disconnect)
+
+    # Should not propagate starlette.requests.ClientDisconnect
+    await enforce_request_body_limit(request)
 
 
 def test_enforce_http_security_requires_client_certificate(monkeypatch):

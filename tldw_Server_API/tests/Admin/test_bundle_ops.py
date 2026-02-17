@@ -2,6 +2,7 @@
 # Description: Tests for admin backup bundle endpoints and service layer.
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import hashlib
 import io
 import json
@@ -141,6 +142,48 @@ def _make_bundle_zip(datasets=None, manifest_overrides=None, tamper_checksum=Fal
 
     buf.seek(0)
     return buf
+
+
+def _write_bundle_manifest_zip(
+    bundle_path: str,
+    *,
+    created_at: str,
+    user_id: int | None,
+) -> None:
+    """Write a minimal bundle ZIP with a manifest for retention tests."""
+    manifest = {
+        "manifest_version": 1,
+        "app_version": "0.1.0",
+        "created_at": created_at,
+        "user_id": user_id,
+        "datasets": ["authnz"],
+        "files": {},
+        "schema_versions": {},
+        "notes": None,
+        "platform": {"os": "test", "python": "3.12", "sqlite": "3.40"},
+    }
+    with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+
+
+def _set_bundle_created_at(bundle_path: str, created_at: str) -> None:
+    """Rewrite manifest created_at in both ZIP and sidecar cache."""
+    with zipfile.ZipFile(bundle_path, "r") as zf:
+        contents = {info.filename: zf.read(info.filename) for info in zf.infolist()}
+    manifest = json.loads(contents["manifest.json"].decode("utf-8"))
+    manifest["created_at"] = created_at
+    contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
+    with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in contents.items():
+            zf.writestr(name, data)
+
+    sidecar = bundle_path + ".manifest.json"
+    if os.path.isfile(sidecar):
+        with open(sidecar, encoding="utf-8") as f:
+            sidecar_manifest = json.loads(f.read())
+        sidecar_manifest["created_at"] = created_at
+        with open(sidecar, "w", encoding="utf-8") as f:
+            json.dump(sidecar_manifest, f, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +464,65 @@ async def test_import_dry_run(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_import_dry_run_includes_rollback_failures_field(tmp_path):
+    """Dry-run import responses should include rollback_failures as an empty list."""
+    _setup_env(tmp_path)
+    await _reset_state()
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    with TestClient(app, headers=headers) as client:
+        await _seed_authnz_data()
+
+        bundle_buf = _make_bundle_zip(datasets=["authnz"])
+        resp = client.post(
+            "/api/v1/admin/backups/bundles/import",
+            params={"dry_run": "true"},
+            files={"file": ("test.zip", bundle_buf, "application/zip")},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert "rollback_failures" in data
+        assert data["rollback_failures"] == []
+
+
+@pytest.mark.asyncio
+async def test_import_response_propagates_rollback_failures(tmp_path, monkeypatch):
+    """Endpoint should propagate rollback_failures from service result payload."""
+    _setup_env(tmp_path)
+    await _reset_state()
+
+    async def _fake_import_bundle_async(**_kwargs):
+        return {
+            "status": "imported",
+            "datasets_restored": ["authnz"],
+            "warnings": [],
+            "safety_snapshots": {"authnz": "snap.db"},
+            "validations": [],
+            "rollback_failures": ["authnz: rollback failed in prior phase"],
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.admin.admin_bundle_ops.svc.import_bundle_async",
+        _fake_import_bundle_async,
+    )
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    with TestClient(app, headers=headers) as client:
+        await _seed_authnz_data()
+        bundle_buf = _make_bundle_zip(datasets=["authnz"])
+        resp = client.post(
+            "/api/v1/admin/backups/bundles/import",
+            files={"file": ("test.zip", bundle_buf, "application/zip")},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["status"] == "imported"
+        assert data["rollback_failures"] == [
+            "authnz: rollback failed in prior phase"
+        ]
+
+
+@pytest.mark.asyncio
 async def test_import_tampered_checksum(tmp_path):
     """Import with tampered checksum should fail."""
     _setup_env(tmp_path)
@@ -538,6 +640,176 @@ async def test_import_real_restore(tmp_path):
         assert "authnz" in data["datasets_restored"]
 
 
+@pytest.mark.asyncio
+async def test_import_restore_failure_returns_structured_detail(tmp_path, monkeypatch):
+    """Restore failures should return structured details with rollback diagnostics."""
+    _setup_env(tmp_path)
+    await _reset_state()
+
+    from tldw_Server_API.app.core.exceptions import BundleImportError
+
+    async def _fake_import_bundle_async(**_kwargs):
+        exc = BundleImportError(
+            "restore_failed:media: restore boom; rollback_failures: authnz: rollback boom",
+            error_code="restore_failed",
+        )
+        exc.rollback_failures = ["authnz: rollback boom"]  # type: ignore[attr-defined]
+        raise exc
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.admin.admin_bundle_ops.svc.import_bundle_async",
+        _fake_import_bundle_async,
+    )
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    with TestClient(app, headers=headers) as client:
+        await _seed_authnz_data()
+        bundle_buf = _make_bundle_zip(datasets=["authnz"])
+        resp = client.post(
+            "/api/v1/admin/backups/bundles/import",
+            files={"file": ("test.zip", bundle_buf, "application/zip")},
+        )
+        assert resp.status_code == 400, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "restore_failed"
+        assert "restore_failed:media: restore boom" in detail["message"]
+        assert detail["rollback_failures"] == ["authnz: rollback boom"]
+
+
+@pytest.mark.asyncio
+async def test_import_error_detail_shape_contract_restore_failed_vs_checksum(
+    tmp_path,
+    monkeypatch,
+):
+    """Contract: restore_failed uses dict detail; checksum failures use string detail."""
+    _setup_env(tmp_path)
+    await _reset_state()
+
+    from tldw_Server_API.app.core.exceptions import BundleImportError
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    with TestClient(app, headers=headers) as client:
+        await _seed_authnz_data()
+
+        with monkeypatch.context() as mp:
+            async def _fake_import_bundle_async(**_kwargs):
+                exc = BundleImportError(
+                    "restore_failed:media: restore boom; rollback_failures: authnz: rollback boom",
+                    error_code="restore_failed",
+                )
+                exc.rollback_failures = ["authnz: rollback boom"]  # type: ignore[attr-defined]
+                raise exc
+
+            mp.setattr(
+                "tldw_Server_API.app.api.v1.endpoints.admin.admin_bundle_ops.svc.import_bundle_async",
+                _fake_import_bundle_async,
+            )
+
+            restore_buf = _make_bundle_zip(datasets=["authnz"])
+            restore_resp = client.post(
+                "/api/v1/admin/backups/bundles/import",
+                files={"file": ("restore_failed.zip", restore_buf, "application/zip")},
+            )
+
+        assert restore_resp.status_code == 400, restore_resp.text
+        restore_detail = restore_resp.json()["detail"]
+        assert isinstance(restore_detail, dict)
+        assert restore_detail["error_code"] == "restore_failed"
+        assert isinstance(restore_detail["rollback_failures"], list)
+
+        checksum_buf = _make_bundle_zip(datasets=["authnz"], tamper_checksum=True)
+        checksum_resp = client.post(
+            "/api/v1/admin/backups/bundles/import",
+            files={"file": ("checksum_failed.zip", checksum_buf, "application/zip")},
+        )
+        assert checksum_resp.status_code == 400, checksum_resp.text
+        checksum_detail = checksum_resp.json()["detail"]
+        assert isinstance(checksum_detail, str)
+        assert "checksum_verification_failed" in checksum_detail
+
+
+def test_import_restore_failure_exposes_error_code_and_rollback_failures(
+    tmp_path,
+    monkeypatch,
+):
+    """Service should raise restore_failed with rollback_failures metadata."""
+    from tldw_Server_API.app.core.exceptions import BundleImportError
+    from tldw_Server_API.app.services import admin_bundle_service
+    from tldw_Server_API.app.services import admin_data_ops_service
+    from tldw_Server_API.app.services.admin_bundle_service import import_bundle
+
+    admin_bundle_service._rate_limit_windows.clear()
+
+    bundle_buf = _make_bundle_zip(
+        datasets=["authnz", "media"],
+        manifest_overrides={"user_id": 123},
+    )
+    zip_path = tmp_path / "restore_and_rollback_fail.zip"
+    with open(zip_path, "wb") as f:
+        f.write(bundle_buf.read())
+
+    class _Snapshot:
+        def __init__(self, filename: str) -> None:
+            self.filename = filename
+
+    def _fake_create_backup_snapshot(*, dataset, user_id, backup_type, max_backups):
+        return _Snapshot(f"{dataset}_safety.db")
+
+    monkeypatch.setattr(
+        admin_bundle_service,
+        "create_backup_snapshot",
+        _fake_create_backup_snapshot,
+    )
+
+    restore_calls = {"count": 0}
+
+    def _fake_restore_sqlite_database_file(
+        *,
+        source_db_path,
+        target_db_path,
+        lock_timeout_seconds,
+    ):
+        restore_calls["count"] += 1
+        if restore_calls["count"] == 2:
+            raise RuntimeError("restore boom")
+
+    monkeypatch.setattr(
+        admin_bundle_service,
+        "restore_sqlite_database_file",
+        _fake_restore_sqlite_database_file,
+    )
+
+    def _fake_resolve_dataset_db_path(dataset, user_id):
+        return str(tmp_path / f"{dataset}_{user_id}_live.db"), None
+
+    monkeypatch.setattr(
+        admin_bundle_service,
+        "_resolve_dataset_db_path",
+        _fake_resolve_dataset_db_path,
+    )
+
+    def _fake_restore_backup_snapshot(*, dataset, user_id, backup_id):
+        raise RuntimeError("rollback boom")
+
+    monkeypatch.setattr(
+        admin_data_ops_service,
+        "restore_backup_snapshot",
+        _fake_restore_backup_snapshot,
+    )
+
+    with pytest.raises(BundleImportError) as exc_info:
+        import_bundle(
+            file_path=str(zip_path),
+            user_id=123,
+            admin_user_id=999,
+        )
+
+    exc = exc_info.value
+    assert getattr(exc, "error_code", None) == "restore_failed"
+    assert getattr(exc, "rollback_failures", []) == ["authnz: rollback boom"]
+    assert "rollback_failures: authnz: rollback boom" in str(exc)
+
+
 # ---------------------------------------------------------------------------
 # Concurrency / rate limit tests
 # ---------------------------------------------------------------------------
@@ -548,13 +820,13 @@ async def test_concurrency_lock_busy(tmp_path, monkeypatch):
     _setup_env(tmp_path)
     await _reset_state()
 
-    import asyncio
+    import threading
 
     from tldw_Server_API.app.services import admin_bundle_service
 
     # Simulate lock being held
-    lock = asyncio.Lock()
-    await lock.acquire()
+    lock = threading.Lock()
+    lock.acquire()
     monkeypatch.setattr(admin_bundle_service, "_bundle_lock", lock)
 
     headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
@@ -567,6 +839,98 @@ async def test_concurrency_lock_busy(tmp_path, monkeypatch):
         assert resp.json()["detail"] == "bundle_operation_in_progress"
 
     lock.release()
+
+
+@pytest.mark.asyncio
+async def test_create_bundle_async_rejects_true_overlap(monkeypatch):
+    """A second overlapping call should fail fast with BundleConcurrencyError."""
+    import asyncio
+    import threading
+    from datetime import datetime, timezone
+    from types import MappingProxyType
+
+    from tldw_Server_API.app.core.exceptions import BundleConcurrencyError
+    from tldw_Server_API.app.services import admin_bundle_service
+
+    lock = threading.Lock()
+    monkeypatch.setattr(admin_bundle_service, "_bundle_lock", lock)
+
+    started = threading.Event()
+    unblock = threading.Event()
+
+    def _slow_create_bundle(**_kwargs):
+        started.set()
+        unblock.wait(timeout=5.0)
+        return admin_bundle_service.BundleMetadata(
+            bundle_id="slow.zip",
+            user_id=None,
+            created_at=datetime.now(timezone.utc),
+            size_bytes=1,
+            datasets=("authnz",),
+            schema_versions=MappingProxyType({}),
+            app_version="0.1.0",
+            manifest_version=1,
+            notes=None,
+        )
+
+    monkeypatch.setattr(admin_bundle_service, "create_bundle", _slow_create_bundle)
+
+    first = asyncio.create_task(
+        admin_bundle_service.create_bundle_async(
+            datasets=["authnz"],
+            user_id=None,
+            admin_user_id=999,
+        )
+    )
+
+    for _ in range(200):
+        if started.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert started.is_set(), "First operation did not start in time"
+
+    with pytest.raises(BundleConcurrencyError, match="bundle_operation_in_progress"):
+        await admin_bundle_service.create_bundle_async(
+            datasets=["authnz"],
+            user_id=None,
+            admin_user_id=999,
+        )
+
+    unblock.set()
+    result = await first
+    assert result.bundle_id == "slow.zip"
+
+
+@pytest.mark.asyncio
+async def test_create_bundle_async_releases_lock_after_exception(monkeypatch):
+    """The global lock should be released even when the wrapped operation raises."""
+    import threading
+
+    from tldw_Server_API.app.services import admin_bundle_service
+
+    lock = threading.Lock()
+    monkeypatch.setattr(admin_bundle_service, "_bundle_lock", lock)
+
+    def _raise_create_bundle(**_kwargs):
+        raise RuntimeError("forced failure")
+
+    monkeypatch.setattr(
+        admin_bundle_service,
+        "create_bundle",
+        _raise_create_bundle,
+    )
+
+    with pytest.raises(RuntimeError, match="forced failure"):
+        await admin_bundle_service.create_bundle_async(
+            datasets=["authnz"],
+            user_id=None,
+            admin_user_id=999,
+        )
+
+    acquired = lock.acquire(blocking=False)
+    assert acquired, "Lock was not released after exception"
+    if acquired:
+        lock.release()
 
 
 @pytest.mark.asyncio
@@ -657,6 +1021,198 @@ def test_check_disk_space_insufficient(tmp_path):
 
     with pytest.raises(BundleDiskSpaceError):
         _check_disk_space(str(tmp_path), 2**63)  # impossibly large
+
+
+def test_prune_expired_bundles_scope_and_unreadable_manifest(tmp_path, monkeypatch):
+    """Retention prune should only remove expired bundles in matching scope."""
+    from tldw_Server_API.app.services import admin_bundle_service
+
+    bundles_dir = tmp_path / "bundles"
+    bundles_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        admin_bundle_service,
+        "_bundle_base_dir",
+        lambda: str(bundles_dir),
+    )
+
+    old_created = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    fresh_created = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+
+    old_scope = bundles_dir / "old_scope.zip"
+    new_scope = bundles_dir / "new_scope.zip"
+    old_other_scope = bundles_dir / "old_other_scope.zip"
+    old_global_scope = bundles_dir / "old_global_scope.zip"
+    corrupt_scope = bundles_dir / "corrupt_scope.zip"
+
+    _write_bundle_manifest_zip(str(old_scope), created_at=old_created, user_id=11)
+    _write_bundle_manifest_zip(str(new_scope), created_at=fresh_created, user_id=11)
+    _write_bundle_manifest_zip(str(old_other_scope), created_at=old_created, user_id=77)
+    _write_bundle_manifest_zip(str(old_global_scope), created_at=old_created, user_id=None)
+
+    with zipfile.ZipFile(corrupt_scope, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", "{not-json")
+
+    old_scope_sidecar = str(old_scope) + ".manifest.json"
+    with open(old_scope_sidecar, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "manifest_version": 1,
+                "app_version": "0.1.0",
+                "created_at": old_created,
+                "user_id": 11,
+                "datasets": ["authnz"],
+            },
+            f,
+        )
+
+    removed = admin_bundle_service._prune_expired_bundles(
+        retention_hours=1,
+        user_id=11,
+    )
+
+    assert removed == 1
+    assert not old_scope.exists()
+    assert not os.path.isfile(old_scope_sidecar)
+    assert new_scope.exists()
+    assert old_other_scope.exists()
+    assert old_global_scope.exists()
+    assert corrupt_scope.exists()
+
+
+def test_check_import_disk_space_checks_temp_upload_and_live_dirs(tmp_path, monkeypatch):
+    """Import preflight should check temp/upload/live DB directories."""
+    import tempfile
+
+    from tldw_Server_API.app.services import admin_bundle_service
+
+    checked: list[tuple[str, int]] = []
+
+    def _fake_check_disk_space(path: str, required_bytes: int) -> None:
+        checked.append((os.path.realpath(path), required_bytes))
+
+    def _fake_resolve_dataset_db_path(dataset: str, user_id: int | None):
+        return str(tmp_path / "live" / dataset / "target.db"), None
+
+    monkeypatch.setattr(
+        admin_bundle_service,
+        "_check_disk_space",
+        _fake_check_disk_space,
+    )
+    monkeypatch.setattr(
+        admin_bundle_service,
+        "_resolve_dataset_db_path",
+        _fake_resolve_dataset_db_path,
+    )
+
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    file_path = str(upload_dir / "incoming_bundle.zip")
+
+    admin_bundle_service._check_import_disk_space(
+        file_path=file_path,
+        required_bytes=1234,
+        datasets=["authnz", "media", "media"],  # media repeated to test dedupe
+        user_id=7,
+    )
+
+    paths = [path for path, _ in checked]
+    temp_path = os.path.realpath(tempfile.gettempdir())
+    upload_path = os.path.realpath(str(upload_dir))
+    authnz_live = os.path.realpath(str(tmp_path / "live" / "authnz"))
+    media_live = os.path.realpath(str(tmp_path / "live" / "media"))
+
+    assert temp_path in paths
+    assert upload_path in paths
+    assert authnz_live in paths
+    assert media_live in paths
+    assert paths.count(media_live) == 1
+    assert all(required == 1234 for _, required in checked)
+
+
+@pytest.mark.asyncio
+async def test_import_returns_507_when_live_db_dir_lacks_space(tmp_path, monkeypatch):
+    """Import should return 507 when live DB target partition lacks free space."""
+    _setup_env(tmp_path)
+    await _reset_state()
+
+    from tldw_Server_API.app.core.exceptions import BundleDiskSpaceError
+    from tldw_Server_API.app.services import admin_bundle_service
+
+    live_dir = tmp_path / "live_db_partition"
+    blocked_path = os.path.realpath(str(live_dir))
+
+    def _fake_resolve_dataset_db_path(dataset: str, user_id: int | None):
+        return str(live_dir / f"{dataset}.db"), None
+
+    def _fake_check_disk_space(path: str, required_bytes: int) -> None:
+        if os.path.realpath(path) == blocked_path:
+            raise BundleDiskSpaceError("insufficient_disk_space")
+
+    monkeypatch.setattr(
+        admin_bundle_service,
+        "_resolve_dataset_db_path",
+        _fake_resolve_dataset_db_path,
+    )
+    monkeypatch.setattr(
+        admin_bundle_service,
+        "_check_disk_space",
+        _fake_check_disk_space,
+    )
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    with TestClient(app, headers=headers) as client:
+        user_id = await _seed_authnz_data()
+        bundle_buf = _make_bundle_zip(
+            datasets=["media"],
+            manifest_overrides={"user_id": user_id},
+        )
+        resp = client.post(
+            "/api/v1/admin/backups/bundles/import",
+            params={"user_id": str(user_id)},
+            files={"file": ("test.zip", bundle_buf, "application/zip")},
+        )
+        assert resp.status_code == 507, resp.text
+        assert resp.json()["detail"] == "insufficient_disk_space"
+
+
+@pytest.mark.asyncio
+async def test_create_bundle_retention_hours_prunes_old_bundles_in_scope(tmp_path):
+    """Creating a bundle with retention_hours should prune old scoped bundles."""
+    _setup_env(tmp_path)
+    await _reset_state()
+
+    import time
+
+    from tldw_Server_API.app.services import admin_bundle_service
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+    with TestClient(app, headers=headers) as client:
+        await _seed_authnz_data()
+
+        first_resp = client.post(
+            "/api/v1/admin/backups/bundles",
+            json={"datasets": ["authnz"], "retention_hours": 1},
+        )
+        assert first_resp.status_code == 200, first_resp.text
+        first_bundle_id = first_resp.json()["item"]["bundle_id"]
+        first_path = admin_bundle_service.get_bundle_path(first_bundle_id)
+
+        old_created = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        _set_bundle_created_at(first_path, old_created)
+
+        time.sleep(1.1)
+
+        second_resp = client.post(
+            "/api/v1/admin/backups/bundles",
+            json={"datasets": ["authnz"], "retention_hours": 1},
+        )
+        assert second_resp.status_code == 200, second_resp.text
+        second_bundle_id = second_resp.json()["item"]["bundle_id"]
+        second_path = admin_bundle_service.get_bundle_path(second_bundle_id)
+
+        assert not os.path.isfile(first_path)
+        assert os.path.isfile(second_path)
 
 
 # ---------------------------------------------------------------------------

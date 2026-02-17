@@ -1,0 +1,161 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { message, Modal } from "antd"
+import { SkillsManager } from "../Manager"
+
+const tldwClientMock = vi.hoisted(() => ({
+  listSkills: vi.fn(),
+  getSkill: vi.fn(),
+  deleteSkill: vi.fn(),
+  exportSkill: vi.fn(),
+  importSkill: vi.fn(),
+  importSkillFile: vi.fn()
+}))
+
+const notificationMock = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn()
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: tldwClientMock
+}))
+
+vi.mock("@/hooks/useAntdNotification", () => ({
+  useAntdNotification: () => notificationMock
+}))
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (
+      key: string,
+      fallbackOrOptions?: string | { defaultValue?: string; [k: string]: unknown }
+    ) => {
+      if (typeof fallbackOrOptions === "string") return fallbackOrOptions
+      if (fallbackOrOptions && typeof fallbackOrOptions === "object") {
+        return fallbackOrOptions.defaultValue || key
+      }
+      return key
+    }
+  })
+}))
+
+vi.mock("../SkillDrawer", () => ({
+  SkillDrawer: () => null
+}))
+
+vi.mock("../SkillPreview", () => ({
+  SkillPreview: () => null
+}))
+
+describe("SkillsManager imports", () => {
+  let queryClient: QueryClient
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false }
+      }
+    })
+    vi.clearAllMocks()
+    tldwClientMock.listSkills.mockResolvedValue({
+      skills: [],
+      count: 0,
+      total: 0,
+      limit: 10,
+      offset: 0
+    })
+    tldwClientMock.importSkill.mockResolvedValue({ name: "imported-skill" })
+    tldwClientMock.importSkillFile.mockResolvedValue({ name: "imported-file-skill" })
+
+    if (!window.matchMedia) {
+      Object.defineProperty(window, "matchMedia", {
+        writable: true,
+        value: vi.fn().mockImplementation((query: string) => ({
+          matches: false,
+          media: query,
+          onchange: null,
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn()
+        }))
+      })
+    }
+
+    if (typeof globalThis.ResizeObserver === "undefined") {
+      globalThis.ResizeObserver = class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      } as unknown as typeof ResizeObserver
+    }
+  })
+
+  afterEach(() => {
+    cleanup()
+    Modal.destroyAll()
+    message.destroy()
+  })
+
+  const renderManager = () =>
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SkillsManager />
+      </QueryClientProvider>
+    )
+
+  it("imports a skill from text via importSkill", async () => {
+    renderManager()
+
+    await waitFor(() => {
+      expect(tldwClientMock.listSkills).toHaveBeenCalled()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Import" }))
+    fireEvent.click(await screen.findByText("Import Text"))
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Import Skill from Text"
+    })
+
+    const contentInput = within(dialog).getByLabelText("SKILL.md Content")
+    fireEvent.change(contentInput, {
+      target: {
+        value: "---\nname: imported-skill\ndescription: imported\n---\n\nBody"
+      }
+    })
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Import" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.importSkill).toHaveBeenCalledWith({
+        content: "---\nname: imported-skill\ndescription: imported\n---\n\nBody",
+        overwrite: false
+      })
+    })
+  })
+
+  it("keeps file import flow functional via importSkillFile", async () => {
+    renderManager()
+
+    await waitFor(() => {
+      expect(tldwClientMock.listSkills).toHaveBeenCalled()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Import" }))
+
+    const input = document.querySelector("input[type='file']") as HTMLInputElement | null
+    expect(input).not.toBeNull()
+
+    const file = new File(["# skill"], "my-skill.md", { type: "text/markdown" })
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } })
+
+    await waitFor(() => {
+      expect(tldwClientMock.importSkillFile).toHaveBeenCalledWith(file)
+    })
+  })
+})

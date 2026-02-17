@@ -279,7 +279,7 @@ const SelectStep: React.FC = () => {
           type="success"
           showIcon
           icon={<CheckCircle className="h-4 w-4" />}
-          message={t("workflows:analyzeBook.bookSelected", "Book selected")}
+          title={t("workflows:analyzeBook.bookSelected", "Book selected")}
           description={
             <div className="mt-2">
               <p className="font-medium">{bookInfo.title}</p>
@@ -480,7 +480,7 @@ const ChunkingStep: React.FC = () => {
           type="warning"
           showIcon
           icon={<AlertTriangle className="h-4 w-4" />}
-          message={t(
+          title={t(
             "workflows:analyzeBook.chunkingWarning",
             "{{count}} chapters may need review",
             { count: warningCount }
@@ -662,7 +662,7 @@ const ConfigureStep: React.FC = () => {
           onChange={(e) => setPreset(e.target.value)}
           className="w-full"
         >
-          <Space direction="vertical" className="w-full">
+          <Space orientation="vertical" className="w-full">
             {presetOptions.map((option) => (
               <Radio
                 key={option.value}
@@ -997,7 +997,7 @@ const ReviewStep: React.FC = () => {
         type="success"
         showIcon
         icon={<CheckCircle className="h-4 w-4" />}
-        message={t(
+        title={t(
           "workflows:analyzeBook.analysisComplete",
           "Analysis Complete"
         )}

@@ -265,7 +265,7 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
             type="info"
             showIcon
             className="mb-4"
-            message={t("managePrompts.drawer.draftRecovered", {
+            title={t("managePrompts.drawer.draftRecovered", {
               defaultValue: "Unsaved draft found ({{age}})",
               age: formatDraftAge(draftData.savedAt)
             })}

@@ -11,6 +11,8 @@ import { fetchTldwTtsModels, type TldwTtsModel } from "@/services/tldw/audio-mod
 import { fetchTldwVoiceCatalog } from "@/services/tldw/audio-voices"
 import { toServerTtsProviderKey } from "@/services/tldw/tts-provider-keys"
 
+const ELEVENLABS_METADATA_TIMEOUT_MS = 10_000
+
 export const OPENAI_TTS_MODELS = [
   { label: "tts-1", value: "tts-1" },
   { label: "tts-1-hd", value: "tts-1-hd" }
@@ -57,7 +59,7 @@ export const useTtsProviderData = ({
 
   const { data: providersInfo } = useQuery<TldwTtsProvidersInfo | null>({
     queryKey: ["tldw-tts-providers"],
-    queryFn: fetchTtsProviders,
+    queryFn: () => fetchTtsProviders(),
     enabled: hasAudio
   })
 
@@ -86,25 +88,26 @@ export const useTtsProviderData = ({
     enabled: hasAudio && provider === "tldw" && Boolean(inferredProviderKey)
   })
 
-  const { data: elevenLabsData, isLoading: elevenLabsLoading } =
+  const {
+    data: elevenLabsData,
+    isLoading: elevenLabsLoading,
+    error: elevenLabsError,
+    refetch: refetchElevenLabs
+  } =
     useQuery<ElevenLabsData>({
       queryKey: ["tts-playground-elevenlabs", provider, elevenLabsApiKey],
       queryFn: async () => {
         if (provider !== "elevenlabs" || !elevenLabsApiKey) {
           return null
         }
-        try {
-          const [voices, models] = await Promise.all([
-            getVoices(elevenLabsApiKey),
-            getModels(elevenLabsApiKey)
-          ])
-          return { voices, models }
-        } catch (e) {
-          console.error(e)
-          return null
-        }
+        const [voices, models] = await Promise.all([
+          getVoices(elevenLabsApiKey, { timeoutMs: ELEVENLABS_METADATA_TIMEOUT_MS }),
+          getModels(elevenLabsApiKey, { timeoutMs: ELEVENLABS_METADATA_TIMEOUT_MS })
+        ])
+        return { voices, models }
       },
-      enabled: provider === "elevenlabs" && Boolean(elevenLabsApiKey)
+      enabled: provider === "elevenlabs" && Boolean(elevenLabsApiKey),
+      retry: false
     })
 
   return {
@@ -113,6 +116,8 @@ export const useTtsProviderData = ({
     tldwTtsModels,
     tldwVoiceCatalog,
     elevenLabsData,
-    elevenLabsLoading
+    elevenLabsLoading,
+    elevenLabsError,
+    refetchElevenLabs
   }
 }

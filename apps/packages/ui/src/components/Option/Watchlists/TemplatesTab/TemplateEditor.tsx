@@ -247,7 +247,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       children: (
         <div className="space-y-3">
           <Alert
-            message={t(
+            title={t(
               "watchlists:templates.preview.note",
               "Preview shows rendered markup only; Jinja2 logic is not evaluated."
             )}
@@ -273,7 +273,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       children: (
         <div className="space-y-4 text-sm">
           <Alert
-            message={t("watchlists:templates.docs.title", "Available Variables")}
+            title={t("watchlists:templates.docs.title", "Available Variables")}
             description={t("watchlists:templates.docs.description", "These variables are available in your Jinja2 template.")}
             type="info"
             showIcon
@@ -404,7 +404,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
                   className="mt-3"
                   type="warning"
                   showIcon
-                  message={t(
+                  title={t(
                     "watchlists:templates.unsavedDrift",
                     "Current editor content differs from the loaded version."
                   )}

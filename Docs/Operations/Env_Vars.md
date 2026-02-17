@@ -26,6 +26,20 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `USER_DB_BASE_DIR_ALLOWED_ROOTS` / `TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS`: Optional allowlist for setup-time changes to `USER_DB_BASE_DIR`. Comma- or colon-separated list of parent directories permitted for the new base.
 - `USER_DB_BASE`: Deprecated alias for `USER_DB_BASE_DIR` (used only by rewrite cache resolution).
 
+## Unified Circuit Breaker (Registry + Cross-Worker Semantics)
+- `CIRCUIT_BREAKER_REGISTRY_MODE`: Registry storage mode (`auto|memory|persistent` plus synonyms). Default `auto`.
+  - `auto`: Uses persistent shared state in normal runtime and in-memory state under explicit pytest runtime.
+  - `memory`: Process-local registry only (no cross-worker synchronization).
+  - `persistent`: Shared DB-backed registry with optimistic locking and lease coordination.
+- `CIRCUIT_BREAKER_REGISTRY_DB_PATH`: Optional path override for shared registry DB. Relative paths resolve from project root.
+- `CIRCUIT_BREAKER_PERSIST_MAX_RETRIES`: Max optimistic-lock merge/retry attempts per persist operation (default `4`, clamped to `>=1`).
+- `CIRCUIT_BREAKER_HALF_OPEN_LEASE_TTL_SECONDS`: TTL for distributed HALF_OPEN probe leases (default `120.0`, clamped to `>=1.0`).
+
+Operational notes:
+- For multi-worker deployments, prefer `CIRCUIT_BREAKER_REGISTRY_MODE=persistent`.
+- If `CIRCUIT_BREAKER_PERSIST_MAX_RETRIES` is too low under heavy write contention, `circuit_breaker_persist_conflicts_total` may spike and stale local mutations can be dropped after retry exhaustion.
+- If `CIRCUIT_BREAKER_HALF_OPEN_LEASE_TTL_SECONDS` is too high, abandoned probe slots take longer to self-heal; if too low, long-running probes can lose their lease before completion.
+
 ## OCR (PDF pipeline)
 - `OCR_PAGE_CONCURRENCY`: Per-page OCR concurrency (default `1`).
 
@@ -461,6 +475,7 @@ Quick start (local dev):
 ## LLM Provider Keys
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `COHERE_API_KEY`, `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `HUGGINGFACE_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `QWEN_API_KEY`
 - Additional provider-specific variables as required by their APIs.
+- `OPENROUTER_MODEL_DISCOVERY_TTL_SECONDS`: TTL for cached OpenRouter `/models` discovery results used by `/api/v1/llm/models/metadata` (default `600`, minimum `30`). Use `refresh_openrouter=true` on the metadata endpoint to force an immediate refresh.
 
 ## MCP Unified
 - `MCP_JWT_SECRET`: Secret used by the MCP server for issuing/verifying tokens.

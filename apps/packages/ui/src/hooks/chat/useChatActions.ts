@@ -81,8 +81,11 @@ import type {
 import type { ChatModelSettings } from "@/store/model"
 import type { SaveMessageData } from "@/types/chat-modes"
 import {
+  buildGreetingOptionsFromEntries,
+  collectGreetingEntries,
   collectGreetings,
-  isGreetingMessageType
+  isGreetingMessageType,
+  resolveGreetingSelection
 } from "@/utils/character-greetings"
 
 type ChatModelSettingsStore = ChatModelSettings & {
@@ -278,6 +281,15 @@ export const useChatActions = ({
     serverChatId
   })
   const greetingEnabled = chatSettings?.greetingEnabled ?? true
+  const greetingSelectionId =
+    typeof chatSettings?.greetingSelectionId === "string"
+      ? chatSettings.greetingSelectionId
+      : null
+  const greetingsChecksum =
+    typeof chatSettings?.greetingsChecksum === "string"
+      ? chatSettings.greetingsChecksum
+      : null
+  const useCharacterDefault = Boolean(chatSettings?.useCharacterDefault)
   const directedCharacterId = React.useMemo(() => {
     const raw = chatSettings?.directedCharacterId
     const parsed = Number.parseInt(String(raw ?? ""), 10)
@@ -505,7 +517,8 @@ export const useChatActions = ({
     model,
     regenerateFromMessage,
     character,
-    messageSteering
+    messageSteering,
+    serverChatIdOverride
   }: {
     message: string
     image: string
@@ -516,6 +529,7 @@ export const useChatActions = ({
     model: string
     regenerateFromMessage?: Message
     character?: Character | null
+    serverChatIdOverride?: string | null
     messageSteering: {
       continueAsUser: boolean
       impersonateUser: boolean
@@ -529,6 +543,23 @@ export const useChatActions = ({
 
     const resolveGreetingText = (): string => {
       if (!greetingEnabled) return ""
+
+      const hasUserTurns =
+        chatHistory.some((entry) => !entry.isBot) ||
+        chatMemory.some((entry) => entry.role === "user")
+      const greetingEntries = collectGreetingEntries(activeCharacter as any)
+      const greetingOptions = buildGreetingOptionsFromEntries(greetingEntries)
+      const selectedGreeting =
+        resolveGreetingSelection({
+          options: greetingOptions,
+          greetingSelectionId,
+          greetingsChecksum,
+          useCharacterDefault,
+          fallback: "first"
+        }).option?.text?.trim() ?? ""
+      if (!hasUserTurns && selectedGreeting.length > 0) {
+        return selectedGreeting
+      }
 
       const fromMessages = chatHistory.find(
         (entry) =>
@@ -550,6 +581,10 @@ export const useChatActions = ({
       )
       if (fromHistory?.content) {
         return fromHistory.content.trim()
+      }
+
+      if (selectedGreeting.length > 0) {
+        return selectedGreeting
       }
 
       const fromCharacter = collectGreetings(activeCharacter as any).find(
@@ -605,6 +640,21 @@ export const useChatActions = ({
         notification.error({
           message: t("error"),
           description: t("validationSelectModel")
+        })
+        setIsProcessing(false)
+        setStreaming(false)
+        return
+      }
+
+      const hasImageInput =
+        typeof image === "string" && image.trim().length > 0
+      if (!isRegenerate && message.trim().length === 0 && !hasImageInput) {
+        notification.error({
+          message: t("error"),
+          description: t(
+            "playground:composer.validationMessageRequired",
+            "Type a message before sending."
+          )
         })
         setIsProcessing(false)
         setStreaming(false)
@@ -689,8 +739,14 @@ export const useChatActions = ({
       const activeCharacterId = String(activeCharacter.id)
       const serverCharacterId =
         serverChatCharacterId != null ? String(serverChatCharacterId) : null
+      const overrideChatId =
+        typeof serverChatIdOverride === "string" &&
+        serverChatIdOverride.trim().length > 0
+          ? serverChatIdOverride.trim()
+          : null
+      const resolvedServerChatId = overrideChatId || serverChatId
       const shouldResetServerChat =
-        Boolean(serverChatId) &&
+        Boolean(resolvedServerChatId) &&
         (!serverCharacterId || serverCharacterId !== activeCharacterId)
 
       if (shouldResetServerChat) {
@@ -706,7 +762,7 @@ export const useChatActions = ({
         setServerChatExternalRef(null)
       }
 
-      let chatId = shouldResetServerChat ? null : serverChatId
+      let chatId = shouldResetServerChat ? null : resolvedServerChatId
       let createdNewChat = false
       if (!chatId) {
         const created = await tldwClient.createChat({
@@ -814,7 +870,11 @@ export const useChatActions = ({
           image_base64?: string
         }
 
-        const payload: TldwChatMessage = { role: "user", content: message }
+        const payload: TldwChatMessage = { role: "user" }
+        const trimmedUserMessage = message.trim()
+        if (trimmedUserMessage.length > 0) {
+          payload.content = message
+        }
         let normalizedImage = image
         if (normalizedImage.length > 0 && !normalizedImage.startsWith("data:")) {
           const payloadValue = normalizedImage.includes(",")
@@ -832,32 +892,34 @@ export const useChatActions = ({
             payload.image_base64 = b64
           }
         }
-        const createdUser = (await tldwClient.addChatMessage(
-          chatId,
-          payload
-        )) as TldwChatMessage | null
-        persistedUserServerMessageId =
-          createdUser?.id != null ? String(createdUser.id) : undefined
-        setMessages((prev) => {
-          const updated = [...prev] as (Message & {
-            serverMessageId?: string
-            serverMessageVersion?: number
-          })[]
-          const serverMessageId =
+        if (payload.content || payload.image_base64) {
+          const createdUser = (await tldwClient.addChatMessage(
+            chatId,
+            payload
+          )) as TldwChatMessage | null
+          persistedUserServerMessageId =
             createdUser?.id != null ? String(createdUser.id) : undefined
-          const serverMessageVersion = createdUser?.version
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (!updated[i].isBot) {
-              updated[i] = {
-                ...updated[i],
-                serverMessageId,
-                serverMessageVersion
+          setMessages((prev) => {
+            const updated = [...prev] as (Message & {
+              serverMessageId?: string
+              serverMessageVersion?: number
+            })[]
+            const serverMessageId =
+              createdUser?.id != null ? String(createdUser.id) : undefined
+            const serverMessageVersion = createdUser?.version
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (!updated[i].isBot) {
+                updated[i] = {
+                  ...updated[i],
+                  serverMessageId,
+                  serverMessageVersion
+                }
+                break
               }
-              break
             }
-          }
-          return updated as Message[]
-        })
+            return updated as Message[]
+          })
+        }
       }
 
       let count = 0
@@ -953,117 +1015,128 @@ export const useChatActions = ({
       )
 
       const finalContent = contentToSave || fullText
+      const finalPersistedContent = finalContent.trim()
 
-      try {
-        const fallbackSpeakerId = Number.parseInt(String(activeCharacter.id), 10)
-        const speakerCharacterId =
-          Number.isFinite(directedCharacterId ?? NaN) && (directedCharacterId ?? 0) > 0
-            ? directedCharacterId
-            : Number.isFinite(fallbackSpeakerId) && fallbackSpeakerId > 0
-              ? fallbackSpeakerId
-              : undefined
-        const detectedMood = detectCharacterMood({
-          assistantText: finalContent,
-          userText: message
-        })
-        const resolvedMoodLabel = detectedMood.label
-        const resolvedMoodConfidence =
-          typeof detectedMood.confidence === "number" &&
-          Number.isFinite(detectedMood.confidence)
-            ? detectedMood.confidence
-            : undefined
-        const resolvedMoodTopic =
-          typeof detectedMood.topic === "string" && detectedMood.topic.trim()
-            ? detectedMood.topic.trim()
-            : undefined
-
-        const persistPayload: Record<string, unknown> = {
-          assistant_content: finalContent,
-          speaker_character_id: speakerCharacterId,
-          speaker_character_name: characterName
-        }
-        if (resolvedMoodLabel) {
-          persistPayload.mood_label = resolvedMoodLabel
-        }
-        if (typeof resolvedMoodConfidence === "number") {
-          persistPayload.mood_confidence = resolvedMoodConfidence
-        }
-        if (resolvedMoodTopic) {
-          persistPayload.mood_topic = resolvedMoodTopic
-        }
-        if (persistedUserServerMessageId) {
-          persistPayload.user_message_id = persistedUserServerMessageId
-        }
-
-        const persisted = (await tldwClient.persistCharacterCompletion(
-          chatId,
-          persistPayload
-        )) as
-          | {
-              assistant_message_id?: string | number
-              message_id?: string | number
-              id?: string | number
-              version?: number
-            }
-          | null
-        const createdAsstServerId =
-          persisted?.assistant_message_id ??
-          persisted?.message_id ??
-          persisted?.id
-        const createdAsstVersion = persisted?.version
-        const metadataExtra = {
-          speaker_character_id: speakerCharacterId ?? null,
-          speaker_character_name: characterName,
-          mood_label: resolvedMoodLabel,
-          mood_confidence: resolvedMoodConfidence ?? null,
-          mood_topic: resolvedMoodTopic ?? null
-        }
-        setMessages((prev) =>
-          ((prev as any[]).map((m) => {
-            if (m.id !== generateMessageId) return m
-            const serverMessageId =
-              createdAsstServerId != null
-                ? String(createdAsstServerId)
-                : undefined
-            return updateActiveVariant(m, {
-              serverMessageId,
-              serverMessageVersion: createdAsstVersion,
-              metadataExtra,
-              speakerCharacterId: speakerCharacterId ?? null,
-              speakerCharacterName: characterName,
-              moodLabel: resolvedMoodLabel,
-              moodConfidence: resolvedMoodConfidence ?? null,
-              moodTopic: resolvedMoodTopic ?? null
-            })
-          }) as Message[])
-        )
-      } catch (e) {
-        console.error(
-          "Failed to persist assistant message via completions/persist:",
-          e
-        )
+      if (finalPersistedContent.length > 0) {
         try {
-          const createdAsst = (await tldwClient.addChatMessage(chatId, {
-            role: "assistant",
-            content: finalContent
-          })) as { id?: string | number; version?: number } | null
+          const fallbackSpeakerId = Number.parseInt(
+            String(activeCharacter.id),
+            10
+          )
+          const speakerCharacterId =
+            Number.isFinite(directedCharacterId ?? NaN) &&
+            (directedCharacterId ?? 0) > 0
+              ? directedCharacterId
+              : Number.isFinite(fallbackSpeakerId) && fallbackSpeakerId > 0
+                ? fallbackSpeakerId
+                : undefined
+          const detectedMood = detectCharacterMood({
+            assistantText: finalPersistedContent,
+            userText: message
+          })
+          const resolvedMoodLabel = detectedMood.label
+          const resolvedMoodConfidence =
+            typeof detectedMood.confidence === "number" &&
+            Number.isFinite(detectedMood.confidence)
+              ? detectedMood.confidence
+              : undefined
+          const resolvedMoodTopic =
+            typeof detectedMood.topic === "string" && detectedMood.topic.trim()
+              ? detectedMood.topic.trim()
+              : undefined
+
+          const persistPayload: Record<string, unknown> = {
+            assistant_content: finalPersistedContent,
+            speaker_character_id: speakerCharacterId,
+            speaker_character_name: characterName
+          }
+          if (resolvedMoodLabel) {
+            persistPayload.mood_label = resolvedMoodLabel
+          }
+          if (typeof resolvedMoodConfidence === "number") {
+            persistPayload.mood_confidence = resolvedMoodConfidence
+          }
+          if (resolvedMoodTopic) {
+            persistPayload.mood_topic = resolvedMoodTopic
+          }
+          if (persistedUserServerMessageId) {
+            persistPayload.user_message_id = persistedUserServerMessageId
+          }
+
+          const persisted = (await tldwClient.persistCharacterCompletion(
+            chatId,
+            persistPayload
+          )) as
+            | {
+                assistant_message_id?: string | number
+                message_id?: string | number
+                id?: string | number
+                version?: number
+              }
+            | null
+          const createdAsstServerId =
+            persisted?.assistant_message_id ??
+            persisted?.message_id ??
+            persisted?.id
+          const createdAsstVersion = persisted?.version
+          const metadataExtra = {
+            speaker_character_id: speakerCharacterId ?? null,
+            speaker_character_name: characterName,
+            mood_label: resolvedMoodLabel,
+            mood_confidence: resolvedMoodConfidence ?? null,
+            mood_topic: resolvedMoodTopic ?? null
+          }
           setMessages((prev) =>
             ((prev as any[]).map((m) => {
               if (m.id !== generateMessageId) return m
               const serverMessageId =
-                createdAsst?.id != null ? String(createdAsst.id) : undefined
+                createdAsstServerId != null
+                  ? String(createdAsstServerId)
+                  : undefined
               return updateActiveVariant(m, {
                 serverMessageId,
-                serverMessageVersion: createdAsst?.version
+                serverMessageVersion: createdAsstVersion,
+                metadataExtra,
+                speakerCharacterId: speakerCharacterId ?? null,
+                speakerCharacterName: characterName,
+                moodLabel: resolvedMoodLabel,
+                moodConfidence: resolvedMoodConfidence ?? null,
+                moodTopic: resolvedMoodTopic ?? null
               })
             }) as Message[])
           )
-        } catch (fallbackError) {
+        } catch (e) {
           console.error(
-            "Failed fallback assistant persistence with addChatMessage:",
-            fallbackError
+            "Failed to persist assistant message via completions/persist:",
+            e
           )
+          try {
+            const createdAsst = (await tldwClient.addChatMessage(chatId, {
+              role: "assistant",
+              content: finalPersistedContent
+            })) as { id?: string | number; version?: number } | null
+            setMessages((prev) =>
+              ((prev as any[]).map((m) => {
+                if (m.id !== generateMessageId) return m
+                const serverMessageId =
+                  createdAsst?.id != null ? String(createdAsst.id) : undefined
+                return updateActiveVariant(m, {
+                  serverMessageId,
+                  serverMessageVersion: createdAsst?.version
+                })
+              }) as Message[])
+            )
+          } catch (fallbackError) {
+            console.error(
+              "Failed fallback assistant persistence with addChatMessage:",
+              fallbackError
+            )
+          }
         }
+      } else {
+        console.warn(
+          "Skipping assistant persistence because completion content is empty."
+        )
       }
 
       const lastEntry = historyBase[historyBase.length - 1]
@@ -1366,7 +1439,8 @@ export const useChatActions = ({
     regenerateFromMessage,
     imageBackendOverride,
     messageSteeringOverride,
-    continueOutputTarget = "chat"
+    continueOutputTarget = "chat",
+    serverChatIdOverride
   }: {
     message: string
     image: string
@@ -1380,6 +1454,7 @@ export const useChatActions = ({
     imageBackendOverride?: string
     messageSteeringOverride?: Partial<MessageSteeringState> | null
     continueOutputTarget?: "chat" | "composer_input"
+    serverChatIdOverride?: string | null
   }) => {
     setStreaming(true)
     const trimmedImageBackendOverride =
@@ -1653,7 +1728,8 @@ export const useChatActions = ({
               model: resolvedModel,
               regenerateFromMessage,
               character: resolvedSelectedCharacter,
-              messageSteering: messageSteeringForTurn
+              messageSteering: messageSteeringForTurn,
+              serverChatIdOverride
             })
             return
           }
@@ -1995,13 +2071,96 @@ export const useChatActions = ({
     }
   }
 
+  const createChatBranch = createBranchMessage({
+    notification,
+    historyId,
+    setHistory,
+    setHistoryId: setHistoryId as (id: string | null) => void,
+    setMessages,
+    setContext: setContextFiles,
+    setSelectedSystemPrompt,
+    setSystemPrompt: currentChatModelSettings.setSystemPrompt,
+    serverChatId,
+    setServerChatId,
+    setServerChatTitle,
+    setServerChatCharacterId,
+    setServerChatMetaLoaded,
+    serverChatState,
+    setServerChatState,
+    setServerChatVersion,
+    serverChatTopic,
+    setServerChatTopic,
+    serverChatClusterId,
+    setServerChatClusterId,
+    serverChatSource,
+    setServerChatSource,
+    serverChatExternalRef,
+    setServerChatExternalRef,
+    onServerChatMutated: invalidateServerChatHistory,
+    characterId: serverChatCharacterId ?? null,
+    chatTitle: serverChatTitle ?? null,
+    messages,
+    history
+  })
+
+  const createServerOnlyChatBranch = createBranchMessage({
+    notification,
+    historyId,
+    setHistory,
+    setHistoryId: setHistoryId as (id: string | null) => void,
+    setMessages,
+    setContext: setContextFiles,
+    setSelectedSystemPrompt,
+    setSystemPrompt: currentChatModelSettings.setSystemPrompt,
+    serverChatId,
+    setServerChatId,
+    setServerChatTitle,
+    setServerChatCharacterId,
+    setServerChatMetaLoaded,
+    serverChatState,
+    setServerChatState,
+    setServerChatVersion,
+    serverChatTopic,
+    setServerChatTopic,
+    serverChatClusterId,
+    setServerChatClusterId,
+    serverChatSource,
+    setServerChatSource,
+    serverChatExternalRef,
+    setServerChatExternalRef,
+    onServerChatMutated: invalidateServerChatHistory,
+    characterId: serverChatCharacterId ?? null,
+    chatTitle: serverChatTitle ?? null,
+    messages,
+    history,
+    serverOnly: true
+  })
+
   const regenerateLastMessage = createRegenerateLastMessage({
     validateBeforeSubmitFn,
     history,
     messages,
     setHistory,
     setMessages,
-    onSubmit
+    onSubmit,
+    beforeSubmit: async ({ nextMessages }) => {
+      if (!serverChatId) return
+      if (selectedCharacter?.id == null && serverChatCharacterId == null) return
+
+      const branchIndex = nextMessages.length - 1
+      if (branchIndex < 0) return
+
+      const branchedChatId = await createServerOnlyChatBranch(branchIndex)
+      if (!branchedChatId) {
+        throw new Error("Failed to create branch for regeneration")
+      }
+
+      return {
+        submitExtras: {
+          serverChatIdOverride: branchedChatId
+        }
+      }
+    }
   })
 
   const stopStreamingRequest = createStopStreamingRequest(
@@ -2102,38 +2261,6 @@ export const useChatActions = ({
     },
     [invalidateServerChatHistory, messages, serverChatId, setMessages]
   )
-
-  const createChatBranch = createBranchMessage({
-    notification,
-    historyId,
-    setHistory,
-    setHistoryId: setHistoryId as (id: string | null) => void,
-    setMessages,
-    setContext: setContextFiles,
-    setSelectedSystemPrompt,
-    setSystemPrompt: currentChatModelSettings.setSystemPrompt,
-    serverChatId,
-    setServerChatId,
-    setServerChatTitle,
-    setServerChatCharacterId,
-    setServerChatMetaLoaded,
-    serverChatState,
-    setServerChatState,
-    setServerChatVersion,
-    serverChatTopic,
-    setServerChatTopic,
-    serverChatClusterId,
-    setServerChatClusterId,
-    serverChatSource,
-    setServerChatSource,
-    serverChatExternalRef,
-    setServerChatExternalRef,
-    onServerChatMutated: invalidateServerChatHistory,
-    characterId: serverChatCharacterId ?? null,
-    chatTitle: serverChatTitle ?? null,
-    messages,
-    history
-  })
 
   const createCompareBranch = async ({
     clusterId,

@@ -531,6 +531,64 @@ _CREATE_BILLING_TABLES = [
         (),
     ),
     ("CREATE INDEX IF NOT EXISTS idx_org_budgets_org ON org_budgets(org_id)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+            id SERIAL PRIMARY KEY,
+            stripe_event_id TEXT UNIQUE NOT NULL,
+            event_type TEXT NOT NULL,
+            event_data JSONB NOT NULL,
+            status TEXT DEFAULT 'pending',
+            processed_at TIMESTAMPTZ,
+            error_message TEXT,
+            retry_count INTEGER DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_event_id ON stripe_webhook_events(stripe_event_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_webhook_events(event_type)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_status ON stripe_webhook_events(status)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS payment_history (
+            id SERIAL PRIMARY KEY,
+            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            stripe_invoice_id TEXT,
+            stripe_payment_intent_id TEXT,
+            amount_cents INTEGER NOT NULL,
+            currency TEXT DEFAULT 'usd',
+            status TEXT NOT NULL,
+            description TEXT,
+            invoice_pdf_url TEXT,
+            receipt_url TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_payment_history_org ON payment_history(org_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_payment_history_org_date ON payment_history(org_id, created_at)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_payment_history_stripe_invoice ON payment_history(stripe_invoice_id)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS billing_audit_log (
+            id SERIAL PRIMARY KEY,
+            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            action TEXT NOT NULL,
+            details TEXT,
+            ip_address TEXT,
+            user_agent TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_org ON billing_audit_log(org_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_action ON billing_audit_log(action)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_created ON billing_audit_log(created_at)", ()),
 ]
 
 
@@ -1484,7 +1542,11 @@ async def ensure_billing_tables_pg(
             except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG budgets normalize skipped/failed: {exc}")
 
-        logger.info("Ensured PostgreSQL billing tables (subscription_plans, org_subscriptions)")
+        logger.info(
+            "Ensured PostgreSQL billing tables "
+            "(subscription_plans, org_subscriptions, org_budgets, "
+            "stripe_webhook_events, payment_history, billing_audit_log)"
+        )
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL billing tables: {exc}")

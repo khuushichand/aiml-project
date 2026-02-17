@@ -39,7 +39,7 @@ export const STEP_CATEGORIES: Record<
 > = {
   ai: {
     label: "AI & LLM",
-    color: "purple",
+    color: "blue",
     order: 1
   },
   search: {
@@ -74,7 +74,7 @@ export const STEP_CATEGORIES: Record<
   },
   control: {
     label: "Control Flow",
-    color: "orange",
+    color: "indigo",
     order: 8
   },
   io: {
@@ -883,14 +883,14 @@ const PORT_OVERRIDES: Record<
 }
 
 const CATEGORY_COLOR_CLASSES: Record<StepCategory, string> = {
-  ai: "bg-purple-500",
+  ai: "bg-blue-500",
   search: "bg-blue-500",
   media: "bg-indigo-500",
   text: "bg-cyan-500",
   research: "bg-violet-500",
   audio: "bg-teal-500",
   video: "bg-emerald-500",
-  control: "bg-orange-500",
+  control: "bg-indigo-500",
   io: "bg-green-500",
   utility: "bg-gray-500"
 }
@@ -1195,9 +1195,19 @@ export const ICON_OVERRIDES: Record<string, string> = {
 
 export const humanizeStepType = (value: string): string => {
   if (!value) return "Workflow Step"
+  const TOKEN_OVERRIDES: Record<string, string> = {
+    llm: "LLM"
+  }
+
   return value
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((token) => {
+      const lower = token.toLowerCase()
+      if (TOKEN_OVERRIDES[lower]) return TOKEN_OVERRIDES[lower]
+      return lower.charAt(0).toUpperCase() + lower.slice(1)
+    })
+    .join(" ")
 }
 
 export const resolveStepCategory = (stepType: string): StepCategory => {

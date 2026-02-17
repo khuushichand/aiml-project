@@ -23,7 +23,7 @@ import time
 import zipfile
 from datetime import datetime, timezone
 from io import BytesIO
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Optional
 
 from loguru import logger
@@ -45,6 +45,11 @@ from tldw_Server_API.app.core.Skills.skill_parser import SkillFrontmatter, Skill
 
 # Skill name validation pattern (same as in schemas)
 SKILL_NAME_PATTERN = re.compile(r'^[a-z][a-z0-9-]{0,63}$')
+# Supporting file name validation pattern (same as in schemas)
+SUPPORTING_FILE_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$')
+MAX_SUPPORTING_FILES_COUNT = 20
+MAX_SUPPORTING_FILE_BYTES = 500000
+MAX_SUPPORTING_FILES_TOTAL_BYTES = 5 * 1024 * 1024  # 5MB
 
 
 class SkillMetadata:
@@ -184,6 +189,99 @@ class SkillsService:
     def _get_skill_dir(self, name: str) -> Path:
         """Get the directory path for a skill."""
         return self.skills_dir / name
+
+    def _normalize_and_validate_skill_name(self, name: str, *, source: str = "skill name") -> str:
+        """Normalize and validate a skill name."""
+        normalized = (name or "").strip().lower()
+        if not normalized:
+            raise SkillValidationError(f"{source.capitalize()} must be specified", field="name")
+        if not SKILL_NAME_PATTERN.match(normalized):
+            raise SkillValidationError(
+                f"Invalid {source}: '{name}'. "
+                "Skill name must start with a letter and contain only lowercase letters, numbers, and hyphens.",
+                field="name",
+            )
+        return normalized
+
+    def _validate_supporting_filename(self, filename: str) -> str:
+        """Validate a supporting filename and return normalized value."""
+        normalized = (filename or "").strip()
+        if not normalized:
+            raise SkillValidationError("Supporting file name cannot be empty", field="supporting_files")
+        if normalized.lower() == "skill.md":
+            raise SkillValidationError("SKILL.md cannot be a supporting file", field="supporting_files")
+        if not SUPPORTING_FILE_NAME_PATTERN.match(normalized):
+            raise SkillValidationError(f"Invalid supporting file name: {filename}", field="supporting_files")
+        return normalized
+
+    def _safe_supporting_path(self, skill_dir: Path, filename: str) -> Path:
+        """Build a validated supporting-file path constrained to the skill directory."""
+        path = (skill_dir / filename).resolve()
+        base = skill_dir.resolve()
+        try:
+            path.relative_to(base)
+        except ValueError as e:
+            raise SkillValidationError(
+                f"Supporting file path escapes skill directory: {filename}",
+                field="supporting_files",
+            ) from e
+        return path
+
+    def _normalize_supporting_files(
+        self,
+        supporting_files: Optional[dict[str, Any]],
+        *,
+        allow_deletes: bool,
+    ) -> dict[str, Optional[str]]:
+        """Validate and normalize supporting files payload."""
+        if not supporting_files:
+            return {}
+
+        normalized: dict[str, Optional[str]] = {}
+        non_null_count = 0
+        total_bytes = 0
+        for raw_name, raw_content in supporting_files.items():
+            if not isinstance(raw_name, str):
+                raise SkillValidationError("Supporting file names must be strings", field="supporting_files")
+            filename = self._validate_supporting_filename(raw_name)
+
+            if raw_content is None:
+                if allow_deletes:
+                    normalized[filename] = None
+                    continue
+                raise SkillValidationError(
+                    f"Supporting file '{filename}' content cannot be null",
+                    field="supporting_files",
+                )
+
+            if not isinstance(raw_content, str):
+                raise SkillValidationError(
+                    f"Supporting file '{filename}' content must be a string",
+                    field="supporting_files",
+                )
+            non_null_count += 1
+            if non_null_count > MAX_SUPPORTING_FILES_COUNT:
+                raise SkillValidationError(
+                    f"Too many supporting files ({non_null_count}); maximum is {MAX_SUPPORTING_FILES_COUNT}",
+                    field="supporting_files",
+                )
+
+            file_bytes = len(raw_content.encode("utf-8"))
+            if file_bytes > MAX_SUPPORTING_FILE_BYTES:
+                raise SkillValidationError(
+                    f"Supporting file {filename} exceeds 500KB limit",
+                    field="supporting_files",
+                )
+            total_bytes += file_bytes
+            if total_bytes > MAX_SUPPORTING_FILES_TOTAL_BYTES:
+                raise SkillValidationError(
+                    f"Total supporting files size ({total_bytes} bytes) exceeds "
+                    f"{MAX_SUPPORTING_FILES_TOTAL_BYTES // (1024 * 1024)}MB limit",
+                    field="supporting_files",
+                )
+            normalized[filename] = raw_content
+
+        return normalized
 
     def _parse_skill_file(self, skill_dir: Path) -> Optional[Any]:
         """Parse SKILL.md content without loading supporting files."""
@@ -441,7 +539,11 @@ class SkillsService:
             SkillConflictError: If skill with this name already exists
             SkillValidationError: If content is invalid
         """
-        name = name.strip().lower()
+        name = self._normalize_and_validate_skill_name(name)
+        normalized_supporting_files = self._normalize_supporting_files(
+            supporting_files,
+            allow_deletes=False,
+        )
         await self._sync_registry_async(force=True)
         db = self._get_db()
 
@@ -473,14 +575,17 @@ class SkillsService:
             raise SkillStorageError(f"Failed to write SKILL.md: {e}", path=str(skill_file)) from e
 
         # Write supporting files
-        if supporting_files:
-            for filename, file_content in supporting_files.items():
-                if file_content is None:
-                    continue
+        if normalized_supporting_files:
+            for filename, file_content in normalized_supporting_files.items():
+                file_path = self._safe_supporting_path(skill_dir, filename)
                 try:
-                    (skill_dir / filename).write_text(file_content, encoding="utf-8")
+                    file_path.write_text(file_content or "", encoding="utf-8")
                 except OSError as e:
-                    logger.warning(f"Failed to write supporting file {filename}: {e}")
+                    shutil.rmtree(skill_dir, ignore_errors=True)
+                    raise SkillStorageError(
+                        f"Failed to write supporting file {filename}: {e}",
+                        path=str(file_path),
+                    ) from e
 
         registry_payload = {
             "name": name,
@@ -542,7 +647,7 @@ class SkillsService:
             SkillNotFoundError: If skill doesn't exist
             SkillConflictError: If version mismatch
         """
-        name = name.strip().lower()
+        name = self._normalize_and_validate_skill_name(name)
         await self._sync_registry_async(force=True)
         db = self._get_db()
 
@@ -594,8 +699,12 @@ class SkillsService:
 
         # Handle supporting files
         if supporting_files:
-            for filename, file_content in supporting_files.items():
-                file_path = skill_dir / filename
+            normalized_supporting_files = self._normalize_supporting_files(
+                supporting_files,
+                allow_deletes=True,
+            )
+            for filename, file_content in normalized_supporting_files.items():
+                file_path = self._safe_supporting_path(skill_dir, filename)
                 if file_content is None:
                     if file_path.exists():
                         try:
@@ -692,11 +801,22 @@ class SkillsService:
         except Exception as e:
             raise SkillValidationError(f"Invalid skill content: {e}") from e
 
-        skill_name = name or parsed.frontmatter.name
+        if parsed.frontmatter.name:
+            self._normalize_and_validate_skill_name(parsed.frontmatter.name, source="frontmatter skill name")
+
+        requested_name: Optional[str] = None
+        if name is not None:
+            requested_name = self._normalize_and_validate_skill_name(name)
+
+        skill_name = requested_name or parsed.frontmatter.name
         if not skill_name:
             raise SkillValidationError("Skill name must be specified in frontmatter or as parameter")
 
-        skill_name = skill_name.strip().lower()
+        skill_name = self._normalize_and_validate_skill_name(skill_name)
+        normalized_supporting_files = self._normalize_supporting_files(
+            supporting_files,
+            allow_deletes=False,
+        ) if supporting_files else None
 
         await self._sync_registry_async(force=True)
         db = self._get_db()
@@ -708,7 +828,7 @@ class SkillsService:
             else:
                 raise SkillConflictError(f"Skill '{skill_name}' already exists", skill_name=skill_name)
 
-        return await self.create_skill(skill_name, content, supporting_files)
+        return await self.create_skill(skill_name, content, normalized_supporting_files)
 
     async def import_from_zip(
         self,
@@ -743,6 +863,10 @@ class SkillsService:
                 if not skill_md_path:
                     raise SkillValidationError("Zip file does not contain SKILL.md")
 
+                skill_md_posix_path = PurePosixPath(skill_md_path)
+                if skill_md_posix_path.is_absolute() or ".." in skill_md_posix_path.parts:
+                    raise SkillValidationError(f"Invalid SKILL.md path in zip: '{skill_md_path}'")
+
                 # Read SKILL.md
                 content = zf.read(skill_md_path).decode("utf-8")
 
@@ -753,12 +877,25 @@ class SkillsService:
                         continue
                     if name.startswith(base_dir) and not name.endswith("/"):
                         relative_name = name[len(base_dir) :]
-                        if relative_name and "/" not in relative_name:
-                            try:
-                                file_content = zf.read(name).decode("utf-8")
-                                supporting_files[relative_name] = file_content
-                            except UnicodeDecodeError:
-                                logger.warning(f"Skipping non-text file: {name}")
+                        if not relative_name:
+                            continue
+
+                        relative_path = PurePosixPath(relative_name)
+                        if relative_path.is_absolute() or ".." in relative_path.parts:
+                            raise SkillValidationError(
+                                f"Zip contains path traversal entry: '{name}'"
+                            )
+
+                        # Ignore nested directories; supporting files are top-level only.
+                        if relative_path.name != relative_name:
+                            continue
+
+                        safe_filename = self._validate_supporting_filename(relative_name)
+                        try:
+                            file_content = zf.read(name).decode("utf-8")
+                            supporting_files[safe_filename] = file_content
+                        except UnicodeDecodeError:
+                            logger.warning(f"Skipping non-text file: {name}")
 
                 # Get skill name from directory
                 skill_name = None
@@ -766,8 +903,11 @@ class SkillsService:
                     skill_name = base_dir.rstrip("/").split("/")[-1]
 
                 # Validate extracted skill name
-                if skill_name and not SKILL_NAME_PATTERN.match(skill_name):
-                    raise SkillValidationError(f"Invalid skill name from zip: '{skill_name}'")
+                if skill_name:
+                    skill_name = self._normalize_and_validate_skill_name(
+                        skill_name,
+                        source="skill name from zip",
+                    )
 
                 return await self.import_skill(
                     content=content,
@@ -821,23 +961,8 @@ class SkillsService:
 
         return buffer.getvalue()
 
-    def get_context_payload(self) -> dict[str, Any]:
-        """
-        Get skill descriptions for context injection.
-
-        Returns a dict with:
-        - available_skills: list of skill summaries
-        - context_text: formatted text for LLM context
-        """
-        self._sync_registry()
-        db = self._get_db()
-        rows = db.list_skill_registry(
-            include_hidden=False,
-            include_deleted=False,
-            limit=10000,
-            offset=0,
-        )
-
+    def _build_context_payload(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        """Build a context payload from skill registry rows."""
         skills = [
             row for row in rows
             if row.get("user_invocable") and not row.get("disable_model_invocation")
@@ -872,6 +997,34 @@ class SkillsService:
             "context_text": "\n".join(lines),
         }
 
+    def _list_context_rows(self) -> list[dict[str, Any]]:
+        """List skill registry rows used for context payload generation."""
+        db = self._get_db()
+        return db.list_skill_registry(
+            include_hidden=False,
+            include_deleted=False,
+            limit=10000,
+            offset=0,
+        )
+
+    def get_context_payload(self) -> dict[str, Any]:
+        """
+        Get skill descriptions for context injection.
+
+        Returns a dict with:
+        - available_skills: list of skill summaries
+        - context_text: formatted text for LLM context
+        """
+        self._sync_registry()
+        rows = self._list_context_rows()
+        return self._build_context_payload(rows)
+
+    async def get_context_payload_async(self) -> dict[str, Any]:
+        """Async-safe context payload retrieval for async request handlers."""
+        await self._sync_registry_async()
+        rows = self._list_context_rows()
+        return self._build_context_payload(rows)
+
     async def get_total_count(self, include_hidden: bool = False) -> int:
         """Get total count of skills."""
         await self._sync_registry_async()
@@ -880,6 +1033,10 @@ class SkillsService:
             include_hidden=include_hidden,
             include_deleted=False,
         )
+
+    def _get_builtin_skills_dir(self) -> Path:
+        """Return the built-in skills source directory."""
+        return Path(__file__).parent / "builtin"
 
     async def seed_builtin_skills(self, overwrite: bool = False) -> list[str]:
         """Copy built-in example skills into the user's skills directory.
@@ -890,10 +1047,13 @@ class SkillsService:
         Returns:
             List of skill names that were seeded.
         """
-        builtin_dir = Path(__file__).parent / "builtin"
+        builtin_dir = self._get_builtin_skills_dir()
         if not builtin_dir.is_dir():
             logger.warning("Built-in skills directory not found: {}", builtin_dir)
             return []
+
+        await self._sync_registry_async(force=True)
+        db = self._get_db()
 
         seeded: list[str] = []
         for skill_dir in sorted(builtin_dir.iterdir()):
@@ -902,27 +1062,60 @@ class SkillsService:
             skill_file = skill_dir / "SKILL.md"
             if not skill_file.is_file():
                 continue
-            skill_name = skill_dir.name
-            if not SKILL_NAME_PATTERN.match(skill_name):
-                logger.warning("Skipping built-in skill with invalid name: {}", skill_name)
+
+            try:
+                skill_name = self._normalize_and_validate_skill_name(
+                    skill_dir.name,
+                    source="built-in skill name",
+                )
+            except SkillValidationError:
+                logger.warning("Skipping built-in skill with invalid name: {}", skill_dir.name)
                 continue
 
-            content = skill_file.read_text(encoding="utf-8")
+            destination_dir = self._get_skill_dir(skill_name)
 
-            # Check if skill already exists
             try:
-                existing = await self.get_skill(skill_name)
-                if existing and not overwrite:
+                registry_row = db.get_skill_registry(skill_name, include_deleted=True)
+            except CharactersRAGDBError as e:
+                raise SkillsError(f"Failed to read existing skill state for '{skill_name}': {e}") from e
+
+            row_is_deleted = bool(registry_row and registry_row.get("deleted"))
+            skill_exists = bool((registry_row and not row_is_deleted) or destination_dir.exists())
+            try:
+                if skill_exists and not overwrite:
                     logger.debug("Built-in skill '{}' already exists, skipping", skill_name)
                     continue
-                # Overwrite: delete then recreate
-                if existing:
-                    await self.delete_skill(skill_name)
-            except SkillNotFoundError:
-                pass
 
-            await self.create_skill(skill_name, content)
+                if overwrite and row_is_deleted:
+                    db.execute_query(
+                        "DELETE FROM skill_registry WHERE name = ? AND deleted = 1",
+                        (skill_name,),
+                        commit=True,
+                    )
+
+                if overwrite and destination_dir.exists():
+                    shutil.rmtree(destination_dir, ignore_errors=True)
+
+                if destination_dir.exists():
+                    logger.warning(
+                        "Skipping built-in skill '{}' because destination already exists",
+                        skill_name,
+                    )
+                    continue
+
+                shutil.copytree(skill_dir, destination_dir, dirs_exist_ok=False)
+            except (CharactersRAGDBError, InputError) as e:
+                raise SkillsError(f"Failed to prepare built-in skill '{skill_name}': {e}") from e
+            except OSError as e:
+                raise SkillStorageError(
+                    f"Failed to copy built-in skill '{skill_name}': {e}",
+                    path=str(destination_dir),
+                ) from e
+
             seeded.append(skill_name)
             logger.info("Seeded built-in skill: {}", skill_name)
+
+        if seeded:
+            await self._sync_registry_async(force=True)
 
         return seeded

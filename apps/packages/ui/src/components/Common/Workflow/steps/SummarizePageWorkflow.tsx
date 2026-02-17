@@ -180,7 +180,7 @@ const CaptureStep: React.FC = () => {
           type="success"
           showIcon
           icon={<CheckCircle className="h-4 w-4" />}
-          message={t("workflows:summarizePage.captured", "Page captured")}
+          title={t("workflows:summarizePage.captured", "Page captured")}
           description={
             <div className="mt-2">
               <p className="font-medium">{pageInfo.title}</p>
@@ -258,7 +258,7 @@ const OptionsStep: React.FC = () => {
           onChange={(e) => handleStyleChange(e.target.value)}
           className="w-full"
         >
-          <Space direction="vertical" className="w-full">
+          <Space orientation="vertical" className="w-full">
             {styleOptions.map((option) => (
               <Radio
                 key={option.value}

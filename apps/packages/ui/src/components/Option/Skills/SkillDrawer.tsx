@@ -1,12 +1,26 @@
 import React from "react"
 import { useMutation } from "@tanstack/react-query"
-import { Button, Drawer, Form, Input, Space } from "antd"
+import { Button, Collapse, Drawer, Form, Input, Space } from "antd"
 import { useTranslation } from "react-i18next"
+import { Plus, Trash2 } from "lucide-react"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
-import type { SkillResponse } from "@/types/skill"
+import type { SkillCreate, SkillResponse, SkillUpdate } from "@/types/skill"
+import {
+  buildInitialSkillContent,
+  buildSupportingFilesForCreate,
+  buildSupportingFilesForUpdate,
+  type SupportingFileFormEntry
+} from "./skill-form-utils"
 
 const SKILL_NAME_REGEX = /^[a-z][a-z0-9-]{0,63}$/
+const SUPPORTING_FILE_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/
+
+interface SkillDrawerFormValues {
+  name: string
+  content: string
+  supportingFiles?: SupportingFileFormEntry[]
+}
 
 interface SkillDrawerProps {
   open: boolean
@@ -23,24 +37,33 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
 }) => {
   const { t } = useTranslation(["option", "common"])
   const notification = useAntdNotification()
-  const [form] = Form.useForm()
+  const [form] = Form.useForm<SkillDrawerFormValues>()
   const isEdit = Boolean(skill)
 
   React.useEffect(() => {
     if (open) {
       if (skill) {
+        const supportingFiles = Object.entries(skill.supporting_files ?? {}).map(
+          ([filename, content]) => ({
+            filename,
+            content,
+            originalFilename: filename
+          })
+        )
         form.setFieldsValue({
           name: skill.name,
-          content: skill.content
+          content: buildInitialSkillContent(skill),
+          supportingFiles
         })
       } else {
         form.resetFields()
+        form.setFieldsValue({ supportingFiles: [] })
       }
     }
   }, [open, skill, form])
 
   const createMutation = useMutation({
-    mutationFn: (values: { name: string; content: string }) =>
+    mutationFn: (values: SkillCreate) =>
       tldwClient.createSkill(values),
     onSuccess: () => {
       notification.success({
@@ -63,7 +86,7 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
   })
 
   const updateMutation = useMutation({
-    mutationFn: (values: { content: string }) =>
+    mutationFn: (values: SkillUpdate) =>
       tldwClient.updateSkill(skill!.name, values, skill!.version),
     onSuccess: () => {
       notification.success({
@@ -90,9 +113,49 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
     try {
       const values = await form.validateFields()
       if (isEdit) {
-        updateMutation.mutate({ content: values.content })
+        let supportingFilesUpdate: Record<string, string | null> | undefined
+        try {
+          supportingFilesUpdate = buildSupportingFilesForUpdate(
+            skill!.supporting_files,
+            values.supportingFiles
+          )
+        } catch (err: any) {
+          notification.error({
+            message: t("option:skills.supportingFilesInvalid", {
+              defaultValue: "Invalid supporting files"
+            }),
+            description: err?.message
+          })
+          return
+        }
+
+        const payload: SkillUpdate = { content: values.content }
+        if (supportingFilesUpdate) {
+          payload.supporting_files = supportingFilesUpdate
+        }
+        updateMutation.mutate(payload)
       } else {
-        createMutation.mutate({ name: values.name, content: values.content })
+        let supportingFiles: Record<string, string> | undefined
+        try {
+          supportingFiles = buildSupportingFilesForCreate(values.supportingFiles)
+        } catch (err: any) {
+          notification.error({
+            message: t("option:skills.supportingFilesInvalid", {
+              defaultValue: "Invalid supporting files"
+            }),
+            description: err?.message
+          })
+          return
+        }
+
+        const payload: SkillCreate = {
+          name: values.name,
+          content: values.content
+        }
+        if (supportingFiles) {
+          payload.supporting_files = supportingFiles
+        }
+        createMutation.mutate(payload)
       }
     } catch {
       // validation errors handled by antd
@@ -110,7 +173,7 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
       }
       open={open}
       onClose={onClose}
-      styles={{ wrapper: { width: 640 } }}
+      size={640}
       destroyOnClose
       extra={
         <Space>
@@ -181,6 +244,107 @@ context: inline
 Process the following: $ARGUMENTS`}
           />
         </Form.Item>
+
+        <Collapse
+          className="mb-4"
+          items={[
+            {
+              key: "supporting-files",
+              label: t("option:skills.supportingFilesLabel", {
+                defaultValue: "Supporting Files"
+              }),
+              children: (
+                <Form.List name="supportingFiles">
+                  {(fields, { add, remove }) => (
+                    <div className="flex flex-col gap-3">
+                      {fields.map((field) => (
+                        <div key={field.key} className="rounded border p-3">
+                          <Form.Item
+                            name={[field.name, "originalFilename"]}
+                            hidden
+                          >
+                            <Input />
+                          </Form.Item>
+                          <div className="mb-2 flex items-start gap-2">
+                            <Form.Item
+                              className="mb-0 flex-1"
+                              name={[field.name, "filename"]}
+                              label={t("option:skills.supportingFileName", {
+                                defaultValue: "Filename"
+                              })}
+                              rules={[
+                                {
+                                  required: true,
+                                  whitespace: true,
+                                  message: t("option:skills.supportingFileNameRequired", {
+                                    defaultValue: "Filename is required"
+                                  })
+                                },
+                                {
+                                  validator: async (_, value: string | undefined) => {
+                                    const trimmed = (value ?? "").trim()
+                                    if (!trimmed) return
+                                    if (!SUPPORTING_FILE_NAME_REGEX.test(trimmed)) {
+                                      throw new Error(
+                                        t("option:skills.supportingFileNameInvalid", {
+                                          defaultValue:
+                                            "Use letters, numbers, dot, underscore, or hyphen (max 100 chars)"
+                                        })
+                                      )
+                                    }
+                                    if (trimmed.toLowerCase() === "skill.md") {
+                                      throw new Error(
+                                        t("option:skills.supportingFileNameReserved", {
+                                          defaultValue: "SKILL.md is reserved"
+                                        })
+                                      )
+                                    }
+                                  }
+                                }
+                              ]}
+                            >
+                              <Input
+                                className="font-mono text-xs"
+                                placeholder="reference.md"
+                              />
+                            </Form.Item>
+                            <Button
+                              danger
+                              type="text"
+                              icon={<Trash2 size={14} />}
+                              aria-label={t("option:skills.removeSupportingFile", {
+                                defaultValue: "Remove supporting file"
+                              })}
+                              onClick={() => remove(field.name)}
+                            />
+                          </div>
+                          <Form.Item
+                            name={[field.name, "content"]}
+                            label={t("option:skills.supportingFileContent", {
+                              defaultValue: "Content"
+                            })}
+                            className="mb-0"
+                          >
+                            <Input.TextArea rows={5} className="font-mono text-xs" />
+                          </Form.Item>
+                        </div>
+                      ))}
+                      <Button
+                        type="dashed"
+                        icon={<Plus size={14} />}
+                        onClick={() => add({ filename: "", content: "" })}
+                      >
+                        {t("option:skills.addSupportingFile", {
+                          defaultValue: "Add Supporting File"
+                        })}
+                      </Button>
+                    </div>
+                  )}
+                </Form.List>
+              )
+            }
+          ]}
+        />
       </Form>
     </Drawer>
   )

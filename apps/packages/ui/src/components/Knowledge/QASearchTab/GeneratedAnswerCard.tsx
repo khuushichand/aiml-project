@@ -50,12 +50,11 @@ export const GeneratedAnswerCard: React.FC<GeneratedAnswerCardProps> =
         </div>
 
         <div className="mb-3 rounded-md bg-surface/30 px-2 py-2">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            className="prose prose-sm max-w-none break-words text-text dark:prose-invert prose-p:my-2 prose-pre:p-0"
-          >
-            {answer}
-          </ReactMarkdown>
+          <div className="prose prose-sm max-w-none break-words text-text dark:prose-invert prose-p:my-2 prose-pre:p-0">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {answer}
+            </ReactMarkdown>
+          </div>
         </div>
 
         <div className="flex items-center gap-1 pt-2 border-t border-accent/20">

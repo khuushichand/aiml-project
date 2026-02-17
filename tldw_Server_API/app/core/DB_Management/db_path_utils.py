@@ -210,6 +210,7 @@ class DatabasePaths:
     KANBAN_DB_NAME = "Kanban.db"
     SLIDES_DB_NAME = "Slides.db"
     VOICE_REGISTRY_DB_NAME = "voice_registry.db"
+    CIRCUIT_BREAKER_REGISTRY_DB_NAME = "circuit_breaker_registry.db"
 
     # Subdirectories
     PROMPTS_SUBDIR = "prompts_user_dbs"
@@ -374,6 +375,33 @@ class DatabasePaths:
             project_root = Path(get_project_root())
             candidate = (project_root / "Databases" / "audit_shared.db").resolve()
         _ensure_dir(candidate.parent, label="shared audit")
+        return candidate
+
+    @staticmethod
+    def get_shared_circuit_breaker_db_path() -> Path:
+        """Get the path to the shared circuit breaker registry database."""
+        raw = (
+            os.getenv("CIRCUIT_BREAKER_REGISTRY_DB_PATH")
+            or settings.get("CIRCUIT_BREAKER_REGISTRY_DB_PATH")
+        )
+        if raw:
+            try:
+                candidate = Path(str(raw)).expanduser()
+            except Exception:
+                candidate = Path(str(raw))
+            if not candidate.is_absolute():
+                project_root = Path(get_project_root())
+                candidate = (project_root / candidate).resolve()
+            else:
+                candidate = candidate.resolve()
+        else:
+            project_root = Path(get_project_root())
+            candidate = (
+                project_root
+                / "Databases"
+                / DatabasePaths.CIRCUIT_BREAKER_REGISTRY_DB_NAME
+            ).resolve()
+        _ensure_dir(candidate.parent, label="shared circuit breaker")
         return candidate
 
     @staticmethod

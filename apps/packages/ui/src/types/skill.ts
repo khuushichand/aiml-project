@@ -25,6 +25,7 @@ export interface SkillResponse {
   model: string | null
   context: SkillContext
   content: string
+  raw_content?: string | null
   supporting_files: Record<string, string> | null
   directory_path: string
   created_at: string
@@ -48,7 +49,7 @@ export interface SkillCreate {
 
 export interface SkillUpdate {
   content?: string
-  supporting_files?: Record<string, string> | null
+  supporting_files?: Record<string, string | null> | null
 }
 
 export interface SkillExecuteRequest {
@@ -65,7 +66,7 @@ export interface SkillExecutionResult {
 }
 
 export interface SkillImportRequest {
-  name: string
+  name?: string
   content: string
   supporting_files?: Record<string, string> | null
   overwrite?: boolean

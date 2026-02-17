@@ -133,7 +133,7 @@ export const GenerationPanel: React.FC = () => {
           type="warning"
           showIcon
           icon={<AlertCircle className="h-4 w-4" />}
-          message={t(
+          title={t(
             "audiobook:generation.browserWarningTitle",
             "Browser TTS cannot export audio"
           )}
@@ -396,7 +396,7 @@ export const GenerationPanel: React.FC = () => {
               type="success"
               showIcon
               icon={<Check className="h-4 w-4" />}
-              message={t(
+              title={t(
                 "audiobook:generation.allComplete",
                 "All chapters generated successfully!"
               )}

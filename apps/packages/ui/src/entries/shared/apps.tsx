@@ -8,12 +8,15 @@ import { RouteShell } from "@/routes/app-route"
 import { platformConfig } from "@/config/platform"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
 import { WorkflowIntegrationHost } from "@/components/Common/Workflow"
+import { patchStaticAntdNotificationCompat } from "@/utils/antd-notification-compat"
 
 const PageHelpModal = React.lazy(() =>
   import("@/components/Common/PageHelpModal").then((m) => ({
     default: m.PageHelpModal
   }))
 )
+
+patchStaticAntdNotificationCompat()
 
 const routerFutureConfig = {
   v7_startTransition: true,

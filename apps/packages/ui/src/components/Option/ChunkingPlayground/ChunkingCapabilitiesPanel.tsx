@@ -22,7 +22,7 @@ export const ChunkingCapabilitiesPanel: React.FC<
       <Alert
         type="info"
         showIcon
-        message={t("common:noData", "No data")}
+        title={t("common:noData", "No data")}
       />
     )
   }
@@ -45,7 +45,7 @@ export const ChunkingCapabilitiesPanel: React.FC<
           </Button>
         ) : null
       }>
-      <Space direction="vertical" size="large" className="w-full">
+      <Space orientation="vertical" size="large" className="w-full">
         <div>
           <Title level={5} className="mb-2">
             {t(

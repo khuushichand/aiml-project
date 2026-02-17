@@ -108,6 +108,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const isMobileViewport = useMobile()
   useServerOnline()
   const location = useLocation()
+  const mobileSidebarPathRef = React.useRef(location.pathname)
   const { phase, isConnected } = useConnectionState()
   const { checkOnce } = useConnectionActions()
   const { isChecking } = useConnectionUxState()
@@ -199,11 +200,33 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const toggleSidebar = () => {
     if (hideSidebar) return
     if (showChatSidebar && !hideHeader) {
+      if (isMobileViewport) {
+        setSidebarOpen((prev) => !prev)
+        return
+      }
       setChatSidebarCollapsed((prev) => !prev)
       return
     }
     setSidebarOpen((prev) => !prev)
   }
+
+  React.useEffect(() => {
+    if (isMobileViewport && !showChatSidebar) return
+    if (!isMobileViewport && sidebarOpen) {
+      setSidebarOpen(false)
+    }
+  }, [isMobileViewport, showChatSidebar, sidebarOpen])
+
+  React.useEffect(() => {
+    if (!isMobileViewport || !showChatSidebar) {
+      mobileSidebarPathRef.current = location.pathname
+      return
+    }
+    if (location.pathname !== mobileSidebarPathRef.current && sidebarOpen) {
+      setSidebarOpen(false)
+    }
+    mobileSidebarPathRef.current = location.pathname
+  }, [isMobileViewport, showChatSidebar, sidebarOpen, location.pathname])
 
   const handleIngestPage = () => {
     if (typeof window !== "undefined") {
@@ -302,9 +325,9 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
       style={chatScreenBackgroundStyle}
     >
       {/* Persistent ChatSidebar when feature flag enabled */}
-      {showChatSidebar && !hideHeader && !hideSidebar && (
+      {showChatSidebar && !hideHeader && !hideSidebar && !isMobileViewport && (
         <ChatSidebar
-          collapsed={chatSidebarCollapsed || isMobileViewport}
+          collapsed={chatSidebarCollapsed}
           onToggleCollapse={() => setChatSidebarCollapsed((prev) => !prev)}
           className="sticky top-0 shrink-0 border-r border-border border-border"
         />
@@ -325,7 +348,11 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
             <div className="relative z-20 w-full">
               <Header
                 onToggleSidebar={hideSidebar ? undefined : toggleSidebar}
-                sidebarCollapsed={chatSidebarCollapsed}
+                sidebarCollapsed={
+                  showChatSidebar && isMobileViewport
+                    ? !sidebarOpen
+                    : chatSidebarCollapsed
+                }
               />
             </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
@@ -333,6 +360,33 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
               {shortcutLoading && renderShortcutOverlay()}
             </div>
           </div>
+        )}
+        {/* Mobile Drawer for ChatSidebar when the persistent sidebar is enabled */}
+        {!hideHeader && showChatSidebar && !hideSidebar && isMobileViewport && (
+          <Drawer
+            title={
+              <div className="flex items-center justify-between">
+                <span>{t("common:chatSidebar.title", "Chats")}</span>
+                <IconButton
+                  onClick={() => setSidebarOpen(false)}
+                  ariaLabel={t("common:close", { defaultValue: "Close" }) as string}
+                  title={t("common:close", { defaultValue: "Close" }) as string}
+                  className="h-10 w-10 sm:h-7 sm:w-7 sm:min-h-0 sm:min-w-0"
+                >
+                  <XIcon className="h-5 w-5 text-text-muted" />
+                </IconButton>
+              </div>
+            }
+            placement="left"
+            closeIcon={null}
+            onClose={() => setSidebarOpen(false)}
+            open={sidebarOpen}
+          >
+            <ChatSidebar
+              collapsed={false}
+              onToggleCollapse={() => setSidebarOpen(false)}
+            />
+          </Drawer>
         )}
         {/* Legacy Drawer sidebar - only shown when new ChatSidebar feature is disabled */}
         {!hideHeader && !showChatSidebar && !hideSidebar && (

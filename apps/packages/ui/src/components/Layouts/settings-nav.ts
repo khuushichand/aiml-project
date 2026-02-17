@@ -25,11 +25,38 @@ const NAV_GROUPS: Array<{ key: NavGroupKey; titleToken: string }> = [
 
 type NavItemWithOrder = SettingsNavItem & { order: number }
 
+const SETTINGS_ROUTE_PREFIX = "/settings"
+
+const SETTINGS_BETA_BADGE_WINDOWS: Record<string, string> = {
+  "/settings/guardian": "2026-12-31",
+  "/settings/prompt-studio": "2026-09-30"
+}
+
+const parseAnnouncementWindowEnd = (value: string): number | null => {
+  const normalized = String(value || "").trim()
+  if (!normalized) return null
+  const expiresAt = Date.parse(`${normalized}T23:59:59.999Z`)
+  if (Number.isNaN(expiresAt)) return null
+  return expiresAt
+}
+
+export const isSettingsAnnouncementBadgeActive = (
+  routePath: string,
+  now: Date = new Date()
+): boolean => {
+  const announcementEnd = parseAnnouncementWindowEnd(
+    SETTINGS_BETA_BADGE_WINDOWS[routePath]
+  )
+  if (announcementEnd == null) return false
+  return now.getTime() <= announcementEnd
+}
+
 const buildNavItemsByGroup = (
   capabilities: ServerCapabilities | null | undefined
 ) =>
   optionRoutes.reduce((acc, route) => {
     if (!route.nav) return acc
+    if (!route.path.startsWith(SETTINGS_ROUTE_PREFIX)) return acc
     const capabilitiesResolved = capabilities !== undefined
     if (
       capabilitiesResolved &&
@@ -39,7 +66,14 @@ const buildNavItemsByGroup = (
     }
     const { group, labelToken, icon, beta, order } = route.nav
     const items = acc.get(group) ?? []
-    items.push({ to: route.path, icon, labelToken, beta, order })
+    const badgeActive = Boolean(beta && isSettingsAnnouncementBadgeActive(route.path))
+    items.push({
+      to: route.path,
+      icon,
+      labelToken,
+      beta: badgeActive ? true : undefined,
+      order
+    })
     acc.set(group, items)
     return acc
   }, new Map<NavGroupKey, NavItemWithOrder[]>())

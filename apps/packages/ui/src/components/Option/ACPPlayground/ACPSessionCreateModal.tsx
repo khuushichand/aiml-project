@@ -152,7 +152,7 @@ const CreationProgress: React.FC<CreationProgressProps> = ({ step, error }) => {
           className="mt-3"
           type="error"
           showIcon
-          message={error.message}
+          title={error.message}
           description={
             error.suggestions.length > 0 && (
               <ul className="mt-2 list-inside list-disc text-sm">

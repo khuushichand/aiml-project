@@ -195,10 +195,11 @@ function Markdown({
   }
 
   return (
-    <React.Fragment>
+    <div
+      className={`${resolvedClassName} ${RICH_TEXT_ELEMENT_STYLE_CLASS}`}
+      style={richTextStyleVars as React.CSSProperties}
+    >
       <ReactMarkdown
-        className={`${resolvedClassName} ${RICH_TEXT_ELEMENT_STYLE_CLASS}`}
-        style={richTextStyleVars as React.CSSProperties}
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         components={{
@@ -324,7 +325,7 @@ function Markdown({
       >
         {processedMessage}
       </ReactMarkdown>
-    </React.Fragment>
+    </div>
   )
 }
 

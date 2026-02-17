@@ -1,10 +1,10 @@
 import OptionLayout from "~/components/Layouts/Layout"
-import SpeechPlaygroundPage from "@/components/Option/Speech/SpeechPlaygroundPage"
+import TtsPlaygroundPage from "@/components/Option/TTS/TtsPlaygroundPage"
 
 const OptionTts = () => {
   return (
     <OptionLayout>
-      <SpeechPlaygroundPage initialMode="listen" />
+      <TtsPlaygroundPage />
     </OptionLayout>
   )
 }

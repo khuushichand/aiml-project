@@ -19,6 +19,7 @@ import {
 } from "@/services/flashcards"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+import { pickFirstReviewableCard } from "../utils/review-card-hygiene"
 
 export type DueStatus = "new" | "learning" | "due" | "all"
 
@@ -52,6 +53,7 @@ export function useDecksQuery(options?: UseFlashcardQueriesOptions) {
  */
 export function useReviewQuery(deckId: number | null | undefined, options?: UseFlashcardQueriesOptions) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
+  const REVIEW_SCAN_LIMIT = 25
 
   return useQuery({
     queryKey: ["flashcards:review:next", deckId],
@@ -60,30 +62,30 @@ export function useReviewQuery(deckId: number | null | undefined, options?: UseF
         deck_id: deckId ?? undefined,
         due_status: "due",
         order_by: "due_at",
-        limit: 1,
+        limit: REVIEW_SCAN_LIMIT,
         offset: 0
       })
-      const dueCard = dueRes.items?.[0]
+      const dueCard = pickFirstReviewableCard(dueRes.items)
       if (dueCard) return dueCard
 
       const newRes = await listFlashcards({
         deck_id: deckId ?? undefined,
         due_status: "new",
         order_by: "created_at",
-        limit: 1,
+        limit: REVIEW_SCAN_LIMIT,
         offset: 0
       })
-      const newCard = newRes.items?.[0]
+      const newCard = pickFirstReviewableCard(newRes.items)
       if (newCard) return newCard
 
       const learningRes = await listFlashcards({
         deck_id: deckId ?? undefined,
         due_status: "learning",
         order_by: "due_at",
-        limit: 1,
+        limit: REVIEW_SCAN_LIMIT,
         offset: 0
       })
-      return learningRes.items?.[0] || null
+      return pickFirstReviewableCard(learningRes.items)
     },
     enabled: options?.enabled ?? flashcardsEnabled
   })

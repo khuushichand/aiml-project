@@ -10,16 +10,21 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
-    getConfig: (...args: unknown[]) => mocks.getConfig(...args),
-    initialize: (...args: unknown[]) => mocks.initialize(...args),
-    getModels: (...args: unknown[]) => mocks.getModels(...args)
+    getConfig: (...args: unknown[]) =>
+      (mocks.getConfig as (...args: unknown[]) => unknown)(...args),
+    initialize: (...args: unknown[]) =>
+      (mocks.initialize as (...args: unknown[]) => unknown)(...args),
+    getModels: (...args: unknown[]) =>
+      (mocks.getModels as (...args: unknown[]) => unknown)(...args)
   }
 }))
 
 vi.mock("@/utils/safe-storage", () => ({
   createSafeStorage: () => ({
-    get: (...args: unknown[]) => mocks.storageGet(...args),
-    set: (...args: unknown[]) => mocks.storageSet(...args)
+    get: (...args: unknown[]) =>
+      (mocks.storageGet as (...args: unknown[]) => unknown)(...args),
+    set: (...args: unknown[]) =>
+      (mocks.storageSet as (...args: unknown[]) => unknown)(...args)
   })
 }))
 
@@ -93,5 +98,19 @@ describe("TldwModelsService caching", () => {
 
     expect(next[0]?.id).toBe("model-b")
     expect(mocks.getModels).toHaveBeenCalledTimes(2)
+  })
+
+  it("forwards refreshOpenRouter flag when explicitly requested", async () => {
+    mocks.getModels.mockResolvedValue([
+      { id: "openrouter/model-a", name: "Model A", provider: "openrouter", type: "chat" }
+    ])
+
+    const { TldwModelsService } = await importService()
+    const service = new TldwModelsService()
+
+    await service.getModels(true, { refreshOpenRouter: true })
+
+    expect(mocks.getModels).toHaveBeenCalledTimes(1)
+    expect(mocks.getModels).toHaveBeenCalledWith({ refreshOpenRouter: true })
   })
 })
