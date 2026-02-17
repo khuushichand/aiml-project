@@ -1,17 +1,32 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  ReactNode,
+} from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { LogOut, Menu, X } from 'lucide-react';
+import { LogOut, Menu, Search, X } from 'lucide-react';
 import { logout } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { OrgContextSwitcher } from '@/components/OrgContextSwitcher';
 import { usePermissions } from '@/components/PermissionGuard';
 import { useToast } from '@/components/ui/toast';
-import { navigationSections, type NavigationItem } from '@/lib/navigation';
+import {
+  matchesNavigationQuery,
+  navigationSections,
+  type NavigationItem,
+} from '@/lib/navigation';
 
 // Mobile menu context
 interface MobileMenuContextType {
@@ -60,6 +75,8 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const router = useRouter();
   const { user, hasPermission, hasRole, loading: permLoading, refresh } = usePermissions();
   const { error: showError } = useToast();
+  const [navQuery, setNavQuery] = useState('');
+  const searchInputId = useId();
 
   const handleLogout = async () => {
     try {
@@ -77,21 +94,27 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   };
 
   // Filter items based on permissions
-  const isItemVisible = (item: NavigationItem) => {
+  const isItemVisible = useCallback((item: NavigationItem) => {
     if (!item.permission && !item.role) return true;
     if (permLoading) return false;
     if (item.permission && hasPermission(item.permission)) return true;
     if (item.role && hasRole(item.role)) return true;
     return false;
-  };
+  }, [hasPermission, hasRole, permLoading]);
 
   // Get visible sections with visible items
-  const visibleSections = navigationSections
-    .map((section) => ({
-      ...section,
-      items: section.items.filter(isItemVisible),
-    }))
-    .filter((section) => section.items.length > 0);
+  const visibleSections = useMemo(
+    () =>
+      navigationSections
+        .map((section) => ({
+          ...section,
+          items: section.items.filter(
+            (item) => isItemVisible(item) && matchesNavigationQuery(item, section.title, navQuery)
+          ),
+        }))
+        .filter((section) => section.items.length > 0),
+    [isItemVisible, navQuery]
+  );
 
   return (
     <>
@@ -114,40 +137,63 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <OrgContextSwitcher />
       </div>
 
+      <div className="border-b px-3 py-2">
+        <label htmlFor={searchInputId} className="sr-only">
+          Find navigation page
+        </label>
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          <Input
+            id={searchInputId}
+            value={navQuery}
+            onChange={(event) => setNavQuery(event.target.value)}
+            placeholder="Find page..."
+            className="h-9 pl-8"
+            aria-label="Find navigation page"
+          />
+        </div>
+      </div>
+
       {/* Navigation with sections */}
       <nav className="flex-1 px-3 py-4 overflow-y-auto" aria-label="Main navigation">
-        {visibleSections.map((section, sectionIndex) => (
-          <div key={section.title} className={sectionIndex > 0 ? 'mt-6' : ''}>
-            <h3 className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              {section.title}
-            </h3>
-            <div className="space-y-1">
-              {section.items.map((item) => {
-                const Icon = item.icon;
-                const isActive = pathname === item.href ||
-                  (item.href !== '/' && pathname.startsWith(item.href));
+        {visibleSections.length === 0 ? (
+          <p className="px-3 py-2 text-sm text-muted-foreground">
+            No navigation matches your search.
+          </p>
+        ) : (
+          visibleSections.map((section, sectionIndex) => (
+            <div key={section.title} className={sectionIndex > 0 ? 'mt-6' : ''}>
+              <h3 className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                {section.title}
+              </h3>
+              <div className="space-y-1">
+                {section.items.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = pathname === item.href ||
+                    (item.href !== '/' && pathname.startsWith(item.href));
 
-                return (
-                  <Link
-                    key={item.name}
-                    href={item.href}
-                    onClick={handleNavClick}
-                    className={cn(
-                      'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                      isActive
-                        ? 'bg-primary/10 text-primary border border-primary/20'
-                        : 'text-foreground hover:bg-muted'
-                    )}
-                    aria-current={isActive ? 'page' : undefined}
-                  >
-                    <Icon className="h-5 w-5 flex-shrink-0" aria-hidden="true" />
-                    <span className="truncate">{item.name}</span>
-                  </Link>
-                );
-              })}
+                  return (
+                    <Link
+                      key={item.name}
+                      href={item.href}
+                      onClick={handleNavClick}
+                      className={cn(
+                        'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                        isActive
+                          ? 'bg-primary/10 text-primary border border-primary/20'
+                          : 'text-foreground hover:bg-muted'
+                      )}
+                      aria-current={isActive ? 'page' : undefined}
+                    >
+                      <Icon className="h-5 w-5 flex-shrink-0" aria-hidden="true" />
+                      <span className="truncate">{item.name}</span>
+                    </Link>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          ))
+        )}
       </nav>
 
       {/* Logout */}
@@ -177,25 +223,94 @@ function DesktopSidebar() {
 // Mobile sidebar (slide-out drawer)
 function MobileSidebar() {
   const { isOpen, close } = useMobileMenu();
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const drawerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const focusableSelector = [
+      'a[href]',
+      'button:not([disabled])',
+      'textarea:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',');
+    const getFocusableElements = () =>
+      Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? []);
+
+    const focusTimer = window.setTimeout(() => {
+      const nextFocus = closeButtonRef.current ?? getFocusableElements()[0] ?? drawerRef.current;
+      nextFocus?.focus();
+    }, 0);
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusableElements = getFocusableElements();
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        drawerRef.current?.focus();
+        return;
+      }
+
+      const firstElement = focusableElements[0];
+      const lastElement = focusableElements[focusableElements.length - 1];
+      const activeElement = document.activeElement as HTMLElement | null;
+
+      if (event.shiftKey && activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus();
+        return;
+      }
+      if (!event.shiftKey && activeElement === lastElement) {
+        event.preventDefault();
+        firstElement.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener('keydown', handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, [close, isOpen]);
+
+  if (!isOpen) {
+    return null;
+  }
 
   return (
     <>
       {/* Backdrop */}
-      {isOpen && (
-        <div
-          className="lg:hidden fixed inset-0 z-40 bg-black/50"
-          onClick={close}
-        />
-      )}
+      <div
+        className="lg:hidden fixed inset-0 z-40 bg-black/50"
+        onClick={close}
+        aria-hidden="true"
+      />
 
       {/* Drawer */}
       <div
         id="mobile-navigation"
-        className={cn(
-          'lg:hidden fixed inset-y-0 left-0 z-50 w-64 bg-card border-r transform transition-transform duration-200 ease-in-out',
-          isOpen ? 'translate-x-0' : '-translate-x-full'
-        )}
-        aria-hidden={!isOpen}
+        ref={drawerRef}
+        className="lg:hidden fixed inset-y-0 left-0 z-50 w-64 bg-card border-r"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Main navigation"
+        tabIndex={-1}
       >
         {/* Close button */}
         <div className="flex h-14 items-center justify-between border-b px-4">
@@ -205,6 +320,7 @@ function MobileSidebar() {
             size="icon"
             onClick={close}
             aria-label="Close navigation menu"
+            ref={closeButtonRef}
           >
             <X className="h-5 w-5" aria-hidden="true" />
           </Button>
@@ -227,6 +343,9 @@ export function ResponsiveLayout({ children }: ResponsiveLayoutProps) {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
   const prevPathnameRef = useRef(pathname);
+  const openMenu = useCallback(() => setIsOpen(true), []);
+  const closeMenu = useCallback(() => setIsOpen(false), []);
+  const toggleMenu = useCallback(() => setIsOpen((prev) => !prev), []);
 
   // Close mobile menu on route change
   useEffect(() => {
@@ -264,9 +383,9 @@ export function ResponsiveLayout({ children }: ResponsiveLayoutProps) {
     <MobileMenuContext.Provider
       value={{
         isOpen,
-        open: () => setIsOpen(true),
-        close: () => setIsOpen(false),
-        toggle: () => setIsOpen(!isOpen),
+        open: openMenu,
+        close: closeMenu,
+        toggle: toggleMenu,
       }}
     >
       <div className="flex h-screen bg-background">

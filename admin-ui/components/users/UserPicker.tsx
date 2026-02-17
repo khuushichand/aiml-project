@@ -93,6 +93,8 @@ export function UserPicker({
             variant="ghost"
             size="icon"
             className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7"
+            aria-label="Clear selected user"
+            title="Clear selected user"
             onClick={() => {
               setQuery('');
               setResults([]);

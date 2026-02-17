@@ -93,6 +93,37 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
+vi.mock("antd", async () => {
+  const actual = await vi.importActual<typeof import("antd")>("antd")
+  const Input = {
+    ...actual.Input,
+    TextArea: ({
+      autoSize: _autoSize,
+      onPressEnter,
+      onKeyDown,
+      value,
+      onChange,
+      ...rest
+    }: any) => (
+      <textarea
+        {...rest}
+        value={value ?? ""}
+        onChange={(event) => onChange?.(event)}
+        onKeyDown={(event) => {
+          onKeyDown?.(event)
+          if (event.key === "Enter") {
+            onPressEnter?.(event)
+          }
+        }}
+      />
+    )
+  }
+  return {
+    ...actual,
+    Input
+  }
+})
+
 import SidepanelPersona from "../sidepanel-persona"
 
 class MockWebSocket {

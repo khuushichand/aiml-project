@@ -181,6 +181,10 @@ jobs:
         working-directory: apps/tldw-frontend
         run: npm run e2e:smoke:interaction
 
+      - name: Run Stage 7 audio regression gate
+        working-directory: apps/tldw-frontend
+        run: npm run e2e:smoke:audio
+
       - name: Run all-pages UX smoke gate
         working-directory: apps/tldw-frontend
         run: npx playwright test e2e/smoke/all-pages.spec.ts --reporter=line

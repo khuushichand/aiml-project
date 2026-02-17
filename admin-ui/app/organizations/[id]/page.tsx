@@ -453,7 +453,13 @@ export default function OrganizationDetailPage() {
                               <Label>Invite Link</Label>
                               <div className="flex gap-2">
                                 <Input value={inviteLink} readOnly className="font-mono text-sm" />
-                                <Button variant="outline" size="icon" onClick={() => copyToClipboard(inviteLink)}>
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  onClick={() => copyToClipboard(inviteLink)}
+                                  aria-label="Copy invite link"
+                                  title="Copy invite link"
+                                >
                                   <Copy className="h-4 w-4" />
                                 </Button>
                               </div>
@@ -593,6 +599,8 @@ export default function OrganizationDetailPage() {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleRemoveMember(member.user_id, member.user?.username)}
+                                aria-label={`Remove ${member.user?.username || `User ${member.user_id}`} from organization`}
+                                title="Remove member"
                               >
                                 <Trash2 className="h-4 w-4 text-red-500" />
                               </Button>
@@ -647,7 +655,12 @@ export default function OrganizationDetailPage() {
                             </TableCell>
                             <TableCell className="text-right">
                               <Link href={`/teams/${team.id}`}>
-                                <Button variant="ghost" size="sm">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  aria-label={`View team ${team.name}`}
+                                  title={`View team ${team.name}`}
+                                >
                                   <Eye className="h-4 w-4" />
                                 </Button>
                               </Link>

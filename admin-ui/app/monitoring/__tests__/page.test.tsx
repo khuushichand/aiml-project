@@ -265,15 +265,14 @@ describe('MonitoringPage', () => {
       .mockResolvedValueOnce({ cpu: { percent: 25 }, memory: { percent: 30 } });
 
     render(<MonitoringPage />);
-
-    await waitFor(() => {
-      expect(apiMock.getHealthMetrics.mock.calls.length).toBeGreaterThanOrEqual(2);
-    }, { timeout: 5000 });
+    await flushPromises();
+    const baselineCalls = apiMock.getHealthMetrics.mock.calls.length;
+    expect(baselineCalls).toBeGreaterThan(0);
 
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     await flushPromises();
 
-    expect(apiMock.getHealthMetrics).toHaveBeenCalledTimes(3);
+    expect(apiMock.getHealthMetrics.mock.calls.length).toBe(baselineCalls + 1);
 
     expectLoadDataCalls();
   });

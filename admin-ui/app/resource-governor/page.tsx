@@ -336,7 +336,13 @@ export default function ResourceGovernorPage() {
                       {editingPolicy ? 'Update the resource governance policy.' : 'Create a new resource governance policy.'}
                     </CardDescription>
                   </div>
-                  <Button variant="ghost" size="icon" onClick={handleCancelForm}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleCancelForm}
+                    aria-label="Close policy form"
+                    title="Close policy form"
+                  >
                     <X className="h-4 w-4" />
                   </Button>
                 </div>
@@ -593,6 +599,7 @@ export default function ResourceGovernorPage() {
                                 size="icon"
                                 onClick={() => handleEditPolicy(policy)}
                                 title="Edit policy"
+                                aria-label={`Edit policy ${policy.name}`}
                               >
                                 <Edit2 className="h-4 w-4" />
                               </Button>

@@ -18,6 +18,7 @@
     "e2e:smoke:interaction:stage1": "playwright test e2e/smoke/stage6-interaction-stage1.spec.ts --reporter=line",
     "e2e:smoke:interaction:stage2": "playwright test e2e/smoke/stage6-interaction-stage2.spec.ts --reporter=line",
     "e2e:smoke:interaction": "playwright test e2e/smoke/stage6-interaction-stage1.spec.ts e2e/smoke/stage6-interaction-stage2.spec.ts --reporter=line",
+    "e2e:smoke:audio": "playwright test e2e/smoke/stage7-audio-regression.spec.ts --reporter=line",
     "e2e:smoke:html": "playwright test e2e/smoke/all-pages.spec.ts --reporter=html",
     "e2e:smoke:chat": "playwright test e2e/smoke/all-pages.spec.ts --grep 'Chat'",
     "e2e:smoke:settings": "playwright test e2e/smoke/all-pages.spec.ts --grep 'Settings'",

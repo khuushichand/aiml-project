@@ -145,7 +145,7 @@ describe('BudgetsPage', () => {
     clearPaginationMock.mockClear();
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole('button', { name: '2' }));
+    await user.click(screen.getByRole('button', { name: 'Go to page 2' }));
     expect(setPaginationValuesMock).toHaveBeenCalledWith({ page: 2 });
 
     await user.selectOptions(screen.getByRole('combobox'), '50');

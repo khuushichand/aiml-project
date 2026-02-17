@@ -30,6 +30,7 @@ import {
 import { PageShell } from "@/components/Common/PageShell"
 import { TtsProviderPanel } from "@/components/Option/TTS/TtsProviderPanel"
 import { isTimeoutLikeError } from "@/utils/request-timeout"
+import { withTemplateFallback } from "@/utils/template-guards"
 
 const { Text, Title, Paragraph } = Typography
 const SAMPLE_TEXT =
@@ -822,13 +823,16 @@ const TtsPlaygroundPage: React.FC = () => {
                               "Paused"
                             )} · `
                           : ""}
-                        {t(
-                          "playground:tts.browserStatusSpeaking",
-                          "Speaking segment {{current}}/{{total}}",
-                          {
-                            current: browserActiveIndex + 1,
-                            total: segments.length
-                          }
+                        {withTemplateFallback(
+                          t(
+                            "playground:tts.browserStatusSpeaking",
+                            "Speaking segment {{current}}/{{total}}",
+                            {
+                              current: browserActiveIndex + 1,
+                              total: segments.length
+                            }
+                          ),
+                          `Speaking segment ${browserActiveIndex + 1}/${segments.length}`
                         )}
                       </Text>
                     )}

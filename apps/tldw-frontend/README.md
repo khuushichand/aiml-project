@@ -138,6 +138,7 @@ Frontend PRs should pass these Playwright smoke gates:
 
 - `npm run e2e:smoke:stage5`
 - `npm run e2e:smoke:interaction`
+- `npm run e2e:smoke:audio`
 - `npx playwright test e2e/smoke/all-pages.spec.ts --reporter=line`
 
 Interaction gate coverage (`e2e:smoke:interaction`) includes:
@@ -145,12 +146,18 @@ Interaction gate coverage (`e2e:smoke:interaction`) includes:
 - Stage 1 defect closures (`INT-1`, `INT-5`): chat template leak guard and home theme-toggle discoverability.
 - Stage 2 positive regressions (`INT-2`, `INT-3`, `INT-4`, `INT-6`): deterministic search typing/no-results behavior, keyboard-only command palette execution, and settings navigation active-state checks.
 
+Audio gate coverage (`e2e:smoke:audio`) includes:
+
+- Route identity + runtime budget checks for `/tts`, `/stt`, `/speech`, and `/audio` aliasing.
+- Template leak guardrails for audio surfaces (`{{...}}` never user-visible).
+- Timeout-to-retry recovery checks for ElevenLabs metadata (`/tts`, `/speech`) and transcription-model loading (`/stt`).
+
 Baseline pass criteria for UX gate acceptance:
 
 - Zero uncaught page errors on gated routes.
 - Zero unresolved `{{...}}` template placeholders on audited interaction surfaces.
 - No unexpected console/request failures beyond the scoped allowlist.
-- Stage 5 + Stage 6 smoke suites pass with route/action-level assertion diagnostics.
+- Stage 5 + Stage 6 + Stage 7 smoke suites pass with route/action-level assertion diagnostics.
 
 ## Learn More
 

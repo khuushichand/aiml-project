@@ -28,7 +28,7 @@ import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
 import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, type SecurityHealthData, User } from '@/types';
 import { buildDashboardUIStats, type DashboardUIStats } from '@/lib/dashboard';
-import { isSecurityHealthData } from '@/lib/type-guards';
+import { resolveSecurityHealth } from '@/lib/security-health';
 import Link from 'next/link';
 
 interface SystemHealth {
@@ -255,11 +255,13 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [securityHealth, setSecurityHealth] = useState<SecurityHealthData | null>(null);
+  const [securityHealthError, setSecurityHealthError] = useState('');
 
   const loadDashboardData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
+      setSecurityHealthError('');
 
       const orgParams = selectedOrg ? { org_id: String(selectedOrg.id) } : undefined;
       const auditParams = selectedOrg ? { limit: '5', org_id: String(selectedOrg.id) } : { limit: '5' };
@@ -325,18 +327,9 @@ export default function DashboardPage() {
       setServerStatus({ state: healthState, checkedAt: new Date().toISOString() });
 
       // Process security health
-      if (securityHealthResult.status === 'fulfilled' && isSecurityHealthData(securityHealthResult.value)) {
-        setSecurityHealth(securityHealthResult.value);
-      } else {
-        // Set default values if endpoint not available
-        setSecurityHealth({
-          risk_score: 0,
-          recent_security_events: 0,
-          failed_logins_24h: 0,
-          suspicious_activity: 0,
-          mfa_adoption_rate: 0,
-        });
-      }
+      const resolvedSecurityHealth = resolveSecurityHealth(securityHealthResult);
+      setSecurityHealth(resolvedSecurityHealth.data);
+      setSecurityHealthError(resolvedSecurityHealth.error);
 
       const { activeUsers, totalStorage, totalQuota } = computeUserStats(users);
 
@@ -629,6 +622,7 @@ export default function DashboardPage() {
   const serverStatusLabel = getServerStatusLabel(serverStatus.state);
   const serverStatusDotClass = getServerStatusDot(serverStatus.state);
   const checkedAtLabel = serverStatus.checkedAt ? formatTimeAgo(serverStatus.checkedAt) : null;
+  const hasSecurityHealth = securityHealth !== null;
 
   const activeRegistrationCount = registrationCodes.filter(isRegistrationCodeActive).length;
   const recentRegistrationCodes = registrationCodes.slice(0, 3);
@@ -965,43 +959,56 @@ export default function DashboardPage() {
                   <CardDescription>Security posture and recent activity</CardDescription>
                 </CardHeader>
                 <CardContent>
+                  {securityHealthError && (
+                    <Alert className="mb-4">
+                      <AlertDescription>{securityHealthError}</AlertDescription>
+                    </Alert>
+                  )}
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
                     <div className="space-y-1">
                       <p className="text-xs text-muted-foreground">Risk Score</p>
                       <div className="flex items-center gap-2">
                         <span className={`text-2xl font-bold ${
-                          (securityHealth?.risk_score ?? 0) >= 70 ? 'text-red-500' :
-                          (securityHealth?.risk_score ?? 0) >= 40 ? 'text-yellow-500' :
-                          'text-green-500'
+                          !hasSecurityHealth
+                            ? 'text-muted-foreground'
+                            : ((securityHealth?.risk_score ?? 0) >= 70 ? 'text-red-500' :
+                              (securityHealth?.risk_score ?? 0) >= 40 ? 'text-yellow-500' :
+                              'text-green-500')
                         }`}>
-                          {securityHealth?.risk_score ?? 0}
+                          {hasSecurityHealth ? securityHealth.risk_score : '—'}
                         </span>
-                        <span className="text-xs text-muted-foreground">/ 100</span>
+                        {hasSecurityHealth && <span className="text-xs text-muted-foreground">/ 100</span>}
                       </div>
                     </div>
                     <div className="space-y-1">
                       <p className="text-xs text-muted-foreground">Security Events (24h)</p>
-                      <p className="text-2xl font-bold">{securityHealth?.recent_security_events ?? 0}</p>
+                      <p className={`text-2xl font-bold ${!hasSecurityHealth ? 'text-muted-foreground' : ''}`}>
+                        {hasSecurityHealth ? securityHealth.recent_security_events : '—'}
+                      </p>
                     </div>
                     <div className="space-y-1">
                       <p className="text-xs text-muted-foreground">Failed Logins (24h)</p>
                       <p className={`text-2xl font-bold ${
+                        !hasSecurityHealth ? 'text-muted-foreground' :
                         (securityHealth?.failed_logins_24h ?? 0) > 10 ? 'text-red-500' : ''
                       }`}>
-                        {securityHealth?.failed_logins_24h ?? 0}
+                        {hasSecurityHealth ? securityHealth.failed_logins_24h : '—'}
                       </p>
                     </div>
                     <div className="space-y-1">
                       <p className="text-xs text-muted-foreground">Suspicious Activity</p>
                       <p className={`text-2xl font-bold ${
+                        !hasSecurityHealth ? 'text-muted-foreground' :
                         (securityHealth?.suspicious_activity ?? 0) > 0 ? 'text-yellow-500' : ''
                       }`}>
-                        {securityHealth?.suspicious_activity ?? 0}
+                        {hasSecurityHealth ? securityHealth.suspicious_activity : '—'}
                       </p>
                     </div>
                     <div className="space-y-1">
                       <p className="text-xs text-muted-foreground">MFA Adoption</p>
-                      <p className="text-2xl font-bold">{securityHealth?.mfa_adoption_rate ?? 0}%</p>
+                      <p className={`text-2xl font-bold ${!hasSecurityHealth ? 'text-muted-foreground' : ''}`}>
+                        {hasSecurityHealth ? `${securityHealth.mfa_adoption_rate}%` : '—'}
+                      </p>
                     </div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
