@@ -35,7 +35,7 @@ Finding IDs: `10.1` through `10.6`
 - Unit tests for error classifier mapping.
 - Integration tests for malformed JSON, missing fields, and zero-entry imports.
 - UX tests for fallback message behavior when error shape is unknown.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Add Optimistic Concurrency Handling
 **Goal**: Prevent silent overwrites in concurrent edit scenarios.
@@ -47,7 +47,7 @@ Finding IDs: `10.1` through `10.6`
 - Integration tests simulating concurrent edits and conflict responses.
 - Unit tests for update payload version propagation.
 - Component tests for 409 conflict messaging and recovery action.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Clarify Delete Undo Semantics and Pending State
 **Goal**: Make delayed-delete behavior understandable and predictable.
@@ -59,7 +59,7 @@ Finding IDs: `10.1` through `10.6`
 - Component tests for pending indicator lifecycle.
 - Integration tests for undo timeout expiration and cancel behavior.
 - Regression tests for route change/unmount cleanup behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Cover Attachment and Recursive Scanning Edge Warnings
 **Goal**: Improve resilience for attachment churn and recursive-trigger surprises.
@@ -71,7 +71,7 @@ Finding IDs: `10.1` through `10.6`
 - Integration tests for attachment refresh after character deletion/invalidation.
 - Component tests for recursive warning visibility and dynamic max-depth text.
 - Contract test confirming displayed max depth matches backend-configured limit.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

@@ -20,7 +20,7 @@ Finding IDs: `10.1` through `10.6`
 **Tests**:
 - Integration tests for create/fetch/update collection flows.
 - Component tests for collection assignment and filtering behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Usage Tracking and Surfacing
 **Goal**: Provide evidence of prompt effectiveness and recency of use.
@@ -31,7 +31,7 @@ Finding IDs: `10.1` through `10.6`
 **Tests**:
 - Unit tests for usage increment/update behavior.
 - Integration tests for chat handoff updating usage metadata.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Shareable Prompt Links for Synced Prompts
 **Goal**: Enable collaborative sharing without file export/import overhead.

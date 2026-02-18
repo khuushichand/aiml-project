@@ -183,6 +183,8 @@ function serverToNewLocalPrompt(server: ServerPrompt): LocalPrompt {
     user_prompt: server.user_prompt,
     createdAt: now,
     updatedAt: now,
+    usageCount: 0,
+    lastUsedAt: null,
     // Server sync fields
     serverId: server.id,
     studioProjectId: server.project_id,

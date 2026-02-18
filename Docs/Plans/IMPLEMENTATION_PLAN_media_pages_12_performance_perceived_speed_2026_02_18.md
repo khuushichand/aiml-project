@@ -20,7 +20,7 @@ Finding IDs: `12.1` through `12.6`
 - Integration tests for loading skeleton lifecycle.
 - Regression tests for debounce request count and virtualized list rendering.
 - Component tests for height-stability logic under resize events.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Media Type Filter Flash Reduction
 **Goal**: Remove initial empty-state flash for media type filters on page load.

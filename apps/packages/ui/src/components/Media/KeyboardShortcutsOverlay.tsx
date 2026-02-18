@@ -49,8 +49,15 @@ export function KeyboardShortcutsOverlay({ open, onClose }: KeyboardShortcutsOve
     {
       title: t('review:shortcuts.general', { defaultValue: 'General' }),
       shortcuts: [
+        { keys: ['/'], description: t('review:shortcuts.focusSearch', { defaultValue: 'Focus search' }) },
         { keys: ['?'], description: t('review:shortcuts.showHelp', { defaultValue: 'Show/hide this help' }) },
         { keys: ['Esc'], description: t('review:shortcuts.closeOverlay', { defaultValue: 'Close overlay' }) },
+        {
+          keys: ['Esc', 'Esc'],
+          description: t('review:shortcuts.clearLargeSelection', {
+            defaultValue: 'Clear large selection in multi-review'
+          })
+        },
       ]
     }
   ]

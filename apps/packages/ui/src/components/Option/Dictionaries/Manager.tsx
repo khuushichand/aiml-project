@@ -24,7 +24,9 @@ import {
   formatRelativeTimestamp
 } from "./listUtils"
 import {
+  buildImportConflictRenameSuggestion,
   buildDictionaryImportErrorDescription,
+  isDictionaryImportConflictError,
   validateDictionaryImportData
 } from "./importValidationUtils"
 import {
@@ -46,6 +48,15 @@ export const DictionariesManager: React.FC = () => {
   const [editForm] = Form.useForm()
   const [entryForm] = Form.useForm()
   const [openImport, setOpenImport] = React.useState(false)
+  const [importFormat, setImportFormat] = React.useState<DictionaryImportFormat>("json")
+  const [importMode, setImportMode] = React.useState<DictionaryImportMode>("file")
+  const [importSourceContent, setImportSourceContent] = React.useState("")
+  const [importMarkdownName, setImportMarkdownName] = React.useState("")
+  const [importPreview, setImportPreview] = React.useState<DictionaryImportPreview | null>(null)
+  const [importConflictResolution, setImportConflictResolution] = React.useState<{
+    preview: DictionaryImportPreview
+    suggestedName: string
+  } | null>(null)
   const [activateOnImport, setActivateOnImport] = React.useState(false)
   const [importValidationErrors, setImportValidationErrors] = React.useState<string[]>([])
   const [importFileName, setImportFileName] = React.useState<string | null>(null)
@@ -127,18 +138,41 @@ export const DictionariesManager: React.FC = () => {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tldw:listDictionaries'] })
   })
   const { mutateAsync: importDict, isPending: importing } = useMutation({
-    mutationFn: ({ data, activate }: any) => tldwClient.importDictionaryJSON(data, activate),
+    mutationFn: async (payload: {
+      format: DictionaryImportFormat
+      activate: boolean
+      data?: any
+      name?: string
+      content?: string
+    }) => {
+      if (payload.format === "json") {
+        return await tldwClient.importDictionaryJSON(payload.data, payload.activate)
+      }
+      return await tldwClient.importDictionaryMarkdown(
+        payload.name || "Imported Dictionary",
+        payload.content || "",
+        payload.activate
+      )
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tldw:listDictionaries'] })
       setOpenImport(false)
       setImportValidationErrors([])
       setImportFileName(null)
+      setImportSourceContent("")
+      setImportPreview(null)
+      setImportMarkdownName("")
+      setImportFormat("json")
+      setImportMode("file")
+      setImportConflictResolution(null)
     },
-    onError: (e: any) =>
+    onError: (e: any) => {
+      if (isDictionaryImportConflictError(e)) return
       notification.error({
         message: "Import failed",
         description: buildDictionaryImportErrorDescription(e)
       })
+    }
   })
 
   const { mutateAsync: updateDictionaryActive } = useMutation({
@@ -306,7 +340,217 @@ export const DictionariesManager: React.FC = () => {
     setOpenImport(false)
     setImportValidationErrors([])
     setImportFileName(null)
+    setImportSourceContent("")
+    setImportPreview(null)
+    setImportMarkdownName("")
+    setImportFormat("json")
+    setImportMode("file")
+    setImportConflictResolution(null)
   }, [])
+
+  const handleImportFileSelection = React.useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      if (!file) return
+      setImportValidationErrors([])
+      setImportPreview(null)
+      setImportFileName(file.name)
+
+      const loweredName = file.name.toLowerCase()
+      if (loweredName.endsWith(".md") || loweredName.endsWith(".markdown")) {
+        setImportFormat("markdown")
+      } else if (loweredName.endsWith(".json")) {
+        setImportFormat("json")
+      }
+
+      try {
+        const text = await file.text()
+        setImportSourceContent(text)
+        if (!importMarkdownName.trim()) {
+          setImportMarkdownName(extractFileStem(file.name))
+        }
+      } catch (error: any) {
+        setImportValidationErrors([
+          error?.message || "Unable to read selected file."
+        ])
+        setImportSourceContent("")
+      } finally {
+        event.target.value = ""
+      }
+    },
+    [importMarkdownName]
+  )
+
+  const buildImportPreview = React.useCallback(() => {
+    setImportValidationErrors([])
+    setImportPreview(null)
+    setImportConflictResolution(null)
+    const trimmedSource = importSourceContent.trim()
+    if (!trimmedSource) {
+      setImportValidationErrors([
+        importMode === "file"
+          ? "Select a file before generating an import preview."
+          : "Paste dictionary content before generating an import preview."
+      ])
+      return
+    }
+
+    if (importFormat === "json") {
+      try {
+        const parsed = JSON.parse(trimmedSource)
+        const validation = validateDictionaryImportData(parsed)
+        if (!validation.valid) {
+          setImportValidationErrors(validation.errors)
+          return
+        }
+        setImportPreview({
+          format: "json",
+          payload: {
+            kind: "json",
+            data: validation.normalizedData
+          },
+          summary: buildImportPreviewSummaryFromJSON(validation.normalizedData)
+        })
+      } catch (error: any) {
+        const parseMessage =
+          error instanceof Error && error.message
+            ? error.message
+            : "Unable to parse JSON"
+        setImportValidationErrors([
+          `Invalid JSON syntax: ${parseMessage}`,
+          "Expected top-level fields: `name` and `entries`."
+        ])
+      }
+      return
+    }
+
+    const summary = buildImportPreviewSummaryFromMarkdown(
+      trimmedSource,
+      importMarkdownName
+    )
+    setImportPreview({
+      format: "markdown",
+      payload: {
+        kind: "markdown",
+        name: summary.name,
+        content: trimmedSource
+      },
+      summary
+    })
+  }, [importFormat, importMarkdownName, importMode, importSourceContent])
+
+  const runImportWithPreview = React.useCallback(
+    async (preview: DictionaryImportPreview) => {
+      if (preview.payload.kind === "json") {
+        return await importDict({
+          format: "json",
+          data: preview.payload.data,
+          activate: activateOnImport
+        })
+      }
+      return await importDict({
+        format: "markdown",
+        name: preview.payload.name,
+        content: preview.payload.content,
+        activate: activateOnImport
+      })
+    },
+    [activateOnImport, importDict]
+  )
+
+  const handleConfirmImport = React.useCallback(async () => {
+    if (!importPreview) return
+    try {
+      await runImportWithPreview(importPreview)
+    } catch (error: any) {
+      if (!isDictionaryImportConflictError(error)) {
+        return
+      }
+      const existingNames = (Array.isArray(data) ? data : []).map(
+        (dictionary: any) => dictionary?.name
+      )
+      const suggestedName = buildImportConflictRenameSuggestion(
+        importPreview.summary.name,
+        existingNames
+      )
+      setImportConflictResolution({
+        preview: importPreview,
+        suggestedName
+      })
+    }
+  }, [data, importPreview, runImportWithPreview])
+
+  const resolveImportConflictRename = React.useCallback(async () => {
+    if (!importConflictResolution) return
+    const renamedPreview: DictionaryImportPreview = {
+      ...importConflictResolution.preview,
+      summary: {
+        ...importConflictResolution.preview.summary,
+        name: importConflictResolution.suggestedName
+      },
+      payload:
+        importConflictResolution.preview.payload.kind === "json"
+          ? {
+              kind: "json",
+              data: {
+                ...importConflictResolution.preview.payload.data,
+                name: importConflictResolution.suggestedName
+              }
+            }
+          : {
+              kind: "markdown",
+              name: importConflictResolution.suggestedName,
+              content: importConflictResolution.preview.payload.content
+            }
+    }
+
+    try {
+      await runImportWithPreview(renamedPreview)
+    } catch {
+      // handled by mutation onError
+      return
+    }
+    setImportConflictResolution(null)
+  }, [importConflictResolution, runImportWithPreview])
+
+  const resolveImportConflictReplace = React.useCallback(async () => {
+    if (!importConflictResolution) return
+    const targetName = importConflictResolution.preview.summary.name
+    const targetDictionary = (Array.isArray(data) ? data : []).find(
+      (dictionary: any) =>
+        String(dictionary?.name || "").trim().toLowerCase() ===
+        targetName.trim().toLowerCase()
+    )
+
+    if (!targetDictionary?.id) {
+      notification.error({
+        message: "Replace unavailable",
+        description: "Could not find the conflicting dictionary to replace."
+      })
+      return
+    }
+
+    const confirmed = await confirmDanger({
+      title: "Replace existing dictionary?",
+      content: `Delete "${targetName}" and import the new version?`,
+      okText: "Replace existing",
+      cancelText: t("common:cancel", { defaultValue: "Cancel" })
+    })
+    if (!confirmed) return
+
+    try {
+      await tldwClient.deleteDictionary(Number(targetDictionary.id))
+      await runImportWithPreview(importConflictResolution.preview)
+      setImportConflictResolution(null)
+      qc.invalidateQueries({ queryKey: ["tldw:listDictionaries"] })
+    } catch (error: any) {
+      notification.error({
+        message: "Replace failed",
+        description:
+          error?.message || "Unable to replace existing dictionary."
+      })
+    }
+  }, [confirmDanger, data, importConflictResolution, notification, qc, runImportWithPreview, t])
 
   const dictionariesUnsupported =
     !capsLoading && capabilities && !capabilities.hasChatDictionaries
@@ -571,6 +815,19 @@ export const DictionariesManager: React.FC = () => {
             className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
             onClick={async () => {
               try {
+                const fullExport = await tldwClient.exportDictionaryJSON(record.id)
+                const exportedEntries = Array.isArray(fullExport?.entries) ? fullExport.entries : []
+                if (hasAdvancedDictionaryEntryFields(exportedEntries)) {
+                  const proceed = await confirmDanger({
+                    title: "Markdown export may lose advanced settings",
+                    content:
+                      "This dictionary includes advanced entry settings (for example probability, timed effects, or replacement limits). Export JSON for full fidelity.",
+                    okText: "Export Markdown anyway",
+                    cancelText: t("common:cancel", { defaultValue: "Cancel" })
+                  })
+                  if (!proceed) return
+                }
+
                 const exp = await tldwClient.exportDictionaryMarkdown(record.id)
                 const blob = new Blob([exp?.content || '' ], { type: 'text/markdown' })
                 const url = URL.createObjectURL(blob)
@@ -748,44 +1005,88 @@ export const DictionariesManager: React.FC = () => {
       >
         {openEntries && <DictionaryEntryManager dictionaryId={openEntries} form={entryForm} />}
       </Drawer>
-      <Modal title="Import Dictionary (JSON)" open={openImport} onCancel={handleCloseImportModal} footer={null}>
+      <Modal title="Import Dictionary" open={openImport} onCancel={handleCloseImportModal} footer={null}>
         <div className="space-y-3">
-          <input type="file" accept="application/json" onChange={async (e) => {
-            const file = e.target.files?.[0]
-            if (!file) return
-            setImportFileName(file.name)
-            setImportValidationErrors([])
-            try {
-              const text = await file.text()
-              const parsed = JSON.parse(text)
-              const validation = validateDictionaryImportData(parsed)
-              if (!validation.valid) {
-                setImportValidationErrors(validation.errors)
-                return
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-text">Format</div>
+              <Select
+                value={importFormat}
+                onChange={(value) => {
+                  setImportFormat(value as DictionaryImportFormat)
+                  setImportPreview(null)
+                  setImportValidationErrors([])
+                }}
+                options={[
+                  { label: "JSON (full fidelity)", value: "json" },
+                  { label: "Markdown", value: "markdown" }
+                ]}
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-text">Source</div>
+              <Select
+                value={importMode}
+                onChange={(value) => {
+                  setImportMode(value as DictionaryImportMode)
+                  setImportPreview(null)
+                  setImportValidationErrors([])
+                }}
+                options={[
+                  { label: "File upload", value: "file" },
+                  { label: "Paste content", value: "paste" }
+                ]}
+              />
+            </div>
+          </div>
+
+          {importMode === "file" ? (
+            <div className="space-y-2">
+              <input
+                type="file"
+                accept={
+                  importFormat === "markdown"
+                    ? ".md,.markdown,text/markdown,text/plain"
+                    : "application/json,.json"
+                }
+                onChange={handleImportFileSelection}
+              />
+              {importFileName && (
+                <p className="text-xs text-text-muted">Selected: {importFileName}</p>
+              )}
+            </div>
+          ) : (
+            <Input.TextArea
+              rows={6}
+              value={importSourceContent}
+              onChange={(event) => {
+                setImportSourceContent(event.target.value)
+                setImportPreview(null)
+                setImportValidationErrors([])
+              }}
+              placeholder={
+                importFormat === "markdown"
+                  ? "Paste markdown dictionary content..."
+                  : "Paste JSON dictionary content..."
               }
-              try {
-                await importDict({ data: validation.normalizedData, activate: activateOnImport })
-              } catch {
-                // handled by mutation onError
-              }
-            } catch (err: any) {
-              const parseMessage =
-                err instanceof Error && err.message
-                  ? err.message
-                  : "Unable to parse JSON"
-              setImportValidationErrors([
-                `Invalid JSON syntax: ${parseMessage}`,
-                "Expected top-level fields: `name` and `entries`.",
-                "Tip: export a dictionary as JSON first to use it as a template."
-              ])
-            } finally {
-              (e.target as any).value = ''
-            }
-          }} />
-          <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={activateOnImport} onChange={(ev) => setActivateOnImport(ev.target.checked)} /> Activate after import</label>
-          {importFileName && (
-            <p className="text-xs text-text-muted">Selected: {importFileName}</p>
+            />
           )}
+
+          {importFormat === "markdown" && (
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-text">Dictionary name</div>
+              <Input
+                value={importMarkdownName}
+                onChange={(event) => setImportMarkdownName(event.target.value)}
+                placeholder="Optional (defaults to markdown heading or file name)"
+              />
+            </div>
+          )}
+
+          <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={activateOnImport} onChange={(ev) => setActivateOnImport(ev.target.checked)} /> Activate after import</label>
+          <Button onClick={buildImportPreview} disabled={!importSourceContent.trim()}>
+            Preview import
+          </Button>
           {importValidationErrors.length > 0 && (
             <div className="rounded-md border border-danger/30 bg-danger/5 px-3 py-2">
               <p className="text-sm font-medium text-danger">
@@ -798,10 +1099,76 @@ export const DictionariesManager: React.FC = () => {
               </ul>
             </div>
           )}
+          {importPreview && (
+            <div className="space-y-2 rounded-md border border-border bg-surface2/40 px-3 py-2">
+              <div className="text-sm font-medium text-text">Import preview</div>
+              <Descriptions size="small" bordered column={1}>
+                <Descriptions.Item label="Format">
+                  {importPreview.format === "json" ? "JSON" : "Markdown"}
+                </Descriptions.Item>
+                <Descriptions.Item label="Dictionary name">
+                  {importPreview.summary.name}
+                </Descriptions.Item>
+                <Descriptions.Item label="Entries">
+                  {importPreview.summary.entryCount}
+                </Descriptions.Item>
+                <Descriptions.Item label="Groups">
+                  {importPreview.summary.groups.length > 0
+                    ? importPreview.summary.groups.join(", ")
+                    : "—"}
+                </Descriptions.Item>
+                <Descriptions.Item label="Advanced fields">
+                  {importPreview.summary.hasAdvancedFields ? "Detected" : "Not detected"}
+                </Descriptions.Item>
+              </Descriptions>
+              <Button type="primary" onClick={() => void handleConfirmImport()} loading={importing}>
+                Confirm import
+              </Button>
+            </div>
+          )}
           {importing && (
             <p className="text-xs text-text-muted">Importing dictionary...</p>
           )}
         </div>
+      </Modal>
+      <Modal
+        title="Dictionary name conflict"
+        open={!!importConflictResolution}
+        onCancel={() => setImportConflictResolution(null)}
+        footer={null}
+      >
+        {importConflictResolution && (
+          <div className="space-y-3">
+            <p className="text-sm text-text">
+              A dictionary named{" "}
+              <span className="font-medium">
+                {importConflictResolution.preview.summary.name}
+              </span>{" "}
+              already exists.
+            </p>
+            <div className="space-y-2">
+              <Button
+                type="primary"
+                onClick={() => void resolveImportConflictRename()}
+                loading={importing}
+                block
+              >
+                Rename to "{importConflictResolution.suggestedName}"
+              </Button>
+              <Button
+                danger
+                onClick={() => void resolveImportConflictReplace()}
+                loading={importing}
+                block
+              >
+                Replace existing
+              </Button>
+              <Button onClick={() => setImportConflictResolution(null)} block>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
       <Modal title="Dictionary Statistics" open={!!statsFor} onCancel={() => setStatsFor(null)} footer={null}>
         {statsFor && (
@@ -897,6 +1264,186 @@ function formatProbabilityFrequencyHint(value: unknown): string {
   return `Fires ~${outOfTen} out of 10 messages (${percent}%).`
 }
 
+type TextDiffSegment = {
+  type: "unchanged" | "removed" | "added"
+  text: string
+}
+
+function tokenizeDiffText(source: string): string[] {
+  return source.split(/(\s+)/).filter((token) => token.length > 0)
+}
+
+function appendDiffSegment(
+  segments: TextDiffSegment[],
+  type: TextDiffSegment["type"],
+  text: string
+) {
+  if (!text) return
+  const previous = segments[segments.length - 1]
+  if (previous && previous.type === type) {
+    previous.text += text
+    return
+  }
+  segments.push({ type, text })
+}
+
+function buildTextDiffSegments(
+  originalText: string,
+  processedText: string
+): TextDiffSegment[] {
+  const originalTokens = tokenizeDiffText(originalText)
+  const processedTokens = tokenizeDiffText(processedText)
+  const originalLength = originalTokens.length
+  const processedLength = processedTokens.length
+
+  if (originalLength === 0 && processedLength === 0) {
+    return []
+  }
+
+  const lcs: number[][] = Array.from({ length: originalLength + 1 }, () =>
+    Array(processedLength + 1).fill(0)
+  )
+
+  for (let originalIndex = originalLength - 1; originalIndex >= 0; originalIndex -= 1) {
+    for (let processedIndex = processedLength - 1; processedIndex >= 0; processedIndex -= 1) {
+      if (originalTokens[originalIndex] === processedTokens[processedIndex]) {
+        lcs[originalIndex][processedIndex] = lcs[originalIndex + 1][processedIndex + 1] + 1
+      } else {
+        lcs[originalIndex][processedIndex] = Math.max(
+          lcs[originalIndex + 1][processedIndex],
+          lcs[originalIndex][processedIndex + 1]
+        )
+      }
+    }
+  }
+
+  const segments: TextDiffSegment[] = []
+  let originalIndex = 0
+  let processedIndex = 0
+
+  while (originalIndex < originalLength && processedIndex < processedLength) {
+    if (originalTokens[originalIndex] === processedTokens[processedIndex]) {
+      appendDiffSegment(segments, "unchanged", originalTokens[originalIndex])
+      originalIndex += 1
+      processedIndex += 1
+      continue
+    }
+
+    if (lcs[originalIndex + 1][processedIndex] >= lcs[originalIndex][processedIndex + 1]) {
+      appendDiffSegment(segments, "removed", originalTokens[originalIndex])
+      originalIndex += 1
+      continue
+    }
+
+    appendDiffSegment(segments, "added", processedTokens[processedIndex])
+    processedIndex += 1
+  }
+
+  while (originalIndex < originalLength) {
+    appendDiffSegment(segments, "removed", originalTokens[originalIndex])
+    originalIndex += 1
+  }
+  while (processedIndex < processedLength) {
+    appendDiffSegment(segments, "added", processedTokens[processedIndex])
+    processedIndex += 1
+  }
+
+  return segments
+}
+
+type DictionaryImportFormat = "json" | "markdown"
+type DictionaryImportMode = "file" | "paste"
+
+type DictionaryImportPreview = {
+  format: DictionaryImportFormat
+  payload:
+    | { kind: "json"; data: any }
+    | { kind: "markdown"; name: string; content: string }
+  summary: {
+    name: string
+    entryCount: number
+    groups: string[]
+    hasAdvancedFields: boolean
+  }
+}
+
+function extractFileStem(fileName: string): string {
+  const trimmed = fileName.trim()
+  if (!trimmed) return "Imported Dictionary"
+  const dotIndex = trimmed.lastIndexOf(".")
+  if (dotIndex <= 0) return trimmed
+  return trimmed.slice(0, dotIndex)
+}
+
+function buildImportPreviewSummaryFromJSON(data: any) {
+  const normalizedName = String(data?.name || "Imported Dictionary").trim() || "Imported Dictionary"
+  const entries = Array.isArray(data?.entries) ? data.entries : []
+  const groups = Array.from(
+    new Set(
+      entries
+        .map((entry: any) => (typeof entry?.group === "string" ? entry.group.trim() : ""))
+        .filter((group: string) => group.length > 0)
+    )
+  )
+  const hasAdvancedFields = hasAdvancedDictionaryEntryFields(entries)
+
+  return {
+    name: normalizedName,
+    entryCount: entries.length,
+    groups,
+    hasAdvancedFields
+  }
+}
+
+function hasAdvancedDictionaryEntryFields(entries: any[]): boolean {
+  return entries.some((entry: any) => {
+    const probability = typeof entry?.probability === "number" ? entry.probability : 1
+    const caseSensitive = typeof entry?.case_sensitive === "boolean" ? entry.case_sensitive : undefined
+    const maxReplacements =
+      Number.isInteger(entry?.max_replacements) && entry.max_replacements > 0
+    const timedEffects =
+      entry?.timed_effects &&
+      typeof entry.timed_effects === "object" &&
+      ["sticky", "cooldown", "delay"].some((key) => {
+        const value = Number((entry.timed_effects as any)?.[key])
+        return Number.isFinite(value) && value > 0
+      })
+    return probability !== 1 || maxReplacements || timedEffects || caseSensitive === false
+  })
+}
+
+function buildImportPreviewSummaryFromMarkdown(content: string, fallbackName?: string) {
+  const headingMatch = content.match(/^#\s+(.+)$/m)
+  const detectedName = headingMatch?.[1]?.trim()
+  const fallback = fallbackName?.trim()
+  const name = detectedName || fallback || "Imported Dictionary"
+  const entryMatches = content.match(/^##\s*Entry:/gm)
+  const legacyEntryMatches = content
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith("#")) return false
+      return trimmed.includes(":")
+    })
+  const groups = Array.from(
+    new Set(
+      Array.from(content.matchAll(/^##\s+(?!Entry:)(.+)$/gm))
+        .map((match) => match[1]?.trim())
+        .filter((group): group is string => Boolean(group))
+    )
+  )
+  const hasAdvancedFields =
+    /-\s+\*\*(Probability|Type|Enabled)\*\*:/.test(content) ||
+    /\/.+\/[gimsuvy]*/.test(content)
+
+  return {
+    name,
+    entryCount: entryMatches ? entryMatches.length : legacyEntryMatches.length,
+    groups,
+    hasAdvancedFields
+  }
+}
+
 function extractRegexSafetyMessage(validationReport: any): string | null {
   const errors = Array.isArray(validationReport?.errors)
     ? validationReport.errors
@@ -972,6 +1519,13 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
   const [previewMaxIterations, setPreviewMaxIterations] = React.useState<number | null>(5)
   const [previewResult, setPreviewResult] = React.useState<any | null>(null)
   const [previewError, setPreviewError] = React.useState<string | null>(null)
+  const [savedPreviewCases, setSavedPreviewCases] = React.useState<
+    Array<{ id: string; name: string; text: string }>
+  >([])
+  const [previewCaseName, setPreviewCaseName] = React.useState("")
+  const [previewCaseError, setPreviewCaseError] = React.useState<string | null>(null)
+  const [toolsPanelKeys, setToolsPanelKeys] = React.useState<string[]>([])
+  const [highlightedValidationEntryId, setHighlightedValidationEntryId] = React.useState<number | null>(null)
   const [entrySearch, setEntrySearch] = React.useState("")
   const [entryGroupFilter, setEntryGroupFilter] = React.useState<string | undefined>(undefined)
 
@@ -1008,6 +1562,80 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
   const [reorderBusyEntryId, setReorderBusyEntryId] = React.useState<number | null>(
     null
   )
+  const validationRowHighlightTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
+  const previewDraftStorageKey = React.useMemo(
+    () => `tldw:dictionaries:preview-draft:${dictionaryId}`,
+    [dictionaryId]
+  )
+  const previewCasesStorageKey = React.useMemo(
+    () => `tldw:dictionaries:preview-cases:${dictionaryId}`,
+    [dictionaryId]
+  )
+
+  React.useEffect(() => {
+    return () => {
+      if (validationRowHighlightTimerRef.current) {
+        clearTimeout(validationRowHighlightTimerRef.current)
+      }
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      const savedDraft = window.localStorage.getItem(previewDraftStorageKey)
+      setPreviewText(savedDraft ?? "")
+    } catch {
+      setPreviewText("")
+    }
+
+    try {
+      const rawSavedCases = window.localStorage.getItem(previewCasesStorageKey)
+      if (!rawSavedCases) {
+        setSavedPreviewCases([])
+        return
+      }
+      const parsed = JSON.parse(rawSavedCases)
+      if (!Array.isArray(parsed)) {
+        setSavedPreviewCases([])
+        return
+      }
+      const normalized = parsed
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          id: String((item as any).id || ""),
+          name: String((item as any).name || "").trim(),
+          text: String((item as any).text || "")
+        }))
+        .filter((item) => item.id && item.name)
+      setSavedPreviewCases(normalized)
+    } catch {
+      setSavedPreviewCases([])
+    }
+  }, [previewCasesStorageKey, previewDraftStorageKey])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.localStorage.setItem(previewDraftStorageKey, previewText)
+    } catch {
+      // no-op (private mode or disabled storage)
+    }
+  }, [previewDraftStorageKey, previewText])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.localStorage.setItem(
+        previewCasesStorageKey,
+        JSON.stringify(savedPreviewCases)
+      )
+    } catch {
+      // no-op (private mode or disabled storage)
+    }
+  }, [previewCasesStorageKey, savedPreviewCases])
 
   const normalizedEntryGroupFilter = React.useMemo(() => {
     if (typeof entryGroupFilter !== "string") return undefined
@@ -1593,6 +2221,89 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
     runPreview()
   }
 
+  const openToolsPanel = React.useCallback((panelKey: "validate" | "preview") => {
+    setToolsPanelKeys((prev) =>
+      prev.includes(panelKey) ? prev : [...prev, panelKey]
+    )
+  }, [])
+
+  const savePreviewCase = React.useCallback(() => {
+    const trimmedText = previewText.trim()
+    if (!trimmedText) {
+      setPreviewCaseError(
+        t(
+          "option:dictionariesTools.saveCaseEmpty",
+          "Enter sample text before saving a test case."
+        )
+      )
+      return
+    }
+
+    const trimmedName = previewCaseName.trim()
+    const fallbackName = `Case ${savedPreviewCases.length + 1}`
+    const nextCase = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: trimmedName || fallbackName,
+      text: previewText
+    }
+    setSavedPreviewCases((prev) => [...prev, nextCase])
+    setPreviewCaseName("")
+    setPreviewCaseError(null)
+  }, [previewCaseName, previewText, savedPreviewCases.length, t])
+
+  const loadPreviewCase = React.useCallback(
+    (caseId: string) => {
+      const selectedCase = savedPreviewCases.find((item) => item.id === caseId)
+      if (selectedCase) {
+        setPreviewText(selectedCase.text)
+      }
+      setPreviewCaseError(null)
+    },
+    [savedPreviewCases]
+  )
+
+  const deletePreviewCase = React.useCallback((caseId: string) => {
+    setSavedPreviewCases((current) =>
+      current.filter((item) => item.id !== caseId)
+    )
+    setPreviewCaseError(null)
+  }, [])
+
+  const jumpToValidationEntry = React.useCallback(
+    (field: unknown) => {
+      if (typeof field !== "string") return
+      const match = field.match(/^entries\[(\d+)\]/)
+      if (!match) return
+      const fieldIndex = Number(match[1])
+      if (!Number.isFinite(fieldIndex) || fieldIndex < 0 || fieldIndex >= entries.length) {
+        return
+      }
+
+      const entryId = Number(entries[fieldIndex]?.id)
+      if (!Number.isFinite(entryId) || entryId <= 0) return
+
+      if (validationRowHighlightTimerRef.current) {
+        clearTimeout(validationRowHighlightTimerRef.current)
+      }
+      setHighlightedValidationEntryId(entryId)
+      validationRowHighlightTimerRef.current = setTimeout(() => {
+        setHighlightedValidationEntryId(null)
+      }, 2200)
+
+      if (typeof document !== "undefined") {
+        const rowElement = document.querySelector(`tr[data-row-key="${entryId}"]`)
+        if (rowElement instanceof HTMLElement) {
+          try {
+            rowElement.scrollIntoView({ behavior: "smooth", block: "center" })
+          } catch {
+            rowElement.scrollIntoView()
+          }
+        }
+      }
+    },
+    [entries]
+  )
+
   const validationErrors = Array.isArray(validationReport?.errors)
     ? validationReport.errors
     : []
@@ -1604,12 +2315,94 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
   const previewEntriesUsed = Array.isArray(previewResult?.entries_used)
     ? previewResult.entries_used
     : []
+  const previewOriginalText =
+    typeof previewResult?.original_text === "string"
+      ? previewResult.original_text
+      : previewText
+  const previewProcessedText =
+    typeof previewResult?.processed_text === "string"
+      ? previewResult.processed_text
+      : ""
+  const previewDiffSegments = React.useMemo(
+    () => buildTextDiffSegments(previewOriginalText || "", previewProcessedText || ""),
+    [previewOriginalText, previewProcessedText]
+  )
+  const previewHasDiffChanges = previewDiffSegments.some(
+    (segment) => segment.type !== "unchanged"
+  )
 
   return (
     <div className="space-y-4">
+      <div className="rounded-lg border border-border bg-surface2/40 px-3 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-xs text-text-muted">
+            {t(
+              "option:dictionariesTools.actionsHelp",
+              "Run validation or preview without opening accordion sections first."
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={validationStrict}
+                onChange={setValidationStrict}
+              />
+              <span className="text-xs text-text">
+                {t(
+                  "option:dictionariesTools.strictLabel",
+                  "Strict validation"
+                )}
+              </span>
+            </div>
+            <Button
+              size="small"
+              onClick={() => {
+                openToolsPanel("validate")
+                runValidation()
+              }}
+              loading={validating}
+              disabled={entries.length === 0}>
+              {t(
+                "option:dictionariesTools.validateButton",
+                "Run validation"
+              )}
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              onClick={() => {
+                openToolsPanel("preview")
+                handlePreview()
+              }}
+              loading={previewing}>
+              {t("option:dictionariesTools.previewButton", "Run preview")}
+            </Button>
+          </div>
+        </div>
+        {entries.length === 0 && (
+          <div className="mt-2 text-xs text-text-muted">
+            {t(
+              "option:dictionariesTools.validateEmpty",
+              "Add at least one entry to validate."
+            )}
+          </div>
+        )}
+      </div>
       <Collapse
         ghost
         className="rounded-lg border border-border bg-surface2/40"
+        activeKey={toolsPanelKeys}
+        onChange={(nextKeys) => {
+          if (Array.isArray(nextKeys)) {
+            setToolsPanelKeys(nextKeys.map((key) => String(key)))
+            return
+          }
+          if (nextKeys) {
+            setToolsPanelKeys([String(nextKeys)])
+            return
+          }
+          setToolsPanelKeys([])
+        }}
         items={[
           {
             key: "validate",
@@ -1625,28 +2418,6 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                     "Check schema, regex safety, and template syntax for this dictionary."
                   )}
                 </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Switch
-                    checked={validationStrict}
-                    onChange={setValidationStrict}
-                  />
-                  <span className="text-sm text-text">
-                    {t(
-                      "option:dictionariesTools.strictLabel",
-                      "Strict validation"
-                    )}
-                  </span>
-                  <Button
-                    size="small"
-                    onClick={() => runValidation()}
-                    loading={validating}
-                    disabled={entries.length === 0}>
-                    {t(
-                      "option:dictionariesTools.validateButton",
-                      "Run validation"
-                    )}
-                  </Button>
-                </div>
                 {entries.length === 0 && (
                   <div className="text-xs text-text-muted">
                     {t(
@@ -1693,11 +2464,27 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                         <ul className="list-disc pl-4 text-xs text-text-muted">
                           {validationErrors.map((err: any, idx: number) => (
                             <li key={`err-${idx}`}>
-                              <span className="font-medium text-text">
-                                {err?.code || "error"}:
-                              </span>{" "}
-                              {err?.message || String(err)}
-                              {err?.field ? ` (${err.field})` : ""}
+                              <button
+                                type="button"
+                                className={
+                                  typeof err?.field === "string" && /^entries\[\d+\]/.test(err.field)
+                                    ? "w-full text-left hover:text-text hover:underline"
+                                    : "w-full cursor-default text-left"
+                                }
+                                onClick={() => jumpToValidationEntry(err?.field)}
+                                disabled={
+                                  !(
+                                    typeof err?.field === "string" &&
+                                    /^entries\[\d+\]/.test(err.field)
+                                  )
+                                }
+                              >
+                                <span className="font-medium text-text">
+                                  {err?.code || "error"}:
+                                </span>{" "}
+                                {err?.message || String(err)}
+                                {err?.field ? ` (${err.field})` : ""}
+                              </button>
                             </li>
                           ))}
                         </ul>
@@ -1721,11 +2508,27 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                         <ul className="list-disc pl-4 text-xs text-text-muted">
                           {validationWarnings.map((warn: any, idx: number) => (
                             <li key={`warn-${idx}`}>
-                              <span className="font-medium text-text">
-                                {warn?.code || "warning"}:
-                              </span>{" "}
-                              {warn?.message || String(warn)}
-                              {warn?.field ? ` (${warn.field})` : ""}
+                              <button
+                                type="button"
+                                className={
+                                  typeof warn?.field === "string" && /^entries\[\d+\]/.test(warn.field)
+                                    ? "w-full text-left hover:text-text hover:underline"
+                                    : "w-full cursor-default text-left"
+                                }
+                                onClick={() => jumpToValidationEntry(warn?.field)}
+                                disabled={
+                                  !(
+                                    typeof warn?.field === "string" &&
+                                    /^entries\[\d+\]/.test(warn.field)
+                                  )
+                                }
+                              >
+                                <span className="font-medium text-text">
+                                  {warn?.code || "warning"}:
+                                </span>{" "}
+                                {warn?.message || String(warn)}
+                                {warn?.field ? ` (${warn.field})` : ""}
+                              </button>
                             </li>
                           ))}
                         </ul>
@@ -1773,6 +2576,85 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                       "Paste text to preview dictionary substitutions."
                     )}
                   />
+                </div>
+                <div className="space-y-2 rounded-md border border-border bg-surface2/40 px-3 py-2">
+                  <div className="text-xs font-medium text-text">
+                    {t(
+                      "option:dictionariesTools.savedCasesLabel",
+                      "Saved test cases"
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      size="small"
+                      value={previewCaseName}
+                      onChange={(event) => {
+                        setPreviewCaseName(event.target.value)
+                        setPreviewCaseError(null)
+                      }}
+                      placeholder={t(
+                        "option:dictionariesTools.caseNamePlaceholder",
+                        "Case name (optional)"
+                      )}
+                      aria-label={t(
+                        "option:dictionariesTools.caseNameAria",
+                        "Test case name"
+                      )}
+                    />
+                    <Button size="small" onClick={savePreviewCase}>
+                      {t(
+                        "option:dictionariesTools.saveCaseButton",
+                        "Save test case"
+                      )}
+                    </Button>
+                  </div>
+                  {previewCaseError && (
+                    <div className="text-xs text-danger">{previewCaseError}</div>
+                  )}
+                  {savedPreviewCases.length > 0 ? (
+                    <div className="space-y-1">
+                      {savedPreviewCases.map((savedCase) => (
+                        <div
+                          key={savedCase.id}
+                          className="flex items-center justify-between gap-2 rounded border border-border bg-surface px-2 py-1"
+                        >
+                          <div className="truncate text-xs text-text">
+                            {savedCase.name}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              size="small"
+                              onClick={() => loadPreviewCase(savedCase.id)}
+                              aria-label={`Load test case ${savedCase.name}`}
+                            >
+                              {t(
+                                "option:dictionariesTools.loadCaseButton",
+                                "Load"
+                              )}
+                            </Button>
+                            <Button
+                              size="small"
+                              danger
+                              onClick={() => deletePreviewCase(savedCase.id)}
+                              aria-label={`Delete test case ${savedCase.name}`}
+                            >
+                              {t(
+                                "option:dictionariesTools.deleteCaseButton",
+                                "Delete"
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-text-muted">
+                      {t(
+                        "option:dictionariesTools.noSavedCases",
+                        "No saved test cases for this dictionary yet."
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <div className="space-y-1">
@@ -1828,13 +2710,78 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                     <div className="space-y-1">
                       <div className="text-xs font-medium text-text">
                         {t(
+                          "option:dictionariesTools.diffPreviewLabel",
+                          "Diff preview"
+                        )}
+                      </div>
+                      {previewHasDiffChanges ? (
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <div className="rounded border border-border bg-surface2/50 p-2">
+                            <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-text-muted">
+                              {t(
+                                "option:dictionariesTools.originalDiffLabel",
+                                "Original (with removals)"
+                              )}
+                            </div>
+                            <p className="text-xs leading-relaxed whitespace-pre-wrap break-words">
+                              {previewDiffSegments
+                                .filter((segment) => segment.type !== "added")
+                                .map((segment, index) => (
+                                  <span
+                                    key={`diff-original-${index}`}
+                                    className={
+                                      segment.type === "removed"
+                                        ? "rounded-sm bg-danger/15 px-0.5 text-danger line-through"
+                                        : ""
+                                    }>
+                                    {segment.text}
+                                  </span>
+                                ))}
+                            </p>
+                          </div>
+                          <div className="rounded border border-border bg-surface2/50 p-2">
+                            <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-text-muted">
+                              {t(
+                                "option:dictionariesTools.processedDiffLabel",
+                                "Processed (with additions)"
+                              )}
+                            </div>
+                            <p className="text-xs leading-relaxed whitespace-pre-wrap break-words">
+                              {previewDiffSegments
+                                .filter((segment) => segment.type !== "removed")
+                                .map((segment, index) => (
+                                  <span
+                                    key={`diff-processed-${index}`}
+                                    className={
+                                      segment.type === "added"
+                                        ? "rounded-sm bg-success/15 px-0.5 text-success"
+                                        : ""
+                                    }>
+                                    {segment.text}
+                                  </span>
+                                ))}
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-text-muted">
+                          {t(
+                            "option:dictionariesTools.noDiffChanges",
+                            "No differences detected between original and processed text."
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-xs font-medium text-text">
+                        {t(
                           "option:dictionariesTools.processedTextLabel",
                           "Processed text"
                         )}
                       </div>
                       <Input.TextArea
                         rows={4}
-                        value={previewResult.processed_text || ""}
+                        value={previewProcessedText || ""}
                         readOnly
                       />
                     </div>
@@ -2018,6 +2965,11 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
             size="small"
             rowKey={(r: any) => r.id}
             dataSource={filteredEntries}
+            rowClassName={(record: any) =>
+              Number(record?.id) === highlightedValidationEntryId
+                ? "bg-warn/10"
+                : ""
+            }
             rowSelection={{
               selectedRowKeys: selectedEntryRowKeys,
               onChange: (keys) => setSelectedEntryRowKeys(keys),

@@ -248,7 +248,7 @@ export function ResultsList({
                           e.stopPropagation()
                           onToggleFavorite(String(result.id))
                         }}
-                        className="p-0.5 hover:bg-surface2 rounded transition-colors"
+                        className="p-1.5 hover:bg-surface2 rounded transition-colors"
                         aria-label={favorites?.has(String(result.id)) ? t('mediaPage.unfavorite', 'Remove from favorites') : t('mediaPage.favorite', 'Add to favorites')}
                         title={favorites?.has(String(result.id)) ? t('mediaPage.unfavorite', 'Remove from favorites') : t('mediaPage.favorite', 'Add to favorites')}
                       >

@@ -92,6 +92,7 @@ const SYSTEM_PROMPT_EXAMPLE =
   "You are a skilled writing assistant who helps users improve drafts with clear, specific, and encouraging feedback."
 type AdvancedSectionKey = "promptControl" | "generationSettings" | "metadata"
 type AdvancedSectionState = Record<AdvancedSectionKey, boolean>
+type CharacterListScope = "active" | "deleted"
 const DEFAULT_ADVANCED_SECTION_STATE: AdvancedSectionState = {
   promptControl: true,
   generationSettings: false,
@@ -682,6 +683,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }
     return 'table'
   })
+  const [characterListScope, setCharacterListScope] = React.useState<CharacterListScope>("active")
   const [galleryDensity, setGalleryDensity] = React.useState<GalleryCardDensity>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(GALLERY_DENSITY_KEY)
@@ -970,6 +972,55 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     onGalleryView: () => setViewMode('gallery'),
     enabled: true
   })
+
+  const shortcutHelpItems = React.useMemo(
+    () => [
+      {
+        id: "new",
+        keys: ["N"],
+        label: t("settings:manageCharacters.shortcuts.new", {
+          defaultValue: "New character"
+        })
+      },
+      {
+        id: "search",
+        keys: ["/"],
+        label: t("settings:manageCharacters.shortcuts.search", {
+          defaultValue: "Focus search"
+        })
+      },
+      {
+        id: "table",
+        keys: ["G", "T"],
+        label: t("settings:manageCharacters.shortcuts.tableView", {
+          defaultValue: "Table view"
+        })
+      },
+      {
+        id: "gallery",
+        keys: ["G", "G"],
+        label: t("settings:manageCharacters.shortcuts.galleryView", {
+          defaultValue: "Gallery view"
+        })
+      },
+      {
+        id: "close",
+        keys: ["Esc"],
+        label: t("settings:manageCharacters.shortcuts.close", {
+          defaultValue: "Close modal"
+        })
+      }
+    ],
+    [t]
+  )
+
+  const shortcutSummaryText = React.useMemo(
+    () =>
+      shortcutHelpItems
+        .map((item) => `${item.keys.join(" ")} ${item.label}`)
+        .join(". "),
+    [shortcutHelpItems]
+  )
 
   // Helper to get current form values as GeneratedCharacter
   const getFormFieldsAsCharacter = (form: FormInstance): Partial<GeneratedCharacter> => {
@@ -1393,6 +1444,15 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               "settings:manageCharacters.form.name.required",
               { defaultValue: "Please enter a name" }
             )
+          },
+          {
+            max: MAX_NAME_LENGTH,
+            message: t(
+              "settings:manageCharacters.form.name.maxLength",
+              {
+                defaultValue: `Name must be ${MAX_NAME_LENGTH} characters or fewer`
+              }
+            )
           }
         ]}>
         <Input
@@ -1401,6 +1461,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             "settings:manageCharacters.form.name.placeholder",
             { defaultValue: "e.g. Writing coach" }
           )}
+          maxLength={MAX_NAME_LENGTH}
+          showCount
         />
       </Form.Item>
     ),
@@ -1506,7 +1568,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 <button
                   key={tag}
                   type="button"
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border transition-colors ${
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border transition-colors motion-reduce:transition-none ${
                     isSelected
                       ? "bg-primary/10 border-primary text-primary"
                       : "bg-surface border-border text-text-muted hover:border-primary/50 hover:text-primary"
@@ -2094,6 +2156,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   }, [viewMode])
 
   React.useEffect(() => {
+    if (characterListScope === "deleted" && viewMode !== "table") {
+      setViewMode("table")
+    }
+  }, [characterListScope, viewMode])
+
+  React.useEffect(() => {
     if (typeof window !== "undefined") {
       localStorage.setItem(GALLERY_DENSITY_KEY, galleryDensity)
     }
@@ -2143,13 +2211,23 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
   React.useEffect(() => {
     setCurrentPage(1)
-  }, [creatorFilter, debouncedSearchTerm, filterTags, hasConversationsOnly, matchAllTags])
+  }, [
+    characterListScope,
+    creatorFilter,
+    debouncedSearchTerm,
+    filterTags,
+    hasConversationsOnly,
+    matchAllTags
+  ])
 
   // Cleanup pending delete timeout on unmount
   React.useEffect(() => {
     return () => {
       if (undoDeleteRef.current) {
         clearTimeout(undoDeleteRef.current)
+      }
+      if (bulkUndoDeleteRef.current) {
+        clearTimeout(bulkUndoDeleteRef.current)
       }
     }
   }, [])
@@ -2312,6 +2390,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     () => toCharactersSortOrder(sortOrder),
     [sortOrder]
   )
+  const useServerQuery = isServerQueryRolloutEnabled || characterListScope === "deleted"
   const characterQueryParams = React.useMemo(
     () => ({
       page: currentPage,
@@ -2321,11 +2400,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       match_all_tags: filterTags.length > 0 ? matchAllTags : undefined,
       creator: creatorFilter || undefined,
       has_conversations: hasConversationsOnly ? true : undefined,
+      include_deleted: characterListScope === "deleted" ? true : undefined,
+      deleted_only: characterListScope === "deleted" ? true : undefined,
       sort_by: serverSortBy,
       sort_order: serverSortOrder,
       include_image_base64: false
     }),
     [
+      characterListScope,
       creatorFilter,
       currentPage,
       debouncedSearchTerm,
@@ -2347,12 +2429,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     queryKey: [
       "tldw:listCharacters",
       characterQueryParams,
-      isServerQueryRolloutEnabled ? "server" : "legacy"
+      useServerQuery ? "server" : "legacy"
     ],
     queryFn: async () => {
       try {
         await tldwClient.initialize()
-        if (isServerQueryRolloutEnabled) {
+        if (useServerQuery) {
           return await tldwClient.listCharactersPage(characterQueryParams)
         }
 
@@ -2856,6 +2938,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   React.useEffect(() => {
     setSelectedCharacterIds(new Set())
   }, [
+    characterListScope,
     creatorFilter,
     currentPage,
     debouncedSearchTerm,
@@ -2866,6 +2949,45 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     sortColumn,
     sortOrder
   ])
+
+  const restoreBulkDeletedCharacters = React.useCallback(
+    async (deletedCharacters: Array<{ id: string; version?: number }>) => {
+      let restoredCount = 0
+      let failedCount = 0
+
+      for (const deletedCharacter of deletedCharacters) {
+        try {
+          await tldwClient.restoreCharacter(
+            deletedCharacter.id,
+            (deletedCharacter.version ?? 0) + 1
+          )
+          restoredCount++
+        } catch {
+          failedCount++
+        }
+      }
+
+      qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+
+      if (failedCount === 0) {
+        notification.success({
+          message: t("settings:manageCharacters.bulk.restoreSuccess", {
+            defaultValue: "Restored {{count}} characters",
+            count: restoredCount
+          })
+        })
+      } else {
+        notification.warning({
+          message: t("settings:manageCharacters.bulk.restorePartial", {
+            defaultValue: "Restored {{success}} characters, {{fail}} failed",
+            success: restoredCount,
+            fail: failedCount
+          })
+        })
+      }
+    },
+    [notification, qc, t]
+  )
 
   // Bulk delete handler
   const handleBulkDelete = React.useCallback(async () => {
@@ -2881,7 +3003,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         count: selectedChars.length
       }),
       content: t("settings:manageCharacters.bulk.deleteContent", {
-        defaultValue: "This will delete {{count}} characters. This action cannot be undone.",
+        defaultValue:
+          "This will soft-delete {{count}} characters. You can undo for 10 seconds.",
         count: selectedChars.length
       }),
       okText: t("common:delete", { defaultValue: "Delete" }),
@@ -2891,15 +3014,15 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     if (!ok) return
 
     setBulkOperationLoading(true)
+    const deletedCharacters: Array<{ id: string; version?: number }> = []
     let successCount = 0
     let failCount = 0
 
     for (const char of selectedChars) {
       try {
-        await tldwClient.deleteCharacter(
-          String(char.id || char.slug || char.name),
-          char.version
-        )
+        const id = String(char.id || char.slug || char.name)
+        await tldwClient.deleteCharacter(id, char.version)
+        deletedCharacters.push({ id, version: char.version })
         successCount++
       } catch {
         failCount++
@@ -2910,23 +3033,62 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     setSelectedCharacterIds(new Set())
     qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
 
-    if (failCount === 0) {
-      notification.success({
-        message: t("settings:manageCharacters.bulk.deleteSuccess", {
-          defaultValue: "Deleted {{count}} characters",
-          count: successCount
-        })
+    if (successCount > 0) {
+      if (bulkUndoDeleteRef.current) {
+        clearTimeout(bulkUndoDeleteRef.current)
+        bulkUndoDeleteRef.current = null
+      }
+
+      const timeoutId = setTimeout(() => {
+        bulkUndoDeleteRef.current = null
+        qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+      }, 10000)
+      bulkUndoDeleteRef.current = timeoutId
+
+      notification.info({
+        message:
+          failCount === 0
+            ? t("settings:manageCharacters.bulk.deleteSuccess", {
+                defaultValue: "Deleted {{count}} characters",
+                count: successCount
+              })
+            : t("settings:manageCharacters.bulk.deletePartial", {
+                defaultValue: "Deleted {{success}} characters, {{fail}} failed",
+                success: successCount,
+                fail: failCount
+              }),
+        description: (
+          <button
+            type="button"
+            className="mt-1 text-sm font-medium text-primary hover:underline"
+            onClick={() => {
+              if (bulkUndoDeleteRef.current) {
+                clearTimeout(bulkUndoDeleteRef.current)
+                bulkUndoDeleteRef.current = null
+              }
+              void restoreBulkDeletedCharacters(deletedCharacters)
+            }}>
+            {t("common:undo", { defaultValue: "Undo" })}
+          </button>
+        ),
+        duration: 10
       })
     } else {
       notification.warning({
-        message: t("settings:manageCharacters.bulk.deletePartial", {
-          defaultValue: "Deleted {{success}} characters, {{fail}} failed",
-          success: successCount,
-          fail: failCount
+        message: t("settings:manageCharacters.bulk.deleteFailure", {
+          defaultValue: "Unable to delete selected characters"
         })
       })
     }
-  }, [selectedCharacterIds, data, confirmDanger, t, notification, qc])
+  }, [
+    selectedCharacterIds,
+    data,
+    confirmDanger,
+    t,
+    notification,
+    qc,
+    restoreBulkDeletedCharacters
+  ])
 
   // Bulk export handler
   const handleBulkExport = React.useCallback(async () => {
@@ -3231,6 +3393,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     timeoutId: ReturnType<typeof setTimeout>
   } | null>(null)
   const undoDeleteRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const bulkUndoDeleteRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const { mutate: deleteCharacter, isPending: deleting } = useMutation({
     mutationFn: async ({ id, expectedVersion }: { id: string; expectedVersion?: number }) =>
@@ -3511,8 +3674,47 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     setConversationsOpen(true)
   }, [])
 
+  const handleRestoreFromTrash = React.useCallback(
+    (record: any) => {
+      const characterId = String(record?.id || record?.slug || record?.name || "")
+      const characterVersion = Number(record?.version)
+      if (!characterId) return
+      if (!Number.isFinite(characterVersion)) {
+        notification.error({
+          message: t("settings:manageCharacters.notification.restoreError", {
+            defaultValue: "Failed to restore character"
+          }),
+          description: t("settings:manageCharacters.notification.restoreVersionMissing", {
+            defaultValue: "Missing character version. Refresh and try again."
+          })
+        })
+        return
+      }
+      restoreCharacter({ id: characterId, version: characterVersion })
+    },
+    [notification, restoreCharacter, t]
+  )
+
   return (
-    <div className="space-y-4">
+    <div className="characters-page">
+      <a
+        href="#characters-main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:border focus:border-border focus:bg-surface focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-text focus:shadow">
+        {t("settings:manageCharacters.skipToContent", {
+          defaultValue: "Skip to characters content"
+        })}
+      </a>
+      <div
+        id="characters-main-content"
+        role="main"
+        tabIndex={-1}
+        aria-describedby="characters-shortcuts-summary"
+        className="space-y-4">
+      <div id="characters-shortcuts-summary" className="sr-only">
+        {`${t("settings:manageCharacters.shortcuts.title", {
+          defaultValue: "Keyboard shortcuts"
+        })}: ${shortcutSummaryText}`}
+      </div>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -3558,6 +3760,35 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             />
           </Tooltip>
           <div className="flex flex-col gap-1 sm:flex-row sm:items-center">
+            <Segmented
+              value={characterListScope}
+              onChange={(value) =>
+                setCharacterListScope(value as CharacterListScope)
+              }
+              options={[
+                {
+                  value: "active",
+                  label: t("settings:manageCharacters.scope.active", {
+                    defaultValue: "Active"
+                  }),
+                  title: t("settings:manageCharacters.scope.activeTitle", {
+                    defaultValue: "Active characters"
+                  })
+                },
+                {
+                  value: "deleted",
+                  label: t("settings:manageCharacters.scope.deleted", {
+                    defaultValue: "Recently deleted"
+                  }),
+                  title: t("settings:manageCharacters.scope.deletedTitle", {
+                    defaultValue: "Soft-deleted characters"
+                  })
+                }
+              ]}
+              aria-label={t("settings:manageCharacters.scope.label", {
+                defaultValue: "Character list scope"
+              })}
+            />
             <Select
               mode="multiple"
               allowClear
@@ -3634,6 +3865,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             <Segmented
               value={viewMode}
               onChange={(v) => setViewMode(v as 'table' | 'gallery')}
+              disabled={characterListScope === "deleted"}
               options={[
                 {
                   value: 'table',
@@ -3688,19 +3920,28 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               title={
                 <div className="text-xs space-y-1">
                   <div className="font-medium mb-1">{t("settings:manageCharacters.shortcuts.title", { defaultValue: "Keyboard shortcuts" })}</div>
-                  <div><kbd className="px-1 bg-white/20 rounded">N</kbd> {t("settings:manageCharacters.shortcuts.new", { defaultValue: "New character" })}</div>
-                  <div><kbd className="px-1 bg-white/20 rounded">/</kbd> {t("settings:manageCharacters.shortcuts.search", { defaultValue: "Focus search" })}</div>
-                  <div><kbd className="px-1 bg-white/20 rounded">G</kbd> <kbd className="px-1 bg-white/20 rounded">T</kbd> {t("settings:manageCharacters.shortcuts.tableView", { defaultValue: "Table view" })}</div>
-                  <div><kbd className="px-1 bg-white/20 rounded">G</kbd> <kbd className="px-1 bg-white/20 rounded">G</kbd> {t("settings:manageCharacters.shortcuts.galleryView", { defaultValue: "Gallery view" })}</div>
-                  <div><kbd className="px-1 bg-white/20 rounded">Esc</kbd> {t("settings:manageCharacters.shortcuts.close", { defaultValue: "Close modal" })}</div>
+                  {shortcutHelpItems.map((item) => (
+                    <div key={item.id}>
+                      {item.keys.map((key, index) => (
+                        <React.Fragment key={`${item.id}-${key}-${index}`}>
+                          {index > 0 && " "}
+                          <kbd className="px-1 bg-white/20 rounded">{key}</kbd>
+                        </React.Fragment>
+                      ))}{" "}
+                      {item.label}
+                    </div>
+                  ))}
                 </div>
               }
-              placement="bottomRight">
+              placement="bottomRight"
+              trigger={["hover", "focus"]}
+              classNames={{ root: "characters-motion-overlay" }}>
               <Button
                 type="text"
                 size="small"
                 icon={<Keyboard className="w-4 h-4" />}
                 aria-label={t("settings:manageCharacters.shortcuts.ariaLabel", { defaultValue: "Keyboard shortcuts" })}
+                aria-describedby="characters-shortcuts-summary"
               />
             </Tooltip>
           </div>
@@ -3761,6 +4002,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       {status === "success" &&
         Array.isArray(data) &&
         data.length === 0 &&
+        characterListScope === "active" &&
         !hasFilters && (
           <div className="space-y-3">
             <FeatureEmptyState
@@ -3822,12 +4064,42 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   <button
                     key={template.id}
                     type="button"
-                    className="rounded border border-border p-2 text-left transition-colors hover:border-primary hover:bg-surface-hover"
+                    className="rounded border border-border p-2 text-left transition-colors motion-reduce:transition-none hover:border-primary hover:bg-surface-hover"
                     onClick={() => applyTemplateToCreateForm(template)}>
                     <div className="text-sm font-medium">{template.name}</div>
                     <div className="text-xs text-text-muted">{template.description}</div>
                   </button>
                 ))}
+              </div>
+            </div>
+          </div>
+        )}
+      {status === "success" &&
+        Array.isArray(data) &&
+        data.length === 0 &&
+        characterListScope === "deleted" &&
+        !hasFilters && (
+          <div className="rounded-lg border border-dashed border-border bg-surface p-4 text-sm text-text">
+            <div className="flex flex-col gap-2">
+              <span className="font-medium">
+                {t("settings:manageCharacters.deletedEmptyTitle", {
+                  defaultValue: "No recently deleted characters"
+                })}
+              </span>
+              <span className="text-text-muted">
+                {t("settings:manageCharacters.deletedEmptyDescription", {
+                  defaultValue:
+                    "Soft-deleted characters appear here for up to 30 days."
+                })}
+              </span>
+              <div>
+                <Button
+                  size="small"
+                  onClick={() => setCharacterListScope("active")}>
+                  {t("settings:manageCharacters.scope.backToActive", {
+                    defaultValue: "Back to active"
+                  })}
+                </Button>
               </div>
             </div>
           </div>
@@ -3902,8 +4174,16 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         )}
       {status === "success" && Array.isArray(data) && data.length > 0 && viewMode === 'table' && (
         <div className="space-y-3">
+          {characterListScope === "deleted" && (
+            <div className="rounded-md border border-border bg-surface2 p-3 text-sm text-text-muted">
+              {t("settings:manageCharacters.deletedListDescription", {
+                defaultValue:
+                  "Showing recently deleted characters. Restore them within 30 days."
+              })}
+            </div>
+          )}
           {/* Bulk Actions Toolbar (M5) */}
-          {hasSelection && (
+          {characterListScope === "active" && hasSelection && (
             <div className="flex items-center gap-3 p-2 bg-surface rounded-lg border border-border">
               <div className="flex items-center gap-2">
                 <CheckSquare className="w-4 h-4 text-primary" />
@@ -3988,7 +4268,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 }
               }}
               columns={[
-              {
+              characterListScope === "active" ? {
                 // Bulk selection checkbox column (M5)
                 title: (
                   <Checkbox
@@ -4029,7 +4309,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                     />
                   )
                 }
-              },
+              } : null,
               {
                 title: (
                   <span className="sr-only">
@@ -4074,6 +4354,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               render: (v: string, record: any) => {
                 const recordId = String(record.id || record.slug || record.name)
                 const isEditing = inlineEdit?.id === recordId && inlineEdit?.field === 'name'
+
+                if (characterListScope === "deleted") {
+                  return (
+                    <span className="line-clamp-1" title={v || undefined}>
+                      {truncateText(v, MAX_NAME_LENGTH)}
+                    </span>
+                  )
+                }
 
                 if (isEditing) {
                   return (
@@ -4134,6 +4422,22 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               render: (v: string, record: any) => {
                 const recordId = String(record.id || record.slug || record.name)
                 const isEditing = inlineEdit?.id === recordId && inlineEdit?.field === 'description'
+
+                if (characterListScope === "deleted") {
+                  return (
+                    <span className="line-clamp-1" title={v || undefined}>
+                      {v ? (
+                        truncateText(v, MAX_DESCRIPTION_LENGTH)
+                      ) : (
+                        <span className="text-text-subtle">
+                          {t("settings:manageCharacters.table.noDescription", {
+                            defaultValue: "—"
+                          })}
+                        </span>
+                      )}
+                    </span>
+                  )
+                }
 
                 if (isEditing) {
                   return (
@@ -4351,7 +4655,35 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                     defaultValue: "Export"
                   }
                 )
+                const restoreLabel = t(
+                  "settings:manageCharacters.actions.restore",
+                  {
+                    defaultValue: "Restore"
+                  }
+                )
                 const name = record?.name || record?.title || record?.slug || ""
+
+                if (characterListScope === "deleted") {
+                  return (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Tooltip title={restoreLabel}>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-primary transition motion-reduce:transition-none hover:border-primary/30 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
+                          aria-label={t("settings:manageCharacters.aria.restore", {
+                            defaultValue: "Restore character {{name}}",
+                            name
+                          })}
+                          onClick={() => handleRestoreFromTrash(record)}>
+                          <History className="w-4 h-4" />
+                          <span className="hidden sm:inline text-xs font-medium">
+                            {restoreLabel}
+                          </span>
+                        </button>
+                      </Tooltip>
+                    </div>
+                  )
+                }
                 return (
                   <div className="flex flex-wrap items-center gap-2">
                     {/* Primary: Chat */}
@@ -4359,7 +4691,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       title={chatLabel}>
                       <button
                         type="button"
-                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-primary transition hover:border-primary/30 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
+                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-primary transition motion-reduce:transition-none hover:border-primary/30 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
                         aria-label={t("settings:manageCharacters.aria.chatWith", {
                           defaultValue: "Chat as {{name}}",
                           name
@@ -4400,7 +4732,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       title={editLabel}>
                       <button
                         type="button"
-                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
+                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition motion-reduce:transition-none hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
                         aria-label={t("settings:manageCharacters.aria.edit", {
                           defaultValue: "Edit character {{name}}",
                           name
@@ -4419,7 +4751,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       title={deleteLabel}>
                       <button
                         type="button"
-                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-danger transition hover:border-danger/30 hover:bg-danger/10 focus:outline-none focus:ring-2 focus:ring-danger focus:ring-offset-1 focus:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
+                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-danger transition motion-reduce:transition-none hover:border-danger/30 hover:bg-danger/10 focus:outline-none focus:ring-2 focus:ring-danger focus:ring-offset-1 focus:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
                         aria-label={t("settings:manageCharacters.aria.delete", {
                           defaultValue: "Delete character {{name}}",
                           name
@@ -4434,7 +4766,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                               "settings:manageCharacters.confirm.delete",
                               {
                                 defaultValue:
-                                  "Are you sure you want to delete this character? This action cannot be undone."
+                                  "Are you sure you want to delete this character? It will be soft-deleted and can be undone for 10 seconds."
                               }
                             ),
                             okText: t("common:delete", { defaultValue: "Delete" }),
@@ -4497,7 +4829,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       <Tooltip title={t("settings:manageCharacters.actions.more", { defaultValue: "More actions" })}>
                         <button
                           type="button"
-                          className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
+                          className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition motion-reduce:transition-none hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
                           aria-label={t("settings:manageCharacters.aria.moreActions", {
                             defaultValue: "More actions for {{name}}",
                             name
@@ -4510,7 +4842,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 )
               }
             }
-          ]}
+          ].filter(Boolean) as any}
           />
           </div>
         </div>
@@ -4635,7 +4967,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           setResumingChatId(null)
         }}
         footer={null}
-        destroyOnHidden>
+        destroyOnHidden
+        rootClassName="characters-motion-modal">
         <div className="space-y-3">
           <p className="text-sm text-text-muted">
             {t("settings:manageCharacters.conversations.subtitle", {
@@ -4910,7 +5243,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             }, 0)
           }
         }}
-        footer={null}>
+        footer={null}
+        rootClassName="characters-motion-modal">
         <p className="text-sm text-text-muted mb-4">
           {t("settings:manageCharacters.modal.description", {
             defaultValue: "Define a reusable character you can chat with in the sidebar."
@@ -5002,7 +5336,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 <button
                   key={template.id}
                   type="button"
-                  className="text-left p-2 rounded border border-border hover:border-primary hover:bg-surface-hover transition-colors"
+                  className="text-left p-2 rounded border border-border hover:border-primary hover:bg-surface-hover transition-colors motion-reduce:transition-none"
                   onClick={() => applyTemplateToCreateForm(template)}>
                   <div className="font-medium text-sm">{template.name}</div>
                   <div className="text-xs text-text-muted">{template.description}</div>
@@ -5087,7 +5421,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             }, 0)
           }
         }}
-        footer={null}>
+        footer={null}
+        rootClassName="characters-motion-modal">
         <p className="text-sm text-text-muted mb-4">
           {t("settings:manageCharacters.modal.editDescription", {
             defaultValue: "Update the character's name, behavior, and other settings."
@@ -5189,6 +5524,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         })}
         cancelText={t("common:cancel", { defaultValue: "Cancel" })}
         confirmLoading={tagManagerSubmitting}
+        rootClassName="characters-motion-modal"
         okButtonProps={{
           disabled:
             tagManagerLoading ||
@@ -5298,6 +5634,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         okText={t("settings:manageCharacters.bulk.addTagsConfirm", { defaultValue: "Add tags" })}
         cancelText={t("common:cancel", { defaultValue: "Cancel" })}
         confirmLoading={bulkOperationLoading}
+        rootClassName="characters-motion-modal"
         okButtonProps={{ disabled: bulkTagsToAdd.length === 0 }}>
         <div className="space-y-4">
           <p className="text-sm text-text-muted">
@@ -5317,7 +5654,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   <button
                     key={tag}
                     type="button"
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border transition-colors ${
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border transition-colors motion-reduce:transition-none ${
                       isSelected
                         ? 'bg-primary/10 border-primary text-primary'
                         : 'bg-surface border-border text-text-muted hover:border-primary/50 hover:text-primary'
@@ -5352,6 +5689,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           />
         </div>
       </Modal>
+      </div>
     </div>
   )
 }

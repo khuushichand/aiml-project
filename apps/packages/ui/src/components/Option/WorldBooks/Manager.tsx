@@ -22,6 +22,7 @@ import {
   buildWorldBookMutationErrorMessage,
   getWorldBookStarterTemplate,
   hasDuplicateWorldBookName,
+  isWorldBookVersionConflictError,
   normalizeWorldBookName,
   toWorldBookFormValues
 } from "./worldBookFormUtils"
@@ -91,6 +92,11 @@ const normalizeKeywords = (value: any): string[] => {
   return normalizeKeywordList(value)
 }
 
+const normalizeEntryGroup = (value: unknown): string | null => {
+  const normalized = String(value ?? "").trim()
+  return normalized.length > 0 ? normalized : null
+}
+
 const buildMatchPreview = (keywordsValue: any, opts: { caseSensitive?: boolean; regexMatch?: boolean; wholeWord?: boolean }) => {
   const keyword = normalizeKeywords(keywordsValue)[0]
   if (!keyword) return "Add a keyword to see a preview."
@@ -135,8 +141,36 @@ const LOREBOOK_METRIC_LABELS = {
   tokensUsed: "Tokens used",
   tokenBudget: "Token budget"
 } as const
+const TEST_MATCHING_SAMPLE_STORAGE_KEY = "tldw:world-books:test-match:sample:v1"
+
+const loadSavedTestMatchingSample = (): string => {
+  if (typeof window === "undefined") return ""
+  try {
+    const raw = window.sessionStorage.getItem(TEST_MATCHING_SAMPLE_STORAGE_KEY)
+    return typeof raw === "string" ? raw : ""
+  } catch {
+    return ""
+  }
+}
+
+const persistTestMatchingSample = (value: string) => {
+  if (typeof window === "undefined") return
+  try {
+    if (!value) {
+      window.sessionStorage.removeItem(TEST_MATCHING_SAMPLE_STORAGE_KEY)
+      return
+    }
+    window.sessionStorage.setItem(TEST_MATCHING_SAMPLE_STORAGE_KEY, value)
+  } catch {
+    // ignore storage failures
+  }
+}
 
 type WorldBookFormMode = "create" | "edit"
+type EditWorldBookConflictState = {
+  attemptedValues: Record<string, any>
+  message: string
+}
 type EntryFilterPreset = {
   enabledFilter: "all" | "enabled" | "disabled"
   matchFilter: "all" | "regex" | "plain"
@@ -155,6 +189,7 @@ type WorldBookFormProps = {
   worldBooks: Array<{ id?: number; name?: string }>
   submitting: boolean
   currentWorldBookId?: number | null
+  maxRecursiveDepth?: number
   onSubmit: (values: Record<string, any>) => void
 }
 
@@ -164,9 +199,15 @@ export const WorldBookForm: React.FC<WorldBookFormProps> = ({
   worldBooks,
   submitting,
   currentWorldBookId,
+  maxRecursiveDepth = 10,
   onSubmit
 }) => {
   const submitLabel = mode === "create" ? "Create" : "Save"
+  const recursiveScanningEnabled = Boolean(Form.useWatch("recursive_scanning", form))
+  const recursiveDepthLimit =
+    typeof maxRecursiveDepth === "number" && Number.isFinite(maxRecursiveDepth)
+      ? Math.max(1, Math.round(maxRecursiveDepth))
+      : 10
   const handleTemplateChange = React.useCallback(
     (templateKey?: string) => {
       if (!templateKey) return
@@ -263,6 +304,15 @@ export const WorldBookForm: React.FC<WorldBookFormProps> = ({
           </Form.Item>
         </div>
       </details>
+      {recursiveScanningEnabled && (
+        <div
+          data-testid={`recursive-scanning-warning-${mode}`}
+          className="mb-4 rounded border border-warn/50 bg-warn/10 px-3 py-2 text-xs text-text"
+        >
+          Recursive scanning can cause entries to trigger each other. Matching depth is limited
+          to {` ${recursiveDepthLimit} `}levels.
+        </div>
+      )}
       <Button type="primary" htmlType="submit" loading={submitting} className="w-full">
         {submitLabel}
       </Button>
@@ -358,6 +408,7 @@ const WorldBookTestMatchingModal: React.FC<WorldBookTestMatchingModalProps> = ({
     const nextWorldBook =
       testableWorldBooks.find((book) => book.id === nextWorldBookId) || null
     applyWorldBookDefaults(nextWorldBook)
+    setSampleText(loadSavedTestMatchingSample())
     setErrorMessage(null)
   }, [applyWorldBookDefaults, initialWorldBookId, open, testableWorldBooks])
 
@@ -365,6 +416,11 @@ const WorldBookTestMatchingModal: React.FC<WorldBookTestMatchingModalProps> = ({
     if (!open) return
     applyWorldBookDefaults(selectedWorldBook)
   }, [applyWorldBookDefaults, open, selectedWorldBook])
+
+  React.useEffect(() => {
+    if (!open) return
+    persistTestMatchingSample(sampleText)
+  }, [open, sampleText])
 
   const handleRunTest = async () => {
     if (!selectedWorldBookId) {
@@ -584,6 +640,8 @@ export const WorldBooksManager: React.FC = () => {
   const [openEntries, setOpenEntries] = React.useState<null | { id: number; name: string; entryCount?: number }>(null)
   const [openAttach, setOpenAttach] = React.useState<null | number>(null)
   const [editId, setEditId] = React.useState<number | null>(null)
+  const [editExpectedVersion, setEditExpectedVersion] = React.useState<number | null>(null)
+  const [editConflict, setEditConflict] = React.useState<EditWorldBookConflictState | null>(null)
   const [openImport, setOpenImport] = React.useState(false)
   const [openMatrix, setOpenMatrix] = React.useState(false)
   const [openGlobalStats, setOpenGlobalStats] = React.useState(false)
@@ -667,6 +725,15 @@ export const WorldBooksManager: React.FC = () => {
     enabled: isOnline
   })
 
+  const { data: worldBookRuntimeConfig } = useQuery({
+    queryKey: ["tldw:worldBookRuntimeConfig"],
+    queryFn: async () => {
+      await tldwClient.initialize()
+      return await tldwClient.getWorldBookRuntimeConfig()
+    },
+    enabled: isOnline
+  })
+
   const { data: characters } = useQuery({
     queryKey: ['tldw:listCharactersForWB'],
     queryFn: async () => {
@@ -709,6 +776,41 @@ export const WorldBooksManager: React.FC = () => {
     enabled: isOnline && !!characters && characters.length > 0
   })
 
+  const maxRecursiveDepth =
+    typeof worldBookRuntimeConfig?.max_recursive_depth === "number" &&
+    Number.isFinite(worldBookRuntimeConfig.max_recursive_depth)
+      ? worldBookRuntimeConfig.max_recursive_depth
+      : 10
+
+  const activeCharacterIds = React.useMemo(() => {
+    const ids = new Set<number>()
+    ;(characters || []).forEach((character: any) => {
+      const id = Number(character?.id)
+      if (Number.isFinite(id) && id > 0) ids.add(id)
+    })
+    return ids
+  }, [characters])
+
+  const reconciledAttachmentsByBook = React.useMemo(() => {
+    const source = attachmentsByBook as Record<number, any[]> | undefined
+    if (!source || typeof source !== "object") return {}
+
+    const next: Record<number, any[]> = {}
+    Object.entries(source).forEach(([worldBookIdRaw, attachedCharacters]) => {
+      const worldBookId = Number(worldBookIdRaw)
+      if (!Number.isFinite(worldBookId) || worldBookId <= 0) return
+      const list = Array.isArray(attachedCharacters) ? attachedCharacters : []
+      const filtered = list.filter((character: any) => {
+        const characterId = Number(character?.id)
+        if (!Number.isFinite(characterId) || characterId <= 0) return false
+        if (activeCharacterIds.size === 0) return true
+        return activeCharacterIds.has(characterId)
+      })
+      if (filtered.length > 0) next[worldBookId] = filtered
+    })
+    return next
+  }, [activeCharacterIds, attachmentsByBook])
+
   const globalStatsQuerySignature = React.useMemo(
     () =>
       ((data || []) as any[])
@@ -749,8 +851,8 @@ export const WorldBooksManager: React.FC = () => {
   }, [data, openAttach])
 
   const getAttachedCharacters = React.useCallback(
-    (worldBookId: number) => (attachmentsByBook && (attachmentsByBook as any)[worldBookId]) || [],
-    [attachmentsByBook]
+    (worldBookId: number) => reconciledAttachmentsByBook[worldBookId] || [],
+    [reconciledAttachmentsByBook]
   )
 
   const { mutate: createWB, isPending: creating } = useMutation({
@@ -795,16 +897,40 @@ export const WorldBooksManager: React.FC = () => {
       })
   })
   const { mutate: updateWB, isPending: updating } = useMutation({
-    mutationFn: (values: any) => editId != null ? tldwClient.updateWorldBook(editId, values) : Promise.resolve(null),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['tldw:listWorldBooks'] }); setOpenEdit(false); editForm.resetFields(); setEditId(null) },
-    onError: (e: any, values: any) =>
+    mutationFn: (values: any) => {
+      if (editId == null) return Promise.resolve(null)
+      if (typeof editExpectedVersion === "number") {
+        return tldwClient.updateWorldBook(editId, values, {
+          expectedVersion: editExpectedVersion
+        })
+      }
+      return tldwClient.updateWorldBook(editId, values)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tldw:listWorldBooks'] })
+      setOpenEdit(false)
+      editForm.resetFields()
+      setEditId(null)
+      setEditExpectedVersion(null)
+      setEditConflict(null)
+    },
+    onError: (e: any, values: any) => {
+      const description = buildWorldBookMutationErrorMessage(e, {
+        attemptedName: values?.name,
+        fallback: "Failed to update world book"
+      })
       notification.error({
         message: "Error",
-        description: buildWorldBookMutationErrorMessage(e, {
-          attemptedName: values?.name,
-          fallback: "Failed to update world book"
-        })
+        description
       })
+      if (isWorldBookVersionConflictError(e)) {
+        setEditConflict({
+          attemptedValues: { ...(values || {}) },
+          message: description
+        })
+        void qc.invalidateQueries({ queryKey: ["tldw:listWorldBooks"] })
+      }
+    }
   })
   const { mutate: deleteWB, isPending: deleting } = useMutation({
     mutationFn: (id: number) => tldwClient.deleteWorldBook(id),
@@ -903,6 +1029,7 @@ export const WorldBooksManager: React.FC = () => {
           await tldwClient.addWorldBookEntry(createdId, {
             keywords: normalizeKeywords(entry?.keywords),
             content: String(entry?.content || ""),
+            group: normalizeEntryGroup(entry?.group ?? entry?.metadata?.group),
             priority:
               typeof entry?.priority === "number"
                 ? entry.priority
@@ -1230,7 +1357,7 @@ export const WorldBooksManager: React.FC = () => {
 
   const initializeMatrixSession = React.useCallback(() => {
     const baseline = new Set<string>()
-    const source = attachmentsByBook as Record<string, any> | undefined
+    const source = reconciledAttachmentsByBook as Record<string, any> | undefined
     if (source && typeof source === "object") {
       Object.entries(source).forEach(([worldBookIdRaw, attachedCharacters]) => {
         const worldBookId = Number(worldBookIdRaw)
@@ -1256,7 +1383,7 @@ export const WorldBooksManager: React.FC = () => {
     setMatrixMetaDrafts({})
     setMatrixMetaPopoverOpenKey(null)
     setMatrixFeedback(null)
-  }, [attachmentKeyFor, attachmentsByBook])
+  }, [attachmentKeyFor, reconciledAttachmentsByBook])
 
   const handleOpenMatrix = React.useCallback(() => {
     initializeMatrixSession()
@@ -1539,13 +1666,20 @@ export const WorldBooksManager: React.FC = () => {
 
     if (attachmentFilter !== "all" && !attachmentsLoading) {
       next = next.filter((book: any) => {
-        const attachedCount = ((attachmentsByBook as any)?.[book?.id] || []).length
+        const attachedCount = (reconciledAttachmentsByBook?.[book?.id] || []).length
         return attachmentFilter === "attached" ? attachedCount > 0 : attachedCount === 0
       })
     }
 
     return next
-  }, [attachmentFilter, attachmentsByBook, attachmentsLoading, data, enabledFilter, listSearch])
+  }, [
+    attachmentFilter,
+    attachmentsLoading,
+    data,
+    enabledFilter,
+    listSearch,
+    reconciledAttachmentsByBook
+  ])
 
   const handleCloseCreate = async () => {
     if (createForm.isFieldsTouched()) {
@@ -1574,6 +1708,8 @@ export const WorldBooksManager: React.FC = () => {
     setOpenEdit(false)
     editForm.resetFields()
     setEditId(null)
+    setEditExpectedVersion(null)
+    setEditConflict(null)
   }
 
   const handleCloseEntries = async () => {
@@ -1595,6 +1731,16 @@ export const WorldBooksManager: React.FC = () => {
     setEnabledFilter("all")
     setAttachmentFilter("all")
   }, [])
+
+  const cancelPendingWorldBookDeletes = React.useCallback(() => {
+    Object.values(deleteTimersRef.current).forEach((timer) => clearTimeout(timer))
+    deleteTimersRef.current = {}
+    setPendingDeleteIds([])
+    notification.info({
+      message: "Pending deletions canceled",
+      description: "No world books are currently scheduled for deletion."
+    })
+  }, [notification])
 
   const openEntriesWithPreset = React.useCallback(
     (
@@ -1653,6 +1799,45 @@ export const WorldBooksManager: React.FC = () => {
   const hasActiveListFilters =
     listSearch.trim().length > 0 || enabledFilter !== "all" || attachmentFilter !== "all"
 
+  const latestEditRecord = React.useMemo(
+    () =>
+      ((data || []) as any[]).find(
+        (book: any) => Number(book?.id) === Number(editId)
+      ) || null,
+    [data, editId]
+  )
+  const latestEditVersion =
+    typeof latestEditRecord?.version === "number" ? latestEditRecord.version : null
+
+  const handleLoadLatestEditValues = React.useCallback(() => {
+    if (!latestEditRecord) return
+    editForm.setFieldsValue(toWorldBookFormValues(latestEditRecord))
+    setEditExpectedVersion(
+      typeof latestEditRecord.version === "number" ? latestEditRecord.version : null
+    )
+    setEditConflict(null)
+    notification.info({
+      message: "Latest values loaded",
+      description: "Review the refreshed values, reapply any local edits, then save again."
+    })
+  }, [editForm, latestEditRecord, notification])
+
+  const handleReapplyEditDraft = React.useCallback(() => {
+    if (!latestEditRecord || !editConflict) return
+    editForm.setFieldsValue({
+      ...toWorldBookFormValues(latestEditRecord),
+      ...editConflict.attemptedValues
+    })
+    setEditExpectedVersion(
+      typeof latestEditRecord.version === "number" ? latestEditRecord.version : null
+    )
+    setEditConflict(null)
+    notification.info({
+      message: "Edits reapplied",
+      description: "Your unsaved edits were merged onto the latest version. Save to retry."
+    })
+  }, [editConflict, editForm, latestEditRecord, notification])
+
   React.useEffect(() => {
     return () => {
       Object.values(deleteTimersRef.current).forEach((t) => clearTimeout(t))
@@ -1694,14 +1879,20 @@ export const WorldBooksManager: React.FC = () => {
             const record = booksById.get(id)
             if (!record) return Promise.resolve(null)
             const values = toWorldBookFormValues(record)
-            return tldwClient.updateWorldBook(id, {
+            const payload = {
               name: values.name,
               description: values.description,
               enabled: nextEnabled,
               scan_depth: values.scan_depth,
               token_budget: values.token_budget,
               recursive_scanning: values.recursive_scanning
-            })
+            }
+            if (typeof record?.version === "number") {
+              return tldwClient.updateWorldBook(id, payload, {
+                expectedVersion: record.version
+              })
+            }
+            return tldwClient.updateWorldBook(id, payload)
           })
         )
       }
@@ -1727,6 +1918,10 @@ export const WorldBooksManager: React.FC = () => {
 
   const openEditWorldBook = (record: any) => {
     setEditId(record.id)
+    setEditExpectedVersion(
+      typeof record?.version === "number" ? record.version : null
+    )
+    setEditConflict(null)
     editForm.setFieldsValue(toWorldBookFormValues(record))
     setOpenEdit(true)
   }
@@ -1762,6 +1957,9 @@ export const WorldBooksManager: React.FC = () => {
             <li>{attachedSummary}</li>
           </ul>
           <p className="text-danger text-sm mt-2">Deletion will run after 10 seconds unless you undo.</p>
+          <p className="text-xs text-text-muted">
+            Pending deletions are local to this tab. Refreshing or navigating away cancels the timer.
+          </p>
         </div>
       ),
       okText: "Delete",
@@ -1780,7 +1978,9 @@ export const WorldBooksManager: React.FC = () => {
 
     showUndoNotification({
       title: "World book deletion scheduled",
-      description: `“${record.name}” will be deleted in 10 seconds.`,
+      description:
+        `“${record.name}” will be deleted in 10 seconds. ` +
+        "Refresh or navigation before timeout cancels pending deletion.",
       duration: 10,
       onUndo: () => {
         if (deleteTimersRef.current[record.id]) {
@@ -1933,7 +2133,15 @@ export const WorldBooksManager: React.FC = () => {
       dataIndex: "name",
       key: "name",
       sorter: (a: any, b: any) => String(a?.name || "").localeCompare(String(b?.name || "")),
-      sortOrder: tableSort.field === "name" ? tableSort.order : null
+      sortOrder: tableSort.field === "name" ? tableSort.order : null,
+      render: (value: string, record: any) => (
+        <div className="flex flex-wrap items-center gap-2">
+          <span>{value}</span>
+          {pendingDeleteIds.includes(Number(record?.id)) && (
+            <Tag color="orange">Pending delete</Tag>
+          )}
+        </div>
+      )
     },
     ...(screens.md
       ? [
@@ -2086,6 +2294,31 @@ export const WorldBooksManager: React.FC = () => {
           </a>
         </div>
       </div>
+      {pendingDeleteIds.length > 0 && (
+        <div
+          data-testid="world-book-pending-delete-banner"
+          className="rounded border border-amber-300 bg-amber-50 px-3 py-2"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-sm text-amber-800">
+                <strong>{pendingDeleteIds.length}</strong>{" "}
+                {pendingDeleteIds.length === 1 ? "world book" : "world books"} pending deletion.
+              </p>
+              <p className="text-xs text-amber-700">
+                Timers run only in this tab. Refreshing or navigating away cancels pending deletions.
+              </p>
+            </div>
+            <Button
+              size="small"
+              onClick={cancelPendingWorldBookDeletes}
+              aria-label="Cancel pending world book deletions"
+            >
+              Cancel pending
+            </Button>
+          </div>
+        </div>
+      )}
       {selectedWorldBookKeys.length > 0 && (
         <div className="rounded border border-border bg-surface-secondary px-3 py-2 flex flex-wrap items-center justify-between gap-2">
           <span className="text-sm">
@@ -2196,6 +2429,7 @@ export const WorldBooksManager: React.FC = () => {
           form={createForm}
           worldBooks={(data || []) as any[]}
           submitting={creating}
+          maxRecursiveDepth={maxRecursiveDepth}
           onSubmit={createWB}
         />
       </Modal>
@@ -2633,12 +2867,41 @@ export const WorldBooksManager: React.FC = () => {
         footer={null}
         styles={{ body: MODAL_BODY_SCROLL_STYLE }}
       >
+        {editConflict && (
+          <div
+            data-testid="world-book-edit-conflict"
+            className="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+          >
+            <p>{editConflict.message}</p>
+            <p className="mt-1 text-xs text-amber-700">
+              Reload the latest version and then reapply your edits before saving again.
+              {latestEditVersion != null ? ` Latest version: ${latestEditVersion}.` : ""}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button
+                size="small"
+                onClick={handleLoadLatestEditValues}
+                disabled={!latestEditRecord}
+              >
+                Load latest values
+              </Button>
+              <Button
+                size="small"
+                onClick={handleReapplyEditDraft}
+                disabled={!latestEditRecord}
+              >
+                Reapply my edits
+              </Button>
+            </div>
+          </div>
+        )}
         <WorldBookForm
           mode="edit"
           form={editForm}
           worldBooks={(data || []) as any[]}
           submitting={updating}
           currentWorldBookId={editId}
+          maxRecursiveDepth={maxRecursiveDepth}
           onSubmit={updateWB}
         />
       </Modal>
@@ -3197,6 +3460,7 @@ const EntryManager: React.FC<{
   const [entryMatchFilter, setEntryMatchFilter] = React.useState<"all" | "regex" | "plain">(
     entryFilterPreset.matchFilter
   )
+  const [entryGroupFilter, setEntryGroupFilter] = React.useState<string>("all")
   const [addMatchingOptionsOpen, setAddMatchingOptionsOpen] = React.useState<boolean>(() =>
     readSessionBoolean("worldbooks:add-matching-options-open", false)
   )
@@ -3218,6 +3482,7 @@ const EntryManager: React.FC<{
     setEntryEnabledFilter(entryFilterPreset.enabledFilter)
     setEntryMatchFilter(entryFilterPreset.matchFilter)
     setEntrySearch(entryFilterPreset.searchText)
+    setEntryGroupFilter("all")
   }, [
     entryFilterPreset.enabledFilter,
     entryFilterPreset.matchFilter,
@@ -3255,12 +3520,24 @@ const EntryManager: React.FC<{
     return { entries: normalizedEntries, totalEntryCount: normalizedTotal }
   }, [entryQueryData])
   const { mutate: addEntry, isPending: adding } = useMutation({
-    mutationFn: (v: any) => tldwClient.addWorldBookEntry(worldBookId, { ...v, keywords: normalizeKeywords(v.keywords) }),
+    mutationFn: (v: any) =>
+      tldwClient.addWorldBookEntry(worldBookId, {
+        ...v,
+        keywords: normalizeKeywords(v.keywords),
+        group: normalizeEntryGroup(v?.group)
+      }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['tldw:listWorldBookEntries', worldBookId] }); form.resetFields() },
     onError: (e: any) => notification.error({ message: 'Error', description: e?.message || 'Failed to add entry' })
   })
   const { mutate: updateEntry, isPending: updating } = useMutation({
-    mutationFn: (v: any) => editingEntry ? tldwClient.updateWorldBookEntry(editingEntry.entry_id, { ...v, keywords: normalizeKeywords(v.keywords) }) : Promise.resolve(null),
+    mutationFn: (v: any) =>
+      editingEntry
+        ? tldwClient.updateWorldBookEntry(editingEntry.entry_id, {
+            ...v,
+            keywords: normalizeKeywords(v.keywords),
+            group: normalizeEntryGroup(v?.group)
+          })
+        : Promise.resolve(null),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['tldw:listWorldBookEntries', worldBookId] }); setEditingEntry(null); editForm.resetFields() },
     onError: (e: any) => notification.error({ message: 'Error', description: e?.message || 'Failed to update entry' })
   })
@@ -3287,6 +3564,7 @@ const EntryManager: React.FC<{
     editForm.setFieldsValue({
       keywords: entry.keywords || [],
       content: entry.content,
+      group: normalizeEntryGroup(entry?.group ?? entry?.metadata?.group) || undefined,
       priority: entry.priority,
       enabled: entry.enabled,
       appendable: appendableValue,
@@ -3322,6 +3600,15 @@ const EntryManager: React.FC<{
     [keywordIndex]
   )
 
+  const entryGroupOptions = React.useMemo(() => {
+    const groups = new Set<string>()
+    ;(entries || []).forEach((entry: any) => {
+      const group = normalizeEntryGroup(entry?.group ?? entry?.metadata?.group)
+      if (group) groups.add(group)
+    })
+    return Array.from(groups).sort((a, b) => a.localeCompare(b))
+  }, [entries])
+
   const filteredEntryData = React.useMemo(() => {
     const source = Array.isArray(entries) ? entries : []
     const query = entrySearch.trim().toLowerCase()
@@ -3345,8 +3632,15 @@ const EntryManager: React.FC<{
       next = next.filter((entry: any) => Boolean(entry?.regex_match) === requiresRegex)
     }
 
+    if (entryGroupFilter !== "all") {
+      next = next.filter((entry: any) => {
+        const group = normalizeEntryGroup(entry?.group ?? entry?.metadata?.group)
+        return group === entryGroupFilter
+      })
+    }
+
     return next
-  }, [entries, entryEnabledFilter, entryMatchFilter, entrySearch])
+  }, [entries, entryEnabledFilter, entryGroupFilter, entryMatchFilter, entrySearch])
 
   const filteredEntryIds = React.useMemo(
     () => normalizeBulkEntryIds(filteredEntryData.map((entry: any) => entry?.entry_id)),
@@ -3494,6 +3788,7 @@ const EntryManager: React.FC<{
           await tldwClient.addWorldBookEntry(destinationId, {
             keywords: normalizedKeywords,
             content,
+            group: normalizeEntryGroup(entry?.group ?? entry?.metadata?.group),
             priority: clampBulkPriority(entry?.priority, 50),
             enabled: Boolean(entry?.enabled),
             case_sensitive: Boolean(entry?.case_sensitive),
@@ -3636,6 +3931,19 @@ const EntryManager: React.FC<{
                 { label: "All match types", value: "all" },
                 { label: "Regex only", value: "regex" },
                 { label: "Plain keywords", value: "plain" }
+              ]}
+            />
+            <Select
+              value={entryGroupFilter}
+              onChange={(value) => setEntryGroupFilter(value)}
+              aria-label="Filter entries by group"
+              className="w-44"
+              options={[
+                { label: "All groups", value: "all" },
+                ...entryGroupOptions.map((group) => ({
+                  label: group,
+                  value: group
+                }))
               ]}
             />
           </div>
@@ -3783,6 +4091,20 @@ const EntryManager: React.FC<{
             }}
             columns={[
               { title: 'Keywords', dataIndex: 'keywords', key: 'keywords', width: 200, render: (arr: string[]) => <div className="flex flex-wrap gap-1">{(arr||[]).map((k) => <Tag key={k}>{k}</Tag>)}</div> },
+              {
+                title: 'Group',
+                dataIndex: 'group',
+                key: 'group',
+                width: 140,
+                render: (_value: unknown, row: any) => {
+                  const group = normalizeEntryGroup(row?.group ?? row?.metadata?.group)
+                  return group ? (
+                    <Tag color="geekblue">{group}</Tag>
+                  ) : (
+                    <span className="text-xs text-text-muted">Ungrouped</span>
+                  )
+                }
+              },
               { title: 'Content', dataIndex: 'content', key: 'content', render: (v: string) => <span className="line-clamp-2">{v}</span> },
               ...(screens.md
                 ? [
@@ -3903,6 +4225,9 @@ const EntryManager: React.FC<{
           <Form.Item name="content" label="Content" rules={[{ required: true }]}>
             <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
           </Form.Item>
+          <Form.Item name="group" label="Group (optional)">
+            <Input placeholder="e.g., Geography, Characters, History" />
+          </Form.Item>
           <p className="text-xs text-text-muted -mt-4 mb-3">{formatEntryContentStats(editContentWatch)}</p>
           <Form.Item
             name="priority"
@@ -3988,6 +4313,9 @@ const EntryManager: React.FC<{
             <KeywordPreview value={addKeywordsWatch} />
             <Form.Item name="content" label="Content" rules={[{ required: true }]}>
               <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
+            </Form.Item>
+            <Form.Item name="group" label="Group (optional)">
+              <Input placeholder="e.g., Geography, Characters, History" />
             </Form.Item>
             <p className="text-xs text-text-muted -mt-4 mb-3">{formatEntryContentStats(addContentWatch)}</p>
             <Form.Item

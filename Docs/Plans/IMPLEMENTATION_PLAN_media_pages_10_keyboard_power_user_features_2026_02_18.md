@@ -21,7 +21,7 @@ Finding IDs: `10.1` through `10.6`
 - Integration tests for `/` focus behavior with input-field conflict guards.
 - Component tests for conditional double-Escape hint visibility.
 - Regression tests for existing shortcut overlay content and open/close controls.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Scoped Content Find Bar
 **Goal**: Provide Ctrl+F-like search limited to the active content pane.
@@ -33,7 +33,7 @@ Finding IDs: `10.1` through `10.6`
 - Unit tests for in-content find matcher and navigation index behavior.
 - Integration tests for open/find/next/previous flows.
 - Regression tests for browser default find behavior not being blocked globally.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Regression Safety for Existing Keyboard Workflows
 **Goal**: Keep current keyboard strengths intact while adding new controls.
@@ -45,7 +45,7 @@ Finding IDs: `10.1` through `10.6`
 - Keyboard regression tests for item/page navigation.
 - Accessibility tests for overlay dialog semantics.
 - Cross-page shortcut conflict tests.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

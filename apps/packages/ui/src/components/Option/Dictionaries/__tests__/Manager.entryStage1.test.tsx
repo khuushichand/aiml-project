@@ -290,7 +290,7 @@ describe("DictionariesManager entry stage-1 information architecture", () => {
         selector: ".ant-select-item-option-content"
       })
     ).toBeNull()
-  })
+  }, 15000)
 
   it("composes entry search and group filtering", async () => {
     const user = userEvent.setup()
@@ -311,5 +311,5 @@ describe("DictionariesManager entry stage-1 information architecture", () => {
     expect(screen.getByText("blood pressure")).toBeInTheDocument()
     expect(screen.queryByText("heart rate")).toBeNull()
     expect(screen.queryByText("Doctor")).toBeNull()
-  })
+  }, 15000)
 })

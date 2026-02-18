@@ -17,6 +17,9 @@
   "comingSoon": {
     "message": "Coming soon..."
   },
+  "tabs_overview": {
+    "message": "Overview"
+  },
   "tabs_sources": {
     "message": "Sources"
   },
@@ -481,6 +484,42 @@
   },
   "runs_detail_noItems": {
     "message": "No items found"
+  },
+  "runs_detail_stream": {
+    "message": "Live stream"
+  },
+  "runs_detail_lastStreamEvent": {
+    "message": "Last event {{time}}"
+  },
+  "runs_detail_liveOn": {
+    "message": "Live"
+  },
+  "runs_detail_liveOff": {
+    "message": "Off"
+  },
+  "runs_detail_streamError": {
+    "message": "Live stream error"
+  },
+  "runs_detail_streamErrorTitle": {
+    "message": "Stream error"
+  },
+  "runs_detail_streamSetupError": {
+    "message": "Failed to connect live stream"
+  },
+  "runs_detail_streamState_connecting": {
+    "message": "Connecting"
+  },
+  "runs_detail_streamState_connected": {
+    "message": "Connected"
+  },
+  "runs_detail_streamState_reconnecting": {
+    "message": "Reconnecting"
+  },
+  "runs_detail_streamState_disconnected": {
+    "message": "Disconnected"
+  },
+  "runs_detail_streamState_error": {
+    "message": "Error"
   },
   "items_description": {
     "message": "Browse scraped feed items and open the selected source content."
@@ -976,6 +1015,114 @@
   },
   "templates_docs_hint": {
     "message": "Use Jinja2 syntax: {% for item in items %}, {{ item.title }}, {% if condition %}, etc."
+  },
+  "overview_description": {
+    "message": "At-a-glance watchlist health, activity, and failure signals."
+  },
+  "overview_lastUpdated": {
+    "message": "Updated {{time}}"
+  },
+  "overview_fetchError": {
+    "message": "Failed to load overview"
+  },
+  "overview_openSources": {
+    "message": "Open"
+  },
+  "overview_openJobs": {
+    "message": "Open"
+  },
+  "overview_openItems": {
+    "message": "Open"
+  },
+  "overview_openRuns": {
+    "message": "Open"
+  },
+  "overview_health_healthyTitle": {
+    "message": "System healthy"
+  },
+  "overview_health_healthyDescription": {
+    "message": "No recent failed runs and source health is stable."
+  },
+  "overview_health_degradedTitle": {
+    "message": "System requires attention"
+  },
+  "overview_health_degradedDescription": {
+    "message": "Some sources or recent runs show failures. Open failed runs to investigate."
+  },
+  "overview_cards_sources_title": {
+    "message": "Sources"
+  },
+  "overview_cards_sources_total": {
+    "message": "Total"
+  },
+  "overview_cards_sources_healthy": {
+    "message": "Healthy {{count}}"
+  },
+  "overview_cards_sources_degraded": {
+    "message": "Degraded {{count}}"
+  },
+  "overview_cards_sources_inactive": {
+    "message": "Inactive {{count}}"
+  },
+  "overview_cards_jobs_title": {
+    "message": "Jobs"
+  },
+  "overview_cards_jobs_active": {
+    "message": "Active"
+  },
+  "overview_cards_jobs_nextRun": {
+    "message": "Next run {{time}}"
+  },
+  "overview_cards_jobs_noNextRun": {
+    "message": "No upcoming schedules"
+  },
+  "overview_cards_items_title": {
+    "message": "Items"
+  },
+  "overview_cards_items_unread": {
+    "message": "Unread"
+  },
+  "overview_cards_runs_title": {
+    "message": "Run Queue"
+  },
+  "overview_cards_runs_running": {
+    "message": "Running"
+  },
+  "overview_cards_runs_pending": {
+    "message": "Pending {{count}}"
+  },
+  "overview_failedRuns_title": {
+    "message": "Recent Failed Runs"
+  },
+  "overview_failedRuns_empty": {
+    "message": "No recent failures"
+  },
+  "overview_failedRuns_viewRun": {
+    "message": "View run"
+  },
+  "overview_failedRuns_jobFallback": {
+    "message": "Job #{{id}}"
+  },
+  "overview_failedRuns_failed": {
+    "message": "Failed"
+  },
+  "overview_failedRuns_noError": {
+    "message": "No error details available"
+  },
+  "notifications_viewRun": {
+    "message": "View run"
+  },
+  "notifications_runCompletedTitle": {
+    "message": "Run completed"
+  },
+  "notifications_runCompletedDescription": {
+    "message": "Run #{{id}} completed successfully."
+  },
+  "notifications_runFailedTitle": {
+    "message": "Run failed"
+  },
+  "notifications_runFailedDescription": {
+    "message": "Run #{{id}} failed. {{hint}}"
   },
   "settings_description": {
     "message": "Server configuration and retention settings for the watchlists module."

@@ -34,7 +34,7 @@ Finding IDs: `9.1` through `9.7`
 - Unit tests simulating quota exceptions during persist.
 - Integration tests for storage event prompt in two-tab scenario.
 - Unit tests for conflict-resolution prompt throttling.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Interrupted Work Recovery and Undo Framework
 **Goal**: Normalize recovery from refresh interruptions and destructive actions.
@@ -46,7 +46,7 @@ Finding IDs: `9.1` through `9.7`
 - Unit tests for rehydrate migration of interrupted artifacts.
 - Integration tests for undo manager restore/purge lifecycle.
 - Regression tests across source/artifact/workspace/note destructive actions.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Dependencies
 
@@ -71,3 +71,38 @@ Finding IDs: `9.1` through `9.7`
 - Validation:
   - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.error-boundary.test.tsx src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage9.error.test.tsx src/components/Option/WorkspacePlayground/__tests__/source-location-copy.test.ts --reporter=verbose`
   - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage1.mobile.test.tsx src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage3.performance.test.tsx src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage9.error.test.tsx src/components/Option/WorkspacePlayground/__tests__/SourcesPane.stage2.test.tsx src/components/Option/WorkspacePlayground/__tests__/source-location-copy.test.ts src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.desktop-layout.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.error-boundary.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage2.responsive.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx src/store/__tests__/workspace.test.ts --reporter=dot`
+- Stage 2 completed:
+  - Added resilient workspace storage event primitives in `workspace-events.ts`:
+    - shared storage key constants,
+    - quota event name + payload typing,
+    - guarded BroadcastChannel sync helpers,
+    - conflict-notice throttling helper.
+  - Updated workspace persistence adapter (`createWorkspaceStorage`) to:
+    - catch `QuotaExceededError` and emit a browser event instead of failing silently,
+    - broadcast storage updates over optional BroadcastChannel sync (`localStorage` flag `tldw:workspace:broadcast-sync=1` or `window.__TLDW_ENABLE_WORKSPACE_BROADCAST_SYNC__ = true`).
+  - Added workspace-level UI warnings in `WorkspacePlayground`:
+    - quota banner with remediation guidance,
+    - cross-tab state-change banner with reload/later actions,
+    - throttled conflict prompts to avoid repeated alert spam.
+  - Added Stage 2 test coverage:
+    - store quota exception event emission test,
+    - helper unit tests for broadcast payload validation + throttle logic,
+    - integration tests for storage-event conflict prompt and quota warning rendering.
+- Stage 2 files updated:
+  - `apps/packages/ui/src/store/workspace-events.ts`
+  - `apps/packages/ui/src/store/workspace.ts`
+  - `apps/packages/ui/src/store/__tests__/workspace-events.test.ts`
+  - `apps/packages/ui/src/store/__tests__/workspace.test.ts`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/index.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage9.persistence.test.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx`
+- Stage 2 validation:
+  - `cd apps/packages/ui && bunx vitest run src/store/__tests__/workspace.test.ts src/store/__tests__/workspace-events.test.ts src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage9.persistence.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx --reporter=verbose`
+- Stage 3 progress:
+  - Added rehydration recovery for interrupted generations:
+    - any persisted artifact with `status: "generating"` is migrated to `status: "failed"` on hydrate,
+    - failed artifact receives retry guidance (`Generation was interrupted. Click regenerate to try again.`),
+    - migration applies to both active workspace artifacts and persisted per-workspace snapshots.
+- Stage 3 files updated:
+  - `apps/packages/ui/src/store/workspace.ts`
+  - `apps/packages/ui/src/store/__tests__/workspace.test.ts`

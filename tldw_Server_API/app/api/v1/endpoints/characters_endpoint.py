@@ -152,6 +152,7 @@ from tldw_Server_API.app.api.v1.schemas.world_book_schemas import (
     WorldBookImportRequest,
     WorldBookImportResponse,
     WorldBookListResponse,
+    WorldBookRuntimeConfig,
     WorldBookResponse,
     WorldBookStatistics,
     WorldBookUpdate,
@@ -169,6 +170,7 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
 )
 from tldw_Server_API.app.core.Character_Chat.character_limits import get_character_limits
 from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_character_rate_limiter
+from tldw_Server_API.app.core.Character_Chat.constants import MAX_RECURSIVE_DEPTH
 from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_selector import (
     PersonaExemplarSelectorConfig,
     select_character_exemplars,
@@ -766,6 +768,8 @@ async def query_characters(
         created_to: Optional[str] = Query(None, description="Created-at upper bound (ISO timestamp)"),
         updated_from: Optional[str] = Query(None, description="Updated-at lower bound (ISO timestamp)"),
         updated_to: Optional[str] = Query(None, description="Updated-at upper bound (ISO timestamp)"),
+        include_deleted: bool = Query(False, description="Include soft-deleted characters in query results"),
+        deleted_only: bool = Query(False, description="Return only soft-deleted characters"),
         sort_by: Literal[
             "name",
             "creator",
@@ -789,6 +793,8 @@ async def query_characters(
             created_to=created_to,
             updated_from=updated_from,
             updated_to=updated_to,
+            include_deleted=include_deleted,
+            deleted_only=deleted_only,
             sort_by=sort_by,
             sort_order=sort_order,
             limit=page_size,
@@ -1344,6 +1350,18 @@ async def list_world_books(
         logger.error(f"Unexpected error listing world books: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
+
+@router.get(
+    "/world-books/config",
+    response_model=WorldBookRuntimeConfig,
+    summary="Get world book runtime config",
+    tags=["World Books"],
+)
+async def get_world_book_runtime_config():
+    """Expose runtime constants used by world-book authoring UIs."""
+    return WorldBookRuntimeConfig(max_recursive_depth=MAX_RECURSIVE_DEPTH)
+
+
 @router.get("/{character_id}", response_model=CharacterResponse, summary="Get character by ID", tags=["characters"])
 async def get_character_by_id_endpoint(  # Renamed from get_character
         character_id: int = FastAPIPath(..., description="ID of the character.", gt=0),
@@ -1618,6 +1636,10 @@ async def get_world_book(
 async def update_world_book(
         world_book_id: int,
         update_data: WorldBookUpdate,
+        expected_version: Optional[int] = Query(
+            None,
+            description="Expected current version of the world book for optimistic locking."
+        ),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     """Update a world book."""
@@ -1631,6 +1653,14 @@ async def update_world_book(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"World book with ID {world_book_id} not found"
             )
+        if expected_version is not None and existing.get("version") != expected_version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Version mismatch. Expected {expected_version}, "
+                    f"found {existing.get('version')}. Please refresh and try again."
+                )
+            )
 
         # Update
         success = service.update_world_book(
@@ -1640,7 +1670,8 @@ async def update_world_book(
             scan_depth=update_data.scan_depth,
             token_budget=update_data.token_budget,
             recursive_scanning=update_data.recursive_scanning,
-            enabled=update_data.enabled
+            enabled=update_data.enabled,
+            expected_version=expected_version
         )
 
         if not success:
@@ -1719,11 +1750,32 @@ def _merge_entry_appendable_metadata(
         metadata: Optional[dict[str, Any]],
         appendable: Optional[bool],
 ) -> Optional[dict[str, Any]]:
-    if appendable is None:
-        return metadata
     merged = dict(metadata or {})
-    merged["appendable"] = bool(appendable)
+    if appendable is not None:
+        merged["appendable"] = bool(appendable)
     return merged
+
+
+def _normalize_entry_group(group: Optional[str]) -> Optional[str]:
+    if group is None:
+        return None
+    normalized = str(group).strip()
+    return normalized or None
+
+
+def _merge_entry_group_metadata(
+        metadata: Optional[dict[str, Any]],
+        group: Optional[str],
+) -> Optional[dict[str, Any]]:
+    merged = dict(metadata or {})
+    normalized_group = _normalize_entry_group(group)
+    if group is None:
+        return merged or None
+    if normalized_group is None:
+        merged.pop("group", None)
+    else:
+        merged["group"] = normalized_group
+    return merged or None
 
 @router.post("/world-books/{world_book_id}/entries", response_model=WorldBookEntryResponse,
              status_code=status.HTTP_201_CREATED, summary="Add entry to world book", tags=["World Books"])
@@ -1744,9 +1796,9 @@ async def add_world_book_entry(
                 detail=f"World book with ID {world_book_id} not found"
             )
 
-        entry_metadata = _merge_entry_appendable_metadata(
-            entry.metadata,
-            entry.appendable,
+        entry_metadata = _merge_entry_group_metadata(
+            _merge_entry_appendable_metadata(entry.metadata, entry.appendable),
+            entry.group,
         )
 
         entry_id = service.add_entry(
@@ -1857,7 +1909,7 @@ async def update_world_book_entry(
         service = WorldBookService(db)
 
         entry_metadata = update_data.metadata
-        if update_data.appendable is not None:
+        if update_data.appendable is not None or update_data.group is not None:
             if entry_metadata is None:
                 existing_entries = service.get_entries(enabled_only=False)
                 existing_entry = next(
@@ -1874,10 +1926,8 @@ async def update_world_book_entry(
                         entry_metadata = existing_entry.get('metadata') or {}
                     elif hasattr(existing_entry, '_d'):
                         entry_metadata = getattr(existing_entry, '_d', {}).get('metadata') or {}
-            entry_metadata = _merge_entry_appendable_metadata(
-                entry_metadata,
-                update_data.appendable,
-            )
+            entry_metadata = _merge_entry_appendable_metadata(entry_metadata, update_data.appendable)
+            entry_metadata = _merge_entry_group_metadata(entry_metadata, update_data.group)
 
         success = service.update_entry(
             entry_id=entry_id,

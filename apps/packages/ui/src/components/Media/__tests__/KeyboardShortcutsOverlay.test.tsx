@@ -37,8 +37,10 @@ describe('KeyboardShortcutsOverlay', () => {
   it('displays General section', () => {
     render(<KeyboardShortcutsOverlay open={true} onClose={vi.fn()} />)
     expect(screen.getByText('General')).toBeInTheDocument()
+    expect(screen.getByText('Focus search')).toBeInTheDocument()
     expect(screen.getByText('Show/hide this help')).toBeInTheDocument()
     expect(screen.getByText('Close overlay')).toBeInTheDocument()
+    expect(screen.getByText('Clear large selection in multi-review')).toBeInTheDocument()
   })
 
   it('displays key indicators', () => {
@@ -50,8 +52,9 @@ describe('KeyboardShortcutsOverlay', () => {
     // Check for specific keys
     expect(screen.getByText('j')).toBeInTheDocument()
     expect(screen.getByText('k')).toBeInTheDocument()
+    expect(screen.getByText('/')).toBeInTheDocument()
     expect(screen.getByText('?')).toBeInTheDocument()
-    expect(screen.getByText('Esc')).toBeInTheDocument()
+    expect(screen.getAllByText('Esc').length).toBeGreaterThan(0)
   })
 
   it('closes on Escape key', () => {

@@ -3,9 +3,14 @@ import {
   DEFAULT_AUDIO_SETTINGS,
   DEFAULT_WORKSPACE_NOTE
 } from "@/types/workspace"
+import {
+  WORKSPACE_STORAGE_KEY,
+  WORKSPACE_STORAGE_QUOTA_EVENT,
+  type WorkspaceStorageQuotaEventDetail
+} from "@/store/workspace-events"
 import { createWorkspaceStorage, useWorkspaceStore } from "../workspace"
 
-const STORAGE_KEY = "tldw-workspace"
+const STORAGE_KEY = WORKSPACE_STORAGE_KEY
 
 const resetWorkspaceStore = () => {
   localStorage.removeItem(STORAGE_KEY)
@@ -293,6 +298,80 @@ describe("workspace store snapshot persistence", () => {
     expect(state.storeHydrated).toBe(true)
   })
 
+  it("marks interrupted generating artifacts as failed during rehydration", async () => {
+    resetWorkspaceStore()
+
+    const persistedState = {
+      state: {
+        workspaceId: "workspace-interrupted",
+        workspaceName: "Interrupted Workspace",
+        workspaceTag: "workspace:interrupted",
+        workspaceCreatedAt: "2026-02-10T00:00:00.000Z",
+        workspaceChatReferenceId: "workspace-interrupted",
+        sources: [],
+        selectedSourceIds: [],
+        generatedArtifacts: [
+          {
+            id: "top-level-generating",
+            type: "summary",
+            title: "Top-level generation",
+            status: "generating",
+            content: "Pending...",
+            createdAt: "2026-02-10T01:00:00.000Z"
+          }
+        ],
+        notes: "",
+        currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+        leftPaneCollapsed: false,
+        rightPaneCollapsed: false,
+        audioSettings: { ...DEFAULT_AUDIO_SETTINGS },
+        savedWorkspaces: [],
+        archivedWorkspaces: [],
+        workspaceSnapshots: {
+          "workspace-interrupted": {
+            workspaceId: "workspace-interrupted",
+            workspaceName: "Interrupted Workspace",
+            workspaceTag: "workspace:interrupted",
+            workspaceCreatedAt: "2026-02-10T00:00:00.000Z",
+            workspaceChatReferenceId: "workspace-interrupted",
+            sources: [],
+            selectedSourceIds: [],
+            generatedArtifacts: [
+              {
+                id: "snapshot-generating",
+                type: "report",
+                title: "Snapshot generation",
+                status: "generating",
+                content: "Pending...",
+                createdAt: "2026-02-10T02:00:00.000Z"
+              }
+            ],
+            notes: "",
+            currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+            leftPaneCollapsed: false,
+            rightPaneCollapsed: false,
+            audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
+          }
+        },
+        workspaceChatSessions: {}
+      },
+      version: 0
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistedState))
+    await useWorkspaceStore.persist.rehydrate()
+
+    const state = useWorkspaceStore.getState()
+    expect(state.generatedArtifacts[0]?.status).toBe("failed")
+    expect(state.generatedArtifacts[0]?.errorMessage).toContain(
+      "Generation was interrupted"
+    )
+    expect(
+      state.workspaceSnapshots["workspace-interrupted"]?.generatedArtifacts[0]
+        ?.status
+    ).toBe("failed")
+  })
+
   it("uses a raw localStorage adapter without parse/stringify in getItem", () => {
     const storage = createWorkspaceStorage()
     const testKey = "workspace-storage-adapter-test"
@@ -303,6 +382,46 @@ describe("workspace store snapshot persistence", () => {
 
     storage.removeItem(testKey)
     expect(storage.getItem(testKey)).toBeNull()
+  })
+
+  it("dispatches a quota warning event when localStorage is full", () => {
+    const storage = createWorkspaceStorage()
+    const originalSetItem = Storage.prototype.setItem
+    const quotaError =
+      typeof DOMException !== "undefined"
+        ? new DOMException("Quota exceeded", "QuotaExceededError")
+        : Object.assign(new Error("Quota exceeded"), {
+            name: "QuotaExceededError",
+            code: 22
+          })
+    const quotaEvents: Array<CustomEvent<WorkspaceStorageQuotaEventDetail>> = []
+
+    const onQuotaExceeded = (event: Event) => {
+      quotaEvents.push(
+        event as CustomEvent<WorkspaceStorageQuotaEventDetail>
+      )
+    }
+
+    Storage.prototype.setItem = () => {
+      throw quotaError
+    }
+    window.addEventListener(
+      WORKSPACE_STORAGE_QUOTA_EVENT,
+      onQuotaExceeded as EventListener
+    )
+
+    expect(() => {
+      storage.setItem(STORAGE_KEY, '{"state":{"workspaceName":"Overflow"}}')
+    }).not.toThrow()
+
+    expect(quotaEvents).toHaveLength(1)
+    expect(quotaEvents[0]?.detail.key).toBe(STORAGE_KEY)
+
+    window.removeEventListener(
+      WORKSPACE_STORAGE_QUOTA_EVENT,
+      onQuotaExceeded as EventListener
+    )
+    Storage.prototype.setItem = originalSetItem
   })
 
   it("duplicates workspace data with new derived IDs and isolated snapshot state", () => {
@@ -595,5 +714,97 @@ describe("workspace store snapshot persistence", () => {
     useWorkspaceStore.getState().selectAllSources()
     state = useWorkspaceStore.getState()
     expect(state.selectedSourceIds).toEqual([readySource.id])
+  })
+
+  it("restores soft-deleted sources and artifacts at prior positions", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Undoable Workspace")
+
+    const sourceA = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 9011, title: "Source A", type: "pdf" })
+    const sourceB = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 9012, title: "Source B", type: "video" })
+    useWorkspaceStore.getState().setSelectedSourceIds([sourceA.id, sourceB.id])
+
+    const artifactA = useWorkspaceStore
+      .getState()
+      .addArtifact({
+        type: "summary",
+        title: "Artifact A",
+        status: "completed",
+        content: "A"
+      })
+    const artifactB = useWorkspaceStore
+      .getState()
+      .addArtifact({
+        type: "report",
+        title: "Artifact B",
+        status: "completed",
+        content: "B"
+      })
+
+    useWorkspaceStore.getState().removeSource(sourceA.id)
+    useWorkspaceStore
+      .getState()
+      .restoreSource(sourceA, { index: 0, select: true })
+
+    let state = useWorkspaceStore.getState()
+    expect(state.sources.map((source) => source.id)).toEqual([
+      sourceA.id,
+      sourceB.id
+    ])
+    expect(state.selectedSourceIds).toContain(sourceA.id)
+
+    useWorkspaceStore.getState().removeArtifact(artifactA.id)
+    useWorkspaceStore
+      .getState()
+      .restoreArtifact(artifactA, { index: 1 })
+
+    state = useWorkspaceStore.getState()
+    expect(state.generatedArtifacts.map((artifact) => artifact.id)).toEqual([
+      artifactB.id,
+      artifactA.id
+    ])
+  })
+
+  it("captures and restores workspace state snapshot for destructive undo", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Snapshot Workspace")
+    const originalWorkspaceId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 9201, title: "Saved source", type: "pdf" })
+    useWorkspaceStore
+      .getState()
+      .addArtifact({
+        type: "summary",
+        title: "Saved artifact",
+        status: "completed",
+        content: "Saved content"
+      })
+    useWorkspaceStore.setState({
+      notes: "Saved notes",
+      leftPaneCollapsed: true
+    })
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    const undoSnapshot = useWorkspaceStore.getState().captureUndoSnapshot()
+    useWorkspaceStore.getState().deleteWorkspace(originalWorkspaceId)
+
+    let state = useWorkspaceStore.getState()
+    expect(state.workspaceId).not.toBe(originalWorkspaceId)
+    expect(state.sources.some((source) => source.mediaId === 9201)).toBe(false)
+
+    useWorkspaceStore.getState().restoreUndoSnapshot(undoSnapshot)
+    state = useWorkspaceStore.getState()
+    expect(state.workspaceId).toBe(originalWorkspaceId)
+    expect(state.sources.some((source) => source.mediaId === 9201)).toBe(true)
+    expect(
+      state.generatedArtifacts.some(
+        (artifact) => artifact.title === "Saved artifact"
+      )
+    ).toBe(true)
+    expect(state.notes).toBe("Saved notes")
+    expect(state.leftPaneCollapsed).toBe(true)
   })
 })

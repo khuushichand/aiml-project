@@ -1,6 +1,6 @@
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { WorldBooksManager } from "../Manager"
 
@@ -209,7 +209,10 @@ describe("WorldBooksManager cross-feature integration stage-1", () => {
       )
 
       await user.click(screen.getByRole("button", { name: "Quick attach characters" }))
-      const quickAttachCharacterLink = await screen.findByRole("link", {
+      const quickAttachTitle = await screen.findByText("Quick attach: Arcana")
+      const quickAttachModal = quickAttachTitle.closest(".ant-modal") as HTMLElement | null
+      expect(quickAttachModal).not.toBeNull()
+      const quickAttachCharacterLink = await within(quickAttachModal as HTMLElement).findByRole("link", {
         name: "Open character Alice"
       })
       expect(quickAttachCharacterLink).toHaveAttribute(

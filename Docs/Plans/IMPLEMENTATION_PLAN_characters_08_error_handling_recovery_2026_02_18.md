@@ -21,7 +21,7 @@ Finding IDs: `C-24` through `C-26`
 - Component tests for `maxLength` enforcement and counter behavior.
 - API integration tests verifying validation errors/messages for oversized names.
 - Regression test for list rendering with edge-length names.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Unify Delete Semantics and User Messaging
 **Goal**: Ensure single and bulk delete flows communicate the same truth.
@@ -33,7 +33,7 @@ Finding IDs: `C-24` through `C-26`
 - Component tests for bulk delete confirm copy and action path.
 - Integration tests for undo behavior in bulk and single delete.
 - i18n tests for delete/recovery copy parity.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Implement Recently Deleted Recovery Surface
 **Goal**: Provide recovery after undo toast timeout expires.

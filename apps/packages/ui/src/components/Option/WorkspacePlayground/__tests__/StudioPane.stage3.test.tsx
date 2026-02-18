@@ -24,6 +24,7 @@ const {
   const addArtifact = vi.fn()
   const updateArtifactStatus = vi.fn()
   const removeArtifact = vi.fn()
+  const restoreArtifact = vi.fn()
   const setIsGeneratingOutput = vi.fn()
   const setAudioSettings = vi.fn()
   const listDecks = vi.fn()
@@ -48,6 +49,7 @@ const {
     addArtifact,
     updateArtifactStatus,
     removeArtifact,
+    restoreArtifact,
     setIsGeneratingOutput,
     setAudioSettings,
     noteFocusTarget: null as { field: "title" | "content"; token: number } | null

@@ -44,6 +44,11 @@ import type { ArtifactType, GeneratedArtifact, AudioTtsProvider } from "@/types/
 import Mermaid from "@/components/Common/Mermaid"
 import { QuickNotesSection } from "./QuickNotesSection"
 import { getWorkspaceStudioNoSourcesHint } from "../source-location-copy"
+import {
+  WORKSPACE_UNDO_WINDOW_MS,
+  scheduleWorkspaceUndoAction,
+  undoWorkspaceAction
+} from "../undo-manager"
 
 // Icon mapping for artifact types
 const ARTIFACT_TYPE_ICONS: Record<ArtifactType, React.ElementType> = {
@@ -315,6 +320,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const addArtifact = useWorkspaceStore((s) => s.addArtifact)
   const updateArtifactStatus = useWorkspaceStore((s) => s.updateArtifactStatus)
   const removeArtifact = useWorkspaceStore((s) => s.removeArtifact)
+  const restoreArtifact = useWorkspaceStore((s) => s.restoreArtifact)
   const setIsGeneratingOutput = useWorkspaceStore((s) => s.setIsGeneratingOutput)
   const setAudioSettings = useWorkspaceStore((s) => s.setAudioSettings)
   const captureToCurrentNote = useWorkspaceStore((s) => s.captureToCurrentNote)
@@ -473,6 +479,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   }
 
   const handleDeleteArtifact = (artifact: GeneratedArtifact) => {
+    const artifactIndex = generatedArtifacts.findIndex(
+      (entry) => entry.id === artifact.id
+    )
     Modal.confirm({
       title: t("playground:studio.deleteOutputTitle", "Delete output?"),
       content: t(
@@ -482,7 +491,43 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       okText: t("common:delete", "Delete"),
       cancelText: t("common:cancel", "Cancel"),
       okButtonProps: { danger: true },
-      onOk: () => removeArtifact(artifact.id)
+      onOk: () => {
+        const undoHandle = scheduleWorkspaceUndoAction({
+          apply: () => {
+            removeArtifact(artifact.id)
+          },
+          undo: () => {
+            restoreArtifact(artifact, { index: artifactIndex })
+          }
+        })
+
+        const undoMessageKey = `workspace-artifact-undo-${undoHandle.id}`
+        messageApi.open({
+          key: undoMessageKey,
+          type: "warning",
+          duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+          content: t(
+            "playground:studio.undoDeleteOutput",
+            "Output deleted."
+          ),
+          btn: (
+            <Button
+              size="small"
+              type="link"
+              onClick={() => {
+                if (undoWorkspaceAction(undoHandle.id)) {
+                  messageApi.success(
+                    t("playground:studio.outputRestored", "Output restored")
+                  )
+                }
+                messageApi.destroy(undoMessageKey)
+              }}
+            >
+              {t("common:undo", "Undo")}
+            </Button>
+          )
+        })
+      }
     })
   }
 

@@ -144,6 +144,8 @@ export type Prompt = {
   // Optional metadata
   tags?: string[];
   favorite?: boolean;
+  usageCount?: number;
+  lastUsedAt?: number | null;
 
   // Soft delete support
   deletedAt?: number | null;

@@ -360,6 +360,8 @@ export interface CharacterListQueryParams {
   sort_by?: CharacterListSortBy
   sort_order?: CharacterListSortOrder
   include_image_base64?: boolean
+  include_deleted?: boolean
+  deleted_only?: boolean
 }
 
 export interface CharacterListQueryResponse {
@@ -3089,13 +3091,34 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: `/api/v1/characters/world-books${qp}`, method: 'GET' })
   }
 
+  async getWorldBookRuntimeConfig(): Promise<{ max_recursive_depth: number }> {
+    return await bgRequest<{ max_recursive_depth: number }>({
+      path: "/api/v1/characters/world-books/config",
+      method: "GET"
+    })
+  }
+
   async createWorldBook(payload: Record<string, any>): Promise<any> {
     return await bgRequest<any>({ path: '/api/v1/characters/world-books', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
   }
 
-  async updateWorldBook(world_book_id: number | string, payload: Record<string, any>): Promise<any> {
+  async updateWorldBook(
+    world_book_id: number | string,
+    payload: Record<string, any>,
+    options?: { expectedVersion?: number }
+  ): Promise<any> {
     const wid = String(world_book_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
+    const query = this.buildQuery(
+      typeof options?.expectedVersion === "number"
+        ? { expected_version: options.expectedVersion }
+        : {}
+    )
+    return await bgRequest<any>({
+      path: `/api/v1/characters/world-books/${wid}${query}`,
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload
+    })
   }
 
   async deleteWorldBook(world_book_id: number | string): Promise<any> {
@@ -3285,6 +3308,23 @@ export class TldwApiClient {
 
   async importDictionaryJSON(data: any, activate?: boolean): Promise<any> {
     return await bgRequest<any>({ path: '/api/v1/chat/dictionaries/import/json', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { data, activate: !!activate } })
+  }
+
+  async importDictionaryMarkdown(
+    name: string,
+    content: string,
+    activate?: boolean
+  ): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chat/dictionaries/import",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        name,
+        content,
+        activate: !!activate
+      }
+    })
   }
 
   async validateDictionary(payload: {

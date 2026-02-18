@@ -1,7 +1,7 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
-import { Tooltip, Input, Dropdown, Modal, type MenuProps } from "antd"
+import { Tooltip, Input, Dropdown, Modal, message, type MenuProps } from "antd"
 import {
   FlaskConical,
   PanelLeftOpen,
@@ -24,6 +24,11 @@ import {
   filterSavedWorkspaces,
   formatWorkspaceLastAccessed
 } from "./workspace-header.utils"
+import {
+  WORKSPACE_UNDO_WINDOW_MS,
+  scheduleWorkspaceUndoAction,
+  undoWorkspaceAction
+} from "./undo-manager"
 
 interface WorkspaceHeaderProps {
   leftPaneOpen: boolean
@@ -43,6 +48,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
 }) => {
   const { t } = useTranslation(["playground", "option", "common"])
   const navigate = useNavigate()
+  const [messageApi, messageContextHolder] = message.useMessage()
   const [isEditing, setIsEditing] = React.useState(false)
   const [editName, setEditName] = React.useState("")
   const [workspaceBrowserOpen, setWorkspaceBrowserOpen] = React.useState(false)
@@ -61,6 +67,8 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     (s) => s.restoreArchivedWorkspace
   )
   const deleteWorkspace = useWorkspaceStore((s) => s.deleteWorkspace)
+  const captureUndoSnapshot = useWorkspaceStore((s) => s.captureUndoSnapshot)
+  const restoreUndoSnapshot = useWorkspaceStore((s) => s.restoreUndoSnapshot)
   const saveCurrentWorkspace = useWorkspaceStore((s) => s.saveCurrentWorkspace)
 
   const handleStartEdit = () => {
@@ -124,7 +132,45 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       okButtonProps: { danger: true },
       cancelText: t("common:cancel", "Cancel"),
       onOk: () => {
-        deleteWorkspace(id)
+        const undoSnapshot = captureUndoSnapshot()
+        const undoHandle = scheduleWorkspaceUndoAction({
+          apply: () => {
+            deleteWorkspace(id)
+          },
+          undo: () => {
+            restoreUndoSnapshot(undoSnapshot)
+          }
+        })
+
+        const undoMessageKey = `workspace-delete-undo-${undoHandle.id}`
+        messageApi.open({
+          key: undoMessageKey,
+          type: "warning",
+          duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+          content: t(
+            "playground:workspace.deleted",
+            "Workspace deleted."
+          ),
+          btn: (
+            <button
+              type="button"
+              className="rounded border border-border px-2 py-0.5 text-xs font-medium hover:bg-surface2"
+              onClick={() => {
+                if (undoWorkspaceAction(undoHandle.id)) {
+                  messageApi.success(
+                    t(
+                      "playground:workspace.restored",
+                      "Workspace restored"
+                    )
+                  )
+                }
+                messageApi.destroy(undoMessageKey)
+              }}
+            >
+              {t("common:undo", "Undo")}
+            </button>
+          )
+        })
       },
       centered: true,
       maskClosable: false
@@ -289,6 +335,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
 
   return (
     <header className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
+      {messageContextHolder}
       <div className="flex items-center gap-3">
         <FlaskConical className="h-5 w-5 text-primary" />
         <div className="flex items-center gap-2">

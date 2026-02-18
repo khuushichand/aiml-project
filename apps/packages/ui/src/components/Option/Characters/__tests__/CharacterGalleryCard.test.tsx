@@ -171,4 +171,21 @@ describe("CharacterGalleryCard", () => {
     await user.click(screen.getByRole("button", { name: /Click to preview/i }))
     expect(onClick).toHaveBeenCalledTimes(1)
   })
+
+  it("includes reduced-motion transition guard on the card container", () => {
+    render(
+      <CharacterGalleryCard
+        character={{
+          id: "char-motion",
+          name: "Reduced Motion"
+        }}
+        onClick={vi.fn()}
+      />
+    )
+
+    const cardButton = screen.getByRole("button", {
+      name: /Click to preview/i
+    })
+    expect(cardButton.className).toContain("motion-reduce:transition-none")
+  })
 })

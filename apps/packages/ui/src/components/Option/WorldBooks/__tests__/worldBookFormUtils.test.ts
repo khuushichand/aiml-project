@@ -7,6 +7,7 @@ import {
   buildWorldBookMutationErrorMessage,
   getWorldBookStarterTemplate,
   hasDuplicateWorldBookName,
+  isWorldBookVersionConflictError,
   toWorldBookFormValues
 } from "../worldBookFormUtils"
 
@@ -49,6 +50,15 @@ describe("worldBookFormUtils", () => {
     expect(
       buildWorldBookMutationErrorMessage({ status: 409 }, { attemptedName: "Arcana" })
     ).toBe('A world book named "Arcana" already exists.')
+  })
+
+  it("detects version-conflict 409 errors and returns conflict guidance", () => {
+    const error = {
+      status: 409,
+      message: "Version mismatch. Expected 2, found 3. Please refresh and try again."
+    }
+    expect(isWorldBookVersionConflictError(error)).toBe(true)
+    expect(buildWorldBookMutationErrorMessage(error)).toBe(error.message)
   })
 
   it("hydrates edit form values with safe defaults", () => {

@@ -6,6 +6,14 @@
 import { createWithEqualityFn } from "zustand/traditional"
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware"
 import type { ChatHistory, Message } from "@/store/option"
+import {
+  WORKSPACE_STORAGE_CHANNEL_NAME,
+  WORKSPACE_STORAGE_KEY,
+  WORKSPACE_STORAGE_QUOTA_EVENT,
+  isWorkspaceBroadcastSyncEnabled,
+  type WorkspaceBroadcastUpdateMessage,
+  type WorkspaceStorageQuotaEventDetail
+} from "@/store/workspace-events"
 import type {
   AddSourceModalState,
   AddSourceTab,
@@ -26,12 +34,88 @@ import { DEFAULT_AUDIO_SETTINGS, DEFAULT_WORKSPACE_NOTE } from "@/types/workspac
 // Storage Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-const STORAGE_KEY = "tldw-workspace"
 const generateWorkspaceId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID()
   }
   return Math.random().toString(36).slice(2)
+}
+
+let workspaceBroadcastChannel: BroadcastChannel | null = null
+
+const isQuotaExceededError = (error: unknown): boolean => {
+  if (!error) return false
+
+  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
+    return (
+      error.name === "QuotaExceededError" ||
+      error.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+      error.code === 22 ||
+      error.code === 1014
+    )
+  }
+
+  const candidate = error as {
+    name?: string
+    code?: number
+    message?: string
+  }
+  return (
+    candidate.name === "QuotaExceededError" ||
+    candidate.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+    candidate.code === 22 ||
+    candidate.code === 1014 ||
+    /quota/i.test(candidate.message || "")
+  )
+}
+
+const emitWorkspaceQuotaExceeded = (key: string, error: unknown): void => {
+  if (typeof window === "undefined") return
+
+  const reason =
+    error instanceof Error
+      ? error.message
+      : "Workspace data exceeded local storage quota."
+  const detail: WorkspaceStorageQuotaEventDetail = { key, reason }
+  window.dispatchEvent(
+    new CustomEvent<WorkspaceStorageQuotaEventDetail>(
+      WORKSPACE_STORAGE_QUOTA_EVENT,
+      { detail }
+    )
+  )
+}
+
+const getWorkspaceBroadcastChannel = (): BroadcastChannel | null => {
+  if (typeof window === "undefined" || typeof BroadcastChannel === "undefined") {
+    return null
+  }
+
+  if (!workspaceBroadcastChannel) {
+    workspaceBroadcastChannel = new BroadcastChannel(
+      WORKSPACE_STORAGE_CHANNEL_NAME
+    )
+  }
+
+  return workspaceBroadcastChannel
+}
+
+const broadcastWorkspaceStorageUpdate = (key: string): void => {
+  if (!isWorkspaceBroadcastSyncEnabled()) return
+
+  const channel = getWorkspaceBroadcastChannel()
+  if (!channel) return
+
+  const payload: WorkspaceBroadcastUpdateMessage = {
+    type: "workspace-storage-updated",
+    key,
+    updatedAt: Date.now()
+  }
+
+  try {
+    channel.postMessage(payload)
+  } catch (error) {
+    console.warn("Workspace broadcast sync unavailable", error)
+  }
 }
 
 /**
@@ -57,7 +141,16 @@ export const createWorkspaceStorage = (): StateStorage => {
       return localStorage.getItem(name)
     },
     setItem: (name: string, value: string): void => {
-      localStorage.setItem(name, value)
+      try {
+        localStorage.setItem(name, value)
+        broadcastWorkspaceStorageUpdate(name)
+      } catch (error) {
+        if (isQuotaExceededError(error)) {
+          emitWorkspaceQuotaExceeded(name, error)
+          return
+        }
+        throw error
+      }
     },
     removeItem: (name: string): void => {
       localStorage.removeItem(name)
@@ -146,6 +239,26 @@ interface WorkspaceChatSessionsState {
   workspaceChatSessions: Record<string, WorkspaceChatSession>
 }
 
+export interface WorkspaceUndoSnapshot {
+  workspaceId: string
+  workspaceName: string
+  workspaceTag: string
+  workspaceCreatedAt: Date | null
+  workspaceChatReferenceId: string
+  sources: WorkspaceSource[]
+  selectedSourceIds: string[]
+  generatedArtifacts: GeneratedArtifact[]
+  notes: string
+  currentNote: WorkspaceNote
+  leftPaneCollapsed: boolean
+  rightPaneCollapsed: boolean
+  audioSettings: AudioGenerationSettings
+  savedWorkspaces: SavedWorkspace[]
+  archivedWorkspaces: SavedWorkspace[]
+  workspaceSnapshots: Record<string, WorkspaceSnapshot>
+  workspaceChatSessions: Record<string, WorkspaceChatSession>
+}
+
 type CaptureNoteMode = "append" | "replace"
 
 interface CaptureToNoteInput {
@@ -193,6 +306,10 @@ interface SourcesActions {
   clearSourceFocusTarget: () => void
   setSourcesLoading: (loading: boolean) => void
   setSourcesError: (error: string | null) => void
+  restoreSource: (
+    source: WorkspaceSource,
+    options?: { index?: number; select?: boolean }
+  ) => void
   getSelectedSources: () => WorkspaceSource[]
   getSelectedMediaIds: () => number[]
 }
@@ -207,6 +324,10 @@ interface StudioActions {
     updates?: Partial<GeneratedArtifact>
   ) => void
   removeArtifact: (id: string) => void
+  restoreArtifact: (
+    artifact: GeneratedArtifact,
+    options?: { index?: number }
+  ) => void
   clearArtifacts: () => void
   setNotes: (notes: string) => void
   setIsGeneratingOutput: (
@@ -274,6 +395,11 @@ interface WorkspaceListActions {
   clearWorkspaceChatSession: (workspaceId: string) => void
 }
 
+interface UndoActions {
+  captureUndoSnapshot: () => WorkspaceUndoSnapshot
+  restoreUndoSnapshot: (snapshot: WorkspaceUndoSnapshot) => void
+}
+
 interface ResetActions {
   reset: () => void
   resetSources: () => void
@@ -298,6 +424,7 @@ export type WorkspaceState = WorkspaceIdentityState &
   UIActions &
   AudioSettingsActions &
   WorkspaceListActions &
+  UndoActions &
   ResetActions
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -418,6 +545,15 @@ interface PersistedWorkspaceState {
 
 const MAX_SAVED_WORKSPACES = 10
 const MAX_ARCHIVED_WORKSPACES = 50
+const INTERRUPTED_GENERATION_ERROR_MESSAGE =
+  "Generation was interrupted. Click regenerate to try again."
+
+const cloneWorkspaceValue = <T>(value: T): T => {
+  if (typeof structuredClone === "function") {
+    return structuredClone(value)
+  }
+  return JSON.parse(JSON.stringify(value)) as T
+}
 
 const sanitizeArtifactsForPersistence = (
   artifacts: GeneratedArtifact[]
@@ -457,11 +593,25 @@ const getWorkspaceSourceStatus = (
 ): WorkspaceSourceStatus => source.status || "ready"
 
 const reviveArtifacts = (artifacts: GeneratedArtifact[]): GeneratedArtifact[] =>
-  artifacts.map((artifact) => ({
-    ...artifact,
-    createdAt: reviveDateOrNull(artifact.createdAt) || new Date(),
-    completedAt: reviveDateOrUndefined(artifact.completedAt)
-  }))
+  artifacts.map((artifact) => {
+    const revivedArtifact: GeneratedArtifact = {
+      ...artifact,
+      createdAt: reviveDateOrNull(artifact.createdAt) || new Date(),
+      completedAt: reviveDateOrUndefined(artifact.completedAt)
+    }
+
+    if (revivedArtifact.status !== "generating") {
+      return revivedArtifact
+    }
+
+    return {
+      ...revivedArtifact,
+      status: "failed",
+      completedAt: revivedArtifact.completedAt || new Date(),
+      errorMessage:
+        revivedArtifact.errorMessage || INTERRUPTED_GENERATION_ERROR_MESSAGE
+    }
+  })
 
 const reviveSavedWorkspace = (workspace: SavedWorkspace): SavedWorkspace => ({
   ...workspace,
@@ -568,6 +718,38 @@ const buildWorkspaceSnapshot = (state: WorkspaceState): WorkspaceSnapshot => ({
   rightPaneCollapsed: state.rightPaneCollapsed,
   audioSettings: { ...state.audioSettings }
 })
+
+const buildWorkspaceUndoSnapshot = (
+  state: WorkspaceState
+): WorkspaceUndoSnapshot => {
+  const nextSnapshots = { ...state.workspaceSnapshots }
+  if (state.workspaceId) {
+    nextSnapshots[state.workspaceId] = buildWorkspaceSnapshot(state)
+  }
+
+  const snapshot: WorkspaceUndoSnapshot = {
+    workspaceId: state.workspaceId,
+    workspaceName: state.workspaceName,
+    workspaceTag: state.workspaceTag,
+    workspaceCreatedAt: state.workspaceCreatedAt,
+    workspaceChatReferenceId:
+      state.workspaceChatReferenceId || state.workspaceId,
+    sources: state.sources,
+    selectedSourceIds: state.selectedSourceIds,
+    generatedArtifacts: state.generatedArtifacts,
+    notes: state.notes,
+    currentNote: state.currentNote,
+    leftPaneCollapsed: state.leftPaneCollapsed,
+    rightPaneCollapsed: state.rightPaneCollapsed,
+    audioSettings: state.audioSettings,
+    savedWorkspaces: state.savedWorkspaces,
+    archivedWorkspaces: state.archivedWorkspaces,
+    workspaceSnapshots: nextSnapshots,
+    workspaceChatSessions: state.workspaceChatSessions
+  }
+
+  return cloneWorkspaceValue(snapshot)
+}
 
 const createSavedWorkspaceEntry = (
   snapshot: WorkspaceSnapshot,
@@ -966,6 +1148,37 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
 
     setSourcesError: (error) => set({ sourcesError: error }),
 
+    restoreSource: (source, options) =>
+      set((state) => {
+        const sourceExists = state.sources.some(
+          (entry) => entry.id === source.id || entry.mediaId === source.mediaId
+        )
+        if (sourceExists) {
+          return state
+        }
+
+        const nextSources = [...state.sources]
+        const insertionIndex = Math.min(
+          Math.max(options?.index ?? nextSources.length, 0),
+          nextSources.length
+        )
+        nextSources.splice(insertionIndex, 0, {
+          ...source,
+          addedAt: reviveDateOrNull(source.addedAt) || new Date()
+        })
+
+        const shouldSelect =
+          options?.select === true &&
+          getWorkspaceSourceStatus(source) === "ready"
+
+        return {
+          sources: nextSources,
+          selectedSourceIds: shouldSelect
+            ? [...new Set([...state.selectedSourceIds, source.id])]
+            : state.selectedSourceIds
+        }
+      }),
+
     getSelectedSources: () => {
       const state = get()
       const selectedSet = new Set(state.selectedSourceIds)
@@ -1021,6 +1234,26 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
       set((state) => ({
         generatedArtifacts: state.generatedArtifacts.filter((a) => a.id !== id)
       })),
+
+    restoreArtifact: (artifact, options) =>
+      set((state) => {
+        if (state.generatedArtifacts.some((entry) => entry.id === artifact.id)) {
+          return state
+        }
+
+        const nextArtifacts = [...state.generatedArtifacts]
+        const insertionIndex = Math.min(
+          Math.max(options?.index ?? nextArtifacts.length, 0),
+          nextArtifacts.length
+        )
+        nextArtifacts.splice(insertionIndex, 0, {
+          ...artifact,
+          createdAt: reviveDateOrNull(artifact.createdAt) || new Date(),
+          completedAt: reviveDateOrUndefined(artifact.completedAt)
+        })
+
+        return { generatedArtifacts: nextArtifacts }
+      }),
 
     clearArtifacts: () => set({ generatedArtifacts: [] }),
 
@@ -1561,6 +1794,48 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
       })
     },
 
+    captureUndoSnapshot: () => {
+      const state = get()
+      return buildWorkspaceUndoSnapshot(state)
+    },
+
+    restoreUndoSnapshot: (snapshot) => {
+      const clonedSnapshot = cloneWorkspaceValue(snapshot)
+      set({
+        workspaceId: clonedSnapshot.workspaceId,
+        workspaceName: clonedSnapshot.workspaceName,
+        workspaceTag: clonedSnapshot.workspaceTag,
+        workspaceCreatedAt: reviveDateOrNull(clonedSnapshot.workspaceCreatedAt),
+        workspaceChatReferenceId:
+          clonedSnapshot.workspaceChatReferenceId ||
+          clonedSnapshot.workspaceId,
+        sources: reviveSources(clonedSnapshot.sources || []),
+        selectedSourceIds: clonedSnapshot.selectedSourceIds || [],
+        generatedArtifacts: reviveArtifacts(clonedSnapshot.generatedArtifacts || []),
+        notes: clonedSnapshot.notes || "",
+        currentNote: clonedSnapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
+        leftPaneCollapsed: Boolean(clonedSnapshot.leftPaneCollapsed),
+        rightPaneCollapsed: Boolean(clonedSnapshot.rightPaneCollapsed),
+        audioSettings:
+          clonedSnapshot.audioSettings || { ...DEFAULT_AUDIO_SETTINGS },
+        savedWorkspaces: (clonedSnapshot.savedWorkspaces || []).map(
+          reviveSavedWorkspace
+        ),
+        archivedWorkspaces: (clonedSnapshot.archivedWorkspaces || []).map(
+          reviveSavedWorkspace
+        ),
+        workspaceSnapshots: Object.fromEntries(
+          Object.entries(clonedSnapshot.workspaceSnapshots || {}).map(
+            ([workspaceId, workspaceSnapshot]) => [
+              workspaceId,
+              reviveWorkspaceSnapshot(workspaceId, workspaceSnapshot)
+            ]
+          )
+        ),
+        workspaceChatSessions: clonedSnapshot.workspaceChatSessions || {}
+      })
+    },
+
     // ─────────────────────────────────────────────────────────────────────────
     // Reset Actions
     // ─────────────────────────────────────────────────────────────────────────
@@ -1578,7 +1853,7 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
       })
     }),
     {
-      name: STORAGE_KEY,
+      name: WORKSPACE_STORAGE_KEY,
       storage: createJSONStorage(() => createWorkspaceStorage()),
       // Only persist essential state, not transient UI state
       partialize: (state): PersistedWorkspaceState => {

@@ -239,6 +239,10 @@ Response body:
 #### 9. Import Dictionary (Markdown)
 POST `/api/v1/chat/dictionaries/import`
 
+Notes:
+- Markdown import is intended for lightweight interoperability and may not preserve all advanced entry settings.
+- Use JSON import/export for full-fidelity round trips.
+
 Request body:
 ```json
 {
@@ -267,6 +271,10 @@ Request body:
 #### 11. Export Dictionary (Markdown)
 GET `/api/v1/chat/dictionaries/{dictionary_id}/export`
 
+Notes:
+- Markdown export is human-readable, but advanced fields such as timed effects, `max_replacements`, and other non-standard metadata may not round-trip fully.
+- Prefer JSON export when you need guaranteed full-fidelity backup/restore behavior.
+
 Response body:
 ```json
 {
@@ -279,6 +287,9 @@ Response body:
 
 #### 12. Export Dictionary (JSON)
 GET `/api/v1/chat/dictionaries/{dictionary_id}/export/json`
+
+Notes:
+- JSON export is the canonical full-fidelity format for dictionary backup, migration, and re-import.
 
 Response body:
 ```json

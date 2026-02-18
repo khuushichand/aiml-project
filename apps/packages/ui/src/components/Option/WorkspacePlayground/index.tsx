@@ -10,6 +10,16 @@ import {
   Command
 } from "lucide-react"
 import { useWorkspaceStore } from "@/store/workspace"
+import {
+  WORKSPACE_CONFLICT_NOTICE_THROTTLE_MS,
+  WORKSPACE_STORAGE_CHANNEL_NAME,
+  WORKSPACE_STORAGE_KEY,
+  WORKSPACE_STORAGE_QUOTA_EVENT,
+  isWorkspaceBroadcastSyncEnabled,
+  isWorkspaceBroadcastUpdateMessage,
+  shouldSurfaceWorkspaceConflictNotice,
+  type WorkspaceStorageQuotaEventDetail
+} from "@/store/workspace-events"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import {
@@ -206,6 +216,11 @@ const WorkspacePlaygroundBody: React.FC = () => {
     React.useState(false)
   const previousWorkspaceIdRef = React.useRef<string | null>(null)
   const workspaceTransitionTimerRef = React.useRef<number | null>(null)
+  const [showStorageQuotaWarning, setShowStorageQuotaWarning] =
+    React.useState(false)
+  const [showCrossTabSyncWarning, setShowCrossTabSyncWarning] =
+    React.useState(false)
+  const lastCrossTabSyncWarningRef = React.useRef(0)
 
   // Workspace store
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
@@ -427,7 +442,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
         return
       }
 
-      if (event.key === "Escape" && globalSearchOpen) {
+      if (event.key === "Escape") {
         event.preventDefault()
         closeGlobalSearch()
       }
@@ -437,7 +452,76 @@ const WorkspacePlaygroundBody: React.FC = () => {
     return () => {
       window.removeEventListener("keydown", handleKeyboardShortcut)
     }
-  }, [closeGlobalSearch, globalSearchOpen])
+  }, [closeGlobalSearch])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const handleQuotaExceeded = (event: Event) => {
+      const customEvent = event as CustomEvent<WorkspaceStorageQuotaEventDetail>
+      if (customEvent.detail?.key !== WORKSPACE_STORAGE_KEY) return
+      setShowStorageQuotaWarning(true)
+    }
+
+    window.addEventListener(
+      WORKSPACE_STORAGE_QUOTA_EVENT,
+      handleQuotaExceeded as EventListener
+    )
+    return () => {
+      window.removeEventListener(
+        WORKSPACE_STORAGE_QUOTA_EVENT,
+        handleQuotaExceeded as EventListener
+      )
+    }
+  }, [])
+
+  const surfaceCrossTabSyncWarning = React.useCallback(() => {
+    const now = Date.now()
+    const shouldShow = shouldSurfaceWorkspaceConflictNotice(
+      lastCrossTabSyncWarningRef.current,
+      now,
+      WORKSPACE_CONFLICT_NOTICE_THROTTLE_MS
+    )
+    if (!shouldShow) return
+
+    lastCrossTabSyncWarningRef.current = now
+    setShowCrossTabSyncWarning(true)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const handleStorageEvent = (event: StorageEvent) => {
+      if (event.key !== WORKSPACE_STORAGE_KEY) return
+      if (event.newValue === event.oldValue) return
+      if (event.storageArea && event.storageArea !== window.localStorage) return
+      surfaceCrossTabSyncWarning()
+    }
+
+    window.addEventListener("storage", handleStorageEvent)
+    return () => {
+      window.removeEventListener("storage", handleStorageEvent)
+    }
+  }, [surfaceCrossTabSyncWarning])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!isWorkspaceBroadcastSyncEnabled()) return
+    if (typeof BroadcastChannel === "undefined") return
+
+    const channel = new BroadcastChannel(WORKSPACE_STORAGE_CHANNEL_NAME)
+    const handleBroadcastUpdate = (event: MessageEvent<unknown>) => {
+      if (!isWorkspaceBroadcastUpdateMessage(event.data)) return
+      if (event.data.key !== WORKSPACE_STORAGE_KEY) return
+      surfaceCrossTabSyncWarning()
+    }
+
+    channel.addEventListener("message", handleBroadcastUpdate)
+    return () => {
+      channel.removeEventListener("message", handleBroadcastUpdate)
+      channel.close()
+    }
+  }, [surfaceCrossTabSyncWarning])
 
   useEffect(() => {
     setActiveSearchResultIndex(0)
@@ -536,6 +620,16 @@ const WorkspacePlaygroundBody: React.FC = () => {
     }
   }
 
+  const handleReloadWorkspaceFromSyncWarning = () => {
+    if (typeof window !== "undefined") {
+      try {
+        window.location.reload()
+      } catch (error) {
+        console.warn("Workspace reload unavailable", error)
+      }
+    }
+  }
+
   const getSearchDomainLabel = (domain: WorkspaceGlobalSearchResult["domain"]) => {
     switch (domain) {
       case "source":
@@ -599,6 +693,64 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
   return (
     <div className="relative flex h-full flex-col bg-bg text-text">
+      {(showStorageQuotaWarning || showCrossTabSyncWarning) && (
+        <div className="space-y-2 border-b border-border bg-surface px-3 py-2">
+          {showStorageQuotaWarning && (
+            <div
+              data-testid="workspace-storage-quota-banner"
+              className="flex flex-wrap items-center justify-between gap-2 rounded border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-text"
+              role="status"
+              aria-live="polite"
+            >
+              <span>
+                {t(
+                  "playground:workspace.storageQuotaExceeded",
+                  "Workspace data is too large to save locally. Delete older outputs or sources to reduce size."
+                )}
+              </span>
+              <button
+                type="button"
+                className="rounded border border-border px-2 py-1 text-xs font-medium hover:bg-surface2"
+                onClick={() => setShowStorageQuotaWarning(false)}
+              >
+                {t("common:dismiss", "Dismiss")}
+              </button>
+            </div>
+          )}
+
+          {showCrossTabSyncWarning && (
+            <div
+              data-testid="workspace-storage-sync-banner"
+              className="flex flex-wrap items-center justify-between gap-2 rounded border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-text"
+              role="alert"
+            >
+              <span>
+                {t(
+                  "playground:workspace.externalUpdate",
+                  "This workspace changed in another tab. Reload to view the latest state."
+                )}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  className="rounded border border-primary/40 bg-primary px-2 py-1 text-xs font-medium text-white hover:opacity-90"
+                  onClick={handleReloadWorkspaceFromSyncWarning}
+                >
+                  {t("common:reload", "Reload")}
+                </button>
+                <button
+                  type="button"
+                  className="rounded border border-border px-2 py-1 text-xs font-medium hover:bg-surface2"
+                  onClick={() => setShowCrossTabSyncWarning(false)}
+                >
+                  {t("common:later", "Later")}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {isMobile ? (
         <>
           <WorkspaceHeader

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
+  buildImportConflictRenameSuggestion,
   buildDictionaryImportErrorDescription,
+  isDictionaryImportConflictError,
   validateDictionaryImportData
 } from "../importValidationUtils"
 
@@ -80,5 +82,25 @@ describe("dictionary import validation utils", () => {
       new Error("Invalid payload")
     )
     expect(message).toContain("Verify the JSON structure")
+  })
+
+  it("detects import conflict errors", () => {
+    expect(
+      isDictionaryImportConflictError(
+        new Error("409 conflict: dictionary already exists")
+      )
+    ).toBe(true)
+    expect(isDictionaryImportConflictError(new Error("Invalid payload"))).toBe(
+      false
+    )
+  })
+
+  it("builds deterministic rename suggestions with numeric suffixes", () => {
+    const suggestion = buildImportConflictRenameSuggestion("Medical Terms", [
+      "Medical Terms",
+      "Medical Terms (2)",
+      "Medical Terms (3)"
+    ])
+    expect(suggestion).toBe("Medical Terms (4)")
   })
 })

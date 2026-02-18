@@ -21,7 +21,7 @@ Finding IDs: `11.1` through `11.6`
 - Responsive integration tests at 320px/375px widths.
 - Component tests for mode-forcing behavior under mobile breakpoint.
 - Regression tests for desktop spread/list/all mode behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Touch Target Compliance Improvements
 **Goal**: Ensure frequently used controls meet minimum touch target size.
@@ -33,7 +33,7 @@ Finding IDs: `11.1` through `11.6`
 - Component style tests for touch target class application.
 - Visual regression tests for results row alignment.
 - Accessibility tests for button role/label behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Responsive Regression Matrix
 **Goal**: Preserve already-strong mobile behavior while adding fixes.
@@ -46,7 +46,7 @@ Finding IDs: `11.1` through `11.6`
 - Responsive snapshot tests across `/media`, `/media-multi`, `/media-trash`.
 - Regression tests for section navigator visibility/interaction on mobile.
 - Modal behavior tests for mobile viewport sizing.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

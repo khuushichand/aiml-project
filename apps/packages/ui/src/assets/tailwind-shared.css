@@ -444,6 +444,22 @@ body {
   .shimmer-text {
     animation: none !important;
   }
+
+  .characters-page,
+  .characters-page * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .characters-motion-modal,
+  .characters-motion-modal *,
+  .characters-motion-overlay,
+  .characters-motion-overlay * {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 
 /* Icon defaults (lucide/react) */

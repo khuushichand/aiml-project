@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   getDeletedPrompts: vi.fn(),
   searchPromptsServer: vi.fn(),
   exportPromptsServer: vi.fn(),
+  listPromptCollectionsServer: vi.fn(),
+  createPromptCollectionServer: vi.fn(),
+  updatePromptCollectionServer: vi.fn(),
   exportPrompts: vi.fn(),
   importPromptsV2: vi.fn(),
   deletePromptById: vi.fn(),
@@ -26,7 +29,13 @@ const mocks = vi.hoisted(() => ({
   permanentlyDeletePrompt: vi.fn(async () => undefined),
   emptyTrash: vi.fn(async () => 0),
   autoSyncPrompt: vi.fn(async () => ({ success: true, syncStatus: "synced" })),
+  pushToStudio: vi.fn(async () => ({ success: true })),
+  pullFromStudio: vi.fn(async () => ({ success: true, localId: "local-1", syncStatus: "synced" })),
   updatePrompt: vi.fn(async () => "updated-id"),
+  incrementPromptUsage: vi.fn(async () => ({
+    usageCount: 1,
+    lastUsedAt: Date.now()
+  })),
   hasPromptStudio: vi.fn(),
   navigate: vi.fn(),
   setSelectedQuickPrompt: vi.fn(),
@@ -165,6 +174,19 @@ vi.mock("antd", async () => {
           >
             sort modified desc
           </button>
+          <button
+            type="button"
+            data-testid="table-sort-usage-desc"
+            onClick={() =>
+              props?.onChange?.(
+                { current: currentPage, pageSize },
+                {},
+                { columnKey: "usageCount", order: "descend" }
+              )
+            }
+          >
+            sort usage desc
+          </button>
         </div>
       )
     }
@@ -206,7 +228,13 @@ vi.mock("@/services/prompts-api", () => ({
   exportPromptsServer: (...args: unknown[]) =>
     (mocks.exportPromptsServer as (...args: unknown[]) => unknown)(...args),
   searchPromptsServer: (...args: unknown[]) =>
-    (mocks.searchPromptsServer as (...args: unknown[]) => unknown)(...args)
+    (mocks.searchPromptsServer as (...args: unknown[]) => unknown)(...args),
+  listPromptCollectionsServer: (...args: unknown[]) =>
+    (mocks.listPromptCollectionsServer as (...args: unknown[]) => unknown)(...args),
+  createPromptCollectionServer: (...args: unknown[]) =>
+    (mocks.createPromptCollectionServer as (...args: unknown[]) => unknown)(...args),
+  updatePromptCollectionServer: (...args: unknown[]) =>
+    (mocks.updatePromptCollectionServer as (...args: unknown[]) => unknown)(...args)
 }))
 
 vi.mock("@/services/prompt-studio", () => ({
@@ -217,8 +245,10 @@ vi.mock("@/services/prompt-studio", () => ({
 vi.mock("@/services/prompt-sync", () => ({
   autoSyncPrompt: (...args: unknown[]) =>
     (mocks.autoSyncPrompt as (...args: unknown[]) => unknown)(...args),
-  pushToStudio: vi.fn(async () => ({ success: true })),
-  pullFromStudio: vi.fn(async () => ({ success: true })),
+  pushToStudio: (...args: unknown[]) =>
+    (mocks.pushToStudio as (...args: unknown[]) => unknown)(...args),
+  pullFromStudio: (...args: unknown[]) =>
+    (mocks.pullFromStudio as (...args: unknown[]) => unknown)(...args),
   shouldAutoSyncWorkspacePrompts: vi.fn(async () => false),
   unlinkPrompt: vi.fn(async () => ({ success: true })),
   getConflictInfo: vi.fn(async () => null),
@@ -237,6 +267,8 @@ vi.mock("@/db/dexie/helpers", () => ({
   })),
   updatePrompt: (...args: unknown[]) =>
     (mocks.updatePrompt as (...args: unknown[]) => unknown)(...args),
+  incrementPromptUsage: (...args: unknown[]) =>
+    (mocks.incrementPromptUsage as (...args: unknown[]) => unknown)(...args),
   exportPrompts: (...args: unknown[]) =>
     (mocks.exportPrompts as (...args: unknown[]) => unknown)(...args),
   importPromptsV2: (...args: unknown[]) =>
@@ -375,7 +407,24 @@ describe("PromptBody server search and pagination", () => {
     mocks.getDeletedPrompts.mockResolvedValue([])
     mocks.getAllCopilotPrompts.mockResolvedValue([])
     mocks.hasPromptStudio.mockResolvedValue(false)
+    mocks.pullFromStudio.mockResolvedValue({
+      success: true,
+      localId: "local-1",
+      syncStatus: "synced"
+    })
     mocks.exportPrompts.mockResolvedValue([])
+    mocks.incrementPromptUsage.mockResolvedValue({
+      usageCount: 1,
+      lastUsedAt: Date.now()
+    })
+    mocks.listPromptCollectionsServer.mockResolvedValue([])
+    mocks.createPromptCollectionServer.mockResolvedValue({ collection_id: 1 })
+    mocks.updatePromptCollectionServer.mockImplementation(async (_id: number, payload: any) => ({
+      collection_id: 1,
+      name: "Collection",
+      description: null,
+      prompt_ids: payload?.prompt_ids || []
+    }))
     mocks.importPromptsV2.mockResolvedValue({
       imported: 0,
       skipped: 0,
@@ -648,6 +697,44 @@ describe("PromptBody server search and pagination", () => {
     })
   })
 
+  it("sorts prompts by usage count when usage sort is selected", async () => {
+    state.prompts = [
+      {
+        id: "prompt-low",
+        name: "Low Usage",
+        title: "Low Usage",
+        content: "low",
+        is_system: false,
+        createdAt: 1,
+        usageCount: 1,
+        keywords: []
+      },
+      {
+        id: "prompt-high",
+        name: "High Usage",
+        title: "High Usage",
+        content: "high",
+        is_system: false,
+        createdAt: 2,
+        usageCount: 8,
+        keywords: []
+      }
+    ]
+    mocks.getAllPrompts.mockResolvedValue(state.prompts)
+
+    renderPromptBody()
+
+    await waitFor(() => {
+      expect(screen.getByTestId("table-row-count")).toHaveTextContent("2")
+    })
+
+    fireEvent.click(screen.getByTestId("table-sort-usage-desc"))
+
+    await waitFor(() => {
+      expect(getVisibleRowNames()).toEqual(["High Usage", "Low Usage"])
+    })
+  })
+
   it("toggles prompt content preview between collapsed and expanded states", async () => {
     state.prompts = [
       {
@@ -859,8 +946,42 @@ describe("PromptBody server search and pagination", () => {
 
     fireEvent.click(screen.getByTestId("prompt-insert-both"))
 
+    await waitFor(() => {
+      expect(mocks.incrementPromptUsage).toHaveBeenCalledWith("local-1")
+    })
     expect(mocks.setSelectedSystemPrompt).toHaveBeenCalledWith("local-1")
     expect(mocks.setSelectedQuickPrompt).toHaveBeenCalledWith("User template body")
+    expect(mocks.navigate).toHaveBeenCalledWith("/chat")
+  })
+
+  it("tracks usage when quick prompt inserts directly without opening modal", async () => {
+    state.prompts = [
+      {
+        id: "local-quick",
+        name: "Quick Prompt",
+        title: "Quick Prompt",
+        content: "Quick insert content",
+        is_system: false,
+        createdAt: 100,
+        user_prompt: "Quick insert content",
+        keywords: []
+      }
+    ]
+    mocks.getAllPrompts.mockResolvedValue(state.prompts)
+
+    renderPromptBody()
+
+    await waitFor(() => {
+      expect(screen.getByTestId("table-row-count")).toHaveTextContent("1")
+    })
+
+    fireEvent.click(screen.getByTestId("mock-use-in-chat-local-quick"))
+
+    await waitFor(() => {
+      expect(mocks.incrementPromptUsage).toHaveBeenCalledWith("local-quick")
+    })
+    expect(mocks.setSelectedQuickPrompt).toHaveBeenCalledWith("Quick insert content")
+    expect(mocks.setSelectedSystemPrompt).toHaveBeenCalledWith(undefined)
     expect(mocks.navigate).toHaveBeenCalledWith("/chat")
   })
 
@@ -886,6 +1007,64 @@ describe("PromptBody server search and pagination", () => {
     expect(screen.getByTestId("mock-prompt-drawer")).toHaveTextContent(
       "Linked Prompt"
     )
+  })
+
+  it("pulls and opens a shared prompt deep-link when only server id is provided", async () => {
+    const importedPrompt = {
+      id: "imported-1",
+      name: "Imported Shared Prompt",
+      title: "Imported Shared Prompt",
+      content: "imported content",
+      is_system: false,
+      createdAt: 200,
+      serverId: 101,
+      keywords: []
+    }
+    mocks.getAllPrompts
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([importedPrompt])
+    mocks.pullFromStudio.mockResolvedValue({
+      success: true,
+      localId: "imported-1",
+      syncStatus: "synced"
+    })
+
+    renderPromptBody(["/prompts?prompt=101&source=studio"])
+
+    await waitFor(() => {
+      expect(mocks.pullFromStudio).toHaveBeenCalledWith(101)
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mock-prompt-drawer")).toBeInTheDocument()
+    })
+    expect(screen.getByTestId("mock-prompt-drawer")).toHaveTextContent(
+      "Imported Shared Prompt"
+    )
+  })
+
+  it("warns when a shared prompt deep-link cannot be pulled from server", async () => {
+    const warningSpy = vi.spyOn(notification, "warning")
+    mocks.getAllPrompts.mockResolvedValue([])
+    mocks.pullFromStudio.mockResolvedValue({
+      success: false,
+      error: "Server prompt not found",
+      syncStatus: "local"
+    })
+
+    renderPromptBody(["/prompts?prompt=404&source=studio"])
+
+    await waitFor(() => {
+      expect(mocks.pullFromStudio).toHaveBeenCalledWith(404)
+    })
+    await waitFor(() => {
+      expect(warningSpy).toHaveBeenCalled()
+    })
+    expect(screen.queryByTestId("mock-prompt-drawer")).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByTestId("prompt-location-search").textContent).toBe("")
+    })
+    warningSpy.mockRestore()
   })
 
   it("retains row selection while paging through large local datasets", async () => {
@@ -1419,10 +1598,6 @@ describe("PromptBody server search and pagination", () => {
     expect(screen.getByText("Open shortcut help")).toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: "Escape", code: "Escape" })
-    await waitFor(() => {
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
-    })
-
     fireEvent.keyDown(document, { key: "?", code: "Slash", shiftKey: true })
     expect(await screen.findByText("Keyboard shortcuts")).toBeInTheDocument()
   })

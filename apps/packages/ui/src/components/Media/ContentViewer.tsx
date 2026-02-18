@@ -286,6 +286,42 @@ const toDisplayMetadataValue = (value: unknown): string => {
 const normalizeComparableText = (value: string): string =>
   value.replace(/\s+/g, ' ').trim().toLowerCase()
 
+const normalizeFindQuery = (value: string): string => value.trim().toLowerCase()
+
+export const findInContentOffsets = (text: string, query: string): number[] => {
+  if (!text) return []
+  const normalizedQuery = normalizeFindQuery(query)
+  if (!normalizedQuery) return []
+
+  const haystack = text.toLowerCase()
+  const offsets: number[] = []
+  let fromIndex = 0
+
+  while (fromIndex < haystack.length) {
+    const index = haystack.indexOf(normalizedQuery, fromIndex)
+    if (index === -1) break
+    offsets.push(index)
+    fromIndex = index + Math.max(1, normalizedQuery.length)
+  }
+
+  return offsets
+}
+
+export const getNextFindMatchIndex = (
+  currentIndex: number,
+  totalMatches: number,
+  direction: 1 | -1
+): number => {
+  if (!Number.isFinite(totalMatches) || totalMatches <= 0) return -1
+  if (!Number.isFinite(currentIndex) || currentIndex < 0 || currentIndex >= totalMatches) {
+    return direction === -1 ? totalMatches - 1 : 0
+  }
+  if (direction === 1) {
+    return (currentIndex + 1) % totalMatches
+  }
+  return (currentIndex - 1 + totalMatches) % totalMatches
+}
+
 const findHeadingMatchInContent = (
   root: HTMLElement | null,
   title: string,
@@ -541,16 +577,33 @@ export function ContentViewer({
   const [embeddedMediaError, setEmbeddedMediaError] = useState<string | null>(null)
   const [deletingItem, setDeletingItem] = useState(false)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  const [findBarOpen, setFindBarOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  const [findMatchOffsets, setFindMatchOffsets] = useState<number[]>([])
+  const [activeFindMatchIndex, setActiveFindMatchIndex] = useState(-1)
   const lastSanitizationTelemetryKeyRef = useRef<string>('')
   const lastAppliedNavigationTargetKeyRef = useRef<string>('')
   const lastAppliedNavigationTitleKeyRef = useRef<string>('')
   const lastAppliedNavigationPageKeyRef = useRef<string>('')
   const titleRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pageRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const rootContainerRef = useRef<HTMLDivElement | null>(null)
+  const findInputRef = useRef<HTMLInputElement | null>(null)
+  const findMatchElementRefs = useRef<Array<HTMLElement | null>>([])
   const contentBodyRef = useRef<HTMLDivElement | null>(null)
   const contentScrollContainerRef = useRef<HTMLDivElement | null>(null)
   const mediaPlayerRef = useRef<HTMLMediaElement | null>(null)
   const embeddedMediaObjectUrlRef = useRef<string | null>(null)
+
+  const setRootContainerRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      rootContainerRef.current = node
+      if (contentRef) {
+        contentRef(node)
+      }
+    },
+    [contentRef]
+  )
 
   const resolvedTextSizePreset: MediaTextSizePreset = useMemo(() => {
     const normalized = String(textSizePreset || '').toLowerCase()
@@ -741,6 +794,143 @@ export function ContentViewer({
       transcriptLines.some((line) => LEADING_TRANSCRIPT_TIMESTAMP_PATTERN.test(line)),
     [shouldShowEmbeddedPlayer, transcriptLines]
   )
+  const normalizedFindQuery = useMemo(() => normalizeFindQuery(findQuery), [findQuery])
+  const findMatchCount = findMatchOffsets.length
+
+  const moveFindMatch = useCallback(
+    (direction: 1 | -1) => {
+      setActiveFindMatchIndex((prev) =>
+        getNextFindMatchIndex(prev, findMatchOffsets.length, direction)
+      )
+    },
+    [findMatchOffsets.length]
+  )
+
+  const closeFindBar = useCallback(() => {
+    setFindBarOpen(false)
+    setFindQuery('')
+    setFindMatchOffsets([])
+    setActiveFindMatchIndex(-1)
+    findMatchElementRefs.current = []
+  }, [])
+
+  const highlightedPlainContent = useMemo<React.ReactNode>(() => {
+    findMatchElementRefs.current = []
+    if (!content) {
+      return t('review:mediaPage.noContent', {
+        defaultValue: 'No content available'
+      })
+    }
+    if (!normalizedFindQuery || findMatchOffsets.length === 0) {
+      return content
+    }
+
+    const parts: React.ReactNode[] = []
+    const queryLength = normalizedFindQuery.length
+    let cursor = 0
+
+    findMatchOffsets.forEach((start, index) => {
+      if (start < cursor) return
+      if (start > cursor) {
+        parts.push(content.slice(cursor, start))
+      }
+      const end = Math.min(content.length, start + queryLength)
+      const isActive = index === activeFindMatchIndex
+      parts.push(
+        <mark
+          key={`find-match-${index}-${start}`}
+          ref={(node) => {
+            findMatchElementRefs.current[index] = node
+          }}
+          data-find-match-index={index}
+          className={
+            isActive
+              ? 'rounded bg-primary/30 text-text px-0.5'
+              : 'rounded bg-warn/20 text-text px-0.5'
+          }
+        >
+          {content.slice(start, end)}
+        </mark>
+      )
+      cursor = end
+    })
+
+    if (cursor < content.length) {
+      parts.push(content.slice(cursor))
+    }
+
+    return <>{parts}</>
+  }, [activeFindMatchIndex, content, findMatchOffsets, normalizedFindQuery, t])
+
+  useEffect(() => {
+    const offsets = findInContentOffsets(content, findQuery)
+    setFindMatchOffsets(offsets)
+    setActiveFindMatchIndex(offsets.length > 0 ? 0 : -1)
+  }, [content, findQuery])
+
+  useEffect(() => {
+    setFindBarOpen(false)
+    setFindQuery('')
+    setFindMatchOffsets([])
+    setActiveFindMatchIndex(-1)
+    findMatchElementRefs.current = []
+  }, [selectedMedia?.id])
+
+  useEffect(() => {
+    if (!findBarOpen) return
+    const timer = window.setTimeout(() => {
+      findInputRef.current?.focus()
+      findInputRef.current?.select()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [findBarOpen])
+
+  useEffect(() => {
+    if (activeFindMatchIndex < 0 || findMatchOffsets.length === 0) return
+
+    const activeNode = findMatchElementRefs.current[activeFindMatchIndex]
+    if (activeNode && typeof activeNode.scrollIntoView === 'function') {
+      activeNode.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
+
+    const container = contentScrollContainerRef.current
+    const offset = findMatchOffsets[activeFindMatchIndex]
+    if (container && Number.isFinite(offset) && content.length > 0) {
+      scrollToCharOffset(container, offset, content.length)
+    }
+  }, [activeFindMatchIndex, content.length, findMatchOffsets])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return
+      if (event.key.toLowerCase() !== 'f') return
+
+      const target = event.target as HTMLElement | null
+      const isTypingTarget =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        Boolean(target?.isContentEditable)
+      if (isTypingTarget) return
+
+      const root = rootContainerRef.current
+      if (
+        root &&
+        target &&
+        target !== document.body &&
+        !root.contains(target)
+      ) {
+        return
+      }
+
+      event.preventDefault()
+      setFindBarOpen(true)
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   const richSanitization = useMemo(() => {
     if (effectiveRenderMode !== 'html' || !content) {
       return {
@@ -1711,7 +1901,7 @@ export function ContentViewer({
   }
 
   return (
-    <div ref={contentRef} className="relative flex-1 flex flex-col bg-bg">
+    <div ref={setRootContainerRef} className="relative flex-1 flex flex-col bg-bg">
       {/* Compact Header */}
       <div className="px-4 py-2 border-b border-border bg-surface">
         <div className="flex flex-col md:flex-row items-center gap-3">
@@ -2021,11 +2211,11 @@ export function ContentViewer({
                   <ChevronUp className="w-4 h-4 text-text-subtle" />
                 )}
               </button>
-              <div className="flex items-center gap-1">
-                {navigationTargetDescription ? (
-                  <span className="rounded bg-surface px-2 py-0.5 text-[11px] text-text-muted">
-                    {navigationTargetDescription}
-                  </span>
+                <div className="flex items-center gap-1">
+                  {navigationTargetDescription ? (
+                    <span className="rounded bg-surface px-2 py-0.5 text-[11px] text-text-muted">
+                      {navigationTargetDescription}
+                    </span>
                 ) : null}
                 {showContentDisplayModeSelector && onContentDisplayModeChange ? (
                   <Select
@@ -2096,6 +2286,20 @@ export function ContentViewer({
                     <Edit3 className="w-4 h-4" />
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setFindBarOpen(true)}
+                  className="p-1 text-text-muted hover:text-text transition-colors"
+                  title={t('review:mediaPage.findInContent', {
+                    defaultValue: 'Find in content'
+                  })}
+                  aria-label={t('review:mediaPage.findInContent', {
+                    defaultValue: 'Find in content'
+                  })}
+                  data-testid="content-find-toggle"
+                >
+                  <FileSearch className="w-4 h-4" />
+                </button>
                 {/* Expand/collapse toggle for long content */}
                 {!collapsedSections.content && shouldShowExpandToggle && (
                   <button
@@ -2122,6 +2326,91 @@ export function ContentViewer({
             </div>
             {!collapsedSections.content && (
               <div className="p-3 bg-surface animate-in fade-in slide-in-from-top-1 duration-150">
+                {findBarOpen && (
+                  <div
+                    className="mb-3 rounded-md border border-border bg-surface2 px-2 py-1.5"
+                    data-testid="content-find-bar"
+                  >
+                    <div className="flex items-center gap-2">
+                      <label htmlFor="content-find-input" className="sr-only">
+                        {t('review:mediaPage.findInContent', {
+                          defaultValue: 'Find in content'
+                        })}
+                      </label>
+                      <input
+                        id="content-find-input"
+                        ref={findInputRef}
+                        type="text"
+                        className="h-7 w-full rounded border border-border bg-surface px-2 text-xs text-text outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                        placeholder={t('review:mediaPage.findPlaceholder', {
+                          defaultValue: 'Find in content'
+                        })}
+                        value={findQuery}
+                        onChange={(event) => setFindQuery(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Escape') {
+                            event.preventDefault()
+                            closeFindBar()
+                            return
+                          }
+                          if (event.key === 'Enter') {
+                            event.preventDefault()
+                            moveFindMatch(event.shiftKey ? -1 : 1)
+                          }
+                        }}
+                        data-testid="content-find-input"
+                      />
+                      <span
+                        className="whitespace-nowrap text-[11px] text-text-muted"
+                        data-testid="content-find-count"
+                      >
+                        {findMatchCount > 0 && activeFindMatchIndex >= 0
+                          ? `${activeFindMatchIndex + 1}/${findMatchCount}`
+                          : `0/${findMatchCount}`}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => moveFindMatch(-1)}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded border border-border bg-surface text-text-muted hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label={t('review:mediaPage.findPrevious', {
+                          defaultValue: 'Previous match'
+                        })}
+                        title={t('review:mediaPage.findPrevious', {
+                          defaultValue: 'Previous match'
+                        })}
+                        disabled={findMatchCount === 0}
+                        data-testid="content-find-prev"
+                      >
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveFindMatch(1)}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded border border-border bg-surface text-text-muted hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label={t('review:mediaPage.findNext', {
+                          defaultValue: 'Next match'
+                        })}
+                        title={t('review:mediaPage.findNext', {
+                          defaultValue: 'Next match'
+                        })}
+                        disabled={findMatchCount === 0}
+                        data-testid="content-find-next"
+                      >
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={closeFindBar}
+                        className="inline-flex h-7 items-center rounded border border-border bg-surface px-2 text-[11px] text-text-muted hover:text-text"
+                        aria-label={t('common:close', { defaultValue: 'Close' })}
+                        title={t('common:close', { defaultValue: 'Close' })}
+                        data-testid="content-find-close"
+                      >
+                        {t('common:close', { defaultValue: 'Close' })}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {shouldShowEmbeddedPlayer ? (
                   <div className="mb-3 rounded-md border border-border bg-surface2 p-2">
                     {embeddedMediaLoading ? (
@@ -2170,7 +2459,7 @@ export function ContentViewer({
                   }`}
                 >
                   {effectiveRenderMode === 'plain' ? (
-                    hasClickableTranscriptTimestamps ? (
+                    hasClickableTranscriptTimestamps && !normalizedFindQuery ? (
                       <div
                         className={`m-0 space-y-1 whitespace-pre-wrap text-text font-mono ${contentBodyTypographyClass}`}
                       >
@@ -2207,10 +2496,7 @@ export function ContentViewer({
                       <pre
                         className={`whitespace-pre-wrap text-text font-mono m-0 ${contentBodyTypographyClass}`}
                       >
-                        {content ||
-                          t('review:mediaPage.noContent', {
-                            defaultValue: 'No content available'
-                          })}
+                        {highlightedPlainContent}
                       </pre>
                     )
                   ) : effectiveRenderMode === 'html' ? (

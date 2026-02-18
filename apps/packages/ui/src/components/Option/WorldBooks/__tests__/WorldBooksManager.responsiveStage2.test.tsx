@@ -204,37 +204,45 @@ describe("WorldBooksManager responsive stage-2 entry drawer mobile ergonomics", 
     vi.clearAllMocks()
   })
 
-  it("hides priority/enabled columns and applies larger touch targets on mobile", async () => {
-    const user = userEvent.setup()
-    mockBreakpoints.md = false
-    render(<WorldBooksManager />)
+  it(
+    "hides priority/enabled columns and applies larger touch targets on mobile",
+    async () => {
+      const user = userEvent.setup()
+      mockBreakpoints.md = false
+      render(<WorldBooksManager />)
 
-    await user.click(screen.getByRole("button", { name: "More actions for Arcana" }))
-    await user.click(await screen.findByText("Manage Entries"))
+      await user.click(screen.getByRole("button", { name: "More actions for Arcana" }))
+      await user.click(await screen.findByRole("menuitem", { name: "Manage Entries" }))
 
-    expect(screen.queryAllByRole("columnheader", { name: "Priority" })).toHaveLength(0)
-    expect(screen.queryAllByRole("columnheader", { name: "Enabled" })).toHaveLength(1)
+      expect(screen.queryAllByRole("columnheader", { name: "Priority" })).toHaveLength(0)
+      expect(screen.queryAllByRole("columnheader", { name: "Enabled" })).toHaveLength(1)
 
-    const editEntryButton = await screen.findByRole("button", { name: "Edit entry" })
-    const deleteEntryButton = await screen.findByRole("button", { name: "Delete entry" })
-    expect(editEntryButton).toHaveClass("min-h-11")
-    expect(editEntryButton).toHaveClass("min-w-11")
-    expect(deleteEntryButton).toHaveClass("min-h-11")
-    expect(deleteEntryButton).toHaveClass("min-w-11")
-  })
+      const editEntryButton = await screen.findByRole("button", { name: "Edit entry" })
+      const deleteEntryButton = await screen.findByRole("button", { name: "Delete entry" })
+      expect(editEntryButton).toHaveClass("min-h-11")
+      expect(editEntryButton).toHaveClass("min-w-11")
+      expect(deleteEntryButton).toHaveClass("min-h-11")
+      expect(deleteEntryButton).toHaveClass("min-w-11")
+    },
+    30000
+  )
 
-  it("keeps priority/enabled columns visible on desktop", async () => {
-    const user = userEvent.setup()
-    mockBreakpoints.md = true
-    render(<WorldBooksManager />)
+  it(
+    "keeps priority/enabled columns visible on desktop",
+    async () => {
+      const user = userEvent.setup()
+      mockBreakpoints.md = true
+      render(<WorldBooksManager />)
 
-    await user.click(screen.getByRole("button", { name: "Manage entries" }))
+      await user.click(screen.getByRole("button", { name: "Manage entries" }))
 
-    expect(screen.queryAllByRole("columnheader", { name: "Priority" })).toHaveLength(1)
-    expect(screen.queryAllByRole("columnheader", { name: "Enabled" }).length).toBeGreaterThan(1)
+      expect(screen.queryAllByRole("columnheader", { name: "Priority" })).toHaveLength(1)
+      expect(screen.queryAllByRole("columnheader", { name: "Enabled" }).length).toBeGreaterThan(1)
 
-    const editEntryButton = await screen.findByRole("button", { name: "Edit entry" })
-    expect(editEntryButton.className).not.toContain("min-h-11")
-    expect(editEntryButton.className).not.toContain("min-w-11")
-  })
+      const editEntryButton = await screen.findByRole("button", { name: "Edit entry" })
+      expect(editEntryButton.className).not.toContain("min-h-11")
+      expect(editEntryButton.className).not.toContain("min-w-11")
+    },
+    15000
+  )
 })

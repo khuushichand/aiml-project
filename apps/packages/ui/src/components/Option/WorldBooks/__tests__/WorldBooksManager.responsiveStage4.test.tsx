@@ -228,33 +228,41 @@ describe("WorldBooksManager responsive stage-4 modal scrolling", () => {
     vi.clearAllMocks()
   })
 
-  it("applies modal body scrolling to create and edit world-book dialogs", async () => {
-    const user = userEvent.setup()
-    render(<WorldBooksManager />)
+  it(
+    "applies modal body scrolling to create and edit world-book dialogs",
+    async () => {
+      const user = userEvent.setup()
+      render(<WorldBooksManager />)
 
-    await user.click(screen.getByRole("button", { name: "New World Book" }))
-    expect(await screen.findByText("Create World Book")).toBeInTheDocument()
-    expectOpenModalBodyScrollable()
+      await user.click(screen.getByRole("button", { name: "New World Book" }))
+      expect(await screen.findByText("Create World Book")).toBeInTheDocument()
+      expectOpenModalBodyScrollable()
 
-    await user.click(screen.getByRole("button", { name: "Close" }))
+      await user.click(screen.getByRole("button", { name: "Close" }))
 
-    await user.click(screen.getByRole("button", { name: "Edit world book" }))
-    expect(await screen.findByText("Edit World Book")).toBeInTheDocument()
-    expectOpenModalBodyScrollable()
-  })
+      await user.click(screen.getByRole("button", { name: "Edit world book" }))
+      expect(await screen.findByText("Edit World Book")).toBeInTheDocument()
+      expectOpenModalBodyScrollable()
+    },
+    15000
+  )
 
-  it("applies modal body scrolling to statistics and attachment matrix dialogs", async () => {
-    const user = userEvent.setup()
-    render(<WorldBooksManager />)
+  it(
+    "applies modal body scrolling to statistics and attachment matrix dialogs",
+    async () => {
+      const user = userEvent.setup()
+      render(<WorldBooksManager />)
 
-    await user.click(screen.getByRole("button", { name: "View world book statistics" }))
-    expect(await screen.findByText("World Book Statistics")).toBeInTheDocument()
-    expectOpenModalBodyScrollable()
+      await user.click(screen.getByRole("button", { name: "View world book statistics" }))
+      expect(await screen.findByText("World Book Statistics")).toBeInTheDocument()
+      expectOpenModalBodyScrollable()
 
-    await user.click(screen.getByRole("button", { name: "Close" }))
+      await user.click(screen.getByRole("button", { name: "Close" }))
 
-    await user.click(screen.getByRole("button", { name: "Open relationship matrix" }))
-    expect(await screen.findByText("World Book ↔ Character Matrix")).toBeInTheDocument()
-    expectOpenModalBodyScrollable()
-  })
+      await user.click(screen.getByRole("button", { name: "Open relationship matrix" }))
+      expect(await screen.findByText("World Book ↔ Character Matrix")).toBeInTheDocument()
+      expectOpenModalBodyScrollable()
+    },
+    15000
+  )
 })

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react'
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ChevronDown, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react'
@@ -380,6 +380,7 @@ const MediaPageContent: React.FC = () => {
       includeGeneratedFallbackDefault
     )
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
   const sidebarCollapsedValue = sidebarCollapsed === true
   const contentDivRef = React.useRef<HTMLDivElement | null>(null)
   const hasRunInitialSearch = React.useRef(false)
@@ -2143,6 +2144,25 @@ const MediaPageContent: React.FC = () => {
           e.preventDefault()
           setShortcutsOverlayOpen((prev) => !prev)
           break
+        case '/':
+          if (e.ctrlKey || e.metaKey || e.altKey) break
+          e.preventDefault()
+          if (searchCollapsed) {
+            setSearchCollapsed(false)
+            window.setTimeout(() => {
+              const input = searchInputRef.current
+              if (!input) return
+              input.focus()
+              input.select()
+            }, 0)
+          } else {
+            const input = searchInputRef.current
+            if (input) {
+              input.focus()
+              input.select()
+            }
+          }
+          break
         case 'j':
           if (hasNext) {
             e.preventDefault()
@@ -2172,7 +2192,7 @@ const MediaPageContent: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [hasNext, hasPrevious, page, totalPages, results, selectedIndex])
+  }, [hasNext, hasPrevious, page, totalPages, results, searchCollapsed, selectedIndex])
 
   // Calculate dynamic sidebar height
   const sidebarHeight = useMemo(() => {
@@ -2457,6 +2477,7 @@ const MediaPageContent: React.FC = () => {
                 <SearchBar
                   value={query}
                   onChange={setQuery}
+                  inputRef={searchInputRef}
                   hasActiveFilters={hasActiveFilters}
                   onClearAll={() => {
                     // M4: Clear filters when clearing search

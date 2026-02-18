@@ -54,6 +54,14 @@ const getContent = (d: MediaDetail): string => {
 const MINIMAP_COLLAPSE_THRESHOLD = 8
 const SELECTION_WARNING_THRESHOLD = 25
 const UNDO_DURATION_SECONDS = 15
+const MOBILE_REVIEW_MEDIA_QUERY = '(max-width: 1023px)'
+
+const getIsMobileReviewViewport = (): boolean => {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false
+  }
+  return window.matchMedia(MOBILE_REVIEW_MEDIA_QUERY).matches
+}
 
 export const MediaReviewPage: React.FC = () => {
   const { t } = useTranslation(['review'])
@@ -62,6 +70,7 @@ export const MediaReviewPage: React.FC = () => {
   const { setChatMode, setSelectedKnowledge, setRagMediaIds } = useMessageOption()
   const [helpDismissed, setHelpDismissed, { isLoading: helpDismissedLoading }] = useStorage<boolean>('mediaReviewHelpDismissed', false)
   const [query, setQuery] = React.useState("")
+  const searchInputRef = React.useRef<HTMLInputElement | null>(null)
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(20)
   const [total, setTotal] = React.useState(0)
@@ -75,7 +84,12 @@ export const MediaReviewPage: React.FC = () => {
   const [keywordTokens, setKeywordTokens] = React.useState<string[]>([])
   const [keywordOptions, setKeywordOptions] = React.useState<string[]>([])
   const [includeContent, setIncludeContent] = React.useState<boolean>(false)
-  const [sidebarHidden, setSidebarHidden] = React.useState<boolean>(false)
+  const [isMobileViewport, setIsMobileViewport] = React.useState<boolean>(() =>
+    getIsMobileReviewViewport()
+  )
+  const [sidebarHidden, setSidebarHidden] = React.useState<boolean>(() =>
+    getIsMobileReviewViewport()
+  )
   const [contentLoading, setContentLoading] = React.useState<boolean>(false)
   const [contentExpandedIds, setContentExpandedIds] = React.useState<Set<string>>(new Set())
   const [analysisExpandedIds, setAnalysisExpandedIds] = React.useState<Set<string>>(new Set())
@@ -89,15 +103,42 @@ export const MediaReviewPage: React.FC = () => {
   // Persisted view mode
   const [persistedViewMode, setPersistedViewMode] = useSetting(MEDIA_REVIEW_VIEW_MODE_SETTING)
   const [viewModeState, setViewModeState] = React.useState<"spread" | "list" | "all">("spread")
-  const viewMode = viewModeState
+  const viewMode = isMobileViewport ? "list" : viewModeState
   const setViewMode = React.useCallback((mode: "spread" | "list" | "all") => {
+    if (isMobileViewport) {
+      setViewModeState("list")
+      return
+    }
     setViewModeState(mode)
     void setPersistedViewMode(mode)
-  }, [setPersistedViewMode])
+  }, [isMobileViewport, setPersistedViewMode])
   // Initialize view mode from persisted setting
   React.useEffect(() => {
     if (persistedViewMode) setViewModeState(persistedViewMode)
   }, [persistedViewMode])
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const mediaQuery = window.matchMedia(MOBILE_REVIEW_MEDIA_QUERY)
+    const handleMediaQueryChange = (event: MediaQueryListEvent) => {
+      setIsMobileViewport(event.matches)
+    }
+
+    setIsMobileViewport(mediaQuery.matches)
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleMediaQueryChange)
+      return () => mediaQuery.removeEventListener('change', handleMediaQueryChange)
+    }
+
+    mediaQuery.addListener(handleMediaQueryChange)
+    return () => mediaQuery.removeListener(handleMediaQueryChange)
+  }, [])
+
+  React.useEffect(() => {
+    if (!isMobileViewport) return
+    setViewModeState("list")
+    setSidebarHidden((prev) => (prev ? prev : true))
+  }, [isMobileViewport])
   const [focusedId, setFocusedId] = React.useState<string | number | null>(null)
   const [collapseOthers, setCollapseOthers] = React.useState<boolean>(false)
   const [pendingInitialMediaId, setPendingInitialMediaId] = React.useState<string | null>(null)
@@ -706,6 +747,21 @@ export const MediaReviewPage: React.FC = () => {
             }
           }
           break
+        case '/': // Focus search field
+          if (e.ctrlKey || e.metaKey || e.altKey) break
+          e.preventDefault()
+          {
+            const searchTarget =
+              searchInputRef.current ??
+              document.querySelector<HTMLInputElement>(
+                'input[aria-label="Search media (title/content)"]'
+              )
+            if (searchTarget) {
+              searchTarget.focus()
+              searchTarget.select()
+            }
+          }
+          break
         case 'ArrowDown': // Next in list
           e.preventDefault()
           goRelative(1)
@@ -760,6 +816,10 @@ export const MediaReviewPage: React.FC = () => {
 
   // Auto-select view mode by item count with notification
   React.useEffect(() => {
+    if (isMobileViewport) {
+      prevAutoViewModeRef.current = "list"
+      return
+    }
     if (!autoViewMode) return
     const count = selectedIds.length
     if (count === 0) return
@@ -783,7 +843,7 @@ export const MediaReviewPage: React.FC = () => {
 
     prevAutoViewModeRef.current = newMode
     setViewModeState(newMode)
-  }, [selectedIds.length, autoViewMode, t])
+  }, [isMobileViewport, selectedIds.length, autoViewMode, t])
 
   // Compute active filter count for collapsed state display
   const activeFilterCount = types.length + keywordTokens.length + (includeContent ? 1 : 0)
@@ -1007,6 +1067,9 @@ export const MediaReviewPage: React.FC = () => {
           {/* Search row - always visible */}
           <div className="flex items-center gap-2 w-full mb-2">
             <Input
+              ref={(node: any) => {
+                searchInputRef.current = node?.input ?? node ?? null
+              }}
               placeholder={t('mediaPage.searchPlaceholder', 'Search media (title/content)')}
               aria-label={
                 t(
@@ -1078,6 +1141,17 @@ export const MediaReviewPage: React.FC = () => {
               </span>
             </div>
           </div>
+          {selectedIds.length > 5 && (
+            <div
+              className="mb-2 text-[11px] text-text-muted"
+              data-testid="escape-double-tap-hint-inline"
+            >
+              {t(
+                'mediaPage.escapeDoubleTapInlineHint',
+                'Tip: press Escape twice quickly to clear large selections.'
+              )}
+            </div>
+          )}
 
           {/* Collapsible filter section */}
           {!filtersCollapsed && (
@@ -1131,7 +1205,7 @@ export const MediaReviewPage: React.FC = () => {
         {selectedIds.length} {t('mediaPage.itemsSelected', 'items selected')}, {openAllLimit - selectedIds.length} {t('mediaPage.remaining', 'remaining')}
       </div>
 
-      <div className="flex flex-1 min-h-0 w-full gap-4">
+      <div className="flex flex-1 min-h-0 w-full gap-4 flex-col lg:flex-row">
         {!sidebarHidden && (
           <div className="w-full lg:w-1/3 border border-border rounded p-2 bg-surface h-full flex flex-col">
             <div className="flex items-center justify-between mb-1">
@@ -1264,7 +1338,13 @@ export const MediaReviewPage: React.FC = () => {
           </div>
         )}
         {/* Toggle bar between sidebar and viewer */}
-        <div className="w-6 flex-shrink-0 h-full flex items-center">
+        <div
+          className={
+            isMobileViewport
+              ? "w-full h-8 flex-shrink-0"
+              : "w-6 flex-shrink-0 h-full flex items-center"
+          }
+        >
           <button
             title={sidebarHidden ? t('mediaPage.showSidebar', 'Show sidebar') : t('mediaPage.hideSidebar', 'Hide sidebar')}
             aria-label={
@@ -1273,9 +1353,19 @@ export const MediaReviewPage: React.FC = () => {
                 : (t('mediaPage.hideSidebar', 'Hide sidebar') as string)
             }
             onClick={() => setSidebarHidden((v) => !v)}
-            className="h-full w-6 rounded bg-surface2 hover:bg-surface flex items-center justify-center text-xs font-semibold text-text-muted"
+            className={
+              isMobileViewport
+                ? "h-8 w-full rounded bg-surface2 hover:bg-surface flex items-center justify-center text-xs font-semibold text-text-muted"
+                : "h-full w-6 rounded bg-surface2 hover:bg-surface flex items-center justify-center text-xs font-semibold text-text-muted"
+            }
           >
-            {sidebarHidden ? '>>' : '<<'}
+            {isMobileViewport
+              ? sidebarHidden
+                ? t('mediaPage.showSidebar', 'Show sidebar')
+                : t('mediaPage.hideSidebar', 'Hide sidebar')
+              : sidebarHidden
+                ? '>>'
+                : '<<'}
           </button>
         </div>
         <div
@@ -1297,56 +1387,62 @@ export const MediaReviewPage: React.FC = () => {
                         : t("mediaPage.viewerAll", "All items (stacked)")}
                   </div>
                 </div>
-                <Tooltip title={t("mediaPage.spreadModeTooltip", "View selected items side-by-side for comparison")}>
-                  <span>
-                    <Radio.Group
-                      value={viewMode}
-                      onChange={(e) => {
-                        const next = e.target.value as "spread" | "list" | "all"
-                        setViewMode(next)
-                        if (next === "list") {
-                          const id = focusedId ?? selectedIds[0] ?? allResults[0]?.id
-                          if (id != null) {
-                            setFocusedId(id)
-                            void ensureDetail(id)
+                {isMobileViewport ? (
+                  <Tag data-testid="mobile-view-mode-badge">
+                    {t("mediaPage.listMode", "Focus")}
+                  </Tag>
+                ) : (
+                  <Tooltip title={t("mediaPage.spreadModeTooltip", "View selected items side-by-side for comparison")}>
+                    <span>
+                      <Radio.Group
+                        value={viewMode}
+                        onChange={(e) => {
+                          const next = e.target.value as "spread" | "list" | "all"
+                          setViewMode(next)
+                          if (next === "list") {
+                            const id = focusedId ?? selectedIds[0] ?? allResults[0]?.id
+                            if (id != null) {
+                              setFocusedId(id)
+                              void ensureDetail(id)
+                            }
+                          } else if (next === "all") {
+                            const ids = selectedIds.length > 0 ? selectedIds : allResults.slice(0, openAllLimit).map((m) => m.id)
+                            setSelectedIds(ids)
+                            ids.forEach((id) => void ensureDetail(id))
                           }
-                        } else if (next === "all") {
-                          const ids = selectedIds.length > 0 ? selectedIds : allResults.slice(0, openAllLimit).map((m) => m.id)
-                          setSelectedIds(ids)
-                          ids.forEach((id) => void ensureDetail(id))
-                        }
-                      }}
-                      optionType="button"
-                      size="small"
-                    >
-                      <Tooltip title={t("mediaPage.spreadModeTooltip", "View selected items side-by-side for comparison")}>
-                        <Radio.Button value="spread">
-                          <LayoutGrid className="w-3.5 h-3.5 inline mr-1" />
-                          {t("mediaPage.spreadMode", "Compare")}
-                          {selectedIds.length > 0 && <span className="ml-1 text-xs opacity-70">({selectedIds.length})</span>}
-                        </Radio.Button>
-                      </Tooltip>
-                      <Tooltip title={t("mediaPage.listModeTooltip", "View one item at a time with navigation")}>
-                        <Radio.Button value="list">
-                          <Focus className="w-3.5 h-3.5 inline mr-1" />
-                          {t("mediaPage.listMode", "Focus")}
-                          {selectedIds.length > 0 && (
-                            <span className="ml-1 text-xs opacity-70">
-                              ({focusedId != null ? selectedIds.indexOf(focusedId) + 1 : 1}/{selectedIds.length})
-                            </span>
-                          )}
-                        </Radio.Button>
-                      </Tooltip>
-                      <Tooltip title={t("mediaPage.allModeTooltip", "View all selected items in a scrollable list")}>
-                        <Radio.Button value="all">
-                          <Rows3 className="w-3.5 h-3.5 inline mr-1" />
-                          {t("mediaPage.allMode", "Stack")}
-                          {selectedIds.length > 0 && <span className="ml-1 text-xs opacity-70">({selectedIds.length})</span>}
-                        </Radio.Button>
-                      </Tooltip>
-                    </Radio.Group>
-                  </span>
-                </Tooltip>
+                        }}
+                        optionType="button"
+                        size="small"
+                      >
+                        <Tooltip title={t("mediaPage.spreadModeTooltip", "View selected items side-by-side for comparison")}>
+                          <Radio.Button value="spread">
+                            <LayoutGrid className="w-3.5 h-3.5 inline mr-1" />
+                            {t("mediaPage.spreadMode", "Compare")}
+                            {selectedIds.length > 0 && <span className="ml-1 text-xs opacity-70">({selectedIds.length})</span>}
+                          </Radio.Button>
+                        </Tooltip>
+                        <Tooltip title={t("mediaPage.listModeTooltip", "View one item at a time with navigation")}>
+                          <Radio.Button value="list">
+                            <Focus className="w-3.5 h-3.5 inline mr-1" />
+                            {t("mediaPage.listMode", "Focus")}
+                            {selectedIds.length > 0 && (
+                              <span className="ml-1 text-xs opacity-70">
+                                ({focusedId != null ? selectedIds.indexOf(focusedId) + 1 : 1}/{selectedIds.length})
+                              </span>
+                            )}
+                          </Radio.Button>
+                        </Tooltip>
+                        <Tooltip title={t("mediaPage.allModeTooltip", "View all selected items in a scrollable list")}>
+                          <Radio.Button value="all">
+                            <Rows3 className="w-3.5 h-3.5 inline mr-1" />
+                            {t("mediaPage.allMode", "Stack")}
+                            {selectedIds.length > 0 && <span className="ml-1 text-xs opacity-70">({selectedIds.length})</span>}
+                          </Radio.Button>
+                        </Tooltip>
+                      </Radio.Group>
+                    </span>
+                  </Tooltip>
+                )}
                 {viewMode === "list" && (
                   <Select
                     size="small"
@@ -1692,6 +1788,10 @@ export const MediaReviewPage: React.FC = () => {
           <div className="flex justify-between items-center py-1 border-b border-border">
             <span>{t('mediaPage.shortcutToggleExpand', 'Toggle content expand')}</span>
             <kbd className="px-2 py-1 bg-surface2 rounded text-xs">o</kbd>
+          </div>
+          <div className="flex justify-between items-center py-1 border-b border-border">
+            <span>{t('mediaPage.shortcutFocusSearch', 'Focus search')}</span>
+            <kbd className="px-2 py-1 bg-surface2 rounded text-xs">/</kbd>
           </div>
           <div className="font-medium text-text-muted mt-4 mb-2">{t('mediaPage.selectionShortcuts', 'Selection')}</div>
           <div className="flex justify-between items-center py-1 border-b border-border">

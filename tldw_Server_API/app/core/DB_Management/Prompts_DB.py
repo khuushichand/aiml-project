@@ -113,7 +113,7 @@ _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # --- Database Class ---
 class PromptsDatabase:
-    _CURRENT_SCHEMA_VERSION = 2
+    _CURRENT_SCHEMA_VERSION = 3
 
     _TABLES_SQL_V1 = """
     PRAGMA foreign_keys = ON;
@@ -133,6 +133,8 @@ class PromptsDatabase:
         uuid TEXT UNIQUE NOT NULL,
         last_modified DATETIME NOT NULL,
         version INTEGER NOT NULL DEFAULT 1,
+        usage_count INTEGER NOT NULL DEFAULT 0,
+        last_used_at DATETIME,
         client_id TEXT NOT NULL,
         deleted BOOLEAN NOT NULL DEFAULT 0,
         prev_version INTEGER,
@@ -177,6 +179,8 @@ class PromptsDatabase:
                       CREATE INDEX IF NOT EXISTS idx_prompts_author ON Prompts(author);
                       CREATE UNIQUE INDEX IF NOT EXISTS idx_prompts_uuid ON Prompts(uuid);
                       CREATE INDEX IF NOT EXISTS idx_prompts_last_modified ON Prompts(last_modified);
+                      CREATE INDEX IF NOT EXISTS idx_prompts_usage_count ON Prompts(usage_count);
+                      CREATE INDEX IF NOT EXISTS idx_prompts_last_used_at ON Prompts(last_used_at);
                       CREATE INDEX IF NOT EXISTS idx_prompts_deleted ON Prompts(deleted);
 
                       CREATE UNIQUE INDEX IF NOT EXISTS idx_promptkeywordstable_keyword ON PromptKeywordsTable(keyword);
@@ -556,6 +560,7 @@ class PromptsDatabase:
 
     _SCHEMA_UPDATE_VERSION_SQL_V1 = "UPDATE schema_version SET version = 1 WHERE version = 0;"
     _SCHEMA_UPDATE_VERSION_SQL_V2 = "UPDATE schema_version SET version = 2 WHERE version = 1;"
+    _SCHEMA_UPDATE_VERSION_SQL_V3 = "UPDATE schema_version SET version = 3 WHERE version = 2;"
 
     def _apply_schema_v1(self, conn: sqlite3.Connection):
         logging.info(f"Applying initial schema (Version 1) to DB: {self.db_path_str}...")
@@ -573,8 +578,21 @@ class PromptsDatabase:
                 # Validation
                 cursor = conn.execute("PRAGMA table_info(Prompts)")
                 columns = {row['name'] for row in cursor.fetchall()}
-                expected_cols = {'id', 'name', 'author', 'details', 'system_prompt', 'user_prompt', 'uuid',
-                                 'last_modified', 'version', 'client_id', 'deleted'}
+                expected_cols = {
+                    'id',
+                    'name',
+                    'author',
+                    'details',
+                    'system_prompt',
+                    'user_prompt',
+                    'uuid',
+                    'last_modified',
+                    'version',
+                    'usage_count',
+                    'last_used_at',
+                    'client_id',
+                    'deleted'
+                }
                 if not expected_cols.issubset(columns):
                     missing_cols = expected_cols - columns
                     raise SchemaError(f"Validation Error: Prompts table missing columns: {missing_cols}")  # noqa: TRY003
@@ -618,6 +636,44 @@ class PromptsDatabase:
             logging.error(f"[Schema V2] Application failed: {e}", exc_info=True)
             raise DatabaseError(f"DB schema V2 setup failed: {e}") from e  # noqa: TRY003
 
+    def _apply_schema_v3(self, conn: sqlite3.Connection):
+        logging.info(f"Applying schema migration (Version 3) to DB: {self.db_path_str}...")
+        try:
+            with self.transaction():
+                existing_columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(Prompts)").fetchall()
+                }
+                if "usage_count" not in existing_columns:
+                    conn.execute(
+                        "ALTER TABLE Prompts ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "last_used_at" not in existing_columns:
+                    conn.execute("ALTER TABLE Prompts ADD COLUMN last_used_at DATETIME")
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_prompts_usage_count ON Prompts(usage_count)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_prompts_last_used_at ON Prompts(last_used_at)"
+                )
+                conn.execute(self._SCHEMA_UPDATE_VERSION_SQL_V3)
+                cursor_check = conn.execute("SELECT version FROM schema_version LIMIT 1")
+                version_in_tx = cursor_check.fetchone()
+                if not version_in_tx or version_in_tx["version"] != 3:
+                    raise SchemaError("Schema V3 version update did not take effect within transaction.")  # noqa: TRY003
+                prompts_columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(Prompts)").fetchall()
+                }
+                required = {"usage_count", "last_used_at"}
+                missing = required - prompts_columns
+                if missing:
+                    raise SchemaError(
+                        f"Schema V3 validation failed: missing prompt columns {sorted(missing)}."
+                    )  # noqa: TRY003
+            logging.info(f"[Schema V3] Usage tracking fields applied for DB: {self.db_path_str}.")
+        except sqlite3.Error as e:
+            logging.error(f"[Schema V3] Application failed: {e}", exc_info=True)
+            raise DatabaseError(f"DB schema V3 setup failed: {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         conn = self.get_connection()
         try:
@@ -636,6 +692,10 @@ class PromptsDatabase:
                     continue
                 if current_db_version == 1:
                     self._apply_schema_v2(conn)
+                    current_db_version = self._get_db_version(conn)
+                    continue
+                if current_db_version == 2:
+                    self._apply_schema_v3(conn)
                     current_db_version = self._get_db_version(conn)
                     continue
                 raise SchemaError(  # noqa: TRY003
@@ -1044,14 +1104,40 @@ class PromptsDatabase:
                     insert_data = {
                         'name': name, 'author': author, 'details': details, 'system_prompt': system_prompt,
                         'user_prompt': user_prompt,
+                        'usage_count': 0, 'last_used_at': None,
                         'uuid': prompt_uuid, 'last_modified': current_time, 'version': new_version,
                         'client_id': client_id, 'deleted': 0
                     }
                     cursor.execute(
-                        """INSERT INTO Prompts (name, author, details, system_prompt, user_prompt, uuid, last_modified,
-                                                version, client_id, deleted)
-                                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
-                                   (name, author, details, system_prompt, user_prompt, prompt_uuid, current_time, new_version, client_id))
+                        """INSERT INTO Prompts (
+                            name,
+                            author,
+                            details,
+                            system_prompt,
+                            user_prompt,
+                            usage_count,
+                            last_used_at,
+                            uuid,
+                            last_modified,
+                            version,
+                            client_id,
+                            deleted
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                        (
+                            name,
+                            author,
+                            details,
+                            system_prompt,
+                            user_prompt,
+                            0,
+                            None,
+                            prompt_uuid,
+                            current_time,
+                            new_version,
+                            client_id,
+                        ),
+                    )
                     prompt_id = cursor.lastrowid
                     if not prompt_id: raise DatabaseError("Failed to get ID for new prompt.")  # noqa: E701, TRY003, TRY301
                     self._log_sync_event(conn, 'Prompts', prompt_uuid, 'create', new_version, insert_data)
@@ -1217,6 +1303,22 @@ class PromptsDatabase:
                 if 'user_prompt' in update_data:
                     set_clauses.append("user_prompt = ?")
                     params.append(update_data.get('user_prompt'))
+                if 'usage_count' in update_data:
+                    usage_count = update_data.get('usage_count')
+                    if usage_count is not None:
+                        try:
+                            usage_count = int(usage_count)
+                        except (TypeError, ValueError) as exc:
+                            raise InputError("usage_count must be an integer.") from exc  # noqa: TRY003
+                        if usage_count < 0:
+                            raise InputError("usage_count cannot be negative.")  # noqa: TRY003
+                    else:
+                        usage_count = 0
+                    set_clauses.append("usage_count = ?")
+                    params.append(usage_count)
+                if 'last_used_at' in update_data:
+                    set_clauses.append("last_used_at = ?")
+                    params.append(update_data.get('last_used_at'))
 
                 # Always update these
                 set_clauses.extend(
@@ -1259,6 +1361,97 @@ class PromptsDatabase:
             if isinstance(e, (InputError, ConflictError, DatabaseError)):
                 raise
             raise DatabaseError(f"Failed to update prompt ID {prompt_id}: {e}") from e  # noqa: TRY003
+
+    def record_prompt_usage(
+        self, prompt_id_or_name_or_uuid: Union[int, str]
+    ) -> Optional[dict[str, Any]]:
+        current_time = self._get_current_utc_timestamp_str()
+        client_id = self.client_id
+
+        col_name = "id"
+        identifier_value: Union[int, str] = prompt_id_or_name_or_uuid
+
+        if isinstance(prompt_id_or_name_or_uuid, str):
+            if prompt_id_or_name_or_uuid.isdigit():
+                identifier_value = int(prompt_id_or_name_or_uuid)
+                col_name = "id"
+            else:
+                try:
+                    uuid.UUID(prompt_id_or_name_or_uuid, version=4)
+                    col_name = "uuid"
+                except ValueError:
+                    col_name = "name"
+
+        try:
+            with self.transaction() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT id, uuid, version, usage_count
+                    FROM Prompts
+                    WHERE {col_name} = ? AND deleted = 0
+                    """,
+                    (identifier_value,),
+                )
+                prompt_info = cursor.fetchone()
+                if not prompt_info:
+                    return None
+
+                prompt_id = int(prompt_info["id"])
+                prompt_uuid = prompt_info["uuid"]
+                current_version = int(prompt_info["version"])
+                current_usage_count = int(prompt_info["usage_count"] or 0)
+                new_usage_count = current_usage_count + 1
+                new_version = current_version + 1
+
+                cursor.execute(
+                    """
+                    UPDATE Prompts
+                    SET usage_count = ?,
+                        last_used_at = ?,
+                        last_modified = ?,
+                        version = ?,
+                        client_id = ?
+                    WHERE id = ? AND version = ?
+                    """,
+                    (
+                        new_usage_count,
+                        current_time,
+                        current_time,
+                        new_version,
+                        client_id,
+                        prompt_id,
+                        current_version,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    raise ConflictError(
+                        f"Failed to update usage for prompt ID {prompt_id}.",
+                        "Prompts",
+                        prompt_id,
+                    )
+
+                payload = {
+                    "id": prompt_id,
+                    "usage_count": new_usage_count,
+                    "last_used_at": current_time,
+                    "last_modified": current_time,
+                    "version": new_version,
+                    "client_id": client_id,
+                }
+                self._log_sync_event(
+                    conn, "Prompts", prompt_uuid, "update", new_version, payload
+                )
+
+            return self.fetch_prompt_details(prompt_id, include_deleted=False)
+        except (InputError, ConflictError, DatabaseError, sqlite3.Error) as e:
+            logger.error(
+                f"Error recording usage for prompt '{prompt_id_or_name_or_uuid}': {e}",
+                exc_info=True,
+            )
+            if isinstance(e, (InputError, ConflictError, DatabaseError)):
+                raise
+            raise DatabaseError(f"Failed to record prompt usage: {e}") from e  # noqa: TRY003
 
     def soft_delete_prompt(self, prompt_id_or_name_or_uuid: Union[int, str]) -> bool:
         current_time = self._get_current_utc_timestamp_str()
@@ -1525,6 +1718,148 @@ class PromptsDatabase:
                 raise
             raise DatabaseError(f"Failed to fetch prompt collection: {e}") from e  # noqa: TRY003
 
+    def list_prompt_collections(self, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        if not isinstance(limit, int) or limit <= 0:
+            raise InputError("Limit must be a positive integer.")  # noqa: TRY003
+        if not isinstance(offset, int) or offset < 0:
+            raise InputError("Offset must be a non-negative integer.")  # noqa: TRY003
+
+        try:
+            collection_rows = self.execute_query(
+                """
+                SELECT id, name, description
+                FROM PromptCollections
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+
+            collections: list[dict[str, Any]] = []
+            for collection_row in collection_rows:
+                collection_id = int(collection_row["id"])
+                prompt_rows = self.execute_query(
+                    """
+                    SELECT pci.prompt_id
+                    FROM PromptCollectionItems pci
+                    JOIN Prompts p ON p.id = pci.prompt_id
+                    WHERE pci.collection_id = ? AND p.deleted = 0
+                    ORDER BY pci.sort_order ASC, pci.prompt_id ASC
+                    """,
+                    (collection_id,),
+                ).fetchall()
+                collections.append(
+                    {
+                        "collection_id": collection_id,
+                        "name": collection_row["name"],
+                        "description": collection_row["description"],
+                        "prompt_ids": [int(row["prompt_id"]) for row in prompt_rows],
+                    }
+                )
+
+            return collections
+        except (InputError, DatabaseError, sqlite3.Error) as e:
+            logger.error(f"Error listing prompt collections: {e}", exc_info=True)
+            if isinstance(e, (InputError, DatabaseError)):
+                raise
+            raise DatabaseError(f"Failed to list prompt collections: {e}") from e  # noqa: TRY003
+
+    def update_prompt_collection(
+        self,
+        collection_id: int,
+        *,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        prompt_ids: Optional[list[int]] = None,
+    ) -> Optional[dict[str, Any]]:
+        if not isinstance(collection_id, int) or collection_id <= 0:
+            raise InputError("Collection ID must be a positive integer.")  # noqa: TRY003
+
+        normalized_name: Optional[str] = None
+        if name is not None:
+            if not isinstance(name, str) or not name.strip():
+                raise InputError("Collection name cannot be empty.")  # noqa: TRY003
+            normalized_name = name.strip()
+
+        normalized_description = description.strip() if isinstance(description, str) else description
+
+        normalized_prompt_ids: Optional[list[int]] = None
+        if prompt_ids is not None:
+            normalized_prompt_ids = []
+            for item in prompt_ids:
+                if not isinstance(item, int) or item <= 0:
+                    raise InputError(f"Invalid prompt ID in collection payload: {item!r}")  # noqa: TRY003
+                if item not in normalized_prompt_ids:
+                    normalized_prompt_ids.append(item)
+
+        timestamp = self._get_current_utc_timestamp_str()
+
+        try:
+            with self.transaction() as conn:
+                cursor = conn.cursor()
+                collection_row = cursor.execute(
+                    """
+                    SELECT id, name, description
+                    FROM PromptCollections
+                    WHERE id = ?
+                    """,
+                    (collection_id,),
+                ).fetchone()
+                if not collection_row:
+                    return None
+
+                next_name = normalized_name if normalized_name is not None else collection_row["name"]
+                next_description = (
+                    normalized_description
+                    if description is not None
+                    else collection_row["description"]
+                )
+
+                cursor.execute(
+                    """
+                    UPDATE PromptCollections
+                    SET name = ?, description = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (next_name, next_description, timestamp, collection_id),
+                )
+
+                if normalized_prompt_ids is not None:
+                    if normalized_prompt_ids:
+                        placeholders = ",".join("?" for _ in normalized_prompt_ids)
+                        existing_rows = cursor.execute(
+                            f"SELECT id FROM Prompts WHERE deleted = 0 AND id IN ({placeholders})",
+                            tuple(normalized_prompt_ids),
+                        ).fetchall()
+                        existing_prompt_ids = {int(row["id"]) for row in existing_rows}
+                        missing = [pid for pid in normalized_prompt_ids if pid not in existing_prompt_ids]
+                        if missing:
+                            raise InputError(f"Prompt(s) not found or deleted: {missing}")  # noqa: TRY003
+
+                    cursor.execute(
+                        "DELETE FROM PromptCollectionItems WHERE collection_id = ?",
+                        (collection_id,),
+                    )
+
+                    if normalized_prompt_ids:
+                        cursor.executemany(
+                            """
+                            INSERT INTO PromptCollectionItems (collection_id, prompt_id, sort_order)
+                            VALUES (?, ?, ?)
+                            """,
+                            [
+                                (collection_id, prompt_id, idx)
+                                for idx, prompt_id in enumerate(normalized_prompt_ids)
+                            ],
+                        )
+
+            return self.get_prompt_collection_by_id(collection_id)
+        except (InputError, DatabaseError, sqlite3.Error) as e:
+            logger.error(f"Error updating prompt collection {collection_id}: {e}", exc_info=True)
+            if isinstance(e, (InputError, DatabaseError)):
+                raise
+            raise DatabaseError(f"Failed to update prompt collection: {e}") from e  # noqa: TRY003
+
     # --- Read Methods ---
     def get_prompt_by_id(self, prompt_id: int, include_deleted: bool = False) -> Optional[dict]:
         query = "SELECT * FROM Prompts WHERE id = ?"
@@ -1584,6 +1919,8 @@ class PromptsDatabase:
             "name": "name",
             "author": "author",
             "id": "id",
+            "usage_count": "usage_count",
+            "last_used_at": "last_used_at",
         }
         if sort_key not in allowed_sort:
             raise ValueError(f"Unsupported sort_by value: {sort_by}")  # noqa: TRY003
@@ -1609,7 +1946,7 @@ class PromptsDatabase:
                 results_data = []
                 if total_items > 0:
                     # Select desired fields, e.g., id, name, uuid, author
-                    query = f"""SELECT id, name, uuid, author, details, last_modified FROM Prompts
+                    query = f"""SELECT id, name, uuid, author, details, last_modified, usage_count, last_used_at FROM Prompts
                                 {where_clause} ORDER BY {order_clause}
                                 LIMIT ? OFFSET ?"""
                     cursor.execute(query, (per_page, offset))

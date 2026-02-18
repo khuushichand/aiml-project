@@ -231,17 +231,21 @@ describe("WorldBooksManager error-handling stage-1 entry totals", () => {
     vi.clearAllMocks()
   })
 
-  it("shows visible window count against API total and keeps filtering compatible", async () => {
-    const user = userEvent.setup()
-    render(<WorldBooksManager />)
+  it(
+    "shows visible window count against API total and keeps filtering compatible",
+    async () => {
+      const user = userEvent.setup()
+      render(<WorldBooksManager />)
 
-    await user.click(screen.getByRole("button", { name: "Manage entries" }))
-    expect(await screen.findByText("Showing 3 of 500 entries.")).toBeInTheDocument()
+      await user.click(screen.getByRole("button", { name: "Manage entries" }))
+      expect(await screen.findByText("Showing 3 of 500 entries.")).toBeInTheDocument()
 
-    await user.clear(screen.getByRole("textbox", { name: "Search entries" }))
-    await user.type(screen.getByRole("textbox", { name: "Search entries" }), "no-match")
+      await user.clear(screen.getByRole("textbox", { name: "Search entries" }))
+      await user.type(screen.getByRole("textbox", { name: "Search entries" }), "no-match")
 
-    expect(await screen.findByText("Showing 0 of 500 entries.")).toBeInTheDocument()
-    expect(screen.getByText("No entries match the current filters.")).toBeInTheDocument()
-  })
+      expect(await screen.findByText("Showing 0 of 500 entries.")).toBeInTheDocument()
+      expect(screen.getByText("No entries match the current filters.")).toBeInTheDocument()
+    },
+    15000
+  )
 })

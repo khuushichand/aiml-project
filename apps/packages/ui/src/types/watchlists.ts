@@ -488,6 +488,7 @@ export interface SourceSeenResetResponse {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type WatchlistTab =
+  | "overview"
   | "sources"
   | "jobs"
   | "runs"

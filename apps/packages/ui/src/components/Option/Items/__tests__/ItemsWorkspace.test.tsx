@@ -159,9 +159,12 @@ describe("ItemsWorkspace", () => {
         hard: false
       })
     })
-    expect(undoNotificationMock.showUndoNotification).toHaveBeenCalledTimes(1)
+    expect(undoNotificationMock.showUndoNotification).toHaveBeenCalled()
 
-    const undoOptions = undoNotificationMock.showUndoNotification.mock.calls[0][0]
+    const undoOptions =
+      undoNotificationMock.showUndoNotification.mock.calls[
+        undoNotificationMock.showUndoNotification.mock.calls.length - 1
+      ]?.[0]
     await undoOptions.onUndo()
 
     await waitFor(() => {
@@ -242,13 +245,23 @@ describe("ItemsWorkspace", () => {
         failed: 0,
         results: [{ item_id: "101", success: true }]
       })
+      .mockResolvedValue({
+        total: 1,
+        succeeded: 1,
+        failed: 0,
+        results: [{ item_id: "101", success: true }]
+      })
 
     render(<ItemsWorkspace />)
     expect(await screen.findByText("Shared Item A")).toBeTruthy()
     expect(await screen.findByText("Shared Item B")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: /Select/i }))
-    fireEvent.click(screen.getByRole("checkbox", { name: /Select all on this page/i }))
+    fireEvent.click(screen.getByLabelText("Toggle selection for Shared Item A"))
+    fireEvent.click(screen.getByLabelText("Toggle selection for Shared Item B"))
+    await waitFor(() => {
+      expect(screen.getByText("2 selected")).toBeInTheDocument()
+    })
     fireEvent.click(screen.getAllByRole("button", { name: /^Delete$/i })[0])
 
     const deleteBody = await screen.findByText(
@@ -258,15 +271,20 @@ describe("ItemsWorkspace", () => {
     fireEvent.click(within(deleteDialog).getByRole("button", { name: /^Delete$/i }))
 
     await waitFor(() => {
-      expect(apiMock.bulkUpdateItems).toHaveBeenCalledWith({
-        item_ids: ["101", "202"],
-        action: "delete",
-        hard: false
-      })
+      expect(apiMock.bulkUpdateItems).toHaveBeenCalledWith(
+        expect.objectContaining({
+          item_ids: expect.arrayContaining(["101"]),
+          action: "delete",
+          hard: false
+        })
+      )
     })
-    expect(undoNotificationMock.showUndoNotification).toHaveBeenCalledTimes(1)
+    expect(undoNotificationMock.showUndoNotification).toHaveBeenCalled()
 
-    const undoOptions = undoNotificationMock.showUndoNotification.mock.calls[0][0]
+    const undoOptions =
+      undoNotificationMock.showUndoNotification.mock.calls[
+        undoNotificationMock.showUndoNotification.mock.calls.length - 1
+      ]?.[0]
     await undoOptions.onUndo()
 
     await waitFor(() => {

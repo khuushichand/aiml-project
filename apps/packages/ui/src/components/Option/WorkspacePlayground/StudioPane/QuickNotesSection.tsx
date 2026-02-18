@@ -20,6 +20,11 @@ import { bgRequest } from "@/services/background-proxy"
 import type { AllowedPath } from "@/services/tldw/openapi-guard"
 import { MarkdownPreview } from "@/components/Common/MarkdownPreview"
 import { getNoteKeywords } from "@/services/note-keywords"
+import {
+  WORKSPACE_UNDO_WINDOW_MS,
+  scheduleWorkspaceUndoAction,
+  undoWorkspaceAction
+} from "../undo-manager"
 
 const { TextArea } = Input
 
@@ -709,6 +714,51 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
   }
 
   // Handle clear
+  const clearNoteWithUndo = () => {
+    const previousNote = {
+      ...currentNote,
+      keywords: [...currentNote.keywords]
+    }
+    const previousKeywordsInput = keywordsInput
+    const undoHandle = scheduleWorkspaceUndoAction({
+      apply: () => {
+        clearCurrentNote()
+        setKeywordsInput("")
+      },
+      undo: () => {
+        setCurrentNote(previousNote)
+        setKeywordsInput(previousKeywordsInput)
+      }
+    })
+
+    const undoMessageKey = `workspace-note-clear-undo-${undoHandle.id}`
+    messageApi.open({
+      key: undoMessageKey,
+      type: "warning",
+      duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+      content: t(
+        "playground:studio.noteCleared",
+        "Note cleared."
+      ),
+      btn: (
+        <Button
+          size="small"
+          type="link"
+          onClick={() => {
+            if (undoWorkspaceAction(undoHandle.id)) {
+              messageApi.success(
+                t("playground:studio.noteRestored", "Note restored")
+              )
+            }
+            messageApi.destroy(undoMessageKey)
+          }}
+        >
+          {t("common:undo", "Undo")}
+        </Button>
+      )
+    })
+  }
+
   const handleClear = () => {
     if (currentNote.isDirty) {
       Modal.confirm({
@@ -718,13 +768,11 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
           "You have unsaved changes. Are you sure you want to clear?"
         ),
         onOk: () => {
-          clearCurrentNote()
-          setKeywordsInput("")
+          clearNoteWithUndo()
         }
       })
     } else {
-      clearCurrentNote()
-      setKeywordsInput("")
+      clearNoteWithUndo()
     }
   }
 

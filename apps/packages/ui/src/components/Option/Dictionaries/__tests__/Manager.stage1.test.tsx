@@ -266,7 +266,7 @@ describe("DictionariesManager stage-1 empty and error states", () => {
     ).toBeInTheDocument()
     expect(screen.getByText("Literal: BP -> blood pressure")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Add first entry" })).toBeInTheDocument()
-  })
+  }, 15000)
 
   it("renders entry loading error state with retry action", async () => {
     const user = userEvent.setup()
@@ -317,5 +317,5 @@ describe("DictionariesManager stage-1 empty and error states", () => {
     ).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Retry" }))
     expect(refetchMock).toHaveBeenCalled()
-  })
+  }, 15000)
 })

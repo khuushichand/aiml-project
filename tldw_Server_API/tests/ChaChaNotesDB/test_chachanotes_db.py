@@ -333,6 +333,27 @@ class TestMessageMetadata:
         assert card_b_id not in with_conv_ids
         assert card_c_id not in with_conv_ids
 
+        card_b_record = db_instance.get_character_card_by_id(card_b_id)
+        assert card_b_record is not None
+        soft_deleted = db_instance.soft_delete_character_card(
+            card_b_id,
+            int(card_b_record["version"])
+        )
+        assert soft_deleted is True
+
+        deleted_only_items, deleted_only_total = db_instance.query_character_cards(
+            deleted_only=True,
+            sort_by="name",
+            sort_order="asc",
+            limit=20,
+            offset=0,
+        )
+        deleted_only_ids = {item["id"] for item in deleted_only_items}
+        assert deleted_only_total >= 1
+        assert card_b_id in deleted_only_ids
+        assert card_a_id not in deleted_only_ids
+        assert card_c_id not in deleted_only_ids
+
     def test_manage_character_tags_rename_merge_delete(self, db_instance: CharactersRAGDB):
         rename_a = _create_sample_card_data("TagRenameA")
         rename_a["tags"] = json.dumps(["legacy", "shared"])

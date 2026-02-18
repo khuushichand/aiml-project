@@ -638,6 +638,7 @@ export const GenerationPreviewModal: React.FC<GenerationPreviewModalProps> = ({
         </Button>
       ]}
       destroyOnHidden
+      rootClassName="characters-motion-modal"
       aria-describedby="generation-preview-content">
       <div id="generation-preview-content">
         {previewContent}

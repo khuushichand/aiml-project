@@ -1,7 +1,8 @@
 import React from "react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { Modal } from "antd"
 import { DictionariesManager } from "../Manager"
 
 if (!window.matchMedia) {
@@ -252,6 +253,10 @@ describe("DictionariesManager stage-2 recovery flows", () => {
     })
   })
 
+  afterEach(() => {
+    Modal.destroyAll()
+  })
+
   it("shows undo flow for entry deletion and restores the entry on undo", async () => {
     const user = userEvent.setup()
     render(<DictionariesManager />)
@@ -285,6 +290,9 @@ describe("DictionariesManager stage-2 recovery flows", () => {
     render(<DictionariesManager />)
 
     await user.click(screen.getByRole("button", { name: "Import" }))
+    const previewImportButton = await screen.findByRole("button", {
+      name: "Preview import"
+    })
 
     const fileInput = document.querySelector(
       'input[type="file"]'
@@ -306,6 +314,10 @@ describe("DictionariesManager stage-2 recovery flows", () => {
     fireEvent.change(fileInput as HTMLInputElement, {
       target: { files: [malformedImport] }
     })
+    await waitFor(() => {
+      expect(previewImportButton).toBeEnabled()
+    })
+    await user.click(previewImportButton)
 
     await waitFor(() => {
       expect(
@@ -319,5 +331,5 @@ describe("DictionariesManager stage-2 recovery flows", () => {
       screen.getByText("Entry 1: missing required field `pattern`.")
     ).toBeInTheDocument()
     expect(tldwClientMock.importDictionaryJSON).not.toHaveBeenCalled()
-  })
+  }, 15000)
 })

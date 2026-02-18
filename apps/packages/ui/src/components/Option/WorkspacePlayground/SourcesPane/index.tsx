@@ -13,13 +13,18 @@ import {
   Loader2,
   AlertTriangle
 } from "lucide-react"
-import { Input, Checkbox, Empty, Button, Tooltip } from "antd"
+import { Input, Checkbox, Empty, Button, Tooltip, message } from "antd"
 import { useWorkspaceStore } from "@/store/workspace"
 import type { WorkspaceSourceType } from "@/types/workspace"
 import {
   WORKSPACE_SOURCE_DRAG_TYPE,
   serializeWorkspaceSourceDragPayload
 } from "../drag-source"
+import {
+  WORKSPACE_UNDO_WINDOW_MS,
+  scheduleWorkspaceUndoAction,
+  undoWorkspaceAction
+} from "../undo-manager"
 import { AddSourceModal } from "./AddSourceModal"
 
 // Icon mapping for source types
@@ -46,6 +51,7 @@ interface SourcesPaneProps {
  */
 export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
   const { t } = useTranslation(["playground", "common"])
+  const [messageApi, messageContextHolder] = message.useMessage()
 
   // Store state
   const sources = useWorkspaceStore((s) => s.sources)
@@ -63,6 +69,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
   )
   const openAddSourceModal = useWorkspaceStore((s) => s.openAddSourceModal)
   const removeSource = useWorkspaceStore((s) => s.removeSource)
+  const restoreSource = useWorkspaceStore((s) => s.restoreSource)
   const sourceItemRefs = React.useRef<Record<string, HTMLDivElement | null>>({})
   const sourceListContainerRef = React.useRef<HTMLDivElement | null>(null)
   const [highlightedSourceId, setHighlightedSourceId] = React.useState<
@@ -290,7 +297,48 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
         </div>
         <button
           type="button"
-          onClick={() => removeSource(source.id)}
+          onClick={() => {
+            const sourceIndex = sources.findIndex((entry) => entry.id === source.id)
+            const wasSelected = selectedSourceIds.includes(source.id)
+            const undoHandle = scheduleWorkspaceUndoAction({
+              apply: () => {
+                removeSource(source.id)
+              },
+              undo: () => {
+                restoreSource(source, {
+                  index: sourceIndex,
+                  select: wasSelected
+                })
+              }
+            })
+
+            const undoMessageKey = `workspace-source-undo-${undoHandle.id}`
+            messageApi.open({
+              key: undoMessageKey,
+              type: "warning",
+              duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+              content: t(
+                "playground:sources.undoRemove",
+                "Source removed."
+              ),
+              btn: (
+                <Button
+                  size="small"
+                  type="link"
+                  onClick={() => {
+                    if (undoWorkspaceAction(undoHandle.id)) {
+                      messageApi.success(
+                        t("playground:sources.restoreSuccess", "Source restored")
+                      )
+                    }
+                    messageApi.destroy(undoMessageKey)
+                  }}
+                >
+                  {t("common:undo", "Undo")}
+                </Button>
+              )
+            })
+          }}
           data-testid={`remove-source-${source.id}`}
           className="shrink-0 rounded p-1 text-text-muted opacity-0 transition hover:bg-error/10 hover:text-error group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11 [@media(hover:none)]:opacity-100"
           aria-label={t("common:remove", "Remove")}
@@ -315,6 +363,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
 
   return (
     <div className="flex h-full flex-col">
+      {messageContextHolder}
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold text-text">

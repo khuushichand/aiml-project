@@ -19,6 +19,8 @@ export type PromptSearchItem = {
   user_prompt?: string | null
   last_modified?: string
   version?: number
+  usage_count?: number
+  last_used_at?: string | null
   keywords?: string[]
   deleted?: boolean
   relevance_score?: number | null
@@ -44,6 +46,33 @@ export type PromptExportResponse = {
   message: string
   file_path?: string | null
   file_content_b64?: string | null
+}
+
+export type PromptCollection = {
+  collection_id: number
+  name: string
+  description?: string | null
+  prompt_ids: number[]
+}
+
+export type PromptCollectionListResponse = {
+  collections: PromptCollection[]
+}
+
+export type PromptCollectionCreatePayload = {
+  name: string
+  description?: string | null
+  prompt_ids?: number[]
+}
+
+export type PromptCollectionCreateResponse = {
+  collection_id: number
+}
+
+export type PromptCollectionUpdatePayload = {
+  name?: string
+  description?: string | null
+  prompt_ids?: number[]
 }
 
 export const buildPromptSearchQuery = ({
@@ -115,4 +144,50 @@ export async function exportPromptsServer(
       message: ""
     }
   )
+}
+
+export async function listPromptCollectionsServer(): Promise<PromptCollection[]> {
+  const response = await apiSend<PromptCollectionListResponse>({
+    path: toAllowedPath("/api/v1/prompts/collections"),
+    method: "GET"
+  })
+
+  if (!response.ok) {
+    throw new Error(response.error || "Failed to load prompt collections")
+  }
+
+  return response.data?.collections || []
+}
+
+export async function createPromptCollectionServer(
+  payload: PromptCollectionCreatePayload
+): Promise<PromptCollectionCreateResponse> {
+  const response = await apiSend<PromptCollectionCreateResponse>({
+    path: toAllowedPath("/api/v1/prompts/collections/create"),
+    method: "POST",
+    body: payload
+  })
+
+  if (!response.ok || !response.data) {
+    throw new Error(response.error || "Failed to create prompt collection")
+  }
+
+  return response.data
+}
+
+export async function updatePromptCollectionServer(
+  collectionId: number,
+  payload: PromptCollectionUpdatePayload
+): Promise<PromptCollection> {
+  const response = await apiSend<PromptCollection>({
+    path: toAllowedPath(`/api/v1/prompts/collections/${collectionId}`),
+    method: "PUT",
+    body: payload
+  })
+
+  if (!response.ok || !response.data) {
+    throw new Error(response.error || "Failed to update prompt collection")
+  }
+
+  return response.data
 }

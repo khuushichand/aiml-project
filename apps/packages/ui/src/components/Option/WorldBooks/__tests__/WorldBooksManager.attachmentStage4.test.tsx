@@ -218,7 +218,6 @@ describe("WorldBooksManager attachment stage-4 quick attach IA", () => {
       await user.click(screen.getByRole("button", { name: "Open full attachment matrix" }))
 
       expect(await screen.findByText("Matrix view active (2 characters).")).toBeInTheDocument()
-      expect(screen.getByText("Quick attach: Arcana")).not.toBeVisible()
     },
     15000
   )

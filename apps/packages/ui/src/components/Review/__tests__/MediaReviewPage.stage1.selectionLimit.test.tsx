@@ -27,7 +27,19 @@ const mocks = vi.hoisted(() => ({
   setChatMode: vi.fn(),
   setSelectedKnowledge: vi.fn(),
   setRagMediaIds: vi.fn(),
-  navigate: vi.fn()
+  navigate: vi.fn(),
+  useVirtualizer: vi.fn(({ count }: { count: number }) => ({
+    getTotalSize: () => count * 120,
+    getVirtualItems: () =>
+      Array.from({ length: count }).map((_, index) => ({
+        index,
+        start: index * 120,
+        size: 120,
+        key: index
+      })),
+    scrollToIndex: vi.fn(),
+    measureElement: vi.fn()
+  }))
 }))
 
 const interpolate = (template: string, values?: Record<string, unknown>) =>
@@ -86,18 +98,7 @@ vi.mock('@tanstack/react-query', () => ({
 }))
 
 vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getTotalSize: () => count * 120,
-    getVirtualItems: () =>
-      Array.from({ length: count }).map((_, index) => ({
-        index,
-        start: index * 120,
-        size: 120,
-        key: index
-      })),
-    scrollToIndex: vi.fn(),
-    measureElement: vi.fn()
-  })
+  useVirtualizer: (params: { count: number }) => mocks.useVirtualizer(params)
 }))
 
 vi.mock('@/hooks/useServerOnline', () => ({
@@ -169,16 +170,19 @@ vi.mock('antd', async (importOriginal) => {
   const React = await import('react')
   const actual = await importOriginal<typeof import('antd')>()
 
-  const Input = ({ value, onChange, onPressEnter, placeholder, ...rest }: any) => (
-    <input
-      value={value || ''}
-      onChange={onChange}
-      placeholder={placeholder}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') onPressEnter?.(event)
-      }}
-      {...rest}
-    />
+  const Input = React.forwardRef<HTMLInputElement, any>(
+    ({ value, onChange, onPressEnter, placeholder, ...rest }, ref) => (
+      <input
+        ref={ref}
+        value={value || ''}
+        onChange={onChange}
+        placeholder={placeholder}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') onPressEnter?.(event)
+        }}
+        {...rest}
+      />
+    )
   )
 
   const Button = ({ children, onClick, disabled, icon, danger: _danger, iconPlacement: _iconPlacement, ...rest }: any) => (
@@ -352,6 +356,7 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     mocks.setSelectedKnowledge.mockReset()
     mocks.setRagMediaIds.mockReset()
     mocks.navigate.mockReset()
+    mocks.useVirtualizer.mockClear()
 
     mocks.getSetting.mockResolvedValue(null)
     mocks.setSetting.mockResolvedValue(undefined)
@@ -377,21 +382,20 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       }
     })
 
-    if (typeof window !== 'undefined' && !window.matchMedia) {
-      Object.defineProperty(window, 'matchMedia', {
-        writable: true,
-        value: vi.fn().mockImplementation(() => ({
-          matches: false,
-          media: '',
-          onchange: null,
-          addListener: vi.fn(),
-          removeListener: vi.fn(),
-          addEventListener: vi.fn(),
-          removeEventListener: vi.fn(),
-          dispatchEvent: vi.fn()
-        }))
-      })
-    }
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      configurable: true,
+      value: vi.fn().mockImplementation(() => ({
+        matches: false,
+        media: '',
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn()
+      }))
+    })
   })
 
   const getResultRowByTitle = (title: string): HTMLElement => {
@@ -400,6 +404,28 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     const row = text.closest('[role="button"]')
     if (!row) throw new Error(`Missing row for title: ${title}`)
     return row as HTMLElement
+  }
+
+  const setMobileViewport = (isMobile: boolean) => {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches:
+          query === '(prefers-reduced-motion: reduce)'
+            ? false
+            : query === '(max-width: 1023px)'
+              ? isMobile
+              : false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn()
+      }))
+    })
   }
 
   it('renders X / 30 selected and updates counter correctly on shift-click range selection', async () => {
@@ -464,6 +490,43 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
 
     const checkbox = within(row).getByRole('checkbox')
     expect(checkbox).toBeChecked()
+  })
+
+  it('shows inline double-escape hint when selection exceeds five items', async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('escape-double-tap-hint-inline')).not.toBeInTheDocument()
+
+    for (let i = 1; i <= 6; i++) {
+      fireEvent.click(getResultRowByTitle(`Item ${i}`))
+    }
+
+    await waitFor(() => {
+      expect(screen.getByText('6 / 30 selected')).toBeInTheDocument()
+      expect(screen.getByTestId('escape-double-tap-hint-inline')).toHaveTextContent(
+        'Tip: press Escape twice quickly to clear large selections.'
+      )
+    })
+  })
+
+  it('focuses the search field when slash shortcut is pressed outside typing contexts', async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    const searchInput = screen.getByPlaceholderText('Search media (title/content)')
+    expect(searchInput).not.toHaveFocus()
+
+    fireEvent.keyDown(document, { key: '/' })
+
+    await waitFor(() => {
+      expect(searchInput).toHaveFocus()
+    })
   })
 
   it('shows compare content action only when exactly two items are selected', async () => {
@@ -730,5 +793,68 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('Recovered Content 1')).toBeInTheDocument()
     })
     expect(attempts.get(1)).toBeGreaterThanOrEqual(2)
+  })
+
+  it('forces list mode and hides sidebar by default on mobile viewports', async () => {
+    setMobileViewport(true)
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Show sidebar' })).toBeInTheDocument()
+    })
+    expect(screen.getByText('Focus')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Compare' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stack' })).not.toBeInTheDocument()
+  })
+
+  it('keeps mobile viewer in single-item mode for multi-selection', async () => {
+    setMobileViewport(true)
+    render(<MediaReviewPage />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show sidebar' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+    fireEvent.click(getResultRowByTitle('Item 2'))
+
+    await waitFor(() => {
+      expect(screen.getByText('2 / 30 selected')).toBeInTheDocument()
+      expect(screen.getByText('Single item view')).toBeInTheDocument()
+    })
+    expect(screen.getAllByRole('button', { name: 'Copy Content' })).toHaveLength(1)
+  })
+
+  it('keeps list and viewer virtualization counts aligned with result/selection state', async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    expect(
+      mocks.useVirtualizer.mock.calls.some(
+        (call) => Number((call[0] as { count?: number })?.count) === mediaItems.length
+      )
+    ).toBe(true)
+    expect(
+      mocks.useVirtualizer.mock.calls.some(
+        (call) => Number((call[0] as { count?: number })?.count) === 0
+      )
+    ).toBe(true)
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+    fireEvent.click(getResultRowByTitle('Item 2'))
+
+    await waitFor(() => {
+      expect(screen.getByText('2 / 30 selected')).toBeInTheDocument()
+    })
+    expect(
+      mocks.useVirtualizer.mock.calls.some(
+        (call) => Number((call[0] as { count?: number })?.count) === 2
+      )
+    ).toBe(true)
   })
 })

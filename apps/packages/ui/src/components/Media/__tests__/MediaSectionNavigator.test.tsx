@@ -111,6 +111,21 @@ describe('MediaSectionNavigator', () => {
     expect(screen.getByText('Chapter 12 > Section 5')).toBeInTheDocument()
   })
 
+  it('keeps responsive container classes for mobile/desktop navigator layouts', () => {
+    render(
+      <MediaSectionNavigator
+        nodes={sampleNodes}
+        selectedNodeId={null}
+        onSelectNode={vi.fn()}
+      />
+    )
+
+    const navigator = screen.getByLabelText('Chapters and sections')
+    expect(navigator).toHaveClass('w-full')
+    expect(navigator).toHaveClass('md:w-72')
+    expect(navigator).toHaveClass('md:min-w-72')
+  })
+
   it('quick-jumps to top match on Enter', async () => {
     const onSelectNode = vi.fn()
     render(

@@ -120,6 +120,34 @@ class TestPromptCRUDEndpoints:
         assert data.get('details') == 'Updated content {{new_var}}'
 
     @pytest.mark.integration
+    def test_record_prompt_usage_endpoint(self, test_client, auth_headers):
+        """Test recording prompt usage increments usage_count and updates last_used_at."""
+        create_response = test_client.post(
+            "/api/v1/prompts",
+            json={'name': 'Usage Test', 'details': 'Track this prompt', 'author': 'test'},
+            headers=auth_headers
+        )
+        prompt_id = create_response.json()['id']
+
+        first_use = test_client.post(
+            f"/api/v1/prompts/{prompt_id}/use",
+            headers=auth_headers
+        )
+        assert first_use.status_code == 200
+        first_payload = first_use.json()
+        assert first_payload.get('usage_count') == 1
+        assert first_payload.get('last_used_at') is not None
+
+        second_use = test_client.post(
+            f"/api/v1/prompts/{prompt_id}/use",
+            headers=auth_headers
+        )
+        assert second_use.status_code == 200
+        second_payload = second_use.json()
+        assert second_payload.get('usage_count') == 2
+        assert second_payload.get('last_used_at') is not None
+
+    @pytest.mark.integration
     def test_delete_prompt_endpoint(self, test_client, auth_headers):
         """Test deleting a prompt via API."""
         create_response = test_client.post(
@@ -485,6 +513,93 @@ class TestCollectionEndpoints:
         data = get_response.json()
         assert data['name'] == 'Get Test'
         assert data['description'] == 'Test'
+
+    @pytest.mark.integration
+    def test_list_collections_endpoint(self, test_client, auth_headers):
+        """Test listing collections via API."""
+        first = test_client.post(
+            "/api/v1/prompts/collections/create",
+            json={"name": "List Collection A", "description": "A", "prompt_ids": []},
+            headers=auth_headers,
+        )
+        second = test_client.post(
+            "/api/v1/prompts/collections/create",
+            json={"name": "List Collection B", "description": "B", "prompt_ids": []},
+            headers=auth_headers,
+        )
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+
+        list_response = test_client.get(
+            "/api/v1/prompts/collections",
+            headers=auth_headers,
+        )
+
+        assert list_response.status_code == 200, list_response.text
+        payload = list_response.json()
+        assert "collections" in payload
+        names = {item["name"] for item in payload["collections"]}
+        assert {"List Collection A", "List Collection B"}.issubset(names)
+
+    @pytest.mark.integration
+    def test_update_collection_endpoint(self, test_client, auth_headers):
+        """Test updating collection metadata and prompt membership."""
+        prompt_one = test_client.post(
+            "/api/v1/prompts/create",
+            json={"name": "Update Col Prompt 1", "content": "P1", "author": "test"},
+            headers=auth_headers,
+        )
+        prompt_two = test_client.post(
+            "/api/v1/prompts/create",
+            json={"name": "Update Col Prompt 2", "content": "P2", "author": "test"},
+            headers=auth_headers,
+        )
+        assert prompt_one.status_code == 201, prompt_one.text
+        assert prompt_two.status_code == 201, prompt_two.text
+
+        create_response = test_client.post(
+            "/api/v1/prompts/collections/create",
+            json={
+                "name": "Original Collection",
+                "description": "Original",
+                "prompt_ids": [prompt_one.json()["prompt_id"]],
+            },
+            headers=auth_headers,
+        )
+        assert create_response.status_code == 200, create_response.text
+        collection_id = create_response.json()["collection_id"]
+
+        update_response = test_client.put(
+            f"/api/v1/prompts/collections/{collection_id}",
+            json={
+                "name": "Updated Collection",
+                "description": "Updated description",
+                "prompt_ids": [
+                    prompt_one.json()["prompt_id"],
+                    prompt_two.json()["prompt_id"],
+                ],
+            },
+            headers=auth_headers,
+        )
+
+        assert update_response.status_code == 200, update_response.text
+        updated_payload = update_response.json()
+        assert updated_payload["name"] == "Updated Collection"
+        assert updated_payload["description"] == "Updated description"
+        assert sorted(updated_payload["prompt_ids"]) == sorted(
+            [prompt_one.json()["prompt_id"], prompt_two.json()["prompt_id"]]
+        )
+
+        get_response = test_client.get(
+            f"/api/v1/prompts/collections/{collection_id}",
+            headers=auth_headers,
+        )
+        assert get_response.status_code == 200, get_response.text
+        persisted = get_response.json()
+        assert persisted["name"] == "Updated Collection"
+        assert sorted(persisted["prompt_ids"]) == sorted(
+            [prompt_one.json()["prompt_id"], prompt_two.json()["prompt_id"]]
+        )
 
 
 class TestCollectionTenantIsolation:

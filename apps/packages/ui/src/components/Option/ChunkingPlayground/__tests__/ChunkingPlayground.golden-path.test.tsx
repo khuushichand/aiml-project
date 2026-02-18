@@ -143,7 +143,7 @@ describe("ChunkingPlayground golden path guardrails", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "Paste Text" }))
     expect(screen.getByPlaceholderText("Paste text here...")).toBeInTheDocument()
-  })
+  }, 15000)
 
   it("keeps core mode navigation for single, compare, templates, and capabilities", () => {
     render(<ChunkingPlayground />)

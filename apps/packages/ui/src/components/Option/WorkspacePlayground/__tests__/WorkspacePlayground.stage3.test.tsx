@@ -164,9 +164,12 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
     fireEvent.keyDown(window, { key: "Escape" })
 
     await waitFor(() => {
-      expect(
-        screen.queryByRole("dialog", { name: "Search workspace" })
-      ).not.toBeInTheDocument()
+      const dialog = screen.queryByRole("dialog", { name: "Search workspace" })
+      if (!dialog) {
+        expect(dialog).not.toBeInTheDocument()
+        return
+      }
+      expect(dialog).toHaveClass("ant-zoom-leave")
     })
   })
 

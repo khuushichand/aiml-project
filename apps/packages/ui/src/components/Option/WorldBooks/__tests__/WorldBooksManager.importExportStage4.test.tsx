@@ -303,27 +303,31 @@ describe("WorldBooksManager import/export stage-4 export actions and upload cont
     restoreBlob()
   })
 
-  it("uses upload control and enforces json file constraints", async () => {
-    const user = userEvent.setup({ applyAccept: false })
-    render(<WorldBooksManager />)
+  it(
+    "uses upload control and enforces json file constraints",
+    async () => {
+      const user = userEvent.setup({ applyAccept: false })
+      render(<WorldBooksManager />)
 
-    await user.click(screen.getByRole("button", { name: "Open world book import modal" }))
-    expect(screen.getByRole("button", { name: "Import world book JSON file" })).toBeInTheDocument()
+      await user.click(screen.getByRole("button", { name: "Open world book import modal" }))
+      expect(screen.getByRole("button", { name: "Import world book JSON file" })).toBeInTheDocument()
 
-    const modalTitles = await screen.findAllByText("Import World Book (JSON)")
-    const modal = modalTitles[modalTitles.length - 1].closest(".ant-modal") as HTMLElement | null
-    expect(modal).not.toBeNull()
-    const input = modal?.querySelector('input[type="file"]') as HTMLInputElement | null
-    expect(input).not.toBeNull()
-    expect(input?.accept).toContain(".json")
+      const modalTitles = await screen.findAllByText("Import World Book (JSON)")
+      const modal = modalTitles[modalTitles.length - 1].closest(".ant-modal") as HTMLElement | null
+      expect(modal).not.toBeNull()
+      const input = modal?.querySelector('input[type="file"]') as HTMLInputElement | null
+      expect(input).not.toBeNull()
+      expect(input?.accept).toContain(".json")
 
-    const badFile = new File(["{bad-json"], "bad.json", { type: "application/json" })
-    ;(badFile as any).text = async () => "{bad-json"
-    await user.upload(input as HTMLInputElement, badFile)
+      const badFile = new File(["{bad-json"], "bad.json", { type: "application/json" })
+      ;(badFile as any).text = async () => "{bad-json"
+      await user.upload(input as HTMLInputElement, badFile)
 
-    await waitFor(() => {
-      expect(screen.getByText("Selected: bad.json")).toBeInTheDocument()
-    })
-    expect(screen.getByRole("button", { name: "Import" })).toBeDisabled()
-  })
+      await waitFor(() => {
+        expect(screen.getByText("Selected: bad.json")).toBeInTheDocument()
+      })
+      expect(screen.getByRole("button", { name: "Import" })).toBeDisabled()
+    },
+    15000
+  )
 })

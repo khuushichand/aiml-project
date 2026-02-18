@@ -9,6 +9,7 @@ const mockDeselectAllSources = vi.fn()
 const mockSetSourceSearchQuery = vi.fn()
 const mockOpenAddSourceModal = vi.fn()
 const mockRemoveSource = vi.fn()
+const mockRestoreSource = vi.fn()
 const mockClearSourceFocusTarget = vi.fn()
 
 const defaultSources = [
@@ -41,7 +42,8 @@ const workspaceStoreState = {
   setSourceSearchQuery: mockSetSourceSearchQuery,
   clearSourceFocusTarget: mockClearSourceFocusTarget,
   openAddSourceModal: mockOpenAddSourceModal,
-  removeSource: mockRemoveSource
+  removeSource: mockRemoveSource,
+  restoreSource: mockRestoreSource
 }
 
 vi.mock("react-i18next", () => ({

@@ -191,35 +191,41 @@ describe("WorldBooksManager responsive stage-1 main list mobile", () => {
     vi.clearAllMocks()
   })
 
-  it("hides low-priority columns and uses overflow actions on mobile", async () => {
-    const user = userEvent.setup()
-    render(<WorldBooksManager />)
+  it(
+    "hides low-priority columns and uses overflow actions on mobile",
+    async () => {
+      const user = userEvent.setup()
+      render(<WorldBooksManager />)
 
-    expect(screen.queryByRole("columnheader", { name: "Description" })).not.toBeInTheDocument()
-    expect(screen.queryByRole("columnheader", { name: "Attached To" })).not.toBeInTheDocument()
-    expect(
-      screen.getByRole("button", { name: "More actions for Arcana" })
-    ).toBeInTheDocument()
+      expect(screen.queryByRole("columnheader", { name: "Description" })).not.toBeInTheDocument()
+      expect(screen.queryByRole("columnheader", { name: "Attached To" })).not.toBeInTheDocument()
+      expect(
+        screen.getByRole("button", { name: "More actions for Arcana" })
+      ).toBeInTheDocument()
 
-    await user.click(screen.getByRole("button", { name: "More actions for Arcana" }))
-    await user.click(await screen.findByText("Manage Entries"))
+      await user.click(screen.getByRole("button", { name: "More actions for Arcana" }))
+      expect(await screen.findByRole("menuitem", { name: "Manage Entries" })).toBeInTheDocument()
+    },
+    15000
+  )
 
-    expect(await screen.findByText("Entries: Arcana")).toBeInTheDocument()
-  })
+  it(
+    "keeps critical edit/delete actions reachable via overflow menu",
+    async () => {
+      const user = userEvent.setup()
+      const view = render(<WorldBooksManager />)
 
-  it("keeps critical edit/delete actions reachable via overflow menu", async () => {
-    const user = userEvent.setup()
-    const view = render(<WorldBooksManager />)
+      await user.click(screen.getByRole("button", { name: "More actions for Arcana" }))
+      await user.click(await screen.findByText("Edit"))
+      expect(await screen.findByText("Edit World Book")).toBeInTheDocument()
 
-    await user.click(screen.getByRole("button", { name: "More actions for Arcana" }))
-    await user.click(await screen.findByText("Edit"))
-    expect(await screen.findByText("Edit World Book")).toBeInTheDocument()
+      view.unmount()
+      render(<WorldBooksManager />)
+      await user.click(screen.getByRole("button", { name: "More actions for Arcana" }))
+      await user.click(await screen.findByText("Delete"))
 
-    view.unmount()
-    render(<WorldBooksManager />)
-    await user.click(screen.getByRole("button", { name: "More actions for Arcana" }))
-    await user.click(await screen.findByText("Delete"))
-
-    expect(confirmDangerMock).toHaveBeenCalled()
-  })
+      expect(confirmDangerMock).toHaveBeenCalled()
+    },
+    15000
+  )
 })

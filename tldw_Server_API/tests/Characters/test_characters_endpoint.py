@@ -595,6 +595,25 @@ class TestCharacterAPIIntegration:
         }
         assert char_with_conversation not in no_conv_ids
 
+        char_deleted_id = int(resp_c.json()["id"])
+        char_deleted_version = int(resp_c.json()["version"])
+        delete_response = client.delete(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_deleted_id}?expected_version={char_deleted_version}"
+        )
+        assert delete_response.status_code == 200, delete_response.text
+
+        deleted_only_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/query?page=1&page_size=20&deleted_only=true"
+        )
+        assert deleted_only_response.status_code == 200, deleted_only_response.text
+        deleted_only_ids = {
+            int(item["id"])
+            for item in deleted_only_response.json()["items"]
+            if "id" in item
+        }
+        assert char_deleted_id in deleted_only_ids
+        assert char_with_conversation not in deleted_only_ids
+
     def test_manage_character_tags_operations_integration(self, client: TestClient, test_db: CharactersRAGDB):
         char_a = client.post(
             f"{CHARACTERS_ENDPOINT_PREFIX}/",

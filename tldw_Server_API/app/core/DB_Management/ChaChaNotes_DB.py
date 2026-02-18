@@ -6543,6 +6543,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         created_to: str | None = None,
         updated_from: str | None = None,
         updated_to: str | None = None,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
         sort_by: str = "name",
         sort_order: str = "asc",
         limit: int = 25,
@@ -6562,6 +6564,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             str(tag).strip().lower() for tag in (tags or []) if str(tag).strip()
         ]
         deleted_false = "FALSE" if self.backend_type == BackendType.POSTGRESQL else "0"
+        deleted_true = "TRUE" if self.backend_type == BackendType.POSTGRESQL else "1"
         updated_expr = "COALESCE(cc.last_modified, cc.created_at)"
         conversation_count_expr = (
             "SELECT COUNT(1) FROM conversations conv "
@@ -6655,7 +6658,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         normalized_sort_order = "DESC" if str(sort_order).lower() == "desc" else "ASC"
         sort_expr = sort_key_map[normalized_sort_by]
 
-        base_query = f"FROM character_cards cc WHERE cc.deleted = {deleted_false}"
+        if deleted_only:
+            deleted_filter = f"cc.deleted = {deleted_true}"
+        elif include_deleted:
+            deleted_filter = "1=1"
+        else:
+            deleted_filter = f"cc.deleted = {deleted_false}"
+
+        base_query = f"FROM character_cards cc WHERE {deleted_filter}"
         if filters:
             base_query += " AND " + " AND ".join(filters)
 

@@ -34,7 +34,7 @@ Finding IDs: `C-27` through `C-30`
 - Unit/style tests for reduced-motion media query coverage.
 - Manual QA checklist in reduced-motion OS/browser mode.
 - Visual checks ensuring no hidden state regressions when transitions are removed.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Landmarks and Skip Navigation
 **Goal**: Improve non-visual navigation efficiency.
@@ -45,7 +45,7 @@ Finding IDs: `C-27` through `C-30`
 **Tests**:
 - Accessibility tests verifying main landmark and skip-link behavior.
 - Keyboard-only E2E test validating skip navigation path.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Shortcut Discoverability for Assistive Tech Users
 **Goal**: Make keyboard-shortcut guidance available beyond hover tooltips.
@@ -57,7 +57,7 @@ Finding IDs: `C-27` through `C-30`
 - Component tests for focus-triggered shortcut help visibility.
 - Accessibility test validating `aria-describedby` associations.
 - Regression tests for shortcut execution after help system changes.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

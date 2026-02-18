@@ -120,4 +120,19 @@ describe('DiffViewModal stage 1 keyboard regressions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(onClose).toHaveBeenCalledTimes(1)
   })
+
+  it('keeps keyboard hint text behind mobile-hidden utility classes', () => {
+    render(
+      <DiffViewModal
+        open
+        onClose={vi.fn()}
+        leftText={'alpha'}
+        rightText={'beta'}
+      />
+    )
+
+    const hint = screen.getByText('↑↓ or j/k to scroll, PgUp/PgDn for pages')
+    expect(hint).toHaveClass('hidden')
+    expect(hint).toHaveClass('sm:block')
+  })
 })

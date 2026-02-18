@@ -24,7 +24,13 @@ Finding IDs: `4.1` through `4.6`
 - Component tests for new action locations and enable/disable gating.
 - Regression tests verifying inline entry test remains available.
 - E2E tests for validate and preview flows without opening collapse panels.
-**Status**: Not Started
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Added an always-visible validation/preview action bar above the accordion panels inside entry management.
+- Promoted strict-validation toggle and `Run validation`/`Run preview` controls out of collapse-only discovery path.
+- Header actions now auto-open the relevant tools panel while executing validation/preview workflows.
+- Preserved empty-entry validation guard with disabled validation action and visible guidance text.
+- Added Stage 1 component tests covering action discoverability, guard behavior, and retention of inline per-entry test controls.
 
 ## Stage 2: Actionable Validation Output and Rich Preview Diff
 **Goal**: Reduce debugging time by linking errors directly to editable content.
@@ -37,7 +43,13 @@ Finding IDs: `4.1` through `4.6`
 - Component tests for clickable validation item behavior.
 - Integration tests for row highlight lifecycle after navigation.
 - Snapshot/visual tests for diff rendering semantics.
-**Status**: Not Started
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Validation errors/warnings that reference `entries[n]` now render as actionable buttons.
+- Clicking a validation item scrolls to the corresponding entry row and applies temporary row highlight styling.
+- Added lightweight diff rendering in preview results with explicit original/processed panes and changed-span emphasis (insertions and removals).
+- Diff rendering handles unchanged output with a clear "no differences" fallback state.
+- Added component tests for clickable validation navigation, row highlight behavior, and diff preview rendering after transform runs.
 
 ## Stage 3: Persisted Test Inputs and Authoring Efficiency
 **Goal**: Support repeated validation/testing loops without re-entry overhead.
@@ -49,7 +61,13 @@ Finding IDs: `4.1` through `4.6`
 - Unit tests for persistence adapter and keying by dictionary ID.
 - Integration tests for save/select/delete test-case lifecycle.
 - E2E test for reopening entry manager and recovering previous preview text.
-**Status**: Not Started
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Added dictionary-scoped preview draft persistence via local storage (`preview-draft` key per dictionary ID).
+- Added dictionary-scoped saved test-case management with named save/load/delete actions.
+- Persisted saved test-case collections per dictionary using dedicated local-storage keys.
+- Added component tests covering reopen draft recovery and saved test-case lifecycle operations.
+- Existing validation/preview actions remain compatible with persisted draft and saved-case workflows.
 
 ## Dependencies
 

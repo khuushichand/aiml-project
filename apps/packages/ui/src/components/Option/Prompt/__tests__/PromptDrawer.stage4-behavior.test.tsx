@@ -43,6 +43,14 @@ vi.mock("../Studio/Prompts/VersionHistoryDrawer", () => ({
 }))
 
 describe("PromptDrawer stage 4 behavior", () => {
+  const clickDrawerClose = () => {
+    const closeButton = document.querySelector(
+      ".ant-drawer-close"
+    ) as HTMLButtonElement | null
+    expect(closeButton).not.toBeNull()
+    fireEvent.click(closeButton!)
+  }
+
   const baseProps = {
     open: true,
     onClose: vi.fn(),
@@ -95,7 +103,7 @@ describe("PromptDrawer stage 4 behavior", () => {
       target: { value: "Unsaved prompt" }
     })
     fireEvent.blur(nameInput)
-    fireEvent.click(screen.getByRole("button", { name: "Close" }))
+    clickDrawerClose()
 
     expect(
       await screen.findByText("You have unsaved changes. Close anyway?")
@@ -104,7 +112,7 @@ describe("PromptDrawer stage 4 behavior", () => {
 
     expect(onClose).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole("button", { name: "Close" }))
+    clickDrawerClose()
     fireEvent.click(await screen.findByTestId("prompt-drawer-unsaved-discard"))
 
     expect(onClose).toHaveBeenCalledTimes(1)
@@ -121,7 +129,7 @@ describe("PromptDrawer stage 4 behavior", () => {
       target: { value: "Save before close" }
     })
     fireEvent.blur(nameInput)
-    fireEvent.click(screen.getByRole("button", { name: "Close" }))
+    clickDrawerClose()
     fireEvent.click(await screen.findByTestId("prompt-drawer-unsaved-save"))
 
     await waitFor(() => {

@@ -77,4 +77,28 @@ describe("PromptActionsMenu", () => {
 
     expect(screen.queryByTestId("menu-item-resolveConflict")).not.toBeInTheDocument()
   })
+
+  it("shows share link action for synced prompts when handler is provided", async () => {
+    const user = userEvent.setup()
+    const onShareLink = vi.fn()
+
+    render(
+      <PromptActionsMenu
+        promptId="p3"
+        syncStatus="synced"
+        serverId={33}
+        onEdit={vi.fn()}
+        onDuplicate={vi.fn()}
+        onUseInChat={vi.fn()}
+        onDelete={vi.fn()}
+        onShareLink={onShareLink}
+      />
+    )
+
+    const shareItem = screen.getByTestId("menu-item-shareLink")
+    expect(shareItem).toBeInTheDocument()
+
+    await user.click(shareItem)
+    expect(onShareLink).toHaveBeenCalledTimes(1)
+  })
 })

@@ -8,7 +8,8 @@ import {
   CloudUpload,
   CloudDownload,
   Unlink,
-  AlertTriangle
+  AlertTriangle,
+  Link
 } from "lucide-react"
 import React from "react"
 import { useTranslation } from "react-i18next"
@@ -23,6 +24,7 @@ interface PromptActionsMenuProps {
   onDuplicate: () => void
   onUseInChat: () => void
   onDelete: () => void
+  onShareLink?: () => void
   onPushToServer?: () => void
   onPullFromServer?: () => void
   onUnlink?: () => void
@@ -38,6 +40,7 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
   onDuplicate,
   onUseInChat,
   onDelete,
+  onShareLink,
   onPushToServer,
   onPullFromServer,
   onUnlink,
@@ -85,6 +88,22 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
 
   const overflowItems: MenuProps["items"] = [
     ...syncItems,
+    ...(onShareLink && isSynced
+      ? [
+          {
+            key: "shareLink",
+            label: t("managePrompts.share.copyLinkAction", {
+              defaultValue: "Copy share link"
+            }),
+            icon: <Link className="size-4" />,
+            disabled,
+            onClick: onShareLink
+          },
+          {
+            type: "divider" as const
+          }
+        ]
+      : []),
     {
       key: "duplicate",
       label: t("managePrompts.tooltip.duplicate", { defaultValue: "Duplicate" }),

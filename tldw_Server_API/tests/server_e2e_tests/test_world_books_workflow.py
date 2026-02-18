@@ -49,6 +49,25 @@ def test_world_books_lifecycle_workflow(page, server_url):
     _require_ok(world_book_resp, "create world book")
     world_book = world_book_resp.json()
     world_book_id = world_book["id"]
+    world_book_version = world_book["version"]
+
+    update_world_book_resp = page.request.put(
+        f"/api/v1/characters/world-books/{world_book_id}",
+        headers=headers,
+        params={"expected_version": world_book_version},
+        json={"description": f"E2E world book description updated {suffix}."},
+    )
+    _require_ok(update_world_book_resp, "update world book with expected version")
+    updated_world_book = update_world_book_resp.json()
+    assert updated_world_book.get("version") == world_book_version + 1
+
+    stale_world_book_update_resp = page.request.put(
+        f"/api/v1/characters/world-books/{world_book_id}",
+        headers=headers,
+        params={"expected_version": world_book_version},
+        json={"description": "stale update should fail"},
+    )
+    assert stale_world_book_update_resp.status == 409
 
     list_resp = page.request.get(
         "/api/v1/characters/world-books",

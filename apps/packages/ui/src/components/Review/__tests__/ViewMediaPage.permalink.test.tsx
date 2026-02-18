@@ -149,7 +149,26 @@ vi.mock('@/components/Common/FeatureEmptyState', () => ({
 }))
 
 vi.mock('@/components/Media/SearchBar', () => ({
-  SearchBar: () => <div data-testid="search-bar" />
+  SearchBar: ({
+    value,
+    onChange,
+    placeholder = 'Search media (title/content)',
+    inputRef
+  }: {
+    value: string
+    onChange: (next: string) => void
+    placeholder?: string
+    inputRef?: React.Ref<HTMLInputElement>
+  }) => (
+    <input
+      data-testid="search-bar"
+      ref={inputRef}
+      value={value}
+      placeholder={placeholder}
+      aria-label={placeholder}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  )
 }))
 
 vi.mock('@/components/Media/FilterPanel', () => ({
@@ -161,7 +180,8 @@ vi.mock('@/components/Media/JumpToNavigator', () => ({
 }))
 
 vi.mock('@/components/Media/KeyboardShortcutsOverlay', () => ({
-  KeyboardShortcutsOverlay: () => null
+  KeyboardShortcutsOverlay: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="keyboard-shortcuts-overlay">Shortcuts overlay</div> : null
 }))
 
 vi.mock('@/components/Media/FilterChips', () => ({
@@ -431,6 +451,191 @@ describe('ViewMediaPage Stage 3 permalinks', () => {
       expect(screen.getByTestId('selected-media-id')).toHaveTextContent('100')
     })
     expect(screen.getByTestId('location-search')).toHaveTextContent('?id=100')
+  })
+
+  it('focuses the media search input when slash shortcut is pressed', async () => {
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 100,
+        title: 'Item 100',
+        snippet: '100',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      }
+    ]
+
+    renderMediaPage('/media')
+
+    const searchInput = await screen.findByRole('textbox', {
+      name: 'Search media (title/content)'
+    })
+    expect(searchInput).not.toHaveFocus()
+
+    fireEvent.keyDown(window, { key: '/' })
+
+    await waitFor(() => {
+      expect(searchInput).toHaveFocus()
+    })
+  })
+
+  it('keeps sidebar collapse/expand toggle behavior functional', async () => {
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 100,
+        title: 'Item 100',
+        snippet: '100',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      }
+    ]
+
+    renderMediaPage('/media?id=100')
+
+    const collapseButton = await screen.findByRole('button', { name: 'Collapse sidebar' })
+    fireEvent.click(collapseButton)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
+    })
+  })
+
+  it('preserves j/k keyboard navigation between selected items', async () => {
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 100,
+        title: 'Item 100',
+        snippet: '100',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      },
+      {
+        kind: 'media',
+        id: 200,
+        title: 'Item 200',
+        snippet: '200',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      }
+    ]
+
+    renderMediaPage('/media?id=100')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-media-id')).toHaveTextContent('100')
+    })
+
+    fireEvent.keyDown(window, { key: 'j' })
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-media-id')).toHaveTextContent('200')
+    })
+
+    fireEvent.keyDown(window, { key: 'k' })
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-media-id')).toHaveTextContent('100')
+    })
+  })
+
+  it('preserves arrow-key pagination behavior', async () => {
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 100,
+        title: 'Item 100',
+        snippet: '100',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      }
+    ]
+
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      if (path.startsWith('/api/v1/media/?page=1')) {
+        return { items: [], pagination: { total_pages: 2, total_items: 40 } }
+      }
+      if (path.startsWith('/api/v1/media/?page=2')) {
+        return { items: [], pagination: { total_pages: 2, total_items: 40 } }
+      }
+      if (path.startsWith('/api/v1/media/keywords')) {
+        return { keywords: [] }
+      }
+      if (path.startsWith('/api/v1/media/')) {
+        const id = path.replace('/api/v1/media/', '').split('?')[0]
+        return {
+          id,
+          title: `Media ${id}`,
+          type: 'document',
+          content: { text: `Content for ${id}` }
+        }
+      }
+      if (path.startsWith('/api/v1/notes')) {
+        return { items: [], pagination: { total_items: 0 } }
+      }
+      return {}
+    })
+
+    renderMediaPage('/media?id=100')
+
+    await waitFor(() => {
+      expect(
+        mocks.bgRequest.mock.calls.some((call) =>
+          String(call?.[0]?.path || '').startsWith('/api/v1/media/?page=1')
+        )
+      ).toBe(true)
+    })
+
+    fireEvent.keyDown(window, { key: 'ArrowRight' })
+
+    await waitFor(() => {
+      expect(
+        mocks.bgRequest.mock.calls.some((call) =>
+          String(call?.[0]?.path || '').startsWith('/api/v1/media/?page=2')
+        )
+      ).toBe(true)
+    })
+    expect(
+      mocks.bgRequest.mock.calls.some((call) =>
+        String(call?.[0]?.path || '').startsWith('/api/v1/media/?page=0')
+      )
+    ).toBe(false)
+  })
+
+  it('toggles keyboard shortcuts overlay with ? key', async () => {
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 100,
+        title: 'Item 100',
+        snippet: '100',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      }
+    ]
+
+    renderMediaPage('/media?id=100')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-media-id')).toHaveTextContent('100')
+    })
+    expect(screen.queryByTestId('keyboard-shortcuts-overlay')).not.toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: '?' })
+    await waitFor(() => {
+      expect(screen.getByTestId('keyboard-shortcuts-overlay')).toBeInTheDocument()
+    })
+
+    fireEvent.keyDown(window, { key: '?' })
+    await waitFor(() => {
+      expect(screen.queryByTestId('keyboard-shortcuts-overlay')).not.toBeInTheDocument()
+    })
   })
 })
 

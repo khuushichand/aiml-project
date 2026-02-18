@@ -9,6 +9,7 @@ from unittest.mock import Mock, MagicMock, patch
 import json
 
 from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import ConflictError
 
 # ========================================================================
 # World Book Management Tests
@@ -82,6 +83,45 @@ class TestWorldBookManagement:
         updated = service.get_world_book(wb_id)
         assert updated['name'] == "Updated"
         assert updated['description'] == "Updated description"
+
+    @pytest.mark.unit
+    def test_update_world_book_with_expected_version(self, world_book_service):
+        """Test optimistic-lock update with expected version."""
+        service = world_book_service
+        wb_id = service.create_world_book(name="Versioned", description="v1")
+        created = service.get_world_book(wb_id)
+        expected_version = created["version"]
+
+        service.update_world_book(
+            world_book_id=wb_id,
+            description="v2",
+            expected_version=expected_version,
+        )
+
+        updated = service.get_world_book(wb_id)
+        assert updated["description"] == "v2"
+        assert updated["version"] == expected_version + 1
+
+    @pytest.mark.unit
+    def test_update_world_book_rejects_stale_expected_version(self, world_book_service):
+        """Test stale expected-version update is rejected with conflict."""
+        service = world_book_service
+        wb_id = service.create_world_book(name="Version conflict", description="v1")
+        created = service.get_world_book(wb_id)
+        expected_version = created["version"]
+
+        service.update_world_book(
+            world_book_id=wb_id,
+            description="v2",
+            expected_version=expected_version,
+        )
+
+        with pytest.raises(ConflictError, match="Version mismatch"):
+            service.update_world_book(
+                world_book_id=wb_id,
+                description="v3",
+                expected_version=expected_version,
+            )
 
     @pytest.mark.unit
     def test_delete_world_book(self, world_book_service):

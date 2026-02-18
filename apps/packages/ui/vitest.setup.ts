@@ -7,21 +7,30 @@ const originalGetComputedStyle = window.getComputedStyle.bind(window)
 window.getComputedStyle = ((element: Element, _pseudoElt?: string | null) =>
   originalGetComputedStyle(element)) as typeof window.getComputedStyle
 
-if (!window.matchMedia) {
-  Object.defineProperty(window, "matchMedia", {
-    writable: true,
-    value: (query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: () => undefined,
-      removeListener: () => undefined,
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-      dispatchEvent: () => false
-    })
-  })
+const evaluateMediaQuery = (query: string): boolean => {
+  const width = window.innerWidth || 1024
+  const minMatches = [...query.matchAll(/\(min-width:\s*(\d+)px\)/g)]
+  const maxMatches = [...query.matchAll(/\(max-width:\s*(\d+)px\)/g)]
+
+  const meetsMin = minMatches.every((match) => width >= Number(match[1]))
+  const meetsMax = maxMatches.every((match) => width <= Number(match[1]))
+
+  return meetsMin && meetsMax
 }
+
+Object.defineProperty(window, "matchMedia", {
+  writable: true,
+  value: (query: string) => ({
+    matches: evaluateMediaQuery(query),
+    media: query,
+    onchange: null,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => false
+  })
+})
 
 if (typeof window.ResizeObserver === "undefined") {
   class ResizeObserverMock {

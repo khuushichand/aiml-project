@@ -13,7 +13,7 @@ import {
   Alert,
   type InputRef
 } from "antd"
-import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers, Cloud, Clipboard, Copy, Keyboard } from "lucide-react"
+import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers, Cloud, Clipboard, Copy, Keyboard, FolderPlus } from "lucide-react"
 import { PromptActionsMenu } from "./PromptActionsMenu"
 import { PromptDrawer } from "./PromptDrawer"
 import { SyncStatusBadge } from "./SyncStatusBadge"
@@ -36,7 +36,8 @@ import {
   getDeletedPrompts,
   restorePrompt,
   permanentlyDeletePrompt,
-  emptyTrash
+  emptyTrash,
+  incrementPromptUsage
 } from "@/db/dexie/helpers"
 import {
   getAllCopilotPrompts,
@@ -64,7 +65,11 @@ import {
 } from "@/services/prompt-sync"
 import {
   exportPromptsServer,
-  searchPromptsServer
+  searchPromptsServer,
+  listPromptCollectionsServer,
+  createPromptCollectionServer,
+  updatePromptCollectionServer,
+  type PromptCollection
 } from "@/services/prompts-api"
 import { hasPromptStudio } from "@/services/prompt-studio"
 import { StudioTabContainer } from "./Studio/StudioTabContainer"
@@ -90,6 +95,10 @@ import {
   getTrashDaysRemaining,
   getTrashRemainingSeverity
 } from "./trash-prompts-utils"
+import {
+  isPromptInCollection,
+  mergePromptIdsForCollection
+} from "./prompt-collections-utils"
 
 type SegmentType = "custom" | "copilot" | "studio" | "trash"
 
@@ -129,7 +138,7 @@ const INITIAL_BATCH_SYNC_STATE: BatchSyncState = {
   cancelled: false
 }
 
-type PromptSortKey = "title" | "type" | "modifiedAt" | null
+type PromptSortKey = "title" | "type" | "modifiedAt" | "usageCount" | null
 type PromptSortOrder = "ascend" | "descend" | null
 type PromptSortState = {
   key: PromptSortKey
@@ -149,7 +158,13 @@ const readPromptSortState = (): PromptSortState => {
       return { key: null, order: null }
     }
     const parsed = JSON.parse(raw) as PromptSortState
-    const allowedKeys: PromptSortKey[] = ["title", "type", "modifiedAt", null]
+    const allowedKeys: PromptSortKey[] = [
+      "title",
+      "type",
+      "modifiedAt",
+      "usageCount",
+      null
+    ]
     const allowedOrders: PromptSortOrder[] = ["ascend", "descend", null]
     if (!allowedKeys.includes(parsed?.key) || !allowedOrders.includes(parsed?.order)) {
       return { key: null, order: null }
@@ -202,6 +217,13 @@ export const PromptBody = () => {
   const [typeFilter, setTypeFilter] = useState<"all" | "system" | "quick">(
     "all"
   )
+  const [usageFilter, setUsageFilter] = useState<"all" | "used" | "unused">(
+    "all"
+  )
+  const [collectionFilter, setCollectionFilter] = useState<number | "all">("all")
+  const [createCollectionModalOpen, setCreateCollectionModalOpen] = useState(false)
+  const [newCollectionName, setNewCollectionName] = useState("")
+  const [newCollectionDescription, setNewCollectionDescription] = useState("")
   const [tagFilter, setTagFilter] = useState<string[]>([])
   const [tagMatchMode, setTagMatchMode] = useState<TagMatchMode>("any")
   const [currentPage, setCurrentPage] = useState(1)
@@ -294,6 +316,12 @@ export const PromptBody = () => {
     queryFn: getDeletedPrompts
   })
 
+  const { data: promptCollectionsData, status: promptCollectionsStatus } = useQuery({
+    queryKey: ["promptCollections"],
+    queryFn: listPromptCollectionsServer,
+    enabled: isOnline
+  })
+
   // Prompt Studio capability check
   const { data: hasStudio } = useQuery({
     queryKey: ["prompt-studio", "capability"],
@@ -303,7 +331,7 @@ export const PromptBody = () => {
 
   useEffect(() => {
     setCurrentPage(1)
-  }, [normalizedSearchText, projectFilter, typeFilter, tagFilter, tagMatchMode])
+  }, [normalizedSearchText, projectFilter, typeFilter, collectionFilter, tagFilter, tagMatchMode])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -347,15 +375,15 @@ export const PromptBody = () => {
     if (!promptId || deepLinkProcessedRef.current) return
     if (status !== "success" || !Array.isArray(data)) return
 
-    // Find the prompt in the data
-    const promptRecord = data.find((p: any) => p.id === promptId)
-    if (promptRecord) {
-      deepLinkProcessedRef.current = true
-      // Remove the prompt param from URL to avoid re-opening on navigation
+    const clearPromptParam = () => {
       const newParams = new URLSearchParams(searchParams)
       newParams.delete("prompt")
+      newParams.delete("source")
       setSearchParams(newParams, { replace: true })
-      // Open the edit drawer for this prompt
+    }
+
+    const openPromptDrawer = (promptRecord: any) => {
+      clearPromptParam()
       setEditId(promptRecord.id)
       setDrawerMode("edit")
       setDrawerInitialValues({
@@ -363,8 +391,12 @@ export const PromptBody = () => {
         name: promptRecord?.name || promptRecord?.title,
         author: promptRecord?.author,
         details: promptRecord?.details,
-        system_prompt: promptRecord?.system_prompt || (promptRecord?.is_system ? promptRecord?.content : undefined),
-        user_prompt: promptRecord?.user_prompt || (!promptRecord?.is_system ? promptRecord?.content : undefined),
+        system_prompt:
+          promptRecord?.system_prompt ||
+          (promptRecord?.is_system ? promptRecord?.content : undefined),
+        user_prompt:
+          promptRecord?.user_prompt ||
+          (!promptRecord?.is_system ? promptRecord?.content : undefined),
         keywords: promptRecord?.keywords ?? promptRecord?.tags ?? [],
         serverId: promptRecord?.serverId,
         syncStatus: promptRecord?.syncStatus,
@@ -377,20 +409,114 @@ export const PromptBody = () => {
         versionNumber: promptRecord?.versionNumber
       })
       setDrawerOpen(true)
-    } else {
-      // Prompt not found - show notification
+    }
+
+    deepLinkProcessedRef.current = true
+
+    // First try local prompt IDs.
+    const localPromptRecord = data.find((p: any) => p.id === promptId)
+    if (localPromptRecord) {
+      openPromptDrawer(localPromptRecord)
+      return
+    }
+
+    const source = searchParams.get("source")
+    const parsedServerPromptId = Number(promptId)
+    const isServerPromptLink =
+      Number.isInteger(parsedServerPromptId) &&
+      parsedServerPromptId > 0 &&
+      (source === "studio" || source === null)
+
+    if (isOnline && isServerPromptLink) {
+      clearPromptParam()
+      void (async () => {
+        const syncResult = await pullFromStudio(parsedServerPromptId)
+        if (!syncResult.success) {
+          notification.warning({
+            message: t("managePrompts.notification.promptNotFound", {
+              defaultValue: "Prompt not found"
+            }),
+            description: t("managePrompts.notification.sharedPromptNotFoundDesc", {
+              defaultValue:
+                "The shared prompt could not be pulled from the server. It may not exist or you may not have access."
+            })
+          })
+          return
+        }
+        try {
+          const refreshedPrompts = await queryClient.fetchQuery({
+            queryKey: ["fetchAllPrompts"],
+            queryFn: getAllPrompts
+          })
+          const importedPrompt = (Array.isArray(refreshedPrompts)
+            ? refreshedPrompts
+            : []
+          ).find(
+            (item: any) =>
+              item?.id === syncResult.localId ||
+              item?.serverId === parsedServerPromptId
+          )
+          if (!importedPrompt) {
+            notification.warning({
+              message: t("managePrompts.notification.promptNotFound", {
+                defaultValue: "Prompt not found"
+              }),
+              description: t("managePrompts.notification.sharedPromptImportMissing", {
+                defaultValue:
+                  "The shared prompt was fetched, but could not be loaded locally."
+              })
+            })
+            return
+          }
+          notification.success({
+            message: t("managePrompts.notification.sharedPromptImported", {
+              defaultValue: "Shared prompt imported"
+            }),
+            description: t("managePrompts.notification.sharedPromptImportedDesc", {
+              defaultValue:
+                "The prompt was pulled from the server and opened in your workspace."
+            })
+          })
+          openPromptDrawer(importedPrompt)
+        } catch {
+          notification.warning({
+            message: t("managePrompts.notification.promptNotFound", {
+              defaultValue: "Prompt not found"
+            }),
+            description: t("managePrompts.notification.sharedPromptImportMissing", {
+              defaultValue:
+                "The shared prompt was fetched, but could not be loaded locally."
+            })
+          })
+        }
+      })()
+      return
+    }
+
+    clearPromptParam()
+    if (!isOnline && isServerPromptLink) {
       deepLinkProcessedRef.current = true
-      const newParams = new URLSearchParams(searchParams)
-      newParams.delete("prompt")
-      setSearchParams(newParams, { replace: true })
       notification.warning({
-        message: t("managePrompts.notification.promptNotFound", { defaultValue: "Prompt not found" }),
-        description: t("managePrompts.notification.promptNotFoundDesc", {
-          defaultValue: "The requested prompt could not be found. It may have been deleted."
+        message: t("managePrompts.notification.promptNotFound", {
+          defaultValue: "Prompt not found"
+        }),
+        description: t("managePrompts.notification.sharedPromptOfflineDesc", {
+          defaultValue:
+            "This shared prompt link requires an online server connection."
         })
       })
+      return
     }
-  }, [searchParams, data, status, setSearchParams, t])
+
+    notification.warning({
+      message: t("managePrompts.notification.promptNotFound", {
+        defaultValue: "Prompt not found"
+      }),
+      description: t("managePrompts.notification.promptNotFoundDesc", {
+        defaultValue: "The requested prompt could not be found. It may have been deleted."
+      })
+    })
+  }, [searchParams, data, status, setSearchParams, isOnline, queryClient, t])
 
   const promptLoadFailed = status === "error"
   const copilotLoadFailed = isOnline && copilotStatus === "error"
@@ -464,6 +590,18 @@ export const PromptBody = () => {
     return prompt?.updatedAt || prompt?.createdAt || 0
   }, [])
 
+  const getPromptUsageCount = React.useCallback((prompt: any) => {
+    const value = prompt?.usageCount
+    if (typeof value !== "number" || Number.isNaN(value)) return 0
+    return Math.max(0, Math.floor(value))
+  }, [])
+
+  const getPromptLastUsedAt = React.useCallback((prompt: any) => {
+    const value = prompt?.lastUsedAt
+    if (typeof value !== "number" || Number.isNaN(value)) return null
+    return value
+  }, [])
+
   const formatRelativePromptTime = React.useCallback(
     (timestamp: number | null | undefined) => {
       if (!timestamp) {
@@ -525,6 +663,21 @@ export const PromptBody = () => {
       is_system: hasSystemPrompt
     }
   }, [])
+
+  const markPromptAsUsed = React.useCallback(
+    async (promptId: string) => {
+      if (!promptId) return
+      try {
+        await incrementPromptUsage(promptId)
+        await queryClient.invalidateQueries({
+          queryKey: ["fetchAllPrompts"]
+        })
+      } catch {
+        // Usage tracking should not block prompt insertion into chat.
+      }
+    },
+    [queryClient]
+  )
 
   const buildPromptUpdatePayload = React.useCallback(
     (prompt: any, overrides: Partial<any> = {}) => {
@@ -1239,6 +1392,125 @@ export const PromptBody = () => {
     }
   })
 
+  const {
+    mutate: createPromptCollectionMutation,
+    isPending: isCreatingPromptCollection
+  } = useMutation({
+    mutationFn: async ({
+      name,
+      description
+    }: {
+      name: string
+      description?: string
+    }) =>
+      createPromptCollectionServer({
+        name: name.trim(),
+        description: description?.trim() || undefined
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["promptCollections"] })
+      setCreateCollectionModalOpen(false)
+      setNewCollectionName("")
+      setNewCollectionDescription("")
+      notification.success({
+        message: t("managePrompts.collections.createSuccess", {
+          defaultValue: "Collection created"
+        }),
+        description: t("managePrompts.collections.createSuccessDesc", {
+          defaultValue: "Prompt collection created successfully."
+        })
+      })
+    },
+    onError: (error: any) => {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description:
+          error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const {
+    mutate: addPromptsToCollectionMutation,
+    isPending: isAssigningPromptCollection
+  } = useMutation({
+    mutationFn: async ({
+      collection,
+      prompts
+    }: {
+      collection: PromptCollection
+      prompts: any[]
+    }) => {
+      const merged = mergePromptIdsForCollection(
+        collection.prompt_ids || [],
+        prompts
+      )
+      if (merged.added === 0) {
+        return {
+          added: 0,
+          skipped: merged.skipped,
+          updatedCollection: null
+        }
+      }
+      const updatedCollection = await updatePromptCollectionServer(
+        collection.collection_id,
+        { prompt_ids: merged.promptIds }
+      )
+      return {
+        added: merged.added,
+        skipped: merged.skipped,
+        updatedCollection
+      }
+    },
+    onSuccess: ({ added, skipped }, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["promptCollections"] })
+      if (added === 0) {
+        notification.info({
+          message: t("managePrompts.collections.assignNoChanges", {
+            defaultValue: "No prompts were added"
+          }),
+          description:
+            skipped > 0
+              ? t("managePrompts.collections.assignNoChangesSkipped", {
+                  defaultValue:
+                    "Selected prompts are already in this collection or not synced yet."
+                })
+              : t("managePrompts.collections.assignNoChangesDefault", {
+                  defaultValue:
+                    "Selected prompts are already in this collection."
+                })
+        })
+        return
+      }
+      setSelectedRowKeys([])
+      notification.success({
+        message: t("managePrompts.collections.assignSuccess", {
+          defaultValue: "Prompts added to collection"
+        }),
+        description: t("managePrompts.collections.assignSuccessDesc", {
+          defaultValue:
+            "Added {{added}} prompt(s) to {{name}}{{skippedLabel}}.",
+          added,
+          name: variables.collection.name,
+          skippedLabel:
+            skipped > 0
+              ? t("managePrompts.collections.assignSkippedSuffix", {
+                  defaultValue: " ({{count}} skipped)",
+                  count: skipped
+                })
+              : ""
+        })
+      })
+    },
+    onError: (error: any) => {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description:
+          error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
   const { mutate: savePromptMutation, isPending: savePromptLoading } =
     useMutation({
       mutationFn: async (payload: any) => {
@@ -1362,6 +1634,26 @@ export const PromptBody = () => {
     return Array.from(set.values())
   }, [data, getPromptKeywords])
 
+  const promptCollections = useMemo<PromptCollection[]>(() => {
+    if (!Array.isArray(promptCollectionsData)) return []
+    return promptCollectionsData
+  }, [promptCollectionsData])
+
+  const selectedCollection = useMemo(() => {
+    if (collectionFilter === "all") return null
+    return (
+      promptCollections.find((item) => item.collection_id === collectionFilter) ||
+      null
+    )
+  }, [collectionFilter, promptCollections])
+
+  useEffect(() => {
+    if (collectionFilter === "all") return
+    if (!selectedCollection) {
+      setCollectionFilter("all")
+    }
+  }, [collectionFilter, selectedCollection])
+
   const copilotPromptIncludesTextPlaceholder =
     typeof copilotEditPromptValue === "string" &&
     copilotEditPromptValue.includes("{text}")
@@ -1439,6 +1731,19 @@ export const PromptBody = () => {
         return promptType === typeFilter
       })
     }
+    if (usageFilter !== "all") {
+      items = items.filter((p) =>
+        usageFilter === "used"
+          ? getPromptUsageCount(p) > 0
+          : getPromptUsageCount(p) === 0
+      )
+    }
+    if (selectedCollection) {
+      const selectedPromptIds = new Set(selectedCollection.prompt_ids || [])
+      items = items.filter((prompt) =>
+        isPromptInCollection(prompt, selectedPromptIds)
+      )
+    }
     if (tagFilter.length > 0) {
       items = items.filter((p) =>
         matchesTagFilter(getPromptKeywords(p), tagFilter, tagMatchMode)
@@ -1455,8 +1760,11 @@ export const PromptBody = () => {
     data,
     projectFilter,
     typeFilter,
+    usageFilter,
+    selectedCollection,
     tagFilter,
     tagMatchMode,
+    getPromptUsageCount,
     getPromptKeywords,
     getPromptType
   ])
@@ -1512,16 +1820,32 @@ export const PromptBody = () => {
           (typeRank[getPromptType(a)] ?? 99) - (typeRank[getPromptType(b)] ?? 99)
       } else if (promptSort.key === "modifiedAt") {
         compare = getPromptModifiedAt(a) - getPromptModifiedAt(b)
+      } else if (promptSort.key === "usageCount") {
+        compare = getPromptUsageCount(a) - getPromptUsageCount(b)
       }
 
       if (compare === 0) {
-        compare = getPromptModifiedAt(b) - getPromptModifiedAt(a)
+        if (promptSort.key === "usageCount") {
+          compare =
+            (getPromptLastUsedAt(a) || 0) - (getPromptLastUsedAt(b) || 0)
+        }
+      }
+      if (compare === 0) {
+        compare = getPromptModifiedAt(a) - getPromptModifiedAt(b)
       }
       return compare * direction
     })
 
     return items
-  }, [filteredData, getPromptModifiedAt, getPromptType, promptSort.key, promptSort.order])
+  }, [
+    filteredData,
+    getPromptLastUsedAt,
+    getPromptModifiedAt,
+    getPromptType,
+    getPromptUsageCount,
+    promptSort.key,
+    promptSort.order
+  ])
 
   const paginatedData = useMemo(() => {
     if (useServerSearchResults) {
@@ -1762,8 +2086,9 @@ export const PromptBody = () => {
     }
   }
 
-  const handleInsertChoice = (choice: "system" | "quick" | "both") => {
+  const handleInsertChoice = async (choice: "system" | "quick" | "both") => {
     if (!insertPrompt) return
+    await markPromptAsUsed(insertPrompt.id)
     if (choice === "system") {
       setSelectedSystemPrompt(insertPrompt.id)
       setSelectedQuickPrompt(undefined)
@@ -1864,6 +2189,67 @@ export const PromptBody = () => {
             t("managePrompts.copilot.clipboard.errorDesc", {
               defaultValue: "Could not copy prompt text to clipboard."
             })
+        })
+      }
+    },
+    [t]
+  )
+
+  const copyPromptShareLink = React.useCallback(
+    async (record: { serverId?: number | null }) => {
+      const serverId = record?.serverId
+      if (typeof serverId !== "number" || serverId <= 0) {
+        notification.warning({
+          message: t("managePrompts.share.missingServerIdTitle", {
+            defaultValue: "Share link unavailable"
+          }),
+          description: t("managePrompts.share.missingServerIdDesc", {
+            defaultValue:
+              "Only prompts synced to the server can generate a share link."
+          })
+        })
+        return
+      }
+      if (
+        typeof navigator === "undefined" ||
+        !navigator.clipboard ||
+        typeof navigator.clipboard.writeText !== "function"
+      ) {
+        notification.error({
+          message: t("managePrompts.share.copyUnavailableTitle", {
+            defaultValue: "Clipboard unavailable"
+          }),
+          description: t("managePrompts.share.copyUnavailableDesc", {
+            defaultValue:
+              "Your browser does not allow copying links automatically."
+          })
+        })
+        return
+      }
+      const url = new URL(window.location.href)
+      url.searchParams.set("prompt", String(serverId))
+      url.searchParams.set("source", "studio")
+      const shareUrl = `${url.origin}${url.pathname}?${url.searchParams.toString()}`
+      try {
+        await navigator.clipboard.writeText(shareUrl)
+        notification.success({
+          message: t("managePrompts.share.copySuccessTitle", {
+            defaultValue: "Share link copied"
+          }),
+          description: t("managePrompts.share.copySuccessDesc", {
+            defaultValue:
+              "Send this link to another user with access to your prompt server."
+          })
+        })
+      } catch {
+        notification.error({
+          message: t("managePrompts.share.copyFailedTitle", {
+            defaultValue: "Could not copy link"
+          }),
+          description: t("managePrompts.share.copyFailedDesc", {
+            defaultValue:
+              "Copy failed. Please try again."
+          })
         })
       }
     },
@@ -2300,6 +2686,65 @@ export const PromptBody = () => {
               )}
             </div>
           )}
+          {isOnline && (
+            <div
+              data-testid="prompts-collections-panel"
+              className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface2 p-2"
+            >
+              <Select
+                value={collectionFilter}
+                onChange={(value) =>
+                  setCollectionFilter(
+                    value === "all" ? "all" : Number(value)
+                  )
+                }
+                loading={promptCollectionsStatus === "pending"}
+                style={{ minWidth: isCompactViewport ? "100%" : 260 }}
+                data-testid="prompts-collection-filter"
+                options={[
+                  {
+                    label: t("managePrompts.collections.filterAll", {
+                      defaultValue: "All collections"
+                    }),
+                    value: "all"
+                  },
+                  ...promptCollections.map((collection) => ({
+                    label: `${collection.name} (${collection.prompt_ids?.length || 0})`,
+                    value: collection.collection_id
+                  }))
+                ]}
+              />
+              <button
+                type="button"
+                onClick={() => setCreateCollectionModalOpen(true)}
+                data-testid="prompts-collection-create"
+                className="inline-flex items-center gap-2 rounded-md border border-border px-2 py-2 text-sm font-medium text-text hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2"
+              >
+                <FolderPlus className="size-4" />
+                {t("managePrompts.collections.create", {
+                  defaultValue: "New collection"
+                })}
+              </button>
+              {selectedCollection && selectedRowKeys.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    addPromptsToCollectionMutation({
+                      collection: selectedCollection,
+                      prompts: selectedPromptRows
+                    })
+                  }
+                  disabled={isAssigningPromptCollection}
+                  data-testid="prompts-collection-add-selected"
+                  className="inline-flex items-center gap-2 rounded-md border border-primary/40 px-2 py-2 text-sm font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+                >
+                  {t("managePrompts.collections.addSelected", {
+                    defaultValue: "Add selected to collection"
+                  })}
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex flex-wrap items-start justify-between gap-3 sm:items-center">
             {/* Left: Action buttons */}
             <div className="flex flex-wrap items-center gap-2">
@@ -2460,6 +2905,40 @@ export const PromptBody = () => {
                     { label: t("managePrompts.filter.all", { defaultValue: "All types" }), value: "all" },
                     { label: t("managePrompts.filter.system", { defaultValue: "System" }), value: "system" },
                     { label: t("managePrompts.filter.quick", { defaultValue: "Quick" }), value: "quick" }
+                  ]}
+                />
+              </div>
+              <div
+                data-testid="prompts-usage-filter-control"
+                className="w-full sm:w-auto"
+              >
+                <Select
+                  value={usageFilter}
+                  onChange={(v) => setUsageFilter(v as "all" | "used" | "unused")}
+                  data-testid="prompts-usage-filter"
+                  aria-label={t("managePrompts.filter.usageLabel", {
+                    defaultValue: "Filter by usage"
+                  })}
+                  style={{ width: isCompactViewport ? "100%" : 150 }}
+                  options={[
+                    {
+                      label: t("managePrompts.filter.usageAll", {
+                        defaultValue: "All usage"
+                      }),
+                      value: "all"
+                    },
+                    {
+                      label: t("managePrompts.filter.usageUsed", {
+                        defaultValue: "Used"
+                      }),
+                      value: "used"
+                    },
+                    {
+                      label: t("managePrompts.filter.usageUnused", {
+                        defaultValue: "Unused"
+                      }),
+                      value: "unused"
+                    }
                   ]}
                 />
               </div>
@@ -2845,6 +3324,50 @@ export const PromptBody = () => {
                       }
                     },
                     {
+                      title: t("managePrompts.columns.used", {
+                        defaultValue: "Used"
+                      }),
+                      key: "usageCount",
+                      width: 120,
+                      sorter: true,
+                      sortOrder:
+                        promptSort.key === "usageCount"
+                          ? promptSort.order
+                          : undefined,
+                      render: (_: any, record: any) => {
+                        const usageCount = getPromptUsageCount(record)
+                        const lastUsedAt = getPromptLastUsedAt(record)
+                        return (
+                          <Tooltip
+                            title={
+                              <div className="text-xs">
+                                <div>
+                                  {t("managePrompts.columns.usedCount", {
+                                    defaultValue: "Uses: {{count}}",
+                                    count: usageCount
+                                  })}
+                                </div>
+                                <div>
+                                  {lastUsedAt
+                                    ? t("managePrompts.columns.lastUsedAt", {
+                                        defaultValue: "Last used: {{time}}",
+                                        time: new Date(lastUsedAt).toLocaleString()
+                                      })
+                                    : t("managePrompts.columns.neverUsed", {
+                                        defaultValue: "Never used"
+                                      })}
+                                </div>
+                              </div>
+                            }
+                          >
+                            <span className="text-xs text-text-muted">
+                              {usageCount}
+                            </span>
+                          </Tooltip>
+                        )
+                      }
+                    },
+                    {
                       title: t("managePrompts.columns.sync", {
                         defaultValue: "Sync"
                       }),
@@ -2905,7 +3428,7 @@ export const PromptBody = () => {
                         user_prompt: record?.user_prompt
                       })
                     }}
-                    onUseInChat={() => {
+                    onUseInChat={async () => {
                       const { systemText, userText } = getPromptTexts(record)
                       const hasSystem =
                         typeof systemText === "string" &&
@@ -2925,6 +3448,7 @@ export const PromptBody = () => {
 
                       const quickContent = userText ?? record?.content
                       if (quickContent) {
+                        await markPromptAsUsed(record.id)
                         setSelectedQuickPrompt(quickContent)
                         setSelectedSystemPrompt(undefined)
                         navigate("/chat")
@@ -2940,6 +3464,13 @@ export const PromptBody = () => {
                       if (!ok) return
                       deletePrompt(record.id)
                     }}
+                    onShareLink={
+                      record.serverId
+                        ? () => {
+                            void copyPromptShareLink(record)
+                          }
+                        : undefined
+                    }
                     // Sync actions (only when online)
                     onPushToServer={isOnline ? () => {
                       setPromptToSync(record.id)
@@ -3765,6 +4296,51 @@ export const PromptBody = () => {
       </Modal>
 
       <Modal
+        title={t("managePrompts.collections.create", {
+          defaultValue: "New collection"
+        })}
+        open={createCollectionModalOpen}
+        onCancel={() => {
+          setCreateCollectionModalOpen(false)
+          setNewCollectionName("")
+          setNewCollectionDescription("")
+        }}
+        onOk={() =>
+          createPromptCollectionMutation({
+            name: newCollectionName,
+            description: newCollectionDescription
+          })
+        }
+        okText={t("common:create", { defaultValue: "Create" })}
+        cancelText={t("common:cancel", { defaultValue: "Cancel" })}
+        okButtonProps={{
+          loading: isCreatingPromptCollection,
+          disabled: newCollectionName.trim().length === 0
+        }}
+        data-testid="prompts-collection-create-modal"
+      >
+        <div className="space-y-3">
+          <Input
+            value={newCollectionName}
+            onChange={(event) => setNewCollectionName(event.target.value)}
+            placeholder={t("managePrompts.collections.namePlaceholder", {
+              defaultValue: "Collection name"
+            })}
+            data-testid="prompts-collection-name-input"
+          />
+          <Input.TextArea
+            value={newCollectionDescription}
+            onChange={(event) => setNewCollectionDescription(event.target.value)}
+            placeholder={t("managePrompts.collections.descriptionPlaceholder", {
+              defaultValue: "Description (optional)"
+            })}
+            autoSize={{ minRows: 2, maxRows: 4 }}
+            data-testid="prompts-collection-description-input"
+          />
+        </div>
+      </Modal>
+
+      <Modal
         title={t("managePrompts.shortcuts.title", {
           defaultValue: "Keyboard shortcuts"
         })}
@@ -3828,7 +4404,9 @@ export const PromptBody = () => {
           {insertPrompt?.systemText && (
             <button
               type="button"
-              onClick={() => handleInsertChoice("system")}
+              onClick={() => {
+                void handleInsertChoice("system")
+              }}
               data-testid="prompt-insert-system"
               className="w-full text-left p-4 rounded-lg border border-border hover:border-primary hover:bg-primary/5 transition-colors">
               <div className="flex items-center gap-2 mb-2">
@@ -3854,7 +4432,9 @@ export const PromptBody = () => {
           {insertPrompt?.userText && (
             <button
               type="button"
-              onClick={() => handleInsertChoice("quick")}
+              onClick={() => {
+                void handleInsertChoice("quick")
+              }}
               data-testid="prompt-insert-quick"
               className="w-full text-left p-4 rounded-lg border border-border hover:border-primary hover:bg-primary/5 transition-colors">
               <div className="flex items-center gap-2 mb-2">
@@ -3880,7 +4460,9 @@ export const PromptBody = () => {
           {insertPrompt?.systemText && insertPrompt?.userText && (
             <button
               type="button"
-              onClick={() => handleInsertChoice("both")}
+              onClick={() => {
+                void handleInsertChoice("both")
+              }}
               data-testid="prompt-insert-both"
               className="w-full text-left p-4 rounded-lg border-2 border-primary/50 bg-primary/5 hover:border-primary hover:bg-primary/10 transition-colors">
               <div className="flex items-center gap-2 mb-2">

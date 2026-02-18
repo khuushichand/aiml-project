@@ -23,7 +23,7 @@ Finding IDs: `H1.1` through `H1.7`
 - Component tests for new columns and status badge rendering.
 - Unit tests for status-to-badge mapping and timestamp formatter.
 - Regression test ensuring table sorting/filtering still works with new columns.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 2: Live Run Visibility
 **Goal**: Move run details from one-time fetch to live status feedback.
@@ -35,7 +35,7 @@ Finding IDs: `H1.1` through `H1.7`
 - Integration tests for WebSocket connect/reconnect/error handling.
 - Component tests for streamed log append and bounded log buffer.
 - E2E test for active run progression and completion transition.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Overview and Notifications
 **Goal**: Add a true operational summary surface and completion/failure signals.
@@ -47,7 +47,7 @@ Finding IDs: `H1.1` through `H1.7`
 - Integration tests for overview aggregate data loading and refresh.
 - Notification lifecycle tests (emit, click-through, dismiss).
 - E2E test validating "system healthy vs degraded" visibility in < 1 click.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

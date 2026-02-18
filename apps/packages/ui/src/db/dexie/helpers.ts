@@ -483,6 +483,8 @@ export const savePrompt = async ({
     tags: resolvedKeywords,
     keywords: resolvedKeywords,
     favorite,
+    usageCount: 0,
+    lastUsedAt: null,
     author,
     details,
     system_prompt: system_prompt ?? (is_system ? resolvedContent : undefined),
@@ -579,7 +581,9 @@ export const updatePrompt = async ({
   is_system,
   tags = [],
   keywords,
-  favorite
+  favorite,
+  usageCount,
+  lastUsedAt
 }: {
   id: string
   title?: string
@@ -599,6 +603,8 @@ export const updatePrompt = async ({
   tags?: string[]
   keywords?: string[]
   favorite?: boolean
+  usageCount?: number
+  lastUsedAt?: number | null
 }) => {
   const db = new PageAssistDatabase()
   const resolvedKeywords = keywords ?? tags
@@ -616,6 +622,8 @@ export const updatePrompt = async ({
     tags: resolvedKeywords,
     keywords: resolvedKeywords,
     favorite,
+    usageCount,
+    lastUsedAt,
     author,
     details,
     system_prompt,
@@ -634,6 +642,12 @@ export const updatePrompt = async ({
     ...payload
   })
   return id
+}
+
+export const incrementPromptUsage = async (id: string) => {
+  if (!id || id.trim().length === 0) return null
+  const db = new PageAssistDatabase()
+  return db.incrementPromptUsage(id)
 }
 
 export const getPromptById = async (id: string) => {

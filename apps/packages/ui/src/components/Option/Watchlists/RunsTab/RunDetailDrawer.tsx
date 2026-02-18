@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react"
+import React, { useCallback, useEffect, useRef, useState } from "react"
 import {
   Alert,
   Button,
@@ -15,12 +15,18 @@ import {
 import type { ColumnsType } from "antd/es/table"
 import { Download } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { useWatchlistsStore } from "@/store/watchlists"
 import {
   exportRunTalliesCsv,
   fetchScrapedItems,
   getRunDetails,
   updateScrapedItem
 } from "@/services/watchlists"
+import {
+  buildWatchlistsRunWebSocketUrl,
+  parseWatchlistsRunStreamPayload
+} from "@/services/watchlists-stream"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { RunDetailResponse, ScrapedItem } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { StatusTag } from "../shared"
@@ -30,6 +36,13 @@ interface RunDetailDrawerProps {
   open: boolean
   onClose: () => void
 }
+
+type StreamConnectionState =
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "disconnected"
+  | "error"
 
 export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   runId,
@@ -47,6 +60,16 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   const [itemsPageSize, setItemsPageSize] = useState(20)
   const [updatingItemIds, setUpdatingItemIds] = useState<number[]>([])
   const [exportingTalliesCsv, setExportingTalliesCsv] = useState(false)
+  const [streamState, setStreamState] = useState<StreamConnectionState>("disconnected")
+  const [streamError, setStreamError] = useState<string | null>(null)
+  const [lastStreamEventAt, setLastStreamEventAt] = useState<string | null>(null)
+  const [streamingEnabled, setStreamingEnabled] = useState(true)
+  const wsRef = useRef<WebSocket | null>(null)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reconnectAttemptRef = useRef(0)
+  const manuallyClosedRef = useRef(false)
+  const currentStatusRef = useRef<string | null>(null)
+  const updateRunInList = useWatchlistsStore((s) => s.updateRunInList)
 
   const downloadCsv = (content: string, filename: string): void => {
     const blob = new Blob([content], { type: "text/csv;charset=utf-8" })
@@ -60,10 +83,97 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     URL.revokeObjectURL(url)
   }
 
+  const clearReconnectTimer = () => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+    }
+  }
+
+  const closeStream = () => {
+    clearReconnectTimer()
+    if (wsRef.current && wsRef.current.readyState < WebSocket.CLOSING) {
+      wsRef.current.close()
+    }
+    wsRef.current = null
+    reconnectAttemptRef.current = 0
+  }
+
+  const appendLogText = (incoming: string) => {
+    const MAX_LOG_CHARS = 200_000
+    setData((prev) => {
+      if (!prev) return prev
+      const current = prev.log_text || ""
+      const merged = `${current}${incoming}`
+      if (merged.length <= MAX_LOG_CHARS) {
+        return { ...prev, log_text: merged }
+      }
+      return {
+        ...prev,
+        log_text: merged.slice(-MAX_LOG_CHARS),
+        truncated: true
+      }
+    })
+  }
+
+  const applyRunSnapshot = (
+    run: {
+      id: number
+      job_id: number
+      status: string
+      started_at?: string | null
+      finished_at?: string | null
+    },
+    stats: Record<string, number>,
+    errorMsg?: string | null
+  ) => {
+    setData((prev) => {
+      if (!prev) {
+        return {
+          id: run.id,
+          job_id: run.job_id,
+          status: run.status,
+          started_at: run.started_at ?? null,
+          finished_at: run.finished_at ?? null,
+          stats,
+          filter_tallies: null,
+          error_msg: errorMsg ?? null,
+          log_text: null,
+          log_path: null,
+          truncated: false,
+          filtered_sample: null
+        }
+      }
+      return {
+        ...prev,
+        id: run.id,
+        job_id: run.job_id,
+        status: run.status,
+        started_at: run.started_at ?? prev.started_at,
+        finished_at: run.finished_at ?? prev.finished_at,
+        stats,
+        error_msg: errorMsg ?? prev.error_msg
+      }
+    })
+
+    updateRunInList(run.id, {
+      status: run.status as any,
+      started_at: run.started_at ?? null,
+      finished_at: run.finished_at ?? null,
+      stats,
+      error_msg: errorMsg ?? null
+    })
+  }
+
+  useEffect(() => {
+    currentStatusRef.current = data?.status || null
+  }, [data?.status])
+
   useEffect(() => {
     if (open && runId) {
       setLoading(true)
       setError(null)
+      setStreamError(null)
       getRunDetails(runId)
         .then((result) => {
           setData(result)
@@ -78,6 +188,9 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     } else {
       setData(null)
       setError(null)
+      setStreamState("disconnected")
+      setStreamError(null)
+      setLastStreamEventAt(null)
     }
   }, [open, runId])
 
@@ -116,6 +229,153 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   useEffect(() => {
     loadItems()
   }, [loadItems])
+
+  useEffect(() => {
+    if (!open || !runId || !streamingEnabled) {
+      manuallyClosedRef.current = true
+      closeStream()
+      return
+    }
+
+    let disposed = false
+
+    const connectStream = async () => {
+      const attempt = reconnectAttemptRef.current
+      setStreamState(attempt > 0 ? "reconnecting" : "connecting")
+      setStreamError(null)
+
+      try {
+        const config = await tldwClient.getConfig()
+        if (disposed) return
+        if (!config) {
+          setStreamState("error")
+          setStreamError(t("watchlists:runs.detail.streamSetupError", "Failed to connect live stream"))
+          return
+        }
+        const wsUrl = buildWatchlistsRunWebSocketUrl(config, runId)
+        const ws = new WebSocket(wsUrl)
+        wsRef.current = ws
+
+        ws.onopen = () => {
+          if (disposed || wsRef.current !== ws) return
+          reconnectAttemptRef.current = 0
+          setStreamState("connected")
+          setStreamError(null)
+        }
+
+        ws.onmessage = (event) => {
+          if (disposed || typeof event.data !== "string") return
+          let parsedJson: unknown = null
+          try {
+            parsedJson = JSON.parse(event.data)
+          } catch {
+            return
+          }
+
+          const streamEvent = parseWatchlistsRunStreamPayload(parsedJson)
+          if (!streamEvent) return
+          setLastStreamEventAt(new Date().toISOString())
+
+          if (streamEvent.type === "snapshot") {
+            applyRunSnapshot(streamEvent.run, streamEvent.stats, streamEvent.error_msg)
+            setData((prev) => {
+              if (!prev) {
+                return {
+                  id: streamEvent.run.id,
+                  job_id: streamEvent.run.job_id,
+                  status: streamEvent.run.status,
+                  started_at: streamEvent.run.started_at ?? null,
+                  finished_at: streamEvent.run.finished_at ?? null,
+                  stats: streamEvent.stats,
+                  filter_tallies: null,
+                  error_msg: streamEvent.error_msg ?? null,
+                  log_text: typeof streamEvent.log_tail === "string" ? streamEvent.log_tail : null,
+                  log_path: null,
+                  truncated: Boolean(streamEvent.log_truncated),
+                  filtered_sample: null
+                }
+              }
+              return {
+                ...prev,
+                log_text: typeof streamEvent.log_tail === "string" ? streamEvent.log_tail : prev.log_text,
+                truncated: Boolean(streamEvent.log_truncated || prev.truncated)
+              }
+            })
+            return
+          }
+
+          if (streamEvent.type === "run_update") {
+            applyRunSnapshot(streamEvent.run, streamEvent.stats, streamEvent.error_msg)
+            return
+          }
+
+          if (streamEvent.type === "log") {
+            appendLogText(streamEvent.text)
+            return
+          }
+
+          if (streamEvent.type === "complete") {
+            const finalStatus = streamEvent.status || currentStatusRef.current || "completed"
+            setData((prev) => (prev ? { ...prev, status: finalStatus } : prev))
+            updateRunInList(runId, { status: finalStatus as any })
+            setStreamState("disconnected")
+            manuallyClosedRef.current = true
+            closeStream()
+          }
+        }
+
+        ws.onerror = () => {
+          if (disposed) return
+          setStreamState("error")
+          setStreamError(t("watchlists:runs.detail.streamError", "Live stream error"))
+        }
+
+        ws.onclose = () => {
+          if (disposed || wsRef.current !== ws) return
+          wsRef.current = null
+
+          if (manuallyClosedRef.current) {
+            setStreamState("disconnected")
+            return
+          }
+
+          const status = String(currentStatusRef.current || "").toLowerCase()
+          const terminal = status === "completed" || status === "failed" || status === "cancelled"
+          if (terminal) {
+            setStreamState("disconnected")
+            return
+          }
+
+          const nextAttempt = reconnectAttemptRef.current + 1
+          reconnectAttemptRef.current = nextAttempt
+          setStreamState("reconnecting")
+          const delayMs = Math.min(1000 * 2 ** Math.max(nextAttempt - 1, 0), 10000)
+          clearReconnectTimer()
+          reconnectTimerRef.current = setTimeout(() => {
+            if (!disposed) void connectStream()
+          }, delayMs)
+        }
+      } catch (err) {
+        if (disposed) return
+        setStreamState("error")
+        setStreamError(
+          err instanceof Error
+            ? err.message
+            : t("watchlists:runs.detail.streamSetupError", "Failed to connect live stream")
+        )
+      }
+    }
+
+    manuallyClosedRef.current = false
+    void connectStream()
+
+    return () => {
+      disposed = true
+      manuallyClosedRef.current = true
+      closeStream()
+      setStreamState("disconnected")
+    }
+  }, [open, runId, streamingEnabled, t, updateRunInList])
 
   // Calculate duration
   const calculateDuration = (): string => {
@@ -254,6 +514,22 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     }
   ]
 
+  const streamStateColorMap: Record<StreamConnectionState, string> = {
+    connecting: "blue",
+    connected: "green",
+    reconnecting: "gold",
+    disconnected: "default",
+    error: "red"
+  }
+
+  const streamStateLabelMap: Record<StreamConnectionState, string> = {
+    connecting: t("watchlists:runs.detail.streamState.connecting", "Connecting"),
+    connected: t("watchlists:runs.detail.streamState.connected", "Connected"),
+    reconnecting: t("watchlists:runs.detail.streamState.reconnecting", "Reconnecting"),
+    disconnected: t("watchlists:runs.detail.streamState.disconnected", "Disconnected"),
+    error: t("watchlists:runs.detail.streamState.error", "Error")
+  }
+
   const tabItems = [
     {
       key: "stats",
@@ -330,6 +606,36 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       label: t("watchlists:runs.detail.logs", "Logs"),
       children: (
         <div>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Tag color={streamStateColorMap[streamState]}>
+                {t("watchlists:runs.detail.stream", "Live stream")}: {streamStateLabelMap[streamState]}
+              </Tag>
+              {lastStreamEventAt && (
+                <span className="text-xs text-text-muted">
+                  {t("watchlists:runs.detail.lastStreamEvent", "Last event {{time}}", {
+                    time: formatRelativeTime(lastStreamEventAt, t, { compact: true })
+                  })}
+                </span>
+              )}
+            </div>
+            <Switch
+              checked={streamingEnabled}
+              size="small"
+              onChange={setStreamingEnabled}
+              checkedChildren={t("watchlists:runs.detail.liveOn", "Live")}
+              unCheckedChildren={t("watchlists:runs.detail.liveOff", "Off")}
+            />
+          </div>
+          {streamError && (
+            <Alert
+              type="error"
+              showIcon
+              className="mb-3"
+              title={t("watchlists:runs.detail.streamErrorTitle", "Stream error")}
+              description={streamError}
+            />
+          )}
           {data?.truncated && (
             <Alert
               type="warning"

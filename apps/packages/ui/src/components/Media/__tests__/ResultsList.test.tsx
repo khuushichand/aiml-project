@@ -124,4 +124,68 @@ describe('ResultsList', () => {
     expect(onClearSearch).toHaveBeenCalledTimes(1)
     expect(onOpenQuickIngest).toHaveBeenCalledTimes(1)
   })
+
+  it('uses enlarged favorite hit target padding for touch ergonomics', () => {
+    const onToggleFavorite = vi.fn()
+
+    render(
+      <ResultsList
+        results={[
+          {
+            id: '1',
+            kind: 'media',
+            title: 'Document A'
+          }
+        ]}
+        selectedId={null}
+        onSelect={vi.fn()}
+        totalCount={1}
+        loadedCount={1}
+        favorites={new Set()}
+        onToggleFavorite={onToggleFavorite}
+      />
+    )
+
+    const favoriteButton = screen.getByRole('button', { name: 'Add to favorites' })
+    expect(favoriteButton).toHaveClass('p-1.5')
+
+    fireEvent.click(favoriteButton)
+    expect(onToggleFavorite).toHaveBeenCalledWith('1')
+  })
+
+  it('shows loading skeletons before results resolve and removes them after data arrives', () => {
+    const { rerender, container } = render(
+      <ResultsList
+        results={[]}
+        selectedId={null}
+        onSelect={vi.fn()}
+        totalCount={0}
+        loadedCount={0}
+        isLoading
+      />
+    )
+
+    expect(container.querySelectorAll('.animate-pulse')).toHaveLength(5)
+
+    rerender(
+      <ResultsList
+        results={[
+          {
+            id: '1',
+            kind: 'media',
+            title: 'Loaded row',
+            snippet: 'Resolved content'
+          }
+        ]}
+        selectedId={null}
+        onSelect={vi.fn()}
+        totalCount={1}
+        loadedCount={1}
+        isLoading={false}
+      />
+    )
+
+    expect(container.querySelectorAll('.animate-pulse')).toHaveLength(0)
+    expect(screen.getByText('Loaded row')).toBeInTheDocument()
+  })
 })

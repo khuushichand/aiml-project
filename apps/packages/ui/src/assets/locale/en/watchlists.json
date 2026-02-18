@@ -6,6 +6,7 @@
   "betaDescription": "Watchlists is currently in beta. Some features may be incomplete or change.",
   "comingSoon": "Coming soon...",
   "tabs": {
+    "overview": "Overview",
     "sources": "Sources",
     "jobs": "Jobs",
     "runs": "Runs",
@@ -13,6 +14,60 @@
     "outputs": "Outputs",
     "templates": "Templates",
     "settings": "Settings"
+  },
+  "overview": {
+    "description": "At-a-glance watchlist health, activity, and failure signals.",
+    "lastUpdated": "Updated {{time}}",
+    "fetchError": "Failed to load overview",
+    "openSources": "Open",
+    "openJobs": "Open",
+    "openItems": "Open",
+    "openRuns": "Open",
+    "health": {
+      "healthyTitle": "System healthy",
+      "healthyDescription": "No recent failed runs and source health is stable.",
+      "degradedTitle": "System requires attention",
+      "degradedDescription": "Some sources or recent runs show failures. Open failed runs to investigate."
+    },
+    "cards": {
+      "sources": {
+        "title": "Sources",
+        "total": "Total",
+        "healthy": "Healthy {{count}}",
+        "degraded": "Degraded {{count}}",
+        "inactive": "Inactive {{count}}"
+      },
+      "jobs": {
+        "title": "Jobs",
+        "active": "Active",
+        "nextRun": "Next run {{time}}",
+        "noNextRun": "No upcoming schedules"
+      },
+      "items": {
+        "title": "Items",
+        "unread": "Unread"
+      },
+      "runs": {
+        "title": "Run Queue",
+        "running": "Running",
+        "pending": "Pending {{count}}"
+      }
+    },
+    "failedRuns": {
+      "title": "Recent Failed Runs",
+      "empty": "No recent failures",
+      "viewRun": "View run",
+      "jobFallback": "Job #{{id}}",
+      "failed": "Failed",
+      "noError": "No error details available"
+    }
+  },
+  "notifications": {
+    "viewRun": "View run",
+    "runCompletedTitle": "Run completed",
+    "runCompletedDescription": "Run #{{id}} completed successfully.",
+    "runFailedTitle": "Run failed",
+    "runFailedDescription": "Run #{{id}} failed. {{hint}}"
   },
   "sources": {
     "title": "Sources",
@@ -243,6 +298,20 @@
       "logsTruncated": "Logs truncated",
       "logsTruncatedDesc": "Showing the most recent log output.",
       "logsPath": "Logs stored at {{path}}",
+      "stream": "Live stream",
+      "lastStreamEvent": "Last event {{time}}",
+      "liveOn": "Live",
+      "liveOff": "Off",
+      "streamError": "Live stream error",
+      "streamErrorTitle": "Stream error",
+      "streamSetupError": "Failed to connect live stream",
+      "streamState": {
+        "connecting": "Connecting",
+        "connected": "Connected",
+        "reconnecting": "Reconnecting",
+        "disconnected": "Disconnected",
+        "error": "Error"
+      },
       "itemsColumns": {
         "title": "Title",
         "status": "Status",

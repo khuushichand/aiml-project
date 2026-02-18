@@ -1,11 +1,13 @@
 import { Search, X, FilterX } from 'lucide-react'
 import { Tooltip } from 'antd'
 import { useTranslation } from 'react-i18next'
+import type { Ref } from 'react'
 
 interface SearchBarProps {
   value: string
   onChange: (value: string) => void
   placeholder?: string
+  inputRef?: Ref<HTMLInputElement>
   onClearAll?: () => void // Optional callback to reset filters too
   hasActiveFilters?: boolean // Whether there are active filters to clear
 }
@@ -14,6 +16,7 @@ export function SearchBar({
   value,
   onChange,
   placeholder = 'Search media (title/content)',
+  inputRef,
   onClearAll,
   hasActiveFilters = false
 }: SearchBarProps) {
@@ -39,8 +42,10 @@ export function SearchBar({
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-text-subtle" />
         <input
+          ref={inputRef}
           type="text"
           placeholder={placeholder}
+          aria-label={placeholder}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className={`w-full pl-10 ${inputPaddingClass} py-2.5 border border-border bg-surface text-text placeholder:text-text-muted rounded-lg focus:outline-none focus:ring-2 focus:ring-focus focus:border-transparent`}

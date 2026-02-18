@@ -82,7 +82,7 @@ export function CharacterGalleryCard({
   return (
     <button
       type="button"
-      className={`group flex w-full flex-col items-center gap-2 rounded-lg border border-border bg-surface p-3 transition-all hover:border-primary/30 hover:bg-surface2 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-bg ${
+      className={`group flex w-full flex-col items-center gap-2 rounded-lg border border-border bg-surface p-3 transition-all motion-reduce:transition-none hover:border-primary/30 hover:bg-surface2 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-bg ${
         isCompact ? "min-h-[168px]" : "min-h-[220px]"
       }`}
       onClick={onClick}

@@ -1,6 +1,6 @@
 import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { Modal } from "antd"
 import { StudioPane } from "../StudioPane"
 
@@ -34,6 +34,7 @@ const {
   const addArtifact = vi.fn()
   const updateArtifactStatus = vi.fn()
   const removeArtifact = vi.fn()
+  const restoreArtifact = vi.fn()
   const setIsGeneratingOutput = vi.fn()
   const setAudioSettings = vi.fn()
   const captureToCurrentNote = vi.fn()
@@ -59,6 +60,7 @@ const {
     addArtifact,
     updateArtifactStatus,
     removeArtifact,
+    restoreArtifact,
     setIsGeneratingOutput,
     setAudioSettings,
     captureToCurrentNote,
@@ -189,6 +191,7 @@ Object.defineProperty(HTMLMediaElement.prototype, "pause", {
 describe("StudioPane Stage 2 workflows", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    Modal.destroyAll()
     isMobile = false
 
     workspaceStoreState.selectedSourceIds = ["source-1"]
@@ -255,6 +258,10 @@ describe("StudioPane Stage 2 workflows", () => {
         }
       ]
     })
+  })
+
+  afterEach(() => {
+    Modal.destroyAll()
   })
 
   it("dispatches discuss event for completed artifacts", () => {
@@ -474,7 +481,8 @@ describe("StudioPane Stage 2 workflows", () => {
     fireEvent.change(await screen.findByPlaceholderText("Back (answer or definition)"), {
       target: { value: "Updated back" }
     })
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+    const flashcardSaveButtons = screen.getAllByRole("button", { name: "Save changes" })
+    fireEvent.click(flashcardSaveButtons[flashcardSaveButtons.length - 1]!)
 
     await waitFor(() => {
       expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
@@ -528,7 +536,8 @@ describe("StudioPane Stage 2 workflows", () => {
     fireEvent.change(await screen.findByPlaceholderText("Explanation (optional)"), {
       target: { value: "Updated explanation" }
     })
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+    const quizSaveButtons = screen.getAllByRole("button", { name: "Save changes" })
+    fireEvent.click(quizSaveButtons[quizSaveButtons.length - 1]!)
 
     await waitFor(() => {
       expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
@@ -581,7 +590,7 @@ describe("StudioPane Stage 2 workflows", () => {
       }),
       expect.any(Object)
     )
-  })
+  }, 15000)
 
   it("requests voice preview audio from TTS provider", async () => {
     render(<StudioPane />)
@@ -600,7 +609,7 @@ describe("StudioPane Stage 2 workflows", () => {
         })
       )
     })
-  })
+  }, 15000)
 
   it("uses fullscreen modal sizing when viewing outputs on mobile", () => {
     isMobile = true

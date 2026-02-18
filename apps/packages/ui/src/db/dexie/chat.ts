@@ -469,6 +469,10 @@ export class PageAssistDatabase {
   async addPrompt(prompt: Prompt) {
     const mergedKeywords = prompt.keywords ?? prompt.tags;
     const now = Date.now();
+    const normalizedUsageCount =
+      typeof prompt.usageCount === "number" && Number.isFinite(prompt.usageCount)
+        ? Math.max(0, Math.floor(prompt.usageCount))
+        : 0;
     const normalized: Prompt = {
       ...prompt,
       title: prompt.title || prompt.name,
@@ -476,6 +480,11 @@ export class PageAssistDatabase {
       tags: mergedKeywords ?? prompt.tags,
       keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags,
       deletedAt: null,
+      usageCount: normalizedUsageCount,
+      lastUsedAt:
+        typeof prompt.lastUsedAt === "number" && Number.isFinite(prompt.lastUsedAt)
+          ? prompt.lastUsedAt
+          : null,
       updatedAt: now
     };
     await db.prompts.add(normalized);
@@ -519,12 +528,32 @@ export class PageAssistDatabase {
 
   async updatePrompt(
     id: string,
-    updates: Partial<Prompt> & { title?: string; name?: string; content?: string; is_system?: boolean; tags?: string[]; keywords?: string[]; favorite?: boolean }
+    updates: Partial<Prompt> & {
+      title?: string
+      name?: string
+      content?: string
+      is_system?: boolean
+      tags?: string[]
+      keywords?: string[]
+      favorite?: boolean
+      usageCount?: number
+      lastUsedAt?: number | null
+    }
   ) {
     const existing = await db.prompts.get(id);
     if (!existing) return;
 
     const mergedKeywords = updates.keywords ?? updates.tags;
+    const resolvedUsageCount =
+      typeof updates.usageCount === "number" && Number.isFinite(updates.usageCount)
+        ? Math.max(0, Math.floor(updates.usageCount))
+        : existing.usageCount;
+    const resolvedLastUsedAt =
+      updates.lastUsedAt === undefined
+        ? existing.lastUsedAt
+        : typeof updates.lastUsedAt === "number" && Number.isFinite(updates.lastUsedAt)
+          ? updates.lastUsedAt
+          : null;
     const merged: Prompt = {
       ...existing,
       ...updates,
@@ -536,10 +565,34 @@ export class PageAssistDatabase {
       tags: mergedKeywords ?? existing.tags,
       keywords: mergedKeywords ?? existing.keywords ?? existing.tags,
       favorite:
-        typeof updates.favorite === "boolean" ? updates.favorite : existing.favorite
+        typeof updates.favorite === "boolean" ? updates.favorite : existing.favorite,
+      usageCount: resolvedUsageCount,
+      lastUsedAt: resolvedLastUsedAt
     };
 
     await db.prompts.put(merged);
+  }
+
+  async incrementPromptUsage(id: string) {
+    const existing = await db.prompts.get(id);
+    if (!existing || existing.deletedAt) return null;
+
+    const now = Date.now();
+    const currentUsageCount =
+      typeof existing.usageCount === "number" && Number.isFinite(existing.usageCount)
+        ? Math.max(0, Math.floor(existing.usageCount))
+        : 0;
+    const usageCount = currentUsageCount + 1;
+    const patch: Pick<Prompt, "usageCount" | "lastUsedAt" | "updatedAt"> = {
+      usageCount,
+      lastUsedAt: now,
+      updatedAt: now
+    };
+    await db.prompts.update(id, patch);
+    return {
+      usageCount,
+      lastUsedAt: now
+    };
   }
 
   async getPromptById(id: string): Promise<Prompt | undefined> {
@@ -682,12 +735,22 @@ export class PageAssistDatabase {
     // Normalize all prompts first
     const normalizedPrompts = data.map(prompt => {
       const mergedKeywords = prompt.keywords ?? prompt.tags;
+      const usageCount =
+        typeof prompt.usageCount === "number" && Number.isFinite(prompt.usageCount)
+          ? Math.max(0, Math.floor(prompt.usageCount))
+          : 0;
+      const lastUsedAt =
+        typeof prompt.lastUsedAt === "number" && Number.isFinite(prompt.lastUsedAt)
+          ? prompt.lastUsedAt
+          : null;
       return {
         ...prompt,
         title: prompt.title || prompt.name,
         name: prompt.name ?? prompt.title,
         tags: mergedKeywords ?? prompt.tags,
-        keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags
+        keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags,
+        usageCount,
+        lastUsedAt
       } as Prompt;
     });
 

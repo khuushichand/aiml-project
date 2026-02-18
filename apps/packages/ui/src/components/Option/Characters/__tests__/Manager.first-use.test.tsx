@@ -291,6 +291,16 @@ describe("CharactersManager first-use onboarding", () => {
     return call?.[0] as any
   }
 
+  const getDeletedScopeListCharactersQueryOptions = () => {
+    const call = useQueryMock.mock.calls.find(([opts]) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      const params = Array.isArray(opts?.queryKey) ? opts?.queryKey?.[1] : undefined
+      return key === "tldw:listCharacters" && params?.deleted_only === true
+    })
+    expect(call).toBeDefined()
+    return call?.[0] as any
+  }
+
   it("requests lightweight character list payload by default", async () => {
     render(<CharactersManager />)
 
@@ -405,7 +415,7 @@ describe("CharactersManager first-use onboarding", () => {
     expect(
       await screen.findByRole("button", { name: "Start from a template..." })
     ).toBeInTheDocument()
-  })
+  }, 30000)
 
   it("shows and applies the system prompt example from the create form", async () => {
     const user = userEvent.setup()
@@ -619,6 +629,43 @@ describe("CharactersManager first-use onboarding", () => {
     expect(window.localStorage.getItem("characters-page-size")).toBe("25")
   }, 30000)
 
+  it("enforces the explicit 75-character name limit in create mode", async () => {
+    const user = userEvent.setup()
+    window.localStorage.setItem(TEMPLATE_CHOOSER_SEEN_KEY, "true")
+
+    render(<CharactersManager />)
+    await user.click(screen.getByRole("button", { name: "New character" }))
+
+    const createSubmitButton = await waitFor(() => {
+      const candidate = screen
+        .getAllByRole("button", { name: "Create character" })
+        .find((button) => button.getAttribute("type") === "submit")
+      expect(candidate).toBeDefined()
+      return candidate as HTMLElement
+    })
+    const createFormElement = createSubmitButton.closest("form")
+    expect(createFormElement).not.toBeNull()
+    const createScope = within(createFormElement as HTMLElement)
+
+    const nameInput = createScope.getByPlaceholderText("e.g. Writing coach")
+    expect(nameInput).toHaveAttribute("maxlength", "75")
+
+    fireEvent.change(nameInput, { target: { value: "A".repeat(76) } })
+    fireEvent.change(
+      createScope.getByPlaceholderText(
+        "E.g., You are a patient math teacher who explains concepts step by step and checks understanding with short examples."
+      ),
+      { target: { value: "System prompt with enough text." } }
+    )
+
+    await user.click(createScope.getByRole("button", { name: "Create character" }))
+
+    expect(
+      await screen.findByText("Name must be 75 characters or fewer")
+    ).toBeInTheDocument()
+    expect(tldwClientMock.createCharacter).not.toHaveBeenCalled()
+  }, 30000)
+
   it("supports has-conversations filter scaffold and clear reset", async () => {
     const user = userEvent.setup()
     const records = [
@@ -672,6 +719,147 @@ describe("CharactersManager first-use onboarding", () => {
     await user.click(screen.getByRole("button", { name: "Clear filters" }))
 
     expect(await screen.findByText("No Chats")).toBeInTheDocument()
+  }, 30000)
+
+  it("switches to recently-deleted scope and queries deleted-only records", async () => {
+    const user = userEvent.setup()
+
+    render(<CharactersManager />)
+
+    await user.click(screen.getByText("Recently deleted"))
+
+    await waitFor(() => {
+      const deletedQuery = getDeletedScopeListCharactersQueryOptions()
+      expect(deletedQuery.queryKey[1]).toMatchObject({
+        include_deleted: true,
+        deleted_only: true
+      })
+    })
+
+    const deletedQuery = getDeletedScopeListCharactersQueryOptions()
+    await deletedQuery.queryFn()
+
+    expect(tldwClientMock.listCharactersPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include_deleted: true,
+        deleted_only: true
+      })
+    )
+  }, 30000)
+
+  it("restores characters from recently-deleted scope actions", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "deleted-1",
+        name: "Deleted Character",
+        system_prompt: "Prompt text",
+        version: 12
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(screen.getByText("Recently deleted"))
+    await user.click(await screen.findByRole("button", { name: /Restore character/i }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.restoreCharacter).toHaveBeenCalledWith("deleted-1", 12)
+    })
+  }, 30000)
+
+  it("uses soft-delete copy and undo semantics for bulk delete", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "bulk-1",
+        name: "Bulk One",
+        system_prompt: "Prompt text",
+        version: 10
+      },
+      {
+        id: "bulk-2",
+        name: "Bulk Two",
+        system_prompt: "Prompt text",
+        version: 20
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(
+      await screen.findByRole("checkbox", { name: "Select all on page" })
+    )
+
+    const selectedLabel = await screen.findByText("{{count}} selected")
+    const toolbar = selectedLabel.closest("div")?.parentElement
+    expect(toolbar).not.toBeNull()
+    await user.click(
+      within(toolbar as HTMLElement).getByRole("button", { name: "Delete" })
+    )
+
+    await waitFor(() => {
+      expect(confirmDangerMock).toHaveBeenCalledTimes(1)
+    })
+    expect(confirmDangerMock.mock.calls[0]?.[0]).toMatchObject({
+      content:
+        "This will soft-delete {{count}} characters. You can undo for 10 seconds."
+    })
+
+    await waitFor(() => {
+      expect(tldwClientMock.deleteCharacter).toHaveBeenCalledTimes(2)
+    })
+    await waitFor(() => {
+      expect(notificationMock.info).toHaveBeenCalledTimes(1)
+    })
+
+    const infoPayload = notificationMock.info.mock.calls[0]?.[0]
+    expect(infoPayload?.duration).toBe(10)
+
+    const undoHandler = infoPayload?.description?.props?.onClick
+    expect(typeof undoHandler).toBe("function")
+    await undoHandler()
+
+    await waitFor(() => {
+      expect(tldwClientMock.restoreCharacter).toHaveBeenCalledWith("bulk-1", 11)
+    })
+    await waitFor(() => {
+      expect(tldwClientMock.restoreCharacter).toHaveBeenCalledWith("bulk-2", 21)
+    })
   }, 30000)
 
   it("supports keyboard Enter to trigger and commit inline name editing", async () => {
@@ -1355,6 +1543,77 @@ describe("CharactersManager first-use onboarding", () => {
     expect(typeof shortcutOptions?.onNewCharacter).toBe("function")
     expect(typeof shortcutOptions?.onFocusSearch).toBe("function")
     expect(typeof shortcutOptions?.onCloseModal).toBe("function")
+  })
+
+  it("adds skip-link, main landmark, and shortcut summary semantics", async () => {
+    render(<CharactersManager />)
+
+    const skipLink = screen.getByRole("link", {
+      name: "Skip to characters content"
+    })
+    expect(skipLink).toHaveAttribute("href", "#characters-main-content")
+
+    const mainRegion = screen.getByRole("main")
+    expect(mainRegion).toHaveAttribute("id", "characters-main-content")
+    expect(mainRegion).toHaveAttribute(
+      "aria-describedby",
+      "characters-shortcuts-summary"
+    )
+    expect(mainRegion.parentElement).toHaveClass("characters-page")
+
+    const shortcutSummary = document.getElementById("characters-shortcuts-summary")
+    expect(shortcutSummary).not.toBeNull()
+    expect(shortcutSummary).toHaveTextContent("Keyboard shortcuts")
+
+    expect(
+      screen.getByRole("button", { name: "Keyboard shortcuts" })
+    ).toBeInTheDocument()
+  })
+
+  it("allows keyboard focus to reveal shortcut help tooltip", async () => {
+    render(<CharactersManager />)
+
+    const shortcutButton = screen.getByRole("button", {
+      name: "Keyboard shortcuts"
+    })
+    fireEvent.focus(shortcutButton)
+
+    await waitFor(() => {
+      expect(screen.getByRole("tooltip")).toBeInTheDocument()
+    })
+  })
+
+  it("renders reduced-motion utility classes on row action controls", async () => {
+    const records = [
+      {
+        id: "motion-1",
+        name: "Motion Ready Character",
+        system_prompt: "Prompt text",
+        version: 1
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    const chatButton = await screen.findByRole("button", { name: /Chat/i })
+    expect(chatButton.className).toContain("motion-reduce:transition-none")
   })
 
   it("imports a character file through the upload control", async () => {

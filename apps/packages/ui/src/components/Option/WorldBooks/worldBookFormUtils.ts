@@ -95,6 +95,9 @@ export const WORLD_BOOK_STARTER_TEMPLATES: WorldBookStarterTemplate[] = [
 ]
 
 const REQUEST_SUFFIX_PATTERN = /\s+\(([A-Z]+)\s+\/[^\)]*\)\s*$/i
+const VERSION_CONFLICT_PATTERN = /\bversion mismatch\b|\bmodified by someone else\b/i
+const WORLD_BOOK_VERSION_CONFLICT_FALLBACK =
+  "This world book was modified by someone else. Reload the latest version and reapply your edits."
 
 export const normalizeWorldBookName = (value: unknown): string => String(value ?? "").trim()
 
@@ -205,21 +208,34 @@ const cleanErrorMessage = (message?: string | null): string => {
   return String(message).replace(REQUEST_SUFFIX_PATTERN, "").trim()
 }
 
+const getErrorStatus = (error: unknown): number | null =>
+  typeof error === "object" && error && typeof (error as { status?: unknown }).status === "number"
+    ? (error as { status: number }).status
+    : null
+
+const getErrorMessage = (error: unknown): string =>
+  typeof error === "object" && error && typeof (error as { message?: unknown }).message === "string"
+    ? cleanErrorMessage((error as { message: string }).message)
+    : ""
+
+export const isWorldBookVersionConflictError = (error: unknown): boolean => {
+  const status = getErrorStatus(error)
+  const message = getErrorMessage(error)
+  return status === 409 && VERSION_CONFLICT_PATTERN.test(message)
+}
+
 export const buildWorldBookMutationErrorMessage = (
   error: unknown,
   options?: { attemptedName?: string; fallback?: string }
 ): string => {
   const fallback = options?.fallback || "Failed to save world book"
-  const status =
-    typeof error === "object" && error && typeof (error as { status?: unknown }).status === "number"
-      ? (error as { status: number }).status
-      : null
-  const message =
-    typeof error === "object" && error && typeof (error as { message?: unknown }).message === "string"
-      ? cleanErrorMessage((error as { message: string }).message)
-      : ""
+  const status = getErrorStatus(error)
+  const message = getErrorMessage(error)
 
   if (status === 409) {
+    if (isWorldBookVersionConflictError(error)) {
+      return message || WORLD_BOOK_VERSION_CONFLICT_FALLBACK
+    }
     if (message) return message
     const attemptedName = normalizeWorldBookName(options?.attemptedName)
     if (attemptedName) {
