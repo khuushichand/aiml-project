@@ -24,6 +24,7 @@ import {
 } from "@ant-design/icons"
 import { useAllAttemptsQuery, useAttemptQuery, useQuizzesQuery } from "../hooks"
 import type { AnswerValue, QuestionPublic, QuizAnswer } from "@/services/quizzes"
+import type { TakeTabNavigationIntent } from "../navigation"
 
 const { Text } = Typography
 
@@ -80,7 +81,7 @@ const readStoredResultsFilterPrefs = (): ResultsFilterPrefs => {
 }
 
 interface ResultsTabProps {
-  onRetakeQuiz?: (quizId: number) => void
+  onRetakeQuiz?: (intent: TakeTabNavigationIntent) => void
 }
 
 export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
@@ -806,7 +807,12 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
                                 type="link"
                                 size="small"
                                 icon={<RedoOutlined />}
-                                onClick={() => onRetakeQuiz(attempt.quiz_id)}
+                                onClick={() => onRetakeQuiz({
+                                  startQuizId: attempt.quiz_id,
+                                  highlightQuizId: attempt.quiz_id,
+                                  sourceTab: "results",
+                                  attemptId: attempt.id
+                                })}
                               >
                                 {t("option:quiz.retake", { defaultValue: "Retake" })}
                               </Button>

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ReviewTab } from "../ReviewTab"
 import {
   useDecksQuery,
+  useCramQueueQuery,
   useReviewQuery,
   useReviewFlashcardMutation,
   useUpdateFlashcardMutation,
@@ -54,6 +55,7 @@ vi.mock("@/hooks/useAntdMessage", () => ({
 
 vi.mock("../../hooks", () => ({
   useDecksQuery: vi.fn(),
+  useCramQueueQuery: vi.fn(),
   useReviewQuery: vi.fn(),
   useReviewFlashcardMutation: vi.fn(),
   useUpdateFlashcardMutation: vi.fn(),
@@ -83,6 +85,7 @@ describe("ReviewTab analytics summary", () => {
       data: [{ id: 9, name: "Biology" }],
       isLoading: false
     } as any)
+    vi.mocked(useCramQueueQuery).mockReturnValue({ data: [] } as any)
     vi.mocked(useReviewQuery).mockReturnValue({ data: null } as any)
     vi.mocked(useReviewFlashcardMutation).mockReturnValue({
       mutateAsync: vi.fn()

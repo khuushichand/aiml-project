@@ -6,6 +6,7 @@ import {
   Search as SearchIcon,
   ChevronLeft,
   ChevronRight,
+  Sparkles as SparklesIcon,
   Bold as BoldIcon,
   Italic as ItalicIcon,
   Heading1 as HeadingIcon,
@@ -187,6 +188,7 @@ type SaveNoteOptions = {
 type SaveIndicatorState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 type NotesEditorMode = 'edit' | 'split' | 'preview'
 type MarkdownToolbarAction = 'bold' | 'italic' | 'heading' | 'list' | 'link' | 'code'
+type RemoteVersionInfo = { version: number; lastModified: string | null }
 
 const NotesManagerPage: React.FC = () => {
   const { t } = useTranslation(['option', 'common'])
@@ -213,6 +215,7 @@ const NotesManagerPage: React.FC = () => {
   const [originalMetadata, setOriginalMetadata] = React.useState<Record<string, any> | null>(null)
   const [selectedVersion, setSelectedVersion] = React.useState<number | null>(null)
   const [selectedLastSavedAt, setSelectedLastSavedAt] = React.useState<string | null>(null)
+  const [remoteVersionInfo, setRemoteVersionInfo] = React.useState<RemoteVersionInfo | null>(null)
   const [isDirty, setIsDirty] = React.useState(false)
   const [backlinkConversationId, setBacklinkConversationId] = React.useState<string | null>(null)
   const [backlinkMessageId, setBacklinkMessageId] = React.useState<string | null>(null)
@@ -222,6 +225,7 @@ const NotesManagerPage: React.FC = () => {
   const [manualLinkTargetId, setManualLinkTargetId] = React.useState<string | null>(null)
   const [manualLinkSaving, setManualLinkSaving] = React.useState(false)
   const [manualLinkDeletingEdgeId, setManualLinkDeletingEdgeId] = React.useState<string | null>(null)
+  const [titleSuggestionLoading, setTitleSuggestionLoading] = React.useState(false)
   const [editorMode, setEditorMode] = React.useState<NotesEditorMode>('edit')
   const [editorCursorIndex, setEditorCursorIndex] = React.useState<number | null>(null)
   const [wikilinkSelectionIndex, setWikilinkSelectionIndex] = React.useState(0)
@@ -908,6 +912,7 @@ const NotesManagerPage: React.FC = () => {
       setBacklinkMessageId(links.message_id)
       setIsDirty(false)
       setSaveIndicator('idle')
+      setRemoteVersionInfo(null)
       setEditorCursorIndex(0)
       setWikilinkSelectionIndex(0)
     } catch {
@@ -927,6 +932,7 @@ const NotesManagerPage: React.FC = () => {
     setBacklinkMessageId(null)
     setIsDirty(false)
     setSaveIndicator('idle')
+    setRemoteVersionInfo(null)
     setEditorCursorIndex(null)
     setWikilinkSelectionIndex(0)
   }, [])
@@ -1066,6 +1072,61 @@ const NotesManagerPage: React.FC = () => {
     [handleSelectNote]
   )
 
+  const suggestTitle = React.useCallback(async () => {
+    if (editorDisabled || titleSuggestionLoading) return
+    const sourceContent = content.trim()
+    if (!sourceContent) {
+      message.warning(
+        t('option:notesSearch.titleSuggestEmptyContent', {
+          defaultValue: 'Write some note content before generating a title.'
+        })
+      )
+      return
+    }
+
+    setTitleSuggestionLoading(true)
+    try {
+      const response = await bgRequest<any>({
+        path: '/api/v1/notes/title/suggest' as any,
+        method: 'POST' as any,
+        headers: { 'Content-Type': 'application/json' },
+        body: {
+          content: sourceContent,
+          title_strategy: 'heuristic'
+        }
+      })
+      const suggested = String(response?.title || '').trim()
+      if (!suggested) {
+        message.warning(
+          t('option:notesSearch.titleSuggestNoResult', {
+            defaultValue: 'No title suggestion was returned.'
+          })
+        )
+        return
+      }
+      const apply = await confirmDanger({
+        title: t('option:notesSearch.titleSuggestApplyTitle', {
+          defaultValue: 'Apply suggested title?'
+        }),
+        content: suggested,
+        okText: t('option:notesSearch.titleSuggestApplyAction', {
+          defaultValue: 'Apply'
+        }),
+        cancelText: t('option:notesSearch.titleSuggestKeepCurrentAction', {
+          defaultValue: 'Keep current'
+        })
+      })
+      if (!apply) return
+      setTitle(suggested)
+      setIsDirty(true)
+      setSaveIndicator('dirty')
+    } catch (error: any) {
+      message.error(String(error?.message || 'Could not generate title'))
+    } finally {
+      setTitleSuggestionLoading(false)
+    }
+  }, [confirmDanger, content, editorDisabled, message, t, titleSuggestionLoading])
+
   const createManualLink = React.useCallback(async () => {
     if (manualLinkSaving) return
     if (selectedId == null || !manualLinkTargetId) return
@@ -1183,6 +1244,24 @@ const NotesManagerPage: React.FC = () => {
         setSaveIndicator('idle')
         return
       }
+      if (
+        selectedId != null &&
+        selectedVersion != null &&
+        remoteVersionInfo &&
+        remoteVersionInfo.version > selectedVersion
+      ) {
+        const proceed = await confirmDanger({
+          title: 'Remote changes detected',
+          content:
+            `This note changed in another tab or session (local v${selectedVersion}, remote v${remoteVersionInfo.version}). ` +
+            'Saving now may cause a conflict. Continue anyway?',
+          okText: 'Save anyway',
+          cancelText: 'Cancel'
+        })
+        if (!proceed) {
+          return
+        }
+      }
       setSaving(true)
       setSaveIndicator('saving')
       try {
@@ -1214,6 +1293,7 @@ const NotesManagerPage: React.FC = () => {
           }
           setIsDirty(false)
           setSaveIndicator('saved')
+          setRemoteVersionInfo(null)
           if (createdVersion != null) setSelectedVersion(createdVersion)
           if (createdLastSaved) setSelectedLastSavedAt(createdLastSaved)
           await refetch()
@@ -1257,6 +1337,7 @@ const NotesManagerPage: React.FC = () => {
           }
           setIsDirty(false)
           setSaveIndicator('saved')
+          setRemoteVersionInfo(null)
           await refetch()
           if (updatedVersion != null) {
             setSelectedVersion(updatedVersion)
@@ -1293,6 +1374,7 @@ const NotesManagerPage: React.FC = () => {
     [
       backlinkConversationId,
       backlinkMessageId,
+      confirmDanger,
       content,
       editorKeywords,
       handleVersionConflict,
@@ -1301,6 +1383,7 @@ const NotesManagerPage: React.FC = () => {
       message,
       originalMetadata,
       refetch,
+      remoteVersionInfo,
       saving,
       selectedId,
       setSelectedLastSavedAt,
@@ -1318,10 +1401,34 @@ const NotesManagerPage: React.FC = () => {
       const version = toNoteVersion(detail)
       if (version != null) setSelectedVersion(version)
       setSelectedLastSavedAt(toNoteLastModified(detail))
+      setRemoteVersionInfo(null)
     } catch {
       // Ignore refresh errors for reload action; list refresh already happened.
     }
   }
+
+  const checkSelectedNoteFreshness = React.useCallback(async () => {
+    if (!isOnline || listMode !== 'active') return
+    if (selectedId == null || selectedVersion == null) return
+    if (saving) return
+    try {
+      const detail = await bgRequest<any>({
+        path: `/api/v1/notes/${selectedId}` as any,
+        method: 'GET' as any
+      })
+      const remoteVersion = toNoteVersion(detail)
+      if (remoteVersion != null && remoteVersion > selectedVersion) {
+        setRemoteVersionInfo({
+          version: remoteVersion,
+          lastModified: toNoteLastModified(detail)
+        })
+      } else {
+        setRemoteVersionInfo(null)
+      }
+    } catch {
+      // Ignore transient freshness-check failures.
+    }
+  }, [isOnline, listMode, saving, selectedId, selectedVersion])
 
   const deleteNote = async (id?: string | number | null) => {
     const target = id ?? selectedId
@@ -1778,6 +1885,27 @@ const NotesManagerPage: React.FC = () => {
   }, [wikilinkSelectionIndex, wikilinkSuggestions.length])
 
   React.useEffect(() => {
+    if (listMode !== 'active') {
+      setRemoteVersionInfo(null)
+      return
+    }
+    if (selectedId == null || selectedVersion == null) return
+    let cancelled = false
+    const runCheck = async () => {
+      if (cancelled) return
+      await checkSelectedNoteFreshness()
+    }
+    void runCheck()
+    const intervalId = window.setInterval(() => {
+      void runCheck()
+    }, 30_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [checkSelectedNoteFreshness, listMode, selectedId, selectedVersion])
+
+  React.useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (!isDirty) return
       e.preventDefault()
@@ -1831,6 +1959,7 @@ const NotesManagerPage: React.FC = () => {
     // When selecting a different note, default back to edit mode so users can start typing immediately.
     setEditorMode('edit')
     setManualLinkTargetId(null)
+    setRemoteVersionInfo(null)
     setEditorCursorIndex(null)
     setWikilinkSelectionIndex(0)
   }, [selectedId])
@@ -2161,20 +2290,45 @@ const NotesManagerPage: React.FC = () => {
           }}
         />
         <div className="flex-1 flex flex-col px-4 py-3 overflow-auto">
-          <Input
-            placeholder={t('option:notesSearch.titlePlaceholder', {
-              defaultValue: 'Title'
-            })}
-            value={title}
-            onChange={(e) => {
-              setTitle(e.target.value)
-              setIsDirty(true)
-              setSaveIndicator('dirty')
-            }}
-            disabled={editorDisabled}
-            ref={titleInputRef}
-            className="bg-transparent hover:bg-surface2 focus:bg-surface2 transition-colors"
-          />
+          <div className="flex items-center gap-2">
+            <Input
+              placeholder={t('option:notesSearch.titlePlaceholder', {
+                defaultValue: 'Title'
+              })}
+              value={title}
+              onChange={(e) => {
+                setTitle(e.target.value)
+                setIsDirty(true)
+                setSaveIndicator('dirty')
+              }}
+              disabled={editorDisabled}
+              ref={titleInputRef}
+              className="bg-transparent hover:bg-surface2 focus:bg-surface2 transition-colors"
+            />
+            <Tooltip
+              title={t('option:notesSearch.generateTitleTooltip', {
+                defaultValue: 'Generate title from content'
+              })}
+            >
+              <Button
+                size="small"
+                onClick={() => {
+                  void suggestTitle()
+                }}
+                disabled={editorDisabled || content.trim().length === 0}
+                loading={titleSuggestionLoading}
+                icon={(<SparklesIcon className="w-4 h-4" />) as any}
+                aria-label={t('option:notesSearch.generateTitleTooltip', {
+                  defaultValue: 'Generate title from content'
+                })}
+                data-testid="notes-generate-title-button"
+              >
+                {t('option:notesSearch.generateTitleAction', {
+                  defaultValue: 'Generate title'
+                })}
+              </Button>
+            </Tooltip>
+          </div>
           <div className="mt-3">
             <Select
               mode="tags"
@@ -2213,6 +2367,35 @@ const NotesManagerPage: React.FC = () => {
               >
                 {saveIndicatorText}
               </Typography.Text>
+            )}
+            {remoteVersionInfo && (
+              <div
+                className="mt-2 rounded border border-warn/50 bg-warn/10 px-2 py-1 text-[12px] text-warn"
+                role="status"
+                data-testid="notes-stale-version-warning"
+              >
+                <span>
+                  {t('option:notesSearch.staleVersionWarning', {
+                    defaultValue:
+                      'A newer version is available on the server (v{{version}}).',
+                    version: remoteVersionInfo.version
+                  })}
+                </span>
+                <Button
+                  type="link"
+                  size="small"
+                  className="!px-1"
+                  onClick={() => {
+                    if (selectedId == null) return
+                    void handleSelectNote(selectedId)
+                  }}
+                  data-testid="notes-stale-version-reload"
+                >
+                  {t('option:notesSearch.reloadNoteAction', {
+                    defaultValue: 'Reload note'
+                  })}
+                </Button>
+              </div>
             )}
           </div>
           {selectedId != null && (

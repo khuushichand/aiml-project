@@ -424,6 +424,21 @@ test.describe('Watchlists playground smoke', () => {
     await page.getByRole('tab', { name: 'Feeds' }).click()
     await expect(page.getByText('Tech Daily')).toBeVisible()
 
+    await page.locator('.ant-table-tbody .ant-checkbox-wrapper').first().click()
+    await expect(page.getByText('1 selected')).toBeVisible()
+
+    await page.getByRole('button', { name: 'Disable' }).click()
+    await expect(page.getByText('Disable selected feeds?')).toBeVisible()
+    await expect(page.getByText('1 selected (1 active, 0 inactive). 1 will change state.')).toBeVisible()
+    await page.getByRole('button', { name: 'Cancel' }).click()
+
+    await page.getByRole('button', { name: 'Delete' }).first().click()
+    await expect(page.getByText('Delete 1 selected feeds?')).toBeVisible()
+    await expect(page.getByText('This will delete 1 feeds (1 active, 0 inactive).')).toBeVisible()
+    await page.getByRole('button', { name: 'Cancel' }).click()
+
+    await page.getByRole('button', { name: 'Clear' }).click()
+
     await page.getByRole('tab', { name: 'Monitors' }).click()
     await expect(
       page.locator('.ant-tabs-tabpane-active').getByText('Morning Brief')

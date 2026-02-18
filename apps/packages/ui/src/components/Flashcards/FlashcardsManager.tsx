@@ -10,16 +10,17 @@ import type { Flashcard } from "@/services/flashcards"
  * FlashcardsManager contains all the tabs and core flashcard logic.
  * Connection state is handled by FlashcardsWorkspace.
  *
- * Structure: Review | Cards | Import/Export
- * - Review: Spaced repetition study loop
- * - Cards: Browse, filter, create, edit, bulk operations
- * - Import/Export: CSV/APKG import and export
+ * Structure: Study | Manage | Transfer
+ * - Study: Spaced repetition review and cram loops
+ * - Manage: Browse, filter, create, edit, bulk operations
+ * - Transfer: CSV/APKG import and export workflows
  */
 export const FlashcardsManager: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const [activeTab, setActiveTab] = React.useState<string>("review")
   const [reviewDeckId, setReviewDeckId] = React.useState<number | null | undefined>(undefined)
   const [reviewOverrideCard, setReviewOverrideCard] = React.useState<Flashcard | null>(null)
+  const [openCreateSignal, setOpenCreateSignal] = React.useState(0)
   const [shortcutsModalOpen, setShortcutsModalOpen] = React.useState(false)
 
   // Listen for "?" key to open keyboard shortcuts modal
@@ -54,6 +55,11 @@ export const FlashcardsManager: React.FC = () => {
     []
   )
 
+  const routeToCreateEntryPoint = React.useCallback(() => {
+    setActiveTab("cards")
+    setOpenCreateSignal((prev) => prev + 1)
+  }, [])
+
   return (
     <div className="mx-auto max-w-6xl p-4">
       <Tabs
@@ -80,10 +86,10 @@ export const FlashcardsManager: React.FC = () => {
         items={[
           {
             key: "review",
-            label: t("option:flashcards.review", { defaultValue: "Review" }),
+            label: t("option:flashcards.tabStudy", { defaultValue: "Study" }),
             children: (
               <ReviewTab
-                onNavigateToCreate={() => setActiveTab("cards")}
+                onNavigateToCreate={routeToCreateEntryPoint}
                 onNavigateToImport={() => setActiveTab("importExport")}
                 reviewDeckId={reviewDeckId}
                 onReviewDeckChange={setReviewDeckId}
@@ -95,19 +101,20 @@ export const FlashcardsManager: React.FC = () => {
           },
           {
             key: "cards",
-            label: t("option:flashcards.cards", { defaultValue: "Cards" }),
+            label: t("option:flashcards.tabManage", { defaultValue: "Manage" }),
             children: (
               <ManageTab
                 onNavigateToImport={() => setActiveTab("importExport")}
                 onReviewCard={handleReviewCard}
+                openCreateSignal={openCreateSignal}
                 isActive={activeTab === "cards"}
               />
             )
           },
           {
             key: "importExport",
-            label: t("option:flashcards.importExport", {
-              defaultValue: "Import / Export"
+            label: t("option:flashcards.tabTransfer", {
+              defaultValue: "Transfer"
             }),
             children: <ImportExportTab />
           }

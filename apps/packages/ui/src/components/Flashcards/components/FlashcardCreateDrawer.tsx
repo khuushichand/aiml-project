@@ -20,6 +20,7 @@ import {
   useCreateDeckMutation,
   useDebouncedFormField
 } from "../hooks"
+import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
 import type { FlashcardCreate, Deck } from "@/services/flashcards"
@@ -190,16 +191,16 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   return (
     <Drawer
       placement="right"
-      styles={{ wrapper: { width: 520 } }}
+      styles={{ wrapper: { width: FLASHCARDS_DRAWER_WIDTH_PX } }}
       open={open}
       onClose={onClose}
       title={t("option:flashcards.createCard", { defaultValue: "Create Flashcard" })}
       footer={
-        <div className="flex justify-between">
-          <Button onClick={onClose}>
-            {t("common:cancel", { defaultValue: "Cancel" })}
-          </Button>
+        <div className="flex justify-end">
           <Space>
+            <Button onClick={onClose}>
+              {t("common:cancel", { defaultValue: "Cancel" })}
+            </Button>
             <Button
               onClick={handleCreateAndAddAnother}
               loading={createMutation.isPending}

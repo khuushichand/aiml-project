@@ -188,4 +188,33 @@ describe('ResultsList', () => {
     expect(container.querySelectorAll('.animate-pulse')).toHaveLength(0)
     expect(screen.getByText('Loaded row')).toBeInTheDocument()
   })
+
+  it('supports keyboard activation with Enter and Space on result rows', () => {
+    const onSelect = vi.fn()
+    render(
+      <ResultsList
+        results={[
+          {
+            id: '101',
+            kind: 'media',
+            title: 'Keyboard row',
+            snippet: 'Keyboard snippet'
+          }
+        ]}
+        selectedId={null}
+        onSelect={onSelect}
+        totalCount={1}
+        loadedCount={1}
+      />
+    )
+
+    const row = screen.getByRole('button', { name: 'Select {{type}}: {{title}}' })
+    row.focus()
+    fireEvent.keyDown(row, { key: 'Enter' })
+    fireEvent.keyDown(row, { key: ' ' })
+
+    expect(onSelect).toHaveBeenCalledTimes(2)
+    expect(onSelect).toHaveBeenNthCalledWith(1, '101')
+    expect(onSelect).toHaveBeenNthCalledWith(2, '101')
+  })
 })

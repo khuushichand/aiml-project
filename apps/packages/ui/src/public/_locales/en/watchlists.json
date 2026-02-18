@@ -794,6 +794,51 @@
   "sources_importActive": {
     "message": "Set Active"
   },
+  "sources_importSelectedFile": {
+    "message": "Selected: {{file}}"
+  },
+  "sources_importConfirm": {
+    "message": "Import {{count}} feed{{plural}}"
+  },
+  "sources_importPreviewError": {
+    "message": "Failed to preview OPML file"
+  },
+  "sources_importPreviewLookupError": {
+    "message": "Could not load existing feeds for duplicate checks."
+  },
+  "sources_importPreviewLoadingExisting": {
+    "message": "Loading existing feeds for duplicate checks..."
+  },
+  "sources_importPreviewSummaryTitle": {
+    "message": "Preflight Summary"
+  },
+  "sources_importPreviewSummary": {
+    "message": "{{ready}} ready, {{duplicateExisting}} existing duplicates, {{duplicateFile}} file duplicates, {{invalidUrl}} invalid URLs, {{missingUrl}} missing URLs."
+  },
+  "sources_importPreviewParseError": {
+    "message": "Could not parse this OPML file. Verify it contains outline nodes with xmlUrl attributes."
+  },
+  "sources_importPreviewNothingToImport": {
+    "message": "No valid feed entries to import."
+  },
+  "sources_importPreviewStatusTitle": {
+    "message": "Preflight Status"
+  },
+  "sources_importPreviewStatus_ready": {
+    "message": "Ready"
+  },
+  "sources_importPreviewStatus_duplicate_existing": {
+    "message": "Duplicate (existing)"
+  },
+  "sources_importPreviewStatus_duplicate_file": {
+    "message": "Duplicate (file)"
+  },
+  "sources_importPreviewStatus_missing_url": {
+    "message": "Missing URL"
+  },
+  "sources_importPreviewStatus_invalid_url": {
+    "message": "Invalid URL"
+  },
   "sources_importSummary": {
     "message": "Import Summary"
   },
@@ -806,14 +851,29 @@
   "sources_bulkEnable": {
     "message": "Enable"
   },
+  "sources_bulkEnableConfirmTitle": {
+    "message": "Enable selected feeds?"
+  },
   "sources_bulkDisable": {
     "message": "Disable"
+  },
+  "sources_bulkDisableConfirmTitle": {
+    "message": "Disable selected feeds?"
+  },
+  "sources_bulkToggleConfirmDescription": {
+    "message": "{{total}} selected ({{active}} active, {{inactive}} inactive). {{impacted}} will change state."
   },
   "sources_bulkDelete": {
     "message": "Delete"
   },
   "sources_bulkDeleteConfirm": {
     "message": "Delete selected sources?"
+  },
+  "sources_bulkDeleteConfirmTitle": {
+    "message": "Delete {{count}} selected feeds?"
+  },
+  "sources_bulkDeleteConfirmDescription": {
+    "message": "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive)."
   },
   "sources_bulkUpdated": {
     "message": "{{count}} sources updated"
@@ -1055,6 +1115,9 @@
   "templates_deleteError": {
     "message": "Failed to delete template"
   },
+  "templates_deleteUsageLookupError": {
+    "message": "Could not verify active monitor usage before deletion."
+  },
   "templates_created": {
     "message": "Template created"
   },
@@ -1078,6 +1141,21 @@
   },
   "templates_deleteConfirm": {
     "message": "Delete this template?"
+  },
+  "templates_deleteConfirmDescription": {
+    "message": "This action cannot be undone."
+  },
+  "templates_deleteConfirmForce": {
+    "message": "Delete anyway"
+  },
+  "templates_deleteConfirmInUseTitle": {
+    "message": "Template is used by active monitors"
+  },
+  "templates_deleteConfirmInUseDescription": {
+    "message": "This template is referenced by {{count}} active monitor{{plural}}. Deleting it may affect scheduled reports."
+  },
+  "templates_deleteConfirmInUseMore": {
+    "message": "+{{count}} more active monitor{{plural}}"
   },
   "templates_empty": {
     "message": "No templates yet"

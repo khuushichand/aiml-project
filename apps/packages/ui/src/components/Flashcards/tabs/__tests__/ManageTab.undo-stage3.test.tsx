@@ -11,6 +11,7 @@ import {
   useCardsKeyboardNav,
   useDebouncedFormField
 } from "../../hooks"
+import { FLASHCARDS_DRAWER_WIDTH_PX } from "../../constants"
 import { getFlashcard, updateFlashcard } from "@/services/flashcards"
 
 const showUndoNotificationMock = vi.fn()
@@ -259,6 +260,8 @@ describe("ManageTab stage3 undo controls", () => {
     )
 
     fireEvent.click(screen.getByText("Action Move"))
+    const moveWrapper = document.querySelector(".ant-drawer-content-wrapper") as HTMLElement | null
+    expect(moveWrapper?.style.width).toBe(`${FLASHCARDS_DRAWER_WIDTH_PX}px`)
 
     const comboboxes = screen.getAllByRole("combobox")
     fireEvent.mouseDown(comboboxes[comboboxes.length - 1])

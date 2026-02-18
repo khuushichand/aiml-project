@@ -1,5 +1,5 @@
 import { Modal, Button, Tooltip, Dropdown } from "antd"
-import { MessageCircle, Pen, Copy, History, Trash2, Download } from "lucide-react"
+import { MessageCircle, Pen, Copy, History, Trash2, Download, ExternalLink } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { CharacterPreview } from "./CharacterPreview"
 
@@ -20,6 +20,7 @@ interface CharacterPreviewPopupProps {
   onClose: () => void
   onQuickChat: () => void
   onChat: () => void
+  onChatInNewTab: () => void
   onEdit: () => void
   onDuplicate: () => void
   onExport: (format?: 'json' | 'png') => void
@@ -39,6 +40,7 @@ export function CharacterPreviewPopup({
   onClose,
   onQuickChat,
   onChat,
+  onChatInNewTab,
   onEdit,
   onDuplicate,
   onExport,
@@ -66,6 +68,9 @@ export function CharacterPreviewPopup({
   })
   const quickChatLabel = t("settings:manageCharacters.actions.quickChat", {
     defaultValue: "Quick chat"
+  })
+  const chatInNewTabLabel = t("settings:manageCharacters.actions.chatInNewTab", {
+    defaultValue: "Chat in new tab"
   })
   const editLabel = t("settings:manageCharacters.actions.edit", {
     defaultValue: "Edit"
@@ -208,6 +213,19 @@ export function CharacterPreviewPopup({
           >
             {chatLabel}
           </Button>
+
+          <Tooltip title={chatInNewTabLabel}>
+            <Button
+              icon={<ExternalLink className="w-4 h-4" />}
+              onClick={onChatInNewTab}
+              aria-label={t("settings:manageCharacters.aria.chatWithInNewTab", {
+                defaultValue: "Chat with {{name}} in a new tab",
+                name: displayName
+              })}
+            >
+              {chatInNewTabLabel}
+            </Button>
+          </Tooltip>
 
           <Tooltip title={quickChatLabel}>
             <Button

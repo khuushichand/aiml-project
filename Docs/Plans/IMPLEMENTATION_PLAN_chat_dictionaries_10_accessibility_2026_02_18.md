@@ -49,7 +49,20 @@ Finding IDs: `10.1` through `10.9`
 - Integration tests for focus trap and restoration after close.
 - Screen-reader-focused manual test checklist for modal transitions.
 - E2E keyboard-only path tests for create/edit/delete flows.
-**Status**: Not Started
+**Status**: Complete
+**Completion Notes (2026-02-18)**:
+- Added focus restoration integration coverage in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.accessibilityStage2.test.tsx`
+- New assertions verify focus returns to trigger controls after closing:
+  - `Manage Entries` drawer
+  - Nested `Edit Entry` modal inside the entries drawer (close + submit)
+- Added focus-return refs and restoration hooks for additional top-level overlays:
+  - `Create Dictionary` modal
+  - `Import Dictionary` modal
+  - `Quick assign` modal
+  - `Dictionary Statistics` modal
+- Added manual screen-reader/keyboard verification artifact:
+  - `Docs/Plans/CHAT_DICTIONARIES_A11Y_STAGE2_MODAL_FOCUS_CHECKLIST_2026_02_18.md`
 
 ## Stage 3: Contrast Compliance and A11y Regression Gates
 **Goal**: Keep status/validation visuals compliant across supported themes.
@@ -62,7 +75,22 @@ Finding IDs: `10.1` through `10.9`
 - Contrast audit checklist with measured ratios for light/dark themes.
 - Axe-based component/integration tests for dictionaries pages.
 - Regression tests for existing aria-label and context-aware label text.
-**Status**: Not Started
+**Status**: Complete
+**Completion Notes (2026-02-18)**:
+- Added visible status text cues (`Check`, `Valid`, `Warn`, `Error`) alongside validation icons in the table status column so state is not color-only.
+  - File: `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Fixed an accessibility naming gap for the entry-tools strict-validation toggle by adding an explicit switch label.
+  - File: `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Added Stage 3 accessibility regression suite with:
+  - axe-based list and entries-drawer checks for naming + ARIA validity
+  - context-aware action-label assertions (dictionary name preserved in aria-labels)
+  - non-color validation status text cue assertion
+  - advanced-mode toggle `aria-expanded` regression assertion
+  - File: `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.accessibilityStage3.test.tsx`
+- Added theme token contrast regression coverage for dictionaries:
+  - File: `apps/packages/ui/src/themes/__tests__/dictionaries-accessibility-contrast.stage10.test.ts`
+- Added measured contrast audit artifact (light + dark preset minima):
+  - File: `Docs/Plans/CHAT_DICTIONARIES_CONTRAST_AUDIT_STAGE3_2026_02_18.md`
 
 ## Dependencies
 

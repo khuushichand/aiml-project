@@ -58,7 +58,7 @@ Finding IDs: `13.1` through `13.8`
 - Form tests for inline validation message linkage.
 - Integration tests for modal open/close focus restoration.
 - End-to-end keyboard traversal tests through Create/Manage flows.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
@@ -86,5 +86,13 @@ Finding IDs: `13.1` through `13.8`
   - Added/confirmed progress labeling semantics in active attempt and results views.
   - Added `ManageTab.undo-accessibility.test.tsx` coverage validating inline undo banner visibility, focusability, and recovery path.
 
+- Stage 4 completed:
+  - Added inline question-modal validation in `ManageTab` for required question text and multiple-choice option minimums.
+  - Linked inline validation text to invalid fields via `aria-describedby` and `aria-invalid`.
+  - Added focus lifecycle management in `ManageTab` modals so focus returns to the opening trigger after close.
+  - Updated `CreateTab` validation handling to avoid generic error toast on form validation failures, preserving inline field-level error flow.
+  - Expanded `ManageTab.undo-accessibility.test.tsx` for focus-return and validation-linkage coverage.
+  - Added `CreateTab.validation-accessibility.test.tsx` for inline validation/no-toast behavior.
+
 - Validation:
-  - `cd apps/packages/ui && bunx vitest run src/components/Quiz/tabs/__tests__/ManageTab.undo-accessibility.test.tsx src/components/Quiz/tabs/__tests__/ResultsTab.details.test.tsx src/components/Quiz/tabs/__tests__/ResultsTab.filters-retake.test.tsx src/components/Quiz/tabs/__tests__/ResultsTab.export.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.empty-state.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.start-flow.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.navigation-guardrails.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.list-controls.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.submission-retry.test.tsx src/components/Quiz/hooks/__tests__/quizSubmissionQueue.test.ts`
+  - `cd apps/packages/ui && bunx vitest run src/components/Quiz/tabs/__tests__/ManageTab.undo-accessibility.test.tsx src/components/Quiz/tabs/__tests__/CreateTab.validation-accessibility.test.tsx src/components/Quiz/tabs/__tests__/ResultsTab.details.test.tsx src/components/Quiz/tabs/__tests__/ResultsTab.filters-retake.test.tsx src/components/Quiz/tabs/__tests__/ResultsTab.export.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.empty-state.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.start-flow.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.navigation-guardrails.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.list-controls.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.submission-retry.test.tsx src/components/Quiz/hooks/__tests__/quizSubmissionQueue.test.ts`

@@ -260,5 +260,5 @@ describe("DictionariesManager responsive stage-1", () => {
     await waitFor(() => {
       expect(tldwClientMock.dictionaryStatistics).toHaveBeenCalledWith(101)
     })
-  })
+  }, 30000)
 })

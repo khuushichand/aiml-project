@@ -113,7 +113,12 @@ describe("ResultsTab filters and retake workflow", () => {
     expect(useAllAttemptsQuery).toHaveBeenCalledWith(expect.objectContaining({ quiz_id: 7 }))
 
     fireEvent.click(screen.getByRole("button", { name: /Retake/i }))
-    expect(onRetakeQuiz).toHaveBeenCalledWith(7)
+    expect(onRetakeQuiz).toHaveBeenCalledWith({
+      startQuizId: 7,
+      highlightQuizId: 7,
+      sourceTab: "results",
+      attemptId: 301
+    })
   })
 
   it("shows no-match empty state when persisted pass filter excludes all attempts", () => {

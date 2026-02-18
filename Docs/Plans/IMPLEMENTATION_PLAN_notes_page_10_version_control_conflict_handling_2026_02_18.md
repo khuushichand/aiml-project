@@ -47,7 +47,7 @@ Finding IDs: `10.1` through `10.7`
 - Decision artifact captured and linked in docs.
 - Contract tests for revision retrieval API if implemented.
 - Snapshot tests for diff rendering if UI shipped.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Proactive Multi-Tab Conflict Awareness
 **Goal**: Reduce surprise 409s by surfacing stale-state risk earlier.
@@ -59,7 +59,7 @@ Finding IDs: `10.1` through `10.7`
 - Integration tests simulating dual-tab edit race conditions.
 - Warning UX tests for stale-state banners.
 - Regression tests for save path conflict handling under stale detection.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
@@ -85,3 +85,13 @@ Finding IDs: `10.1` through `10.7`
 - Added Stage 2 verification in `/apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage8.trash-restore.test.tsx`:
   - Verifies trashed note restoration roundtrip and post-restore note opening.
   - Verifies trash empty-state behavior.
+- Completed Stage 3 decision artifact:
+  - Added `/Docs/Plans/DECISION_RECORD_notes_version_history_stage3_2026_02_18.md`.
+  - Decision: defer full revisions/diff UI; keep version + last-saved metadata and staged conflict awareness as current MVP baseline.
+- Completed Stage 4 in `/apps/packages/ui/src/components/Notes/NotesManagerPage.tsx`:
+  - Added periodic freshness polling for selected notes to detect newer remote versions.
+  - Added in-editor stale-version warning banner with `Reload note` action.
+  - Added pre-save warning confirmation when remote version is ahead, while preserving authoritative server `expected_version` checks.
+- Added Stage 4 verification in `/apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage9.stale-version-warning.test.tsx`:
+  - Verifies stale-version warning display and save-cancel behavior.
+  - Verifies reload action clears warning and loads latest note content/version.

@@ -1223,6 +1223,15 @@
   "manageCharacters_actions_quickChat": {
     "message": "Quick chat"
   },
+  "manageCharacters_actions_chatInNewTab": {
+    "message": "Chat in new tab"
+  },
+  "manageCharacters_actions_setDefault": {
+    "message": "Set as default"
+  },
+  "manageCharacters_actions_clearDefault": {
+    "message": "Clear default"
+  },
   "manageCharacters_actions_edit": {
     "message": "Edit"
   },
@@ -1259,6 +1268,9 @@
   "manageCharacters_aria_chatWith": {
     "message": "Chat as {{name}}"
   },
+  "manageCharacters_aria_chatWithInNewTab": {
+    "message": "Chat with {{name}} in a new tab"
+  },
   "manageCharacters_aria_quickChatWith": {
     "message": "Quick chat with {{name}}"
   },
@@ -1288,6 +1300,12 @@
   },
   "manageCharacters_conversations_subtitle": {
     "message": "Select a conversation to continue as this character."
+  },
+  "manageCharacters_conversations_lastActive": {
+    "message": "Last active: {{time}}"
+  },
+  "manageCharacters_conversations_avgMessages": {
+    "message": "Avg messages: {{count}}"
   },
   "manageCharacters_conversations_empty": {
     "message": "No conversations found for this character yet."
@@ -1492,6 +1510,24 @@
   },
   "manageCharacters_notification_deletedSuccess": {
     "message": "Character deleted"
+  },
+  "manageCharacters_notification_defaultSet": {
+    "message": "Default character set"
+  },
+  "manageCharacters_notification_defaultSetDesc": {
+    "message": "{{name}} will be preselected for new chats."
+  },
+  "manageCharacters_notification_defaultSetError": {
+    "message": "Couldn't set default character"
+  },
+  "manageCharacters_notification_defaultCleared": {
+    "message": "Default character cleared"
+  },
+  "manageCharacters_notification_chatTabBlocked": {
+    "message": "Popup blocked"
+  },
+  "manageCharacters_notification_chatTabBlockedDesc": {
+    "message": "Allow popups for this site or use Chat to open in the current tab."
   },
   "manageCharacters_loadError_title": {
     "message": "Couldn't load characters"

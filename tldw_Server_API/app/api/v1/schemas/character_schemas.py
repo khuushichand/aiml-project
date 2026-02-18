@@ -152,6 +152,24 @@ class CharacterResponse(CharacterBase):
     model_config = {"from_attributes": True}
 
 
+class CharacterVersionEntry(BaseModel):
+    change_id: int
+    version: int = Field(ge=1)
+    operation: str
+    timestamp: Optional[datetime] = None
+    client_id: Optional[str] = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class CharacterVersionListResponse(BaseModel):
+    items: list[CharacterVersionEntry] = Field(default_factory=list)
+    total: int = Field(default=0, ge=0)
+
+
+class CharacterRevertRequest(BaseModel):
+    target_version: int = Field(..., ge=1)
+
+
 class CharacterListQueryResponse(BaseModel):
     items: list[CharacterResponse] = Field(default_factory=list)
     total: int = Field(default=0, ge=0)

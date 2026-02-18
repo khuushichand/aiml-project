@@ -13995,6 +13995,66 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             update_data["meta_json"] = self._serialize_json_payload(meta, "Wordcloud meta")
         self._update_writing_wordcloud_fields(wordcloud_id, update_data)
 
+    def get_character_version_history(
+        self,
+        character_id: int,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return character sync snapshots ordered by newest-first change_id."""
+        if not isinstance(character_id, int) or character_id <= 0:
+            raise InputError("character_id must be a positive integer.")  # noqa: TRY003
+        if not isinstance(limit, int) or limit <= 0:
+            raise InputError("limit must be a positive integer.")  # noqa: TRY003
+
+        entity_col = "entity_id"
+        try:
+            cols = {c.get("name") for c in self.backend.get_table_info("sync_log")}
+            if "entity_uuid" in cols and "entity_id" not in cols:
+                entity_col = "entity_uuid"
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(
+                "sync_log column introspection failed for character history: {}",
+                exc,
+            )
+
+        query = (
+            f"SELECT change_id, operation, timestamp, client_id, version, payload "
+            f"FROM sync_log "
+            f"WHERE entity = ? AND {entity_col} = ? "
+            f"ORDER BY change_id DESC LIMIT ?"
+        )
+
+        try:
+            cursor = self.execute_query(query, ("character_cards", str(character_id), limit))
+            entries: list[dict[str, Any]] = []
+            for row in cursor.fetchall():
+                entry = dict(row)
+                payload_value = entry.get("payload")
+                if isinstance(payload_value, str):
+                    try:
+                        entry["payload"] = json.loads(payload_value)
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "Failed to decode character history payload for change_id {}.",
+                            entry.get("change_id"),
+                        )
+                        entry["payload"] = {}
+                elif payload_value is None:
+                    entry["payload"] = {}
+                entries.append(entry)
+            return entries  # noqa: TRY300
+        except CharactersRAGDBError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            logger.error(
+                "Error retrieving character version history for {}: {}",
+                character_id,
+                exc,
+            )
+            raise CharactersRAGDBError(
+                f"Failed to retrieve character version history: {exc}"
+            ) from exc  # noqa: TRY003
+
     # --- Sync Log Methods ---
     def get_sync_log_entries(self, since_change_id: int = 0, limit: int | None = None,
                              entity_type: str | None = None) -> list[dict[str, Any]]:

@@ -14,9 +14,10 @@ import { useTranslation } from "react-i18next"
 import { PlusOutlined, DeleteOutlined, SaveOutlined } from "@ant-design/icons"
 import { useCreateQuizMutation, useCreateQuestionMutation } from "../hooks"
 import type { QuestionType, QuestionCreate } from "@/services/quizzes"
+import type { TakeTabNavigationIntent } from "../navigation"
 
 interface CreateTabProps {
-  onNavigateToTake: () => void
+  onNavigateToTake: (intent?: TakeTabNavigationIntent) => void
 }
 
 interface QuestionFormData {
@@ -26,6 +27,12 @@ interface QuestionFormData {
   options: string[]
   correct_answer: number | string
   explanation?: string
+}
+
+const isFormValidationError = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") return false
+  const maybeValidationError = error as { errorFields?: unknown }
+  return Array.isArray(maybeValidationError.errorFields)
 }
 
 export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake }) => {
@@ -102,8 +109,14 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake }) => {
       // Reset form
       form.resetFields()
       setQuestions([])
-      onNavigateToTake()
+      onNavigateToTake({
+        highlightQuizId: quiz.id,
+        sourceTab: "create"
+      })
     } catch (error) {
+      if (isFormValidationError(error)) {
+        return
+      }
       messageApi.error(
         t("option:quiz.createError", { defaultValue: "Failed to create quiz" })
       )

@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { ReviewTab } from "../ReviewTab"
 import {
   useDecksQuery,
+  useCramQueueQuery,
   useReviewQuery,
   useReviewFlashcardMutation,
   useUpdateFlashcardMutation,
@@ -54,6 +55,7 @@ vi.mock("@/hooks/useAntdMessage", () => ({
 
 vi.mock("../../hooks", () => ({
   useDecksQuery: vi.fn(),
+  useCramQueueQuery: vi.fn(),
   useReviewQuery: vi.fn(),
   useReviewFlashcardMutation: vi.fn(),
   useUpdateFlashcardMutation: vi.fn(),
@@ -110,6 +112,7 @@ describe("ReviewTab create CTA visibility", () => {
       data: [],
       isLoading: false
     } as any)
+    vi.mocked(useCramQueueQuery).mockReturnValue({ data: [] } as any)
     vi.mocked(useReviewQuery).mockReturnValue({
       data: null
     } as any)

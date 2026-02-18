@@ -1,5 +1,5 @@
 import React from "react"
-import { Button, Card, Empty, Select, Space, Tag, Tooltip, Typography } from "antd"
+import { Button, Card, Empty, Input, Segmented, Select, Space, Switch, Tag, Tooltip, Typography } from "antd"
 import { X, Minus, Check, Star, Calendar, Undo2 } from "lucide-react"
 import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
@@ -8,6 +8,7 @@ import { useAntdMessage } from "@/hooks/useAntdMessage"
 import type { Flashcard, FlashcardUpdate } from "@/services/flashcards"
 import {
   useDecksQuery,
+  useCramQueueQuery,
   useReviewQuery,
   useReviewFlashcardMutation,
   useUpdateFlashcardMutation,
@@ -60,6 +61,10 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   const [localOverrideCard, setLocalOverrideCard] = React.useState<Flashcard | null>(null)
   const [editDrawerOpen, setEditDrawerOpen] = React.useState(false)
   const [showRatingRationale, setShowRatingRationale] = React.useState(false)
+  const [reviewMode, setReviewMode] = React.useState<"due" | "cram">("due")
+  const [cramTag, setCramTag] = React.useState("")
+  const [cramUpdatesSchedule, setCramUpdatesSchedule] = React.useState(false)
+  const [cramQueueIndex, setCramQueueIndex] = React.useState(0)
 
   // Undo state - stores the last reviewed card for potential re-rating
   const [lastReviewedCard, setLastReviewedCard] = React.useState<Flashcard | null>(null)
@@ -74,7 +79,13 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
 
   // Queries and mutations
   const decksQuery = useDecksQuery()
-  const reviewQuery = useReviewQuery(reviewDeckId)
+  const reviewQuery = useReviewQuery(reviewDeckId, {
+    enabled: reviewMode === "due"
+  })
+  const cramTagFilter = cramTag.trim() || undefined
+  const cramQueueQuery = useCramQueueQuery(reviewDeckId, cramTagFilter, {
+    enabled: reviewMode === "cram"
+  })
   const reviewMutation = useReviewFlashcardMutation()
   const updateMutation = useUpdateFlashcardMutation()
   const resetSchedulingMutation = useResetFlashcardSchedulingMutation()
@@ -85,7 +96,18 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   const hasCardsQuery = useHasCardsQuery()
   const nextDueQuery = useNextDueQuery(reviewDeckId)
   const nextDueInfo = nextDueQuery.data
-  const activeCard = localOverrideCard ?? reviewOverrideCard ?? reviewQuery.data
+  const cramQueue = cramQueueQuery.data || []
+  const cramQueueCard =
+    reviewMode === "cram" && cramQueueIndex < cramQueue.length
+      ? cramQueue[cramQueueIndex]
+      : null
+  const activeCard =
+    localOverrideCard ??
+    reviewOverrideCard ??
+    (reviewMode === "cram" ? cramQueueCard : reviewQuery.data)
+  const reviewProgressTotal =
+    reviewMode === "cram" ? cramQueue.length : dueCountsQuery.data?.total ?? 0
+  const isCramMode = reviewMode === "cram"
 
   // Get deck name for progress display
   const currentDeckName = React.useMemo(() => {
@@ -169,6 +191,44 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         // Store the card for potential undo before submitting
         const cardForUndo = { ...card }
 
+        const advanceCramQueue = () => {
+          if (reviewMode !== "cram") return
+          const currentIndex = cramQueue.findIndex((queued) => queued.uuid === card.uuid)
+          if (currentIndex >= 0) {
+            setCramQueueIndex(Math.min(currentIndex + 1, cramQueue.length))
+            return
+          }
+          setCramQueueIndex((idx) => Math.min(idx + 1, cramQueue.length))
+        }
+
+        if (reviewMode === "cram" && !cramUpdatesSchedule) {
+          setShowAnswer(false)
+          answerStartTimeRef.current = null
+          setReviewedCount((c) => c + 1)
+          setShowUndoButton(false)
+          setLastReviewedCard(null)
+          setUndoCountdown(0)
+          if (undoTimeoutRef.current) {
+            window.clearTimeout(undoTimeoutRef.current)
+          }
+          if (undoIntervalRef.current) {
+            window.clearInterval(undoIntervalRef.current)
+          }
+          if (reviewOverrideCard) {
+            onClearOverride?.()
+          }
+          if (localOverrideCard) {
+            setLocalOverrideCard(null)
+          }
+          advanceCramQueue()
+          message.success(
+            t("option:flashcards.cramPracticeSaved", {
+              defaultValue: "Practice saved. Scheduling unchanged."
+            })
+          )
+          return
+        }
+
         const reviewResult = await reviewMutation.mutateAsync({
           cardUuid: card.uuid,
           rating,
@@ -183,6 +243,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         if (localOverrideCard) {
           setLocalOverrideCard(null)
         }
+        advanceCramQueue()
 
         // Enable undo for 10 seconds with visible countdown
         setLastReviewedCard(cardForUndo)
@@ -242,7 +303,18 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         message.error(errorMessage)
       }
     },
-    [activeCard, reviewMutation, message, t, reviewOverrideCard, onClearOverride, localOverrideCard]
+    [
+      activeCard,
+      cramQueue,
+      cramUpdatesSchedule,
+      localOverrideCard,
+      message,
+      onClearOverride,
+      reviewMode,
+      reviewMutation,
+      reviewOverrideCard,
+      t
+    ]
   )
 
   // Handle undo - re-present the last reviewed card
@@ -405,14 +477,21 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
     }
   }, [activeCard, resetSchedulingMutation, message, t])
 
-  // Reset reviewed count when deck changes
+  React.useEffect(() => {
+    if (reviewMode !== "cram") return
+    setCramQueueIndex((idx) => Math.min(idx, cramQueue.length))
+  }, [reviewMode, cramQueue.length])
+
+  // Reset reviewed/session state when review scope changes
   React.useEffect(() => {
     setReviewedCount(0)
+    setCramQueueIndex(0)
     setLocalOverrideCard(null)
     setShowUndoButton(false)
     setLastReviewedCard(null)
+    setUndoCountdown(0)
     autoRevealAnswerRef.current = false
-  }, [reviewDeckId])
+  }, [reviewDeckId, reviewMode, cramTagFilter])
 
   React.useEffect(() => {
     if (reviewOverrideCard) {
@@ -460,15 +539,60 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
             value: d.id
           }))}
         />
+        <Segmented
+          value={reviewMode}
+          onChange={(value) => {
+            setReviewMode(value as "due" | "cram")
+          }}
+          options={[
+            {
+              label: t("option:flashcards.reviewModeDueOnly", {
+                defaultValue: "Due only"
+              }),
+              value: "due"
+            },
+            {
+              label: t("option:flashcards.reviewModeCram", {
+                defaultValue: "Cram"
+              }),
+              value: "cram"
+            }
+          ]}
+          data-testid="flashcards-review-mode-toggle"
+        />
+        {reviewMode === "cram" && (
+          <>
+            <Input
+              allowClear
+              value={cramTag}
+              onChange={(event) => setCramTag(event.target.value)}
+              placeholder={t("option:flashcards.cramTagFilterPlaceholder", {
+                defaultValue: "Filter cram by tag (optional)"
+              })}
+              className="min-w-56 max-w-full flex-1"
+              data-testid="flashcards-review-cram-tag"
+            />
+            <Space size={6}>
+              <Text type="secondary" className="text-xs">
+                {t("option:flashcards.cramUpdateSchedule", {
+                  defaultValue: "Update schedule"
+                })}
+              </Text>
+              <Switch
+                checked={cramUpdatesSchedule}
+                onChange={setCramUpdatesSchedule}
+                data-testid="flashcards-review-cram-update-schedule"
+              />
+            </Space>
+          </>
+        )}
         <Button
           type="primary"
           className="min-h-11"
           onClick={onNavigateToCreate}
           data-testid="flashcards-review-create-cta"
         >
-          {t("option:flashcards.noDueCreateCta", {
-            defaultValue: "Create a new card"
-          })}
+          {t("option:flashcards.noDueCreateCta", { defaultValue: "Create card" })}
         </Button>
       </div>
 
@@ -478,9 +602,9 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         selectedDeckId={reviewDeckId ?? null}
       />
 
-      {dueCountsQuery.data && dueCountsQuery.data.total > 0 && (
+      {reviewProgressTotal > 0 && (
         <ReviewProgress
-          dueCount={dueCountsQuery.data.total}
+          dueCount={reviewProgressTotal}
           reviewedCount={reviewedCount}
           deckName={currentDeckName}
         />
@@ -614,6 +738,14 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                           "Again = shortest gap, Hard = short gap, Good = medium gap, Easy = longest gap."
                       })}
                     </Text>
+                    {isCramMode && !cramUpdatesSchedule && (
+                      <Text type="secondary" className="text-xs text-center">
+                        {t("option:flashcards.cramNoScheduleHint", {
+                          defaultValue:
+                            "Practice-only mode: ratings do not change your review schedule."
+                        })}
+                      </Text>
+                    )}
                     <Button
                       type="link"
                       size="small"
@@ -701,6 +833,14 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                 ? t("option:flashcards.noCardsYet", {
                     defaultValue: "No flashcards yet"
                   })
+                : isCramMode && cramTagFilter
+                  ? t("option:flashcards.cramNoCardsForTag", {
+                      defaultValue: "No cards match this cram tag filter."
+                    })
+                  : isCramMode
+                    ? t("option:flashcards.cramComplete", {
+                        defaultValue: "Cram session complete!"
+                      })
                 : t("option:flashcards.allCaughtUp", {
                     defaultValue: "You're all caught up!"
                   })
@@ -718,7 +858,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                   <Space>
                     <Button type="primary" onClick={onNavigateToCreate}>
                       {t("option:flashcards.createFirstCard", {
-                        defaultValue: "Create a flashcard"
+                        defaultValue: "Create card"
                       })}
                     </Button>
                     <Button onClick={onNavigateToImport}>
@@ -736,23 +876,34 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                       <Text className="text-4xl">🎉</Text>
                       <div className="mt-2">
                         <Text strong className="text-lg">
-                          {t("option:flashcards.reviewedThisSession", {
-                            defaultValue: "{{count}} cards reviewed this session",
-                            count: reviewedCount
-                          })}
+                          {isCramMode
+                            ? t("option:flashcards.reviewedThisCramSession", {
+                                defaultValue:
+                                  "{{count}} cards practiced in this cram session",
+                                count: reviewedCount
+                              })
+                            : t("option:flashcards.reviewedThisSession", {
+                                defaultValue: "{{count}} cards reviewed this session",
+                                count: reviewedCount
+                              })}
                         </Text>
                       </div>
                     </div>
                   )}
                   <Text type="secondary">
-                    {t("option:flashcards.allCaughtUpDescription", {
-                      defaultValue:
-                        "No cards are due for review. Great job!"
-                    })}
+                    {isCramMode
+                      ? t("option:flashcards.cramCompleteDescription", {
+                          defaultValue:
+                            "You reached the end of your cram queue."
+                        })
+                      : t("option:flashcards.allCaughtUpDescription", {
+                          defaultValue:
+                            "No cards are due for review. Great job!"
+                        })}
                   </Text>
 
                   {/* Next due date information */}
-                  {nextDueInfo && (
+                  {!isCramMode && nextDueInfo && (
                     <div className="mt-4 p-3 rounded-lg bg-surface2 border border-border">
                       {nextDueInfo.nextDueAt ? (
                         <>
@@ -795,7 +946,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
 
                   <Button type="link" onClick={onNavigateToCreate}>
                     {t("option:flashcards.createMoreCards", {
-                      defaultValue: "Create more cards"
+                      defaultValue: "Create card"
                     })}
                   </Button>
                 </>

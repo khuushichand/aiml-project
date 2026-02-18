@@ -43,12 +43,16 @@ import {
 } from "../hooks/quizSubmissionQueue"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import type { AnswerValue, QuestionPublic, Quiz, QuizAnswer, QuizAttempt } from "@/services/quizzes"
+import type { TakeTabNavigationSource } from "../navigation"
 
 interface TakeQuizTabProps {
   onNavigateToGenerate: () => void
   onNavigateToCreate: () => void
   startQuizId?: number | null
+  highlightQuizId?: number | null
+  navigationSource?: TakeTabNavigationSource | null
   onStartHandled?: () => void
+  onHighlightHandled?: () => void
 }
 
 const DEFAULT_PASSING_SCORE = 70
@@ -59,7 +63,10 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
   onNavigateToGenerate,
   onNavigateToCreate,
   startQuizId,
-  onStartHandled
+  highlightQuizId,
+  navigationSource,
+  onStartHandled,
+  onHighlightHandled
 }) => {
   const { t } = useTranslation(["option", "common"])
   const [messageApi, contextHolder] = message.useMessage()
@@ -122,7 +129,9 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
   const [queuedSubmission, setQueuedSubmission] = React.useState<QueuedQuizSubmission | null>(null)
   const [isRetryingQueuedSubmission, setIsRetryingQueuedSubmission] = React.useState(false)
   const [submissionQueueStorageUnavailable, setSubmissionQueueStorageUnavailable] = React.useState(false)
+  const [highlightedQuizId, setHighlightedQuizId] = React.useState<number | null>(null)
   const lastAutoStartId = React.useRef<number | null>(null)
+  const lastAutoHighlightId = React.useRef<number | null>(null)
   const hasInitializedSearchRef = React.useRef(false)
   const questionRefs = React.useRef<Map<number, HTMLDivElement | null>>(new Map())
   const isOnline = useServerOnline()
@@ -359,13 +368,42 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
   }
 
   React.useEffect(() => {
-    if (startQuizId == null || lastAutoStartId.current === startQuizId) {
+    if (startQuizId == null) {
+      lastAutoStartId.current = null
+      return
+    }
+    if (lastAutoStartId.current === startQuizId) {
       return
     }
     lastAutoStartId.current = startQuizId
     requestStart(startQuizId)
     onStartHandled?.()
   }, [startQuizId, onStartHandled])
+
+  React.useEffect(() => {
+    if (highlightQuizId == null) {
+      lastAutoHighlightId.current = null
+      return
+    }
+    if (lastAutoHighlightId.current === highlightQuizId) {
+      return
+    }
+    lastAutoHighlightId.current = highlightQuizId
+    setHighlightedQuizId(highlightQuizId)
+    setSearchQuery("")
+    setPage(1)
+    onHighlightHandled?.()
+  }, [highlightQuizId, onHighlightHandled])
+
+  React.useEffect(() => {
+    if (highlightedQuizId == null) return
+    const timeoutId = window.setTimeout(() => {
+      setHighlightedQuizId(null)
+    }, 12000)
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [highlightedQuizId])
 
   React.useEffect(() => {
     if (!attempt) return
@@ -758,6 +796,43 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     return quizzes.find((quiz) => quiz.id === pendingQuizId) ?? null
   }, [pendingQuizId, quizDetails, quizzes])
 
+  const highlightedQuiz = React.useMemo(() => {
+    if (highlightedQuizId == null) return null
+    return sortedQuizzes.find((quiz) => quiz.id === highlightedQuizId) ?? null
+  }, [highlightedQuizId, sortedQuizzes])
+
+  const highlightNotice = React.useMemo(() => {
+    if (!highlightedQuiz) return null
+    if (navigationSource === "generate") {
+      return t("option:quiz.generatedHighlightNotice", {
+        defaultValue: "Quiz generated successfully: {{name}}. It is highlighted below.",
+        name: highlightedQuiz.name
+      })
+    }
+    if (navigationSource === "create") {
+      return t("option:quiz.createdHighlightNotice", {
+        defaultValue: "Quiz created successfully: {{name}}. It is highlighted below.",
+        name: highlightedQuiz.name
+      })
+    }
+    if (navigationSource === "results") {
+      return t("option:quiz.retakeHighlightNotice", {
+        defaultValue: "Retake ready for {{name}}.",
+        name: highlightedQuiz.name
+      })
+    }
+    if (navigationSource === "manage") {
+      return t("option:quiz.manageHighlightNotice", {
+        defaultValue: "{{name}} selected from Manage tab.",
+        name: highlightedQuiz.name
+      })
+    }
+    return t("option:quiz.highlightNotice", {
+      defaultValue: "Quiz selected: {{name}}.",
+      name: highlightedQuiz.name
+    })
+  }, [highlightedQuiz, navigationSource, t])
+
   const renderStartConfirmationModal = () => (
     <Modal
       title={t("option:quiz.readyToBegin", { defaultValue: "Ready to begin?" })}
@@ -1105,6 +1180,16 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
         {t("option:quiz.selectQuiz", { defaultValue: "Select a quiz to begin" })}
       </div>
 
+      {highlightNotice && (
+        <Alert
+          type="info"
+          showIcon
+          title={highlightNotice}
+          closable
+          onClose={() => setHighlightedQuizId(null)}
+        />
+      )}
+
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <Input.Search
           allowClear
@@ -1153,77 +1238,89 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
             }
           }
         }}
-        renderItem={(quiz) => (
-          <List.Item>
-            <Card
-              hoverable
-              className="h-full"
-              actions={[
-                <Button
-                  key="start"
-                  type="primary"
-                  icon={<PlayCircleOutlined />}
-                  onClick={() => {
-                    requestStart(quiz.id)
-                  }}
-                >
-                  {t("option:quiz.startQuiz", { defaultValue: "Start Quiz" })}
-                </Button>
-              ]}
-            >
-              <Card.Meta
-                title={quiz.name}
-                description={
-                  <div className="space-y-2">
-                    {quiz.description && (
-                      <p className="text-sm text-text-muted line-clamp-2">
-                        {quiz.description}
-                      </p>
-                    )}
-                    <div className="flex flex-wrap gap-2">
-                      <Tag icon={<QuestionCircleOutlined />}>
-                        {quiz.total_questions}{" "}
-                        {t("option:quiz.questions", { defaultValue: "questions" })}
-                      </Tag>
-                      {quiz.time_limit_seconds && (
-                        <Tag icon={<ClockCircleOutlined />}>
-                          {formatQuizTimeLimit(quiz.time_limit_seconds)}
-                        </Tag>
+        renderItem={(quiz) => {
+          const isHighlighted = quiz.id === highlightedQuizId
+          return (
+            <List.Item>
+              <Card
+                hoverable
+                className="h-full"
+                style={isHighlighted
+                  ? {
+                    borderColor: "var(--color-primary, #1677ff)",
+                    boxShadow: "0 0 0 2px rgba(22, 119, 255, 0.2)"
+                  }
+                  : undefined}
+                data-testid={`take-quiz-card-${quiz.id}`}
+                data-highlighted={isHighlighted ? "true" : undefined}
+                actions={[
+                  <Button
+                    key="start"
+                    type="primary"
+                    icon={<PlayCircleOutlined />}
+                    onClick={() => {
+                      setHighlightedQuizId(null)
+                      requestStart(quiz.id)
+                    }}
+                  >
+                    {t("option:quiz.startQuiz", { defaultValue: "Start Quiz" })}
+                  </Button>
+                ]}
+              >
+                <Card.Meta
+                  title={quiz.name}
+                  description={
+                    <div className="space-y-2">
+                      {quiz.description && (
+                        <p className="text-sm text-text-muted line-clamp-2">
+                          {quiz.description}
+                        </p>
                       )}
-                      {quiz.passing_score != null && (
-                        <Tag color="blue">
-                          {t("option:quiz.passingScoreLabel", { defaultValue: "Pass" })}: {quiz.passing_score}%
+                      <div className="flex flex-wrap gap-2">
+                        <Tag icon={<QuestionCircleOutlined />}>
+                          {quiz.total_questions}{" "}
+                          {t("option:quiz.questions", { defaultValue: "questions" })}
                         </Tag>
-                      )}
-                      {(quiz as Quiz & { difficulty?: string | null }).difficulty && (
-                        <Tag color="purple">
-                          {getQuizDifficultyLabel(quiz)}
-                        </Tag>
-                      )}
-                      {quiz.media_id != null && (
-                        <Tag color="green">
-                          <Typography.Link href={`/media?id=${quiz.media_id}`}>
-                            {t("option:quiz.sourceMedia", { defaultValue: "Source media #{{id}}", id: quiz.media_id })}
-                          </Typography.Link>
-                        </Tag>
-                      )}
-                      {lastScoreByQuizId.has(quiz.id) && (
-                        <Tag color="geekblue">
-                          {t("option:quiz.lastScore", { defaultValue: "Last score: {{score}}%", score: lastScoreByQuizId.get(quiz.id) })}
-                        </Tag>
+                        {quiz.time_limit_seconds && (
+                          <Tag icon={<ClockCircleOutlined />}>
+                            {formatQuizTimeLimit(quiz.time_limit_seconds)}
+                          </Tag>
+                        )}
+                        {quiz.passing_score != null && (
+                          <Tag color="blue">
+                            {t("option:quiz.passingScoreLabel", { defaultValue: "Pass" })}: {quiz.passing_score}%
+                          </Tag>
+                        )}
+                        {(quiz as Quiz & { difficulty?: string | null }).difficulty && (
+                          <Tag color="purple">
+                            {getQuizDifficultyLabel(quiz)}
+                          </Tag>
+                        )}
+                        {quiz.media_id != null && (
+                          <Tag color="green">
+                            <Typography.Link href={`/media?id=${quiz.media_id}`}>
+                              {t("option:quiz.sourceMedia", { defaultValue: "Source media #{{id}}", id: quiz.media_id })}
+                            </Typography.Link>
+                          </Tag>
+                        )}
+                        {lastScoreByQuizId.has(quiz.id) && (
+                          <Tag color="geekblue">
+                            {t("option:quiz.lastScore", { defaultValue: "Last score: {{score}}%", score: lastScoreByQuizId.get(quiz.id) })}
+                          </Tag>
+                        )}
+                      </div>
+                      {formatQuizDate(quiz.created_at) && (
+                        <p className="text-xs text-text-subtle">
+                          {t("option:quiz.createdOn", { defaultValue: "Created: {{date}}", date: formatQuizDate(quiz.created_at) })}
+                        </p>
                       )}
                     </div>
-                    {formatQuizDate(quiz.created_at) && (
-                      <p className="text-xs text-text-subtle">
-                        {t("option:quiz.createdOn", { defaultValue: "Created: {{date}}", date: formatQuizDate(quiz.created_at) })}
-                      </p>
-                    )}
-                  </div>
-                }
-              />
-            </Card>
-          </List.Item>
-        )}
+                  }
+                />
+              </Card>
+            </List.Item>
+          )
+        }}
       />
     </div>
   )

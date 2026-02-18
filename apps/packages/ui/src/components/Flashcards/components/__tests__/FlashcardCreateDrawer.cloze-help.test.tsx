@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { FlashcardCreateDrawer } from "../FlashcardCreateDrawer"
 import { useCreateFlashcardMutation, useCreateDeckMutation, useDecksQuery } from "../../hooks"
+import { FLASHCARDS_DRAWER_WIDTH_PX } from "../../constants"
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -109,6 +110,9 @@ describe("FlashcardCreateDrawer cloze helper and validation", () => {
         onSuccess={vi.fn()}
       />
     )
+
+    const wrapper = document.querySelector(".ant-drawer-content-wrapper") as HTMLElement | null
+    expect(wrapper?.style.width).toBe(`${FLASHCARDS_DRAWER_WIDTH_PX}px`)
 
     expect(
       screen.getByText(

@@ -1,0 +1,56 @@
+name: UI WorldBooks Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+      - dev
+    paths:
+      - "apps/packages/ui/src/components/Option/WorldBooks/**"
+      - "apps/packages/ui/src/assets/tailwind-shared.css"
+      - "apps/packages/ui/vitest.config.ts"
+      - "apps/packages/ui/package.json"
+      - "apps/bun.lock"
+      - ".github/workflows/ui-worldbooks-tests.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/packages/ui/src/components/Option/WorldBooks/**"
+      - "apps/packages/ui/src/assets/tailwind-shared.css"
+      - "apps/packages/ui/vitest.config.ts"
+      - "apps/packages/ui/package.json"
+      - "apps/bun.lock"
+      - ".github/workflows/ui-worldbooks-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-worldbooks-tests-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  worldbooks-vitest:
+    name: WorldBooks Vitest (Serial)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.2"
+
+      - name: Install workspace dependencies
+        working-directory: apps
+        run: bun install --frozen-lockfile
+
+      - name: Run WorldBooks test suite with stable worker strategy
+        working-directory: apps/packages/ui
+        env:
+          CI: "true"
+        run: bun run test:worldbooks

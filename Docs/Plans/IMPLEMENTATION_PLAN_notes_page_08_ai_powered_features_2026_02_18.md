@@ -22,7 +22,7 @@ Finding IDs: `8.1` through `8.4`
 - Integration tests for request/response wiring and apply/reject flow.
 - Component tests for button disabled/loading states.
 - Fallback tests for empty content and backend unavailability.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Strategy Configuration Surface
 **Goal**: Clarify and optionally expose heuristic vs LLM strategy behavior.
@@ -64,3 +64,15 @@ Finding IDs: `8.1` through `8.4`
 
 - Toolbar placement should coordinate with Plan 02 editor header/action layout.
 - Keyword suggestion flow should reuse tagging behavior from Plan 03.
+
+## Progress Notes (2026-02-18)
+
+- Completed Stage 1 in `/apps/packages/ui/src/components/Notes/NotesManagerPage.tsx`:
+  - Added `Generate title` action adjacent to the title input.
+  - Wired request flow to `POST /api/v1/notes/title/suggest`.
+  - Added suggestion preview-and-apply confirmation before mutating the title field.
+  - Added loading/disabled/error handling that preserves manual editing context.
+- Added Stage 1 verification in `/apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage10.ai-title.test.tsx`:
+  - Verifies suggestion request/response apply flow.
+  - Verifies reject/keep-current behavior.
+  - Verifies backend failure error handling.

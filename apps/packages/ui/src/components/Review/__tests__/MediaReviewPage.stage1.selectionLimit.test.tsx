@@ -1,6 +1,7 @@
 import React from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import axe from 'axe-core'
 import MediaReviewPage from '../MediaReviewPage'
 
 const mediaItems = Array.from({ length: 31 }).map((_, idx) => ({
@@ -856,5 +857,28 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
         (call) => Number((call[0] as { count?: number })?.count) === 2
       )
     ).toBe(true)
+  })
+
+  it('has no axe violations for core aria naming and region rules', async () => {
+    const { container } = render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    const results = await axe.run(container, {
+      runOnly: {
+        type: 'rule',
+        values: [
+          'aria-required-attr',
+          'aria-valid-attr',
+          'aria-valid-attr-value',
+          'button-name',
+          'region'
+        ]
+      }
+    })
+
+    expect(results.violations).toEqual([])
   })
 })

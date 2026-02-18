@@ -4342,7 +4342,7 @@ export function ContentViewer({
           title={t('review:mediaPage.scheduleSourceRefresh', {
             defaultValue: 'Schedule source refresh'
           })}
-          destroyOnClose
+          destroyOnHidden
         >
           <div className="space-y-3" data-testid="media-schedule-refresh-modal">
             <p className="m-0 text-xs text-text-muted">
@@ -4431,7 +4431,7 @@ export function ContentViewer({
           title={t('review:mediaPage.exportMedia', {
             defaultValue: 'Export content'
           })}
-          destroyOnClose
+          destroyOnHidden
         >
           <div className="space-y-3" data-testid="media-export-modal">
             <div className="flex flex-wrap gap-2">

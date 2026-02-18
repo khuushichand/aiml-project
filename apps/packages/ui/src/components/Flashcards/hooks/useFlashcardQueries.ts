@@ -21,7 +21,7 @@ import {
 } from "@/services/flashcards"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
-import { pickFirstReviewableCard } from "../utils/review-card-hygiene"
+import { isTutorialResidueCard, pickFirstReviewableCard } from "../utils/review-card-hygiene"
 
 export type DueStatus = "new" | "learning" | "due" | "all"
 
@@ -115,6 +115,46 @@ export function useReviewQuery(deckId: number | null | undefined, options?: UseF
         offset: 0
       })
       return pickFirstReviewableCard(learningRes.items)
+    },
+    enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+/**
+ * Hook for fetching a cram-mode queue (cards regardless of due state), optionally filtered by tag.
+ */
+export function useCramQueueQuery(
+  deckId: number | null | undefined,
+  tag?: string | null,
+  options?: UseFlashcardQueriesOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+  const MAX_QUEUE_SIZE = 1000
+  const PAGE_SIZE = 200
+
+  return useQuery({
+    queryKey: ["flashcards:review:cram-queue", deckId ?? null, tag ?? null],
+    queryFn: async (): Promise<Flashcard[]> => {
+      const queue: Flashcard[] = []
+      let offset = 0
+
+      while (queue.length < MAX_QUEUE_SIZE) {
+        const res = await listFlashcards({
+          deck_id: deckId ?? undefined,
+          tag: tag || undefined,
+          due_status: "all",
+          order_by: "due_at",
+          limit: PAGE_SIZE,
+          offset
+        })
+        const items = res.items || []
+        if (items.length === 0) break
+        queue.push(...items.filter((card) => !isTutorialResidueCard(card)))
+        if (items.length < PAGE_SIZE) break
+        offset += PAGE_SIZE
+      }
+
+      return queue.slice(0, MAX_QUEUE_SIZE)
     },
     enabled: options?.enabled ?? flashcardsEnabled
   })

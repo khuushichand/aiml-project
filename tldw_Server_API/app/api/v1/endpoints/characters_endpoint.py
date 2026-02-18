@@ -139,10 +139,13 @@ from tldw_Server_API.app.api.v1.schemas.character_schemas import (
     CharacterExemplarUpdate,
     CharacterImportResponse,
     CharacterListQueryResponse,
+    CharacterRevertRequest,
     CharacterTagOperationRequest,
     CharacterTagOperationResponse,
     CharacterResponse,
     CharacterUpdate,
+    CharacterVersionEntry,
+    CharacterVersionListResponse,
     DeletionResponse,
 )
 from tldw_Server_API.app.api.v1.schemas.world_book_schemas import (
@@ -226,6 +229,44 @@ _EXEMPLAR_SEARCH_HYBRID_CANDIDATE_CAP = 200
 _EXEMPLAR_SEARCH_HYBRID_MIN_POOL = 40
 _EXEMPLAR_SEARCH_HYBRID_VECTOR_WEIGHT = 0.55
 _EXEMPLAR_SEARCH_HYBRID_LEXICAL_WEIGHT = 0.45
+_CHARACTER_REVERT_FIELDS = (
+    "name",
+    "description",
+    "personality",
+    "scenario",
+    "system_prompt",
+    "post_history_instructions",
+    "first_message",
+    "message_example",
+    "creator_notes",
+    "alternate_greetings",
+    "tags",
+    "creator",
+    "character_version",
+    "extensions",
+)
+
+
+def _build_character_revert_payload(
+    snapshot_payload: dict[str, Any],
+    current_character: dict[str, Any],
+) -> dict[str, Any]:
+    if not any(field in snapshot_payload for field in _CHARACTER_REVERT_FIELDS):
+        raise InputError(
+            "Target version does not contain a full character snapshot and cannot be reverted."
+        )
+
+    payload: dict[str, Any] = {}
+    for field in _CHARACTER_REVERT_FIELDS:
+        if field in snapshot_payload:
+            payload[field] = snapshot_payload.get(field)
+            continue
+        if field in current_character:
+            payload[field] = current_character.get(field)
+
+    if not payload.get("name"):
+        raise InputError("Target version snapshot is missing a valid character name.")
+    return payload
 
 
 # --- Helper Functions (Keep _convert_db_char_to_response_model as is) ---
@@ -1392,6 +1433,135 @@ async def get_character_by_id_endpoint(  # Renamed from get_character
         raise
     except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error getting character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
+
+
+@router.get(
+    "/{character_id}/versions",
+    response_model=CharacterVersionListResponse,
+    summary="Get character version history",
+    tags=["characters"],
+)
+async def get_character_versions_endpoint(
+    character_id: int = FastAPIPath(..., description="ID of the character.", gt=0),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of versions to return."),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        current_char = get_character_details(db, character_id)
+        if not current_char:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+
+        raw_entries = db.get_character_version_history(character_id, limit=limit)
+        items = [
+            CharacterVersionEntry(
+                change_id=int(entry.get("change_id") or 0),
+                version=int(entry.get("version") or 0),
+                operation=str(entry.get("operation") or "update"),
+                timestamp=entry.get("timestamp"),
+                client_id=entry.get("client_id"),
+                payload=entry.get("payload")
+                if isinstance(entry.get("payload"), dict)
+                else {},
+            )
+            for entry in raw_entries
+        ]
+        return CharacterVersionListResponse(items=items, total=len(items))
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error getting character versions for {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Unexpected error getting character versions for {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
+
+
+@router.post(
+    "/{character_id}/revert",
+    response_model=CharacterResponse,
+    summary="Revert character to a previous version snapshot",
+    tags=["characters"],
+)
+async def revert_character_to_version_endpoint(
+    revert_request: CharacterRevertRequest,
+    character_id: int = FastAPIPath(..., description="ID of the character to revert.", gt=0),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        current_char = get_character_details(db, character_id)
+        if not current_char:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+
+        target_version = int(revert_request.target_version)
+        history_entries = db.get_character_version_history(character_id, limit=500)
+        target_entry = next(
+            (
+                entry
+                for entry in history_entries
+                if int(entry.get("version") or -1) == target_version
+            ),
+            None,
+        )
+        if not target_entry:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Version {target_version} not found for character {character_id}.",
+            )
+
+        snapshot_payload = target_entry.get("payload")
+        if not isinstance(snapshot_payload, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Target version payload is missing or malformed.",
+            )
+
+        revert_payload = _build_character_revert_payload(snapshot_payload, current_char)
+        expected_version = int(current_char.get("version") or 0)
+        if expected_version <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Current character version is invalid. Refresh and try again.",
+            )
+
+        success = update_existing_character_details(
+            db,
+            character_id,
+            revert_payload,
+            expected_version,
+        )
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to revert character (unexpected boolean failure).",
+            )
+
+        updated_char = get_character_details(db, character_id)
+        if not updated_char:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Character reverted but could not be retrieved.",
+            )
+        return _convert_db_char_to_response_model(updated_char)
+    except InputError as e:
+        logger.warning(f"Validation error reverting character {character_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except ConflictError as e:
+        logger.warning(f"Version conflict reverting character {character_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error reverting character {character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Unexpected error reverting character {character_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 

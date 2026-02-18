@@ -53,7 +53,11 @@ Finding IDs: `15.1` through `15.11`
 - Automated contrast checks where supported.
 - Visual regression tests for updated token usage.
 - Manual audit record added with measured ratios.
-**Status**: Not Started
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Added media-page-specific token contrast regression coverage in `apps/packages/ui/src/themes/__tests__/media-pages-accessibility-contrast.stage15.test.ts`.
+- Verified WCAG thresholds for core text/focus pairings across all built-in themes and enforced documented minimum floors.
+- Added audit record with measured worst-case ratios in `Docs/Plans/MEDIA_PAGES_CONTRAST_AUDIT_2026_02_18.md`.
 
 ## Stage 4: Accessibility Regression Suite for Existing Strengths
 **Goal**: Protect existing keyboard and semantic wins while new a11y fixes ship.
@@ -65,7 +69,13 @@ Finding IDs: `15.1` through `15.11`
 - Regression tests for keyboard traversal and activation.
 - Axe-based integration tests for media and multi-review pages.
 - Dialog/landmark semantic tests for shortcuts and navigator components.
-**Status**: Not Started
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Added keyboard activation regression coverage for result rows (`Enter`/`Space`) in `ResultsList.test.tsx`.
+- Added navigator semantic regression coverage (`aria-label` landmark + `role="tree"`) in `MediaSectionNavigator.test.tsx`.
+- Added axe-based aria/region regression checks for both `/media` and `/media-multi` page shells in:
+  - `apps/packages/ui/src/components/Review/__tests__/ViewMediaPage.stage13.error-handling.test.tsx`
+  - `apps/packages/ui/src/components/Review/__tests__/MediaReviewPage.stage1.selectionLimit.test.tsx`
 
 ## Dependencies
 

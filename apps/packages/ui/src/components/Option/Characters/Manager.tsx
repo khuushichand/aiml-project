@@ -23,10 +23,11 @@ import {
   tldwClient,
   type CharacterListSortBy,
   type CharacterListSortOrder,
+  type CharacterVersionEntry,
   type ServerChatSummary
 } from "@/services/tldw/TldwApiClient"
 import { fetchChatModels } from "@/services/tldw-server"
-import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Download, CheckSquare, Square, Tags, X, MoreHorizontal } from "lucide-react"
+import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Download, CheckSquare, Square, Tags, X, MoreHorizontal, Star, StarOff, ExternalLink, Clock3 } from "lucide-react"
 import { CharacterPreview } from "./CharacterPreview"
 import { CharacterGalleryCard, type GalleryCardDensity } from "./CharacterGalleryCard"
 import { CharacterPreviewPopup } from "./CharacterPreviewPopup"
@@ -75,6 +76,11 @@ import {
   buildServerLogHint,
   sanitizeServerErrorMessage
 } from "@/utils/server-error-message"
+import {
+  DEFAULT_CHARACTER_STORAGE_KEY,
+  defaultCharacterStorage,
+  resolveCharacterSelectionId
+} from "@/utils/default-character-preference"
 
 const MAX_NAME_LENGTH = 75
 const MAX_DESCRIPTION_LENGTH = 65
@@ -539,6 +545,69 @@ const buildCharacterSelectionPayload = (record: any) => ({
     validateAndCreateImageDataUrl(record.image_base64) ||
     ""
 })
+
+const resolveChatWorkspaceUrl = (): string => {
+  if (typeof window === "undefined") return "/"
+  try {
+    const currentUrl = new URL(window.location.href)
+    if (currentUrl.hash.startsWith("#/")) {
+      currentUrl.hash = "#/"
+      return currentUrl.toString()
+    }
+    if (/options\.html$/i.test(currentUrl.pathname)) {
+      return `${currentUrl.origin}${currentUrl.pathname}#/`
+    }
+    return `${currentUrl.origin}/`
+  } catch {
+    return "/"
+  }
+}
+
+const CHARACTER_VERSION_DIFF_FIELD_KEYS = [
+  "name",
+  "description",
+  "system_prompt",
+  "first_message",
+  "personality",
+  "scenario",
+  "post_history_instructions",
+  "message_example",
+  "creator_notes",
+  "alternate_greetings",
+  "tags",
+  "creator",
+  "character_version",
+  "extensions"
+] as const
+
+const normalizeVersionSnapshotValue = (value: unknown): string => {
+  if (value === null || typeof value === "undefined") return ""
+  if (typeof value === "string") return value.trim()
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value)
+  }
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+const formatVersionSnapshotValue = (value: unknown): string => {
+  if (value === null || typeof value === "undefined") return "—"
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? value : "—"
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value)
+  }
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
 
 const makeQuickChatMessageId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -1061,6 +1130,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [createForm] = Form.useForm()
   const [editForm] = Form.useForm()
   const [, setSelectedCharacter] = useSelectedCharacter<any>(null)
+  const [defaultCharacterSelection, setDefaultCharacterSelection] =
+    useStorage<any | null>(
+      {
+        key: DEFAULT_CHARACTER_STORAGE_KEY,
+        instance: defaultCharacterStorage
+      },
+      null
+    )
   const newButtonRef = React.useRef<HTMLButtonElement | null>(null)
   const lastEditTriggerRef = React.useRef<HTMLButtonElement | null>(null)
   const importButtonContainerRef = React.useRef<HTMLDivElement | null>(null)
@@ -1264,6 +1341,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     selectedChatModel ||
     quickChatModelOptions[0]?.value ||
     null
+  const defaultCharacterId = React.useMemo(
+    () => resolveCharacterSelectionId(defaultCharacterSelection),
+    [defaultCharacterSelection]
+  )
 
   const [generationPreviewData, setGenerationPreviewData] = React.useState<GeneratedCharacter | null>(null)
   const [generationPreviewField, setGenerationPreviewField] = React.useState<string | null>(null)
@@ -3074,6 +3155,48 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     })
   }
 
+  const conversationInsights = React.useMemo(() => {
+    if (!Array.isArray(characterChats) || characterChats.length === 0) {
+      return {
+        lastActive: null as string | null,
+        averageMessageCount: 0
+      }
+    }
+
+    let newestTimestamp = 0
+    let messageCountTotal = 0
+    let messageCountSamples = 0
+
+    for (const chat of characterChats) {
+      const timestamp = Date.parse(
+        String(chat.last_active || chat.updated_at || chat.created_at || "")
+      )
+      if (Number.isFinite(timestamp) && timestamp > newestTimestamp) {
+        newestTimestamp = timestamp
+      }
+
+      const count =
+        typeof chat.message_count === "number"
+          ? chat.message_count
+          : Number.NaN
+      if (Number.isFinite(count)) {
+        messageCountTotal += count
+        messageCountSamples += 1
+      }
+    }
+
+    return {
+      lastActive:
+        newestTimestamp > 0 ? new Date(newestTimestamp).toISOString() : null,
+      averageMessageCount:
+        messageCountSamples > 0 ? messageCountTotal / messageCountSamples : 0
+    }
+  }, [characterChats])
+  const averageConversationMessageCountLabel = React.useMemo(() => {
+    const average = conversationInsights.averageMessageCount
+    return Number.isInteger(average) ? String(average) : average.toFixed(1)
+  }, [conversationInsights.averageMessageCount])
+
   const resolveTimestamp = (
     record: Record<string, any>,
     keys: string[]
@@ -3453,6 +3576,21 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }
   }, [openEdit])
 
+  const conversationsLoadErrorMessageRef = React.useRef(
+    t("settings:manageCharacters.conversations.error", {
+      defaultValue: "Unable to load conversations for this character."
+    })
+  )
+
+  React.useEffect(() => {
+    conversationsLoadErrorMessageRef.current = t(
+      "settings:manageCharacters.conversations.error",
+      {
+        defaultValue: "Unable to load conversations for this character."
+      }
+    )
+  }, [t])
+
   React.useEffect(() => {
     if (!conversationsOpen || !conversationCharacter) return
     let cancelled = false
@@ -3480,12 +3618,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         }
       } catch {
         if (!cancelled) {
-          setChatsError(
-            t("settings:manageCharacters.conversations.error", {
-              defaultValue:
-                "Unable to load conversations for this character."
-            })
-          )
+          setChatsError(conversationsLoadErrorMessageRef.current)
         }
       } finally {
         if (!cancelled) {
@@ -3497,7 +3630,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     return () => {
       cancelled = true
     }
-  }, [conversationsOpen, conversationCharacter, t])
+  }, [conversationsOpen, conversationCharacter])
 
   const { mutate: updateCharacter, isPending: updating } = useMutation({
     mutationFn: async (values: any) => {
@@ -4225,7 +4358,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }
   }, [notification, t])
 
-  // Extracted action handlers for reuse between table and gallery views
+  // Extracted action handlers for reuse between table and gallery views.
   const handleChat = React.useCallback((record: any) => {
     setSelectedCharacter(buildCharacterSelectionPayload(record))
     navigate("/")
@@ -4233,6 +4366,95 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       focusComposer()
     }, 0)
   }, [setSelectedCharacter, navigate])
+
+  const handleChatInNewTab = React.useCallback(
+    async (record: any) => {
+      const characterSelection = buildCharacterSelectionPayload(record)
+      await setSelectedCharacter(characterSelection)
+      const opened = window.open(
+        resolveChatWorkspaceUrl(),
+        "_blank",
+        "noopener,noreferrer"
+      )
+      if (!opened) {
+        notification.warning({
+          message: t("settings:manageCharacters.notification.chatTabBlocked", {
+            defaultValue: "Popup blocked"
+          }),
+          description: t(
+            "settings:manageCharacters.notification.chatTabBlockedDesc",
+            {
+              defaultValue:
+                "Allow popups for this site or use Chat to open in the current tab."
+            }
+          )
+        })
+      }
+    },
+    [notification, setSelectedCharacter, t]
+  )
+
+  const isDefaultCharacterRecord = React.useCallback(
+    (record: any) => {
+      if (!defaultCharacterId) return false
+      const recordId = resolveCharacterSelectionId({
+        id: record?.id || record?.slug || record?.name
+      } as any)
+      return recordId === defaultCharacterId
+    },
+    [defaultCharacterId]
+  )
+
+  const handleSetDefaultCharacter = React.useCallback(
+    async (record: any) => {
+      try {
+        await setDefaultCharacterSelection(buildCharacterSelectionPayload(record))
+        notification.success({
+          message: t("settings:manageCharacters.notification.defaultSet", {
+            defaultValue: "Default character set"
+          }),
+          description: t("settings:manageCharacters.notification.defaultSetDesc", {
+            defaultValue: "{{name}} will be preselected for new chats.",
+            name: record?.name || record?.title || record?.slug || ""
+          })
+        })
+      } catch (error: any) {
+        notification.error({
+          message: t("settings:manageCharacters.notification.defaultSetError", {
+            defaultValue: "Couldn't set default character"
+          }),
+          description:
+            error?.message ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+      }
+    },
+    [notification, setDefaultCharacterSelection, t]
+  )
+
+  const handleClearDefaultCharacter = React.useCallback(async () => {
+    try {
+      await setDefaultCharacterSelection(null)
+      notification.info({
+        message: t("settings:manageCharacters.notification.defaultCleared", {
+          defaultValue: "Default character cleared"
+        })
+      })
+    } catch (error: any) {
+      notification.error({
+        message: t("settings:manageCharacters.notification.defaultSetError", {
+          defaultValue: "Couldn't set default character"
+        }),
+        description:
+          error?.message ||
+          t("settings:manageCharacters.notification.someError", {
+            defaultValue: "Something went wrong. Please try again later"
+          })
+      })
+    }
+  }, [notification, setDefaultCharacterSelection, t])
 
   const openQuickChat = React.useCallback((record: any) => {
     const characterSelection = buildCharacterSelectionPayload(record)
@@ -5599,6 +5821,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   }
                 )
                 const name = record?.name || record?.title || record?.slug || ""
+                const isDefaultCharacter = isDefaultCharacterRecord(record)
 
                 if (characterListScope === "deleted") {
                   return (
@@ -5633,31 +5856,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                           defaultValue: "Chat as {{name}}",
                           name
                         })}
-                        onClick={() => {
-                          const id = record.id || record.slug || record.name
-                          setSelectedCharacter({
-                            id,
-                            name: record.name || record.title || record.slug,
-                            system_prompt:
-                              record.system_prompt ||
-                              record.systemPrompt ||
-                              record.instructions ||
-                              "",
-                            greeting:
-                              record.greeting ||
-                              record.first_message ||
-                              record.greet ||
-                              "",
-                            avatar_url:
-                              record.avatar_url ||
-                              validateAndCreateImageDataUrl(record.image_base64) ||
-                              ""
-                          })
-                          navigate("/")
-                          setTimeout(() => {
-                            focusComposer()
-                          }, 0)
-                        }}>
+                        onClick={() => handleChat(record)}>
                         <MessageCircle className="w-4 h-4" />
                         <span className="hidden sm:inline text-xs font-medium">
                           {chatLabel}
@@ -5734,6 +5933,16 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                             onClick: () => openQuickChat(record)
                           },
                           {
+                            key: 'chat-new-tab',
+                            icon: <ExternalLink className="w-4 h-4" />,
+                            label: t("settings:manageCharacters.actions.chatInNewTab", {
+                              defaultValue: "Chat in new tab"
+                            }),
+                            onClick: () => {
+                              void handleChatInNewTab(record)
+                            }
+                          },
+                          {
                             key: 'conversations',
                             icon: <History className="w-4 h-4" />,
                             label: t("settings:manageCharacters.actions.viewConversations", {
@@ -5751,6 +5960,28 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                             icon: <Copy className="w-4 h-4" />,
                             label: duplicateLabel,
                             onClick: () => handleDuplicate(record)
+                          },
+                          {
+                            key: isDefaultCharacter ? "clear-default" : "set-default",
+                            icon: isDefaultCharacter ? (
+                              <StarOff className="w-4 h-4" />
+                            ) : (
+                              <Star className="w-4 h-4" />
+                            ),
+                            label: isDefaultCharacter
+                              ? t("settings:manageCharacters.actions.clearDefault", {
+                                  defaultValue: "Clear default"
+                                })
+                              : t("settings:manageCharacters.actions.setDefault", {
+                                  defaultValue: "Set as default"
+                                }),
+                            onClick: () => {
+                              if (isDefaultCharacter) {
+                                void handleClearDefaultCharacter()
+                                return
+                              }
+                              void handleSetDefaultCharacter(record)
+                            }
                           },
                           { type: 'divider' as const },
                           {
@@ -5848,6 +6079,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         onChat={() => {
           if (previewCharacter) {
             handleChat(previewCharacter)
+            setPreviewCharacter(null)
+          }
+        }}
+        onChatInNewTab={() => {
+          if (previewCharacter) {
+            void handleChatInNewTab(previewCharacter)
             setPreviewCharacter(null)
           }
         }}
@@ -6128,6 +6365,24 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         destroyOnHidden
         rootClassName="characters-motion-modal">
         <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3 text-xs text-text-subtle">
+            <span>
+              {t("settings:manageCharacters.conversations.lastActive", {
+                defaultValue: "Last active: {{time}}",
+                time: conversationInsights.lastActive
+                  ? new Date(conversationInsights.lastActive).toLocaleString()
+                  : t("settings:manageCharacters.conversations.unknownTime", {
+                      defaultValue: "Unknown"
+                    })
+              })}
+            </span>
+            <span>
+              {t("settings:manageCharacters.conversations.avgMessages", {
+                defaultValue: "Avg messages: {{count}}",
+                count: averageConversationMessageCountLabel
+              })}
+            </span>
+          </div>
           <p className="text-sm text-text-muted">
             {t("settings:manageCharacters.conversations.subtitle", {
               defaultValue:

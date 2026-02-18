@@ -1421,6 +1421,9 @@
     "actions": {
       "chat": "Chat",
       "quickChat": "Quick chat",
+      "chatInNewTab": "Chat in new tab",
+      "setDefault": "Set as default",
+      "clearDefault": "Clear default",
       "edit": "Edit",
       "delete": "Delete",
       "duplicate": "Duplicate",
@@ -1443,6 +1446,7 @@
     },
     "aria": {
       "chatWith": "Chat as {{name}}",
+      "chatWithInNewTab": "Chat with {{name}} in a new tab",
       "quickChatWith": "Quick chat with {{name}}",
       "edit": "Edit character {{name}}",
       "delete": "Delete character {{name}}",
@@ -1457,6 +1461,8 @@
       "title": "Conversations for {{name}}",
       "titleGeneric": "Character conversations",
       "subtitle": "Select a conversation to continue as this character.",
+      "lastActive": "Last active: {{time}}",
+      "avgMessages": "Avg messages: {{count}}",
       "empty": "No conversations found for this character yet.",
       "error": "Unable to load conversations for this character.",
       "updated": "Updated {{time}}",
@@ -1550,7 +1556,13 @@
       "error": "Error",
       "someError": "Something went wrong. Please try again later",
       "updatedSuccess": "Character updated",
-      "deletedSuccess": "Character deleted"
+      "deletedSuccess": "Character deleted",
+      "defaultSet": "Default character set",
+      "defaultSetDesc": "{{name}} will be preselected for new chats.",
+      "defaultSetError": "Couldn't set default character",
+      "defaultCleared": "Default character cleared",
+      "chatTabBlocked": "Popup blocked",
+      "chatTabBlockedDesc": "Allow popups for this site or use Chat to open in the current tab."
     },
     "loadError": {
       "title": "Couldn't load characters",

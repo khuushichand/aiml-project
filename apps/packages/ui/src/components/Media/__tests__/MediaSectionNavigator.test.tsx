@@ -126,6 +126,19 @@ describe('MediaSectionNavigator', () => {
     expect(navigator).toHaveClass('md:min-w-72')
   })
 
+  it('retains landmark and tree semantics for assistive technology', () => {
+    render(
+      <MediaSectionNavigator
+        nodes={sampleNodes}
+        selectedNodeId={null}
+        onSelectNode={vi.fn()}
+      />
+    )
+
+    expect(screen.getByLabelText('Chapters and sections')).toBeInTheDocument()
+    expect(screen.getByRole('tree')).toBeInTheDocument()
+  })
+
   it('quick-jumps to top match on Enter', async () => {
     const onSelectNode = vi.fn()
     render(

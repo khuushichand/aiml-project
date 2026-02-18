@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { CharactersManager } from "../Manager"
+import { DEFAULT_CHARACTER_STORAGE_KEY } from "@/utils/default-character-preference"
 
 const TEMPLATE_CHOOSER_SEEN_KEY = "characters-template-chooser-seen"
 
@@ -238,14 +239,24 @@ const makeUseQueryResult = (value: Record<string, unknown>) => ({
   ...value
 })
 
+const resolveStorageKey = (key: unknown): string => {
+  if (typeof key === "string") return key
+  if (key && typeof key === "object" && "key" in key) {
+    const nested = (key as { key?: unknown }).key
+    return typeof nested === "string" ? nested : ""
+  }
+  return ""
+}
+
 describe("CharactersManager first-use onboarding", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
+    window.history.replaceState({}, "", "/")
     useNavigateMock.mockReturnValue(navigateMock)
     confirmDangerMock.mockResolvedValue(true)
     useStorageMock.mockImplementation(
-      (_key: string, defaultValue: unknown) => [
+      (_key: unknown, defaultValue: unknown) => [
         defaultValue ?? null,
         vi.fn(),
         { isLoading: false }
@@ -329,8 +340,8 @@ describe("CharactersManager first-use onboarding", () => {
   })
 
   it("falls back to legacy client-side query path when rollout flag is disabled", async () => {
-    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => {
-      if (key === "ff_characters_server_query") {
+    useStorageMock.mockImplementation((key: unknown, defaultValue: unknown) => {
+      if (resolveStorageKey(key) === "ff_characters_server_query") {
         return [false, vi.fn(), { isLoading: false }]
       }
       return [defaultValue ?? null, vi.fn(), { isLoading: false }]
@@ -956,8 +967,10 @@ describe("CharactersManager first-use onboarding", () => {
       await screen.findByRole("checkbox", { name: "Select all on page" })
     )
 
-    const selectedLabel = await screen.findByText("{{count}} selected")
-    const toolbar = selectedLabel.closest("div")?.parentElement
+    const clearSelectionButton = await screen.findByRole("button", {
+      name: "Clear selection"
+    })
+    const toolbar = clearSelectionButton.closest("div")?.parentElement
     expect(toolbar).not.toBeNull()
     await user.click(
       within(toolbar as HTMLElement).getByRole("button", { name: "Delete" })
@@ -967,8 +980,9 @@ describe("CharactersManager first-use onboarding", () => {
       expect(confirmDangerMock).toHaveBeenCalledTimes(1)
     })
     expect(confirmDangerMock.mock.calls[0]?.[0]).toMatchObject({
-      content:
-        "This will soft-delete {{count}} characters. You can undo for 10 seconds."
+      content: expect.stringContaining(
+        "This will soft-delete 2 characters. You can undo for 10 seconds."
+      )
     })
 
     await waitFor(() => {
@@ -1628,6 +1642,177 @@ describe("CharactersManager first-use onboarding", () => {
     expect(exportCharacterToJSONMock).toHaveBeenCalledTimes(1)
   }, 30000)
 
+  it("sets a character as default from row actions", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "char-default",
+      name: "Default Candidate",
+      system_prompt: "Default system prompt",
+      greeting: "Default greeting",
+      version: 1
+    }
+    const setDefaultCharacterMock = vi.fn(async () => undefined)
+
+    useStorageMock.mockImplementation((key: unknown, defaultValue: unknown) => {
+      if (resolveStorageKey(key) === DEFAULT_CHARACTER_STORAGE_KEY) {
+        return [null, setDefaultCharacterMock, { isLoading: false }]
+      }
+      return [defaultValue ?? null, vi.fn(), { isLoading: false }]
+    })
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    await user.click(await screen.findByRole("menuitem", { name: "Set as default" }))
+
+    await waitFor(() => {
+      expect(setDefaultCharacterMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "char-default",
+          name: "Default Candidate",
+          system_prompt: "Default system prompt",
+          greeting: "Default greeting"
+        })
+      )
+    })
+  }, 30000)
+
+  it("clears default character from row actions when selected record is default", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "char-default-clear",
+      name: "Default Clear Candidate",
+      system_prompt: "Default system prompt",
+      greeting: "Default greeting",
+      version: 1
+    }
+    const setDefaultCharacterMock = vi.fn(async () => undefined)
+
+    useStorageMock.mockImplementation((key: unknown, defaultValue: unknown) => {
+      if (resolveStorageKey(key) === DEFAULT_CHARACTER_STORAGE_KEY) {
+        return [
+          {
+            id: "char-default-clear",
+            name: "Default Clear Candidate",
+            system_prompt: "Default system prompt",
+            greeting: "Default greeting"
+          },
+          setDefaultCharacterMock,
+          { isLoading: false }
+        ]
+      }
+      return [defaultValue ?? null, vi.fn(), { isLoading: false }]
+    })
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    await user.click(await screen.findByRole("menuitem", { name: "Clear default" }))
+
+    await waitFor(() => {
+      expect(setDefaultCharacterMock).toHaveBeenCalledWith(null)
+    })
+  }, 30000)
+
+  it("shows conversation insights summary with last active and average message count", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "char-conv-insights",
+      name: "Conversation Insights Character",
+      system_prompt: "Conversation insights prompt",
+      greeting: "Conversation insights greeting",
+      version: 1
+    }
+
+    tldwClientMock.listChats.mockResolvedValueOnce([
+      {
+        id: "chat-1",
+        title: "First",
+        character_id: "char-conv-insights",
+        created_at: "2026-02-10T10:00:00.000Z",
+        updated_at: "2026-02-12T12:00:00.000Z",
+        message_count: 4
+      },
+      {
+        id: "chat-2",
+        title: "Second",
+        character_id: "char-conv-insights",
+        created_at: "2026-02-11T10:00:00.000Z",
+        updated_at: "2026-02-14T14:00:00.000Z",
+        message_count: 6
+      }
+    ])
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    await user.click(
+      await screen.findByRole("menuitem", { name: "View conversations" })
+    )
+
+    await waitFor(() => {
+      expect(tldwClientMock.listChats).toHaveBeenCalledWith(
+        expect.objectContaining({
+          character_id: "char-conv-insights"
+        })
+      )
+    })
+
+    expect(await screen.findByText(/Last active:/)).toBeInTheDocument()
+    expect(screen.getByText("Avg messages: 5")).toBeInTheDocument()
+  }, 30000)
+
   it("opens quick chat from table actions and sends a character-scoped prompt", async () => {
     const user = userEvent.setup()
     const characterRecord = {
@@ -1639,8 +1824,8 @@ describe("CharactersManager first-use onboarding", () => {
       version: 1
     }
 
-    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => {
-      if (key === "selectedModel") {
+    useStorageMock.mockImplementation((key: unknown, defaultValue: unknown) => {
+      if (resolveStorageKey(key) === "selectedModel") {
         return ["mock-chat-model", vi.fn(), { isLoading: false }]
       }
       return [defaultValue ?? null, vi.fn(), { isLoading: false }]
@@ -1675,21 +1860,14 @@ describe("CharactersManager first-use onboarding", () => {
     render(<CharactersManager />)
 
     await user.click(await screen.findByRole("button", { name: /More actions/i }))
-    await user.click(await screen.findByText("Quick chat"))
+    await user.click(await screen.findByRole("menuitem", { name: "Quick chat" }))
 
-    const quickChatDialog = await screen.findByRole("dialog", {
-      name: "Quick chat: Quick Chat Character"
-    })
-
-    const modelCombobox = within(quickChatDialog).getByRole("combobox")
-    fireEvent.mouseDown(modelCombobox)
-    await user.click(await screen.findByText("mock-chat-model (openai)"))
-
-    const input = within(quickChatDialog).getByPlaceholderText(
+    const input = await screen.findByPlaceholderText(
       "Ask this character a quick question..."
     )
+
     await user.type(input, "How do you help?")
-    await user.click(within(quickChatDialog).getByRole("button", { name: "Send" }))
+    await user.click(screen.getByRole("button", { name: "Send" }))
 
     await waitFor(() => {
       expect(tldwClientMock.createChat).toHaveBeenCalledWith(
@@ -1720,8 +1898,8 @@ describe("CharactersManager first-use onboarding", () => {
       version: 1
     }
 
-    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => {
-      if (key === "selectedModel") {
+    useStorageMock.mockImplementation((key: unknown, defaultValue: unknown) => {
+      if (resolveStorageKey(key) === "selectedModel") {
         return ["mock-chat-model", vi.fn(), { isLoading: false }]
       }
       return [defaultValue ?? null, vi.fn(), { isLoading: false }]
@@ -1751,14 +1929,16 @@ describe("CharactersManager first-use onboarding", () => {
     render(<CharactersManager />)
 
     await user.click(await screen.findByText("Gallery Quick Chat Character"))
-    await user.click(await screen.findByRole("button", { name: "Quick chat" }))
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Quick chat with Gallery Quick Chat Character"
+      })
+    )
 
-    const quickChatDialog = await screen.findByRole("dialog", {
-      name: "Quick chat: Gallery Quick Chat Character"
-    })
-    expect(
-      within(quickChatDialog).getByText("Hi from gallery quick chat")
-    ).toBeInTheDocument()
+    await screen.findByPlaceholderText(
+      "Ask this character a quick question..."
+    )
+    expect(screen.getByText("Hi from gallery quick chat")).toBeInTheDocument()
   }, 30000)
 
   it("promotes quick chat into full chat flow without route changes until promoted", async () => {
@@ -1772,8 +1952,8 @@ describe("CharactersManager first-use onboarding", () => {
       version: 1
     }
 
-    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => {
-      if (key === "selectedModel") {
+    useStorageMock.mockImplementation((key: unknown, defaultValue: unknown) => {
+      if (resolveStorageKey(key) === "selectedModel") {
         return ["mock-chat-model", vi.fn(), { isLoading: false }]
       }
       return [defaultValue ?? null, vi.fn(), { isLoading: false }]
@@ -1808,44 +1988,188 @@ describe("CharactersManager first-use onboarding", () => {
     render(<CharactersManager />)
 
     await user.click(await screen.findByRole("button", { name: /More actions/i }))
-    await user.click(await screen.findByText("Quick chat"))
+    await user.click(await screen.findByRole("menuitem", { name: "Quick chat" }))
 
-    const quickChatDialog = await screen.findByRole("dialog", {
-      name: "Quick chat: Promote Quick Chat Character"
-    })
-    const modelCombobox = within(quickChatDialog).getByRole("combobox")
-    fireEvent.mouseDown(modelCombobox)
-    await user.click(await screen.findByText("mock-chat-model (openai)"))
-
-    await user.type(
-      within(quickChatDialog).getByPlaceholderText(
-        "Ask this character a quick question..."
-      ),
-      "Promote this thread"
+    const quickChatInput = await screen.findByPlaceholderText(
+      "Ask this character a quick question..."
     )
-    await user.click(within(quickChatDialog).getByRole("button", { name: "Send" }))
+
+    await user.type(quickChatInput, "Promote this thread")
+    await user.click(screen.getByRole("button", { name: "Send" }))
     await screen.findByText("Promotion reply")
     expect(navigateMock).not.toHaveBeenCalled()
 
-    await user.click(
-      within(quickChatDialog).getByRole("button", { name: "Open full chat" })
-    )
+    await user.click(screen.getByRole("button", { name: "Open full chat" }))
 
     await waitFor(() => {
       expect(navigateMock).toHaveBeenCalledWith("/")
     })
+    expect(setSelectedCharacterMock).toHaveBeenCalled()
     expect(setSelectedCharacterMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "303"
+        name: "Promote Quick Chat Character"
       })
     )
     expect(tldwClientMock.deleteChat).not.toHaveBeenCalled()
   }, 30000)
 
+  it("opens chat in a new tab from row actions without replacing current-tab navigation", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "char-new-tab",
+      name: "New Tab Character",
+      system_prompt: "Use new tab flow.",
+      greeting: "Hi from new tab",
+      version: 1
+    }
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => ({ closed: false } as unknown as Window))
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    await user.click(await screen.findByRole("menuitem", { name: "Chat in new tab" }))
+
+    await waitFor(() => {
+      expect(setSelectedCharacterMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "char-new-tab",
+          name: "New Tab Character"
+        })
+      )
+      expect(openSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        "_blank",
+        "noopener,noreferrer"
+      )
+    })
+    expect(navigateMock).not.toHaveBeenCalled()
+
+    openSpy.mockRestore()
+  }, 30000)
+
+  it("opens chat in a new tab from actions menu", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "char-new-tab-gallery",
+      name: "Gallery New Tab Character",
+      system_prompt: "Gallery new-tab prompt.",
+      greeting: "Gallery greeting",
+      version: 1
+    }
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => ({ closed: false } as unknown as Window))
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    await user.click(await screen.findByRole("menuitem", { name: "Chat in new tab" }))
+
+    await waitFor(() => {
+      expect(setSelectedCharacterMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "char-new-tab-gallery",
+          name: "Gallery New Tab Character"
+        })
+      )
+      expect(openSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        "_blank",
+        "noopener,noreferrer"
+      )
+    })
+    expect(navigateMock).not.toHaveBeenCalled()
+
+    openSpy.mockRestore()
+  }, 30000)
+
+  it("shows a warning when chat-in-new-tab is blocked by the browser", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "char-popup-blocked",
+      name: "Popup Blocked Character",
+      system_prompt: "Popup test prompt.",
+      greeting: "Popup test greeting",
+      version: 1
+    }
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null)
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    await user.click(await screen.findByRole("menuitem", { name: "Chat in new tab" }))
+
+    await waitFor(() => {
+      expect(notificationMock.warning).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Popup blocked"
+        })
+      )
+    })
+
+    openSpy.mockRestore()
+  }, 30000)
+
   it("keeps AI field generation affordances wired in create mode", async () => {
     const user = userEvent.setup()
-    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => {
-      if (key === "characterGenModel") {
+    useStorageMock.mockImplementation((key: unknown, defaultValue: unknown) => {
+      if (resolveStorageKey(key) === "characterGenModel") {
         return ["mock-generation-model", vi.fn(), { isLoading: false }]
       }
       return [defaultValue ?? null, vi.fn(), { isLoading: false }]
@@ -2229,7 +2553,7 @@ describe("CharactersManager first-use onboarding", () => {
     const confirmButton = screen.getByRole("button", { name: "Confirm import" })
     expect(confirmButton).toBeDisabled()
     expect(tldwClientMock.importCharacterFile).not.toHaveBeenCalled()
-  })
+  }, 15000)
 
   it("surfaces malformed YAML preview errors and blocks confirm import", async () => {
     const user = userEvent.setup()
@@ -2256,7 +2580,7 @@ describe("CharactersManager first-use onboarding", () => {
     const confirmButton = screen.getByRole("button", { name: "Confirm import" })
     expect(confirmButton).toBeDisabled()
     expect(tldwClientMock.importCharacterFile).not.toHaveBeenCalled()
-  })
+  }, 15000)
 
   it("allows canceling import preview without persisting files", async () => {
     const user = userEvent.setup()

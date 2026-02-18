@@ -284,9 +284,7 @@ describe("SidepanelPersona", () => {
     const ws = MockWebSocket.instances[0]
     ws.emitOpen()
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument()
-    })
+    await screen.findByText("Persona stream connected")
 
     fireEvent.change(screen.getByPlaceholderText("Ask Persona..."), {
       target: { value: "hello persona" }
@@ -400,9 +398,7 @@ describe("SidepanelPersona", () => {
     const ws = MockWebSocket.instances[0]
     ws.emitOpen()
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument()
-    })
+    await screen.findByText("Persona stream connected")
 
     ws.emitMessage(
       JSON.stringify({

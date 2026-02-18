@@ -119,7 +119,30 @@ Finding IDs: `H3-1` through `H3-4`
 - Query tests for due-filter bypass and deck/tag subset behavior.
 - E2E tests for cram session start, card traversal, and completion summary.
 - Regression tests ensuring default due-only behavior remains unchanged.
-**Status**: Not Started
+**Status**: Complete
+
+**Progress Notes (2026-02-18)**:
+- Added review scope toggle in `ReviewTab`:
+  - `Due only` (existing SRS flow)
+  - `Cram` (study cards regardless of due state).
+- Added cram queue data hook:
+  - `useCramQueueQuery(deckId, tag)` fetches reviewable cards with `due_status: "all"` and optional tag filter.
+  - Queue excludes tutorial-residue cards (same hygiene policy as scheduled review).
+- Added cram session controls:
+  - tag filter input for subset practice
+  - `Update schedule` switch (off by default) to support practice-only sessions.
+- Implemented cram rating behavior:
+  - practice-only mode advances queue and records session progress without calling review mutation.
+  - schedule-updating cram mode reuses existing review mutation pathway.
+- Updated completion/summary copy:
+  - cram completion and cram-session phrasing now differ from due-review phrasing.
+  - next-due estimate panel remains specific to due-only mode.
+- Test coverage:
+  - added `ReviewTab.cram-mode.test.tsx` for mode controls and no-schedule mutation bypass.
+  - updated existing `ReviewTab` tests to mock `useCramQueueQuery` and keep due-mode regressions covered.
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run --config vitest.config.ts src/components/Flashcards/tabs/__tests__/ReviewTab.analytics-summary.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.edit-in-review.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.cram-mode.test.tsx` (pass: `4` files, `8` tests)
+  - `cd apps/packages/ui && bunx vitest run --config vitest.config.ts src/components/Flashcards/hooks/__tests__/useFlashcardShortcuts.test.ts src/components/Flashcards/components/__tests__/FlashcardCreateDrawer.cloze-help.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.reset-scheduling.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.save.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.scheduling-metadata.test.tsx src/components/Flashcards/components/__tests__/KeyboardShortcutsModal.rating-scale.test.tsx src/components/Flashcards/tabs/__tests__/ManageTab.scheduling-metadata.test.tsx src/components/Flashcards/tabs/__tests__/ManageTab.undo-stage3.test.tsx src/components/Flashcards/tabs/__tests__/ImportExportTab.import-results.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.analytics-summary.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.edit-in-review.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.cram-mode.test.tsx` (pass: `13` files, `22` tests)
 
 ## Dependencies
 

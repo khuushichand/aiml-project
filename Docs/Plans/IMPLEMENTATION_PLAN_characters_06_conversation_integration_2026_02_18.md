@@ -21,7 +21,7 @@ Finding IDs: `C-19` through `C-21`
 - Component tests for quick-chat open/close and character context binding.
 - Integration tests for send/receive flow and error states.
 - E2E test for quick chat launch from both table and gallery views.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Add Default Character Preference
 **Goal**: Let users set a preferred character for new chat sessions.
@@ -33,7 +33,7 @@ Finding IDs: `C-19` through `C-21`
 - Unit tests for preference read/write helpers.
 - Integration tests for default selection on new chat bootstrap.
 - Regression tests ensuring explicit user selection overrides default.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Expand Conversation Insights
 **Goal**: Improve character usage visibility beyond raw conversation count.
@@ -45,7 +45,7 @@ Finding IDs: `C-19` through `C-21`
 - Backend tests for aggregate stat fields and null-safe defaults.
 - Component tests for stats rendering and formatting.
 - Integration tests for stats update after new chat activity.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Navigation and Workflow Cohesion
 **Goal**: Keep characters and chat workflows coherent for mixed-depth usage.
@@ -56,9 +56,29 @@ Finding IDs: `C-19` through `C-21`
 **Tests**:
 - E2E tests for legacy chat navigation path.
 - Manual QA matrix for quick-chat + full-chat transitions.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
 - Stage 1 depends on reusable chat composer/view primitives that can run in a constrained overlay.
 - Stage 2 may require user-preference API surface if local-only persistence is insufficient.
+
+## Stage 4 Completion Notes (2026-02-18)
+
+- Kept the existing primary `Chat` action path unchanged (select character, navigate to `/`, focus composer) to preserve legacy handoff behavior.
+- Added optional `Chat in new tab` action for table-row overflow and gallery preview flows.
+- Added popup-blocked fallback notification copy to reduce silent failures.
+- Added component tests for:
+  - row overflow `Chat in new tab` behavior
+  - gallery preview `Chat in new tab` behavior
+
+### Stage 4 Manual QA Matrix
+
+| Flow | Steps | Expected Result |
+|---|---|---|
+| Table -> Chat (current tab) | Click primary `Chat` on a row | Navigates to `/`, character is selected, composer is focused |
+| Table -> Quick chat | Row overflow -> `Quick chat` | Modal opens, no route change, messages stay in modal |
+| Table -> Chat in new tab | Row overflow -> `Chat in new tab` | New tab opens at chat workspace with selected character preloaded; current tab remains on `/characters` |
+| Gallery -> Chat (current tab) | Open preview -> `Chat` | Same as table current-tab flow |
+| Gallery -> Chat in new tab | Open preview -> `Chat in new tab` | Same as table new-tab flow |
+| Quick chat -> Open full chat | Open quick chat, send message, click `Open full chat` | Current tab navigates to `/`; quick chat session is preserved for continuation |

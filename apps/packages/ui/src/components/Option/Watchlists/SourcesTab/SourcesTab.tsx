@@ -44,6 +44,7 @@ import {
   resolveCheckNowTargets,
   shouldConfirmMultiSourceCheck
 } from "./check-now-utils"
+import { countToggleImpact, summarizeSourceSelection } from "./bulk-action-summary"
 import {
   restoreDeletedSources,
   SOURCE_DELETE_UNDO_WINDOW_SECONDS,
@@ -116,6 +117,10 @@ export const SourcesTab: React.FC = () => {
   )
   const selectedSourceIds = useMemo(
     () => selectedSources.map((source) => source.id),
+    [selectedSources]
+  )
+  const selectedSourceSummary = useMemo(
+    () => summarizeSourceSelection(selectedSources),
     [selectedSources]
   )
   const hasActiveFilters = useMemo(
@@ -488,6 +493,55 @@ export const SourcesTab: React.FC = () => {
       setSelectedRowKeys([])
     }
   }
+
+  const requestBulkToggle = useCallback((active: boolean) => {
+    if (selectedSources.length === 0) return
+    const impacted = countToggleImpact(selectedSources, active)
+    Modal.confirm({
+      title: active
+        ? t("watchlists:sources.bulkEnableConfirmTitle", "Enable selected feeds?")
+        : t("watchlists:sources.bulkDisableConfirmTitle", "Disable selected feeds?"),
+      content: t(
+        "watchlists:sources.bulkToggleConfirmDescription",
+        "{{total}} selected ({{active}} active, {{inactive}} inactive). {{impacted}} will change state.",
+        {
+          total: selectedSourceSummary.total,
+          active: selectedSourceSummary.active,
+          inactive: selectedSourceSummary.inactive,
+          impacted
+        }
+      ),
+      okText: active
+        ? t("watchlists:sources.bulkEnable", "Enable")
+        : t("watchlists:sources.bulkDisable", "Disable"),
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: () => handleBulkToggle(active)
+    })
+  }, [selectedSourceSummary, selectedSources, t])
+
+  const requestBulkDelete = useCallback(() => {
+    if (selectedSources.length === 0) return
+    Modal.confirm({
+      title: t(
+        "watchlists:sources.bulkDeleteConfirmTitle",
+        "Delete {{count}} selected feeds?",
+        { count: selectedSourceSummary.total }
+      ),
+      content: t(
+        "watchlists:sources.bulkDeleteConfirmDescription",
+        "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive).",
+        {
+          count: selectedSourceSummary.total,
+          active: selectedSourceSummary.active,
+          inactive: selectedSourceSummary.inactive
+        }
+      ),
+      okText: t("watchlists:sources.bulkDelete", "Delete"),
+      cancelText: t("common:cancel", "Cancel"),
+      okButtonProps: { danger: true },
+      onOk: () => handleBulkDelete()
+    })
+  }, [selectedSourceSummary, selectedSources.length, t])
 
   const executeCheckNow = useCallback(async (sourceIds: number[]) => {
     const normalizedIds = normalizeSourceIds(sourceIds)
@@ -913,22 +967,15 @@ export const SourcesTab: React.FC = () => {
           >
             {t("watchlists:sources.checkNow", "Check Now")}
           </Button>
-          <Button size="small" onClick={() => handleBulkToggle(true)} loading={bulkWorking}>
+          <Button size="small" onClick={() => requestBulkToggle(true)} loading={bulkWorking}>
             {t("watchlists:sources.bulkEnable", "Enable")}
           </Button>
-          <Button size="small" onClick={() => handleBulkToggle(false)} loading={bulkWorking}>
+          <Button size="small" onClick={() => requestBulkToggle(false)} loading={bulkWorking}>
             {t("watchlists:sources.bulkDisable", "Disable")}
           </Button>
-          <Popconfirm
-            title={t("watchlists:sources.bulkDeleteConfirm", "Delete selected sources?")}
-            onConfirm={handleBulkDelete}
-            okText={t("common:yes", "Yes")}
-            cancelText={t("common:no", "No")}
-          >
-            <Button size="small" danger loading={bulkWorking}>
-              {t("watchlists:sources.bulkDelete", "Delete")}
-            </Button>
-          </Popconfirm>
+          <Button size="small" danger loading={bulkWorking} onClick={requestBulkDelete}>
+            {t("watchlists:sources.bulkDelete", "Delete")}
+          </Button>
           <Button size="small" onClick={() => setSelectedRowKeys([])}>
             {t("common:clear", "Clear")}
           </Button>

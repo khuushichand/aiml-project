@@ -56,6 +56,14 @@ type QuestionDraft = {
   order_index: number
 }
 
+type QuestionValidationErrors = {
+  questionText?: string
+  options?: string
+}
+
+const QUESTION_TEXT_ERROR_ID = "manage-question-text-error"
+const QUESTION_OPTIONS_ERROR_ID = "manage-question-options-error"
+
 export const ManageTab: React.FC<ManageTabProps> = ({
   onNavigateToCreate,
   onNavigateToGenerate,
@@ -74,6 +82,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const [questionPage, setQuestionPage] = React.useState(1)
   const [questionPageSize, setQuestionPageSize] = React.useState(5)
   const [editForm] = Form.useForm()
+  const [questionValidationErrors, setQuestionValidationErrors] = React.useState<QuestionValidationErrors>({})
+  const editModalTriggerRef = React.useRef<HTMLElement | null>(null)
+  const questionModalTriggerRef = React.useRef<HTMLElement | null>(null)
 
   // Undo deletion state
   const UNDO_GRACE_PERIOD = 8000 // 8 seconds
@@ -144,6 +155,21 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       return t("option:quiz.trueFalse", { defaultValue: "True/False" })
     }
     return t("option:quiz.fillBlank", { defaultValue: "Fill in the Blank" })
+  }
+
+  const captureFocusTarget = (ref: React.MutableRefObject<HTMLElement | null>) => {
+    const activeElement = document.activeElement
+    ref.current = activeElement instanceof HTMLElement ? activeElement : null
+  }
+
+  const restoreFocusTarget = (ref: React.MutableRefObject<HTMLElement | null>) => {
+    const element = ref.current
+    if (!element) return
+    window.setTimeout(() => {
+      if (!element.isConnected) return
+      if ("disabled" in element && (element as HTMLButtonElement).disabled) return
+      element.focus()
+    }, 0)
   }
 
   const handleUndoQuizDelete = () => {
@@ -222,6 +248,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   }, [editingQuiz, editForm])
 
   const openEditModal = (quiz: Quiz) => {
+    captureFocusTarget(editModalTriggerRef)
     setEditingQuiz(quiz)
     setEditModalOpen(true)
   }
@@ -231,7 +258,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     setEditingQuiz(null)
     setQuestionModalOpen(false)
     setQuestionDraft(null)
+    setQuestionValidationErrors({})
     editForm.resetFields()
+    restoreFocusTarget(editModalTriggerRef)
   }
 
   const handleSaveQuiz = async () => {
@@ -271,6 +300,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   })
 
   const openQuestionModal = (question?: Question) => {
+    captureFocusTarget(questionModalTriggerRef)
     if (question) {
       setIsNewQuestion(false)
       setQuestionDraft({
@@ -290,12 +320,15 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       setIsNewQuestion(true)
       setQuestionDraft(baseQuestionDraft())
     }
+    setQuestionValidationErrors({})
     setQuestionModalOpen(true)
   }
 
   const closeQuestionModal = () => {
     setQuestionModalOpen(false)
     setQuestionDraft(null)
+    setQuestionValidationErrors({})
+    restoreFocusTarget(questionModalTriggerRef)
   }
 
   const updateQuestionDraft = (updates: Partial<QuestionDraft>) => {
@@ -316,11 +349,12 @@ export const ManageTab: React.FC<ManageTabProps> = ({
 
   const handleSaveQuestion = async () => {
     if (!editingQuiz || !questionDraft) return
+
+    const validationErrors: QuestionValidationErrors = {}
     if (!questionDraft.question_text.trim()) {
-      messageApi.warning(
-        t("option:quiz.questionTextRequired", { defaultValue: "Question text is required." })
-      )
-      return
+      validationErrors.questionText = t("option:quiz.questionTextRequired", {
+        defaultValue: "Question text is required."
+      })
     }
 
     let optionsPayload: string[] | undefined
@@ -329,10 +363,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     if (questionDraft.question_type === "multiple_choice") {
       const { filtered, indexMap } = normalizeOptions(questionDraft.options)
       if (filtered.length < 2) {
-        messageApi.warning(
-          t("option:quiz.optionsRequired", { defaultValue: "Please provide at least two options." })
-        )
-        return
+        validationErrors.options = t("option:quiz.optionsRequired", {
+          defaultValue: "Please provide at least two options."
+        })
       }
       const rawIndex = Number(correctAnswer)
       const mapped = indexMap.get(Number.isNaN(rawIndex) ? 0 : rawIndex)
@@ -343,6 +376,12 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     } else {
       correctAnswer = String(correctAnswer || "").trim()
     }
+
+    if (validationErrors.questionText || validationErrors.options) {
+      setQuestionValidationErrors(validationErrors)
+      return
+    }
+    setQuestionValidationErrors({})
 
     try {
       if (isNewQuestion) {
@@ -697,6 +736,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             type="dashed"
             icon={<PlusOutlined />}
             onClick={() => openQuestionModal()}
+            data-testid="manage-add-question"
           >
             {t("option:quiz.addQuestion", { defaultValue: "Add Question" })}
           </Button>
@@ -729,7 +769,12 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             renderItem={(question) => (
               <List.Item
                 actions={[
-                  <Button key="edit" type="link" onClick={() => openQuestionModal(question)}>
+                  <Button
+                    key="edit"
+                    type="link"
+                    onClick={() => openQuestionModal(question)}
+                    data-testid={`manage-edit-question-${question.id}`}
+                  >
                     {t("common:edit", { defaultValue: "Edit" })}
                   </Button>,
                   <Button
@@ -788,6 +833,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                   updates.correct_answer = ""
                 }
                 updateQuestionDraft(updates)
+                setQuestionValidationErrors({})
               }}
               options={[
                 { label: t("option:quiz.multipleChoice", { defaultValue: "Multiple Choice" }), value: "multiple_choice" },
@@ -800,9 +846,25 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             <Input.TextArea
               placeholder={t("option:quiz.questionText", { defaultValue: "Enter your question..." })}
               value={questionDraft.question_text}
-              onChange={(e) => updateQuestionDraft({ question_text: e.target.value })}
+              onChange={(e) => {
+                updateQuestionDraft({ question_text: e.target.value })
+                if (questionValidationErrors.questionText) {
+                  setQuestionValidationErrors((prev) => ({ ...prev, questionText: undefined }))
+                }
+              }}
+              aria-invalid={questionValidationErrors.questionText ? true : undefined}
+              aria-describedby={questionValidationErrors.questionText ? QUESTION_TEXT_ERROR_ID : undefined}
               rows={2}
             />
+            {questionValidationErrors.questionText && (
+              <div
+                id={QUESTION_TEXT_ERROR_ID}
+                className="text-sm text-red-600"
+                role="alert"
+              >
+                {questionValidationErrors.questionText}
+              </div>
+            )}
 
             {questionDraft.question_type === "multiple_choice" && (
               <div className="space-y-2">
@@ -824,11 +886,25 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                         const newOptions = [...questionDraft.options]
                         newOptions[optIndex] = e.target.value
                         updateQuestionDraft({ options: newOptions })
+                        if (questionValidationErrors.options) {
+                          setQuestionValidationErrors((prev) => ({ ...prev, options: undefined }))
+                        }
                       }}
+                      aria-invalid={questionValidationErrors.options ? true : undefined}
+                      aria-describedby={questionValidationErrors.options ? QUESTION_OPTIONS_ERROR_ID : undefined}
                       className="flex-1"
                     />
                   </div>
                 ))}
+                {questionValidationErrors.options && (
+                  <div
+                    id={QUESTION_OPTIONS_ERROR_ID}
+                    className="text-sm text-red-600"
+                    role="alert"
+                  >
+                    {questionValidationErrors.options}
+                  </div>
+                )}
               </div>
             )}
 

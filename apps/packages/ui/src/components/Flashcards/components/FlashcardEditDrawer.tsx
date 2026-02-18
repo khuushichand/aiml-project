@@ -16,6 +16,7 @@ import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
 import { useTranslation } from "react-i18next"
 import { useDebouncedFormField } from "../hooks"
+import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import type { Flashcard, FlashcardUpdate, Deck } from "@/services/flashcards"
@@ -176,18 +177,18 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
     <>
     <Drawer
       placement="right"
-      styles={{ wrapper: { width: 520 } }}
+      styles={{ wrapper: { width: FLASHCARDS_DRAWER_WIDTH_PX } }}
       open={open}
       onClose={handleAttemptClose}
       title={t("option:flashcards.editCard", { defaultValue: "Edit Flashcard" })}
       footer={
-        <div className="flex justify-between">
-          <Button danger onClick={onDelete}>
-            {t("common:delete", { defaultValue: "Delete" })}
-          </Button>
+        <div className="flex justify-end">
           <Space>
             <Button onClick={handleAttemptClose}>
               {t("common:cancel", { defaultValue: "Cancel" })}
+            </Button>
+            <Button danger onClick={onDelete}>
+              {t("common:delete", { defaultValue: "Delete" })}
             </Button>
             <Button type="primary" loading={isLoading} onClick={handleSave}>
               {t("common:save", { defaultValue: "Save" })}

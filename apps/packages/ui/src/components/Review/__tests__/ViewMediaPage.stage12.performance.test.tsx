@@ -169,11 +169,24 @@ vi.mock('@/components/Media/SearchBar', () => ({
 }))
 
 vi.mock('@/components/Media/FilterPanel', () => ({
-  FilterPanel: ({ mediaTypes }: { mediaTypes?: string[] }) => (
+  FilterPanel: ({
+    mediaTypes,
+    onKeywordSearch
+  }: {
+    mediaTypes?: string[]
+    onKeywordSearch?: (query: string) => void
+  }) => (
     <div data-testid="filter-panel">
       <div data-testid="filter-panel-media-types">
         {(mediaTypes || []).join(',')}
       </div>
+      <button
+        type="button"
+        data-testid="filter-panel-keyword-search"
+        onClick={() => onKeywordSearch?.('retry')}
+      >
+        keyword-search
+      </button>
     </div>
   )
 }))
@@ -501,5 +514,59 @@ describe('ViewMediaPage stage 12 performance guardrails', () => {
     await waitFor(() => {
       expect(screen.getByTestId('filter-panel-media-types')).toHaveTextContent('pdf')
     })
+  })
+
+  it('retries keyword endpoint after cooldown instead of latching fallback forever', async () => {
+    const baseNow = new Date('2026-02-18T00:00:00Z').getTime()
+    let now = baseNow
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+
+    let keywordCallCount = 0
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      if (path.startsWith('/api/v1/media/keywords')) {
+        keywordCallCount += 1
+        if (keywordCallCount === 1) {
+          throw new Error('temporary keyword endpoint failure')
+        }
+        return { keywords: ['keyword-from-endpoint'] }
+      }
+      if (path.startsWith('/api/v1/media/?page=')) {
+        return { items: [], pagination: { total_pages: 1, total_items: 0 } }
+      }
+      if (path.startsWith('/api/v1/media/')) {
+        const id = path.replace('/api/v1/media/', '').split('?')[0]
+        return {
+          id,
+          title: `Media ${id}`,
+          type: 'document',
+          content: { text: `Content for ${id}` }
+        }
+      }
+      if (path.startsWith('/api/v1/notes')) {
+        return { items: [], pagination: { total_items: 0 } }
+      }
+      return {}
+    })
+
+    renderMediaPage('/media')
+
+    await waitFor(() => {
+      expect(keywordCallCount).toBe(1)
+    })
+
+    fireEvent.click(screen.getByTestId('filter-panel-keyword-search'))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(keywordCallCount).toBe(1)
+
+    now = baseNow + 31_000
+    fireEvent.click(screen.getByTestId('filter-panel-keyword-search'))
+    await waitFor(() => {
+      expect(keywordCallCount).toBe(2)
+    })
+
+    nowSpy.mockRestore()
   })
 })

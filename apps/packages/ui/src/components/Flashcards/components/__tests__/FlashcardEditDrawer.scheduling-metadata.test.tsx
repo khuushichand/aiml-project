@@ -3,6 +3,7 @@ import relativeTime from "dayjs/plugin/relativeTime"
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { FlashcardEditDrawer } from "../FlashcardEditDrawer"
+import { FLASHCARDS_DRAWER_WIDTH_PX } from "../../constants"
 import type { Flashcard } from "@/services/flashcards"
 
 dayjs.extend(relativeTime)
@@ -120,5 +121,8 @@ describe("FlashcardEditDrawer scheduling metadata panel", () => {
     expect(
       screen.getByText((content) => content.includes(expectedLastReviewedAbsolute))
     ).toBeInTheDocument()
+
+    const wrapper = document.querySelector(".ant-drawer-content-wrapper") as HTMLElement | null
+    expect(wrapper?.style.width).toBe(`${FLASHCARDS_DRAWER_WIDTH_PX}px`)
   })
 })

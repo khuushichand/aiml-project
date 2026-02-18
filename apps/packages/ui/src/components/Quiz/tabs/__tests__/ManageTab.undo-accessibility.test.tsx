@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ManageTab } from "../ManageTab"
@@ -123,6 +123,67 @@ describe("ManageTab undo accessibility", () => {
     fireEvent.click(undoButton)
     await waitFor(() => {
       expect(screen.getByText("Biology Basics")).toBeInTheDocument()
+    })
+  })
+
+  it("returns focus to the edit trigger after the edit modal closes", async () => {
+    render(
+      <ManageTab
+        onNavigateToCreate={() => {}}
+        onNavigateToGenerate={() => {}}
+        onStartQuiz={() => {}}
+      />
+    )
+
+    const editTrigger = screen.getByTestId("quiz-edit-7")
+    editTrigger.focus()
+    expect(editTrigger).toHaveFocus()
+
+    fireEvent.click(editTrigger)
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }))
+
+    await waitFor(() => {
+      expect(editTrigger).toHaveFocus()
+    })
+  })
+
+  it("links inline validation errors and restores focus when question modal closes", async () => {
+    render(
+      <ManageTab
+        onNavigateToCreate={() => {}}
+        onNavigateToGenerate={() => {}}
+        onStartQuiz={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId("quiz-edit-7"))
+
+    const addQuestionButton = await screen.findByTestId("manage-add-question")
+    addQuestionButton.focus()
+    expect(addQuestionButton).toHaveFocus()
+
+    fireEvent.click(addQuestionButton)
+
+    const questionInput = await screen.findByPlaceholderText("Enter your question...")
+    const questionModal = questionInput.closest(".ant-modal")
+    const questionModalQueries = questionModal ? within(questionModal as HTMLElement) : screen
+
+    fireEvent.click(questionModalQueries.getByRole("button", { name: /^save$/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Question text is required.")).toBeInTheDocument()
+    })
+    expect(screen.getByText("Please provide at least two options.")).toBeInTheDocument()
+
+    expect(questionInput).toHaveAttribute("aria-describedby", "manage-question-text-error")
+
+    const optionOneInput = questionModalQueries.getByPlaceholderText("Option 1")
+    expect(optionOneInput).toHaveAttribute("aria-describedby", "manage-question-options-error")
+
+    fireEvent.click(questionModalQueries.getByRole("button", { name: /cancel/i }))
+
+    await waitFor(() => {
+      expect(addQuestionButton).toHaveFocus()
     })
   })
 })

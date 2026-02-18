@@ -175,6 +175,8 @@ export interface ServerChatSummary {
   title: string
   created_at: string
   updated_at?: string | null
+  last_active?: string | null
+  message_count?: number | null
   source?: string | null
   state?: ConversationState | string | null
   topic_label?: string | null
@@ -370,6 +372,20 @@ export interface CharacterListQueryResponse {
   page: number
   page_size: number
   has_more: boolean
+}
+
+export interface CharacterVersionEntry {
+  change_id: number
+  version: number
+  operation: string
+  timestamp?: string | null
+  client_id?: string | null
+  payload: Record<string, unknown>
+}
+
+export interface CharacterVersionListResponse {
+  items: CharacterVersionEntry[]
+  total: number
 }
 
 // Admin / RBAC types
@@ -2310,6 +2326,76 @@ export class TldwApiClient {
     return request
   }
 
+  async listCharacterVersions(
+    id: string | number,
+    options?: { limit?: number }
+  ): Promise<CharacterVersionListResponse> {
+    const cid = String(id)
+    const query = this.buildQuery({
+      limit: options?.limit ?? 50
+    })
+    const template = await this.resolveApiPath("characters.versions", [
+      "/api/v1/characters/{id}/versions",
+      "/api/v1/characters/{id}/versions/"
+    ])
+    const path = appendPathQuery(this.fillPathParams(template, cid), query)
+    const response = await bgRequest<any>({
+      path,
+      method: "GET"
+    })
+
+    const items = Array.isArray(response?.items)
+      ? response.items
+      : Array.isArray(response)
+        ? response
+        : []
+    return {
+      items: items.map((item: any) => ({
+        change_id:
+          typeof item?.change_id === "number" && Number.isFinite(item.change_id)
+            ? item.change_id
+            : Number(item?.change_id || 0),
+        version:
+          typeof item?.version === "number" && Number.isFinite(item.version)
+            ? item.version
+            : Number(item?.version || 0),
+        operation: String(item?.operation || "update"),
+        timestamp: item?.timestamp ?? null,
+        client_id: item?.client_id ?? null,
+        payload:
+          item?.payload && typeof item.payload === "object" && !Array.isArray(item.payload)
+            ? item.payload
+            : {}
+      })),
+      total:
+        typeof response?.total === "number" && Number.isFinite(response.total)
+          ? response.total
+          : items.length
+    }
+  }
+
+  async revertCharacter(
+    id: string | number,
+    targetVersion: number
+  ): Promise<any> {
+    const cid = String(id)
+    const template = await this.resolveApiPath("characters.revert", [
+      "/api/v1/characters/{id}/revert",
+      "/api/v1/characters/{id}/revert/"
+    ])
+    const path = this.fillPathParams(template, cid)
+    const response = await bgRequest<any>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        target_version: targetVersion
+      }
+    })
+    this.characterCache.delete(cid)
+    return response
+  }
+
   async createCharacter(payload: Record<string, any>): Promise<any> {
     const path = await this.resolveApiPath("characters.create", [
       "/api/v1/characters",
@@ -2519,11 +2605,28 @@ export class TldwApiClient {
       input?.lastModified ??
       null
     const state = input?.state ?? input?.conversation_state ?? null
+    const last_active =
+      input?.last_active ??
+      input?.lastActive ??
+      updated_at ??
+      created_at ??
+      null
+    const messageCountRaw = input?.message_count ?? input?.messageCount
+    const message_count =
+      typeof messageCountRaw === "number"
+        ? messageCountRaw
+        : typeof messageCountRaw === "string" && messageCountRaw.trim().length > 0
+          ? Number.parseFloat(messageCountRaw)
+          : null
     return {
       id: String(input?.id ?? ""),
       title: String(input?.title || ""),
       created_at,
       updated_at: updated_at ? String(updated_at) : null,
+      last_active: last_active ? String(last_active) : null,
+      message_count: Number.isFinite(message_count as number)
+        ? (message_count as number)
+        : null,
       source: input?.source ?? null,
       state: state ? String(state) : null,
       topic_label: input?.topic_label ?? input?.topicLabel ?? null,

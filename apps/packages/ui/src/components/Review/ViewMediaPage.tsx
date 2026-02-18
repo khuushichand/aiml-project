@@ -118,6 +118,7 @@ const MEDIA_NAVIGATION_GENERATED_FALLBACK_STORAGE_KEY =
   'media:navigation:includeGeneratedFallback'
 const MEDIA_SIDEBAR_COLLAPSED_STORAGE_KEY = 'media:sidebar:collapsed'
 export const MEDIA_STALE_CHECK_INTERVAL_MS = 30_000
+const MEDIA_KEYWORD_ENDPOINT_RETRY_COOLDOWN_MS = 30_000
 const MEDIA_COLLECTIONS_STORAGE_KEY = 'media:collections:v1'
 
 type MediaCollectionRecord = {
@@ -475,6 +476,7 @@ const MediaPageContent: React.FC = () => {
   const contentDivRef = React.useRef<HTMLDivElement | null>(null)
   const hasRunInitialSearch = React.useRef(false)
   const keywordEndpointUnavailableRef = React.useRef(false)
+  const keywordEndpointRetryAtRef = React.useRef(0)
   const pendingSectionSelectionTelemetryRef = React.useRef<{
     nodeId: string
     startedAt: number
@@ -1809,7 +1811,11 @@ const MediaPageContent: React.FC = () => {
       return Array.from(out)
     }
 
-    if (!keywordEndpointUnavailableRef.current) {
+    const now = Date.now()
+    if (
+      !keywordEndpointUnavailableRef.current ||
+      now >= keywordEndpointRetryAtRef.current
+    ) {
       try {
         const trimmedSearch = searchText?.trim()
         const endpointPath = trimmedSearch
@@ -1833,9 +1839,13 @@ const MediaPageContent: React.FC = () => {
 
         setKeywordOptions(normalizeKeywords(endpointItems))
         setKeywordSourceMode('endpoint')
+        keywordEndpointUnavailableRef.current = false
+        keywordEndpointRetryAtRef.current = 0
         return
       } catch {
         keywordEndpointUnavailableRef.current = true
+        keywordEndpointRetryAtRef.current =
+          Date.now() + MEDIA_KEYWORD_ENDPOINT_RETRY_COOLDOWN_MS
       }
     }
 

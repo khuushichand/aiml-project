@@ -103,6 +103,14 @@ import {
   findUnavailableChatModel,
   normalizeChatModelId
 } from "@/utils/chat-model-availability"
+import {
+  DEFAULT_CHARACTER_STORAGE_KEY,
+  defaultCharacterStorage,
+  isFreshChatState,
+  resolveCharacterSelectionId,
+  shouldApplyDefaultCharacter,
+  shouldResetDefaultCharacterBootstrap
+} from "@/utils/default-character-preference"
 import { CONTEXT_FILE_SIZE_MB_SETTING } from "@/services/settings/ui-settings"
 import { browser } from "wxt/browser"
 import type { Character } from "@/types/character"
@@ -134,7 +142,15 @@ export const SidepanelForm = ({
     false
   )
   const [imageBackendDefault] = useStorage("imageBackendDefault", "")
-  const [storedCharacter] = useSelectedCharacter<Character | null>(null)
+  const [storedCharacter, setStoredCharacter] =
+    useSelectedCharacter<Character | null>(null)
+  const [defaultCharacter] = useStorage<Character | null>(
+    {
+      key: DEFAULT_CHARACTER_STORAGE_KEY,
+      instance: defaultCharacterStorage
+    },
+    null
+  )
   const [contextFileMaxSizeMb] = useSetting(CONTEXT_FILE_SIZE_MB_SETTING)
   const maxContextFileSizeBytes = React.useMemo(
     () => contextFileMaxSizeMb * 1024 * 1024,
@@ -669,14 +685,68 @@ export const SidepanelForm = ({
   )
 
   // Character selection state
+  const storedCharacterId = React.useMemo(
+    () => resolveCharacterSelectionId(storedCharacter),
+    [storedCharacter]
+  )
+  const defaultCharacterId = React.useMemo(
+    () => resolveCharacterSelectionId(defaultCharacter),
+    [defaultCharacter]
+  )
+  const isFreshChat = React.useMemo(
+    () => isFreshChatState(serverChatId, messages.length),
+    [messages.length, serverChatId]
+  )
+  const defaultCharacterBootstrapAppliedRef = React.useRef(false)
+  const previousFreshChatRef = React.useRef(isFreshChat)
   const [selectedCharacterId, setSelectedCharacterId] = React.useState<
     string | null
-  >(storedCharacter?.id ? String(storedCharacter.id) : null)
+  >(storedCharacterId)
 
   React.useEffect(() => {
-    const nextId = storedCharacter?.id ? String(storedCharacter.id) : null
-    setSelectedCharacterId((prev) => (prev === nextId ? prev : nextId))
-  }, [storedCharacter?.id])
+    setSelectedCharacterId((prev) =>
+      prev === storedCharacterId ? prev : storedCharacterId
+    )
+  }, [storedCharacterId])
+
+  React.useEffect(() => {
+    defaultCharacterBootstrapAppliedRef.current = false
+  }, [defaultCharacterId])
+
+  React.useEffect(() => {
+    if (
+      shouldResetDefaultCharacterBootstrap(
+        previousFreshChatRef.current,
+        isFreshChat
+      )
+    ) {
+      defaultCharacterBootstrapAppliedRef.current = false
+    }
+    previousFreshChatRef.current = isFreshChat
+  }, [isFreshChat])
+
+  React.useEffect(() => {
+    if (!defaultCharacter || !defaultCharacterId) return
+    if (
+      !shouldApplyDefaultCharacter({
+        defaultCharacterId,
+        selectedCharacterId: storedCharacterId,
+        isFreshChat,
+        hasAppliedInSession: defaultCharacterBootstrapAppliedRef.current
+      })
+    ) {
+      return
+    }
+
+    defaultCharacterBootstrapAppliedRef.current = true
+    void setStoredCharacter(defaultCharacter)
+  }, [
+    defaultCharacter,
+    defaultCharacterId,
+    isFreshChat,
+    setStoredCharacter,
+    storedCharacterId
+  ])
 
   const {
     filteredSlashCommands,

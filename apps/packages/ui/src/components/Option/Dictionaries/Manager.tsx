@@ -38,6 +38,22 @@ import {
   filterDictionaryEntriesBySearchAndGroup,
 } from "./entryListUtils"
 
+function getActiveFocusableElement(): HTMLElement | null {
+  if (typeof document === "undefined") return null
+  const activeElement = document.activeElement
+  return activeElement instanceof HTMLElement ? activeElement : null
+}
+
+function restoreFocusToElement(target: HTMLElement | null): void {
+  if (!target) return
+  window.setTimeout(() => {
+    if (!target.isConnected) return
+    if (target instanceof HTMLButtonElement && target.disabled) return
+    if (target instanceof HTMLInputElement && target.disabled) return
+    target.focus()
+  }, 0)
+}
+
 export const DictionariesManager: React.FC = () => {
   const { t } = useTranslation(["common", "option"])
   const isOnline = useServerOnline()
@@ -70,6 +86,12 @@ export const DictionariesManager: React.FC = () => {
   const [assignSaving, setAssignSaving] = React.useState(false)
   const [dictionarySearch, setDictionarySearch] = React.useState("")
   const [activeUpdateMap, setActiveUpdateMap] = React.useState<Record<number, boolean>>({})
+  const createDialogFocusReturnRef = React.useRef<HTMLElement | null>(null)
+  const editDialogFocusReturnRef = React.useRef<HTMLElement | null>(null)
+  const entriesDrawerFocusReturnRef = React.useRef<HTMLElement | null>(null)
+  const importDialogFocusReturnRef = React.useRef<HTMLElement | null>(null)
+  const quickAssignFocusReturnRef = React.useRef<HTMLElement | null>(null)
+  const statsDialogFocusReturnRef = React.useRef<HTMLElement | null>(null)
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const confirmDanger = useConfirmDanger()
   const {
@@ -89,6 +111,48 @@ export const DictionariesManager: React.FC = () => {
 
   // Track validation status per dictionary: { [id]: { status: 'valid' | 'warning' | 'error' | 'loading', message?: string } }
   const [validationStatus, setValidationStatus] = React.useState<Record<number, { status: 'valid' | 'warning' | 'error' | 'loading' | 'unknown'; message?: string }>>({})
+
+  React.useEffect(() => {
+    if (open) return
+    const focusTarget = createDialogFocusReturnRef.current
+    createDialogFocusReturnRef.current = null
+    restoreFocusToElement(focusTarget)
+  }, [open])
+
+  React.useEffect(() => {
+    if (openEdit) return
+    const focusTarget = editDialogFocusReturnRef.current
+    editDialogFocusReturnRef.current = null
+    restoreFocusToElement(focusTarget)
+  }, [openEdit])
+
+  React.useEffect(() => {
+    if (openEntries != null) return
+    const focusTarget = entriesDrawerFocusReturnRef.current
+    entriesDrawerFocusReturnRef.current = null
+    restoreFocusToElement(focusTarget)
+  }, [openEntries])
+
+  React.useEffect(() => {
+    if (openImport) return
+    const focusTarget = importDialogFocusReturnRef.current
+    importDialogFocusReturnRef.current = null
+    restoreFocusToElement(focusTarget)
+  }, [openImport])
+
+  React.useEffect(() => {
+    if (assignFor) return
+    const focusTarget = quickAssignFocusReturnRef.current
+    quickAssignFocusReturnRef.current = null
+    restoreFocusToElement(focusTarget)
+  }, [assignFor])
+
+  React.useEffect(() => {
+    if (statsFor) return
+    const focusTarget = statsDialogFocusReturnRef.current
+    statsDialogFocusReturnRef.current = null
+    restoreFocusToElement(focusTarget)
+  }, [statsFor])
 
   // Validate dictionary on demand
   const validateDictionary = React.useCallback(async (dictId: number) => {
@@ -320,6 +384,7 @@ export const DictionariesManager: React.FC = () => {
   )
 
   const openQuickAssignModal = React.useCallback((dictionary: any) => {
+    quickAssignFocusReturnRef.current = getActiveFocusableElement()
     const refs = Array.isArray(dictionary?.used_by_chat_refs)
       ? dictionary.used_by_chat_refs
       : []
@@ -331,6 +396,13 @@ export const DictionariesManager: React.FC = () => {
     setAssignChatIds(Array.from(new Set(preselectedIds)))
     setAssignSearch("")
   }, [])
+
+  const closeQuickAssignModal = React.useCallback(() => {
+    if (assignSaving) return
+    setAssignFor(null)
+    setAssignChatIds([])
+    setAssignSearch("")
+  }, [assignSaving])
 
   const assignableChats = React.useMemo(() => {
     if (!Array.isArray(assignableChatsData)) return []
@@ -535,6 +607,31 @@ export const DictionariesManager: React.FC = () => {
     setImportMode("file")
     setImportConflictResolution(null)
   }, [])
+
+  const openCreateDictionaryModal = React.useCallback(() => {
+    createDialogFocusReturnRef.current = getActiveFocusableElement()
+    setOpen(true)
+  }, [])
+
+  const openImportDictionaryModal = React.useCallback(() => {
+    importDialogFocusReturnRef.current = getActiveFocusableElement()
+    setOpenImport(true)
+  }, [])
+
+  const openDictionaryEntriesPanel = React.useCallback((dictionaryId: number) => {
+    entriesDrawerFocusReturnRef.current = getActiveFocusableElement()
+    setOpenEntries(dictionaryId)
+  }, [])
+
+  const closeDictionaryEntriesPanel = React.useCallback(() => {
+    setOpenEntries(null)
+  }, [])
+
+  const closeDictionaryEditModal = React.useCallback(() => {
+    setOpenEdit(false)
+    editForm.resetFields()
+    setEditId(null)
+  }, [editForm])
 
   const handleImportFileSelection = React.useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -743,6 +840,7 @@ export const DictionariesManager: React.FC = () => {
   const useCompactDictionaryActions = useMobileEntriesDrawer
 
   const openDictionaryEditModal = React.useCallback((record: any) => {
+    editDialogFocusReturnRef.current = getActiveFocusableElement()
     setEditId(record.id)
     editForm.setFieldsValue(record)
     setOpenEdit(true)
@@ -792,6 +890,7 @@ export const DictionariesManager: React.FC = () => {
   }, [confirmDanger, notification, t])
 
   const openDictionaryStatsModal = React.useCallback(async (record: any) => {
+    statsDialogFocusReturnRef.current = getActiveFocusableElement()
     try {
       const [stats, activity] = await Promise.all([
         tldwClient.dictionaryStatistics(record.id),
@@ -811,6 +910,7 @@ export const DictionariesManager: React.FC = () => {
         recent_activity_total: Number(activity?.total || 0)
       })
     } catch (e: any) {
+      statsDialogFocusReturnRef.current = null
       notification.error({ message: 'Stats failed', description: e?.message })
     }
   }, [notification])
@@ -890,6 +990,8 @@ export const DictionariesManager: React.FC = () => {
         <Switch
           checked={Boolean(v)}
           loading={Boolean(activeUpdateMap[record.id])}
+          checkedChildren="On"
+          unCheckedChildren="Off"
           onChange={async (checked) => {
             const confirmed = await confirmDeactivationIfNeeded(record, checked)
             if (!confirmed) return
@@ -1056,18 +1158,19 @@ export const DictionariesManager: React.FC = () => {
     {
       title: 'Status',
       key: 'validation_status',
-      width: 100,
+      width: 132,
       render: (_: any, record: any) => {
         const status = validationStatus[record.id]
         if (!status) {
           return (
             <Tooltip title="Click to validate">
               <button
-                className="min-w-[36px] min-h-[36px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+                className="min-w-[36px] min-h-[36px] px-2 inline-flex items-center gap-1 text-xs text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
                 onClick={() => validateDictionary(record.id)}
                 aria-label={`Validate dictionary ${record.name}`}
               >
-                <CheckCircle2 className="w-4 h-4 opacity-30" />
+                <CheckCircle2 className="w-4 h-4 opacity-40" />
+                <span>Check</span>
               </button>
             </Tooltip>
           )
@@ -1075,7 +1178,10 @@ export const DictionariesManager: React.FC = () => {
         if (status.status === 'loading') {
           return (
             <Tooltip title="Validating...">
-              <Loader2 className="w-4 h-4 animate-spin text-text-muted" />
+              <span className="inline-flex items-center gap-1 text-xs text-text-muted">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Checking</span>
+              </span>
             </Tooltip>
           )
         }
@@ -1083,11 +1189,12 @@ export const DictionariesManager: React.FC = () => {
           return (
             <Tooltip title={status.message || 'Valid'}>
               <button
-                className="min-w-[36px] min-h-[36px] flex items-center justify-center text-success hover:bg-success/10 rounded-md transition-colors"
+                className="min-w-[36px] min-h-[36px] px-2 inline-flex items-center gap-1 text-xs text-text hover:bg-success/10 rounded-md transition-colors"
                 onClick={() => validateDictionary(record.id)}
                 aria-label={`Dictionary ${record.name} is valid. Click to re-validate.`}
               >
-                <CheckCircle2 className="w-4 h-4" />
+                <CheckCircle2 className="w-4 h-4 text-success" />
+                <span>Valid</span>
               </button>
             </Tooltip>
           )
@@ -1096,11 +1203,12 @@ export const DictionariesManager: React.FC = () => {
           return (
             <Tooltip title={status.message || 'Has warnings'}>
               <button
-                className="min-w-[36px] min-h-[36px] flex items-center justify-center text-warn hover:bg-warn/10 rounded-md transition-colors"
+                className="min-w-[36px] min-h-[36px] px-2 inline-flex items-center gap-1 text-xs text-text hover:bg-warn/10 rounded-md transition-colors"
                 onClick={() => validateDictionary(record.id)}
                 aria-label={`Dictionary ${record.name} has warnings. Click to re-validate.`}
               >
-                <AlertTriangle className="w-4 h-4" />
+                <AlertTriangle className="w-4 h-4 text-warn" />
+                <span>Warn</span>
               </button>
             </Tooltip>
           )
@@ -1109,11 +1217,12 @@ export const DictionariesManager: React.FC = () => {
         return (
           <Tooltip title={status.message || 'Has errors'}>
             <button
-              className="min-w-[36px] min-h-[36px] flex items-center justify-center text-danger hover:bg-danger/10 rounded-md transition-colors"
+              className="min-w-[36px] min-h-[36px] px-2 inline-flex items-center gap-1 text-xs text-text hover:bg-danger/10 rounded-md transition-colors"
               onClick={() => validateDictionary(record.id)}
               aria-label={`Dictionary ${record.name} has errors. Click to re-validate.`}
             >
-              <AlertCircle className="w-4 h-4" />
+              <AlertCircle className="w-4 h-4 text-danger" />
+              <span>Error</span>
             </button>
           </Tooltip>
         )
@@ -1133,7 +1242,7 @@ export const DictionariesManager: React.FC = () => {
         <Tooltip title="Manage entries">
           <button
             className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
-            onClick={() => setOpenEntries(record.id)}
+            onClick={() => openDictionaryEntriesPanel(record.id)}
             aria-label={`Manage entries for ${record.name}`}
           >
             Entries
@@ -1240,8 +1349,8 @@ export const DictionariesManager: React.FC = () => {
           aria-label="Search dictionaries"
         />
         <div className="flex justify-end gap-2">
-          <Button onClick={() => setOpenImport(true)}>Import</Button>
-          <Button type="primary" icon={<Plus className="w-4 h-4" />} onClick={() => setOpen(true)}>
+          <Button onClick={openImportDictionaryModal}>Import</Button>
+          <Button type="primary" icon={<Plus className="w-4 h-4" />} onClick={openCreateDictionaryModal}>
             New Dictionary
           </Button>
         </div>
@@ -1280,9 +1389,9 @@ export const DictionariesManager: React.FC = () => {
               "Roleplay language style mappings",
             ]}
             primaryActionLabel="Create your first dictionary"
-            onPrimaryAction={() => setOpen(true)}
+            onPrimaryAction={openCreateDictionaryModal}
             secondaryActionLabel="Import dictionary"
-            onSecondaryAction={() => setOpenImport(true)}
+            onSecondaryAction={openImportDictionaryModal}
           />
         ) : (
         <Table
@@ -1309,7 +1418,7 @@ export const DictionariesManager: React.FC = () => {
           primaryActionLabel="Retry"
           onPrimaryAction={() => void refetch()}
           secondaryActionLabel="Import dictionary"
-          onSecondaryAction={() => setOpenImport(true)}
+          onSecondaryAction={openImportDictionaryModal}
         />
       )}
 
@@ -1320,12 +1429,7 @@ export const DictionariesManager: React.FC = () => {
             : "Quick assign dictionary"
         }
         open={!!assignFor}
-        onCancel={() => {
-          if (assignSaving) return
-          setAssignFor(null)
-          setAssignChatIds([])
-          setAssignSearch("")
-        }}
+        onCancel={closeQuickAssignModal}
         onOk={() => void handleConfirmQuickAssign()}
         okText={
           assignChatIds.length === 1
@@ -1445,11 +1549,11 @@ export const DictionariesManager: React.FC = () => {
         </Form>
       </Modal>
 
-      <Modal title="Edit Dictionary" open={openEdit} onCancel={() => setOpenEdit(false)} footer={null}>
+      <Modal title="Edit Dictionary" open={openEdit} onCancel={closeDictionaryEditModal} footer={null}>
         <Form layout="vertical" form={editForm} onFinish={handleEditSubmit}>
           <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="description" label="Description"><Input /></Form.Item>
-          <Form.Item name="is_active" label="Active" valuePropName="checked"><Switch /></Form.Item>
+          <Form.Item name="is_active" label="Active" valuePropName="checked"><Switch checkedChildren="On" unCheckedChildren="Off" /></Form.Item>
           <Form.Item
             name="default_token_budget"
             label={(
@@ -1473,7 +1577,7 @@ export const DictionariesManager: React.FC = () => {
             : "Manage Entries"
         }
         open={!!openEntries}
-        onClose={() => setOpenEntries(null)}
+        onClose={closeDictionaryEntriesPanel}
         placement="right"
         destroyOnClose
         size={useMobileEntriesDrawer ? "100vw" : 1040}
@@ -2414,6 +2518,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
   // Entry editing state
   const [editingEntry, setEditingEntry] = React.useState<any | null>(null)
   const [editEntryForm] = Form.useForm()
+  const editEntryFocusReturnRef = React.useRef<HTMLElement | null>(null)
 
   // Inline test popover state
   const [testingEntryId, setTestingEntryId] = React.useState<number | null>(null)
@@ -2448,6 +2553,13 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
       }
     }
   }, [])
+
+  React.useEffect(() => {
+    if (editingEntry) return
+    const focusTarget = editEntryFocusReturnRef.current
+    editEntryFocusReturnRef.current = null
+    restoreFocusToElement(focusTarget)
+  }, [editingEntry])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -2732,6 +2844,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
 
   const openEditEntryPanel = React.useCallback(
     (entry: any) => {
+      editEntryFocusReturnRef.current = getActiveFocusableElement()
       setEditingEntry(entry)
       editEntryForm.setFieldsValue({
         ...entry,
@@ -3294,7 +3407,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
         label="Enabled"
         valuePropName="checked"
         initialValue={true}>
-        <Switch />
+        <Switch checkedChildren="On" unCheckedChildren="Off" />
       </Form.Item>
       <Form.Item
         name="probability"
@@ -3402,7 +3515,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
         </Form.Item>
       </div>
       <Form.Item name="case_sensitive" label="Case Sensitive" valuePropName="checked">
-        <Switch />
+        <Switch checkedChildren="On" unCheckedChildren="Off" />
       </Form.Item>
       <Button type="primary" htmlType="submit" loading={updatingEntry} className="w-full">
         Save Changes
@@ -3425,6 +3538,12 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
               <Switch
                 checked={validationStrict}
                 onChange={setValidationStrict}
+                checkedChildren="On"
+                unCheckedChildren="Off"
+                aria-label={t(
+                  "option:dictionariesTools.strictLabel",
+                  "Strict validation"
+                )}
               />
               <span className="text-xs text-text">
                 {t(
@@ -4904,7 +5023,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                   valuePropName="checked"
                   initialValue={true}
                 >
-                  <Switch />
+                  <Switch checkedChildren="On" unCheckedChildren="Off" />
                 </Form.Item>
                 <Form.Item
                   name="case_sensitive"
@@ -4920,7 +5039,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                   valuePropName="checked"
                   initialValue={false}
                 >
-                  <Switch />
+                  <Switch checkedChildren="On" unCheckedChildren="Off" />
                 </Form.Item>
               </div>
             </div>

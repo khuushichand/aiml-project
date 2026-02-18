@@ -2,6 +2,7 @@ import React from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import axe from 'axe-core'
 import ViewMediaPage from '../ViewMediaPage'
 
 const mocks = vi.hoisted(() => ({
@@ -332,6 +333,38 @@ describe('ViewMediaPage stage 13 error handling', () => {
         String(entry?.[0]?.path || '').startsWith('/api/v1/media/11')
       ).length
     ).toBe(2)
+  })
+
+  it('has no axe violations for core aria naming and region rules', async () => {
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 77,
+        title: 'Accessibility media',
+        snippet: 'Accessible snippet',
+        keywords: ['a11y'],
+        meta: { type: 'document' },
+        raw: {}
+      }
+    ]
+
+    const { container } = renderMediaPage()
+    await screen.findByTestId('result-77')
+
+    const results = await axe.run(container, {
+      runOnly: {
+        type: 'rule',
+        values: [
+          'aria-required-attr',
+          'aria-valid-attr',
+          'aria-valid-attr-value',
+          'button-name',
+          'region'
+        ]
+      }
+    })
+
+    expect(results.violations).toEqual([])
   })
 
   it('clears previous content when newly selected item detail fetch fails', async () => {

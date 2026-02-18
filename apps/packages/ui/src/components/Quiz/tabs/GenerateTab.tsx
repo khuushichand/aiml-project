@@ -6,9 +6,10 @@ import { useQuery } from "@tanstack/react-query"
 import { bgRequest } from "@/services/background-proxy"
 import { useGenerateQuizMutation } from "../hooks"
 import type { QuestionType } from "@/services/quizzes"
+import type { TakeTabNavigationIntent } from "../navigation"
 
 interface GenerateTabProps {
-  onNavigateToTake: () => void
+  onNavigateToTake: (intent?: TakeTabNavigationIntent) => void
 }
 
 interface MediaItem {
@@ -79,7 +80,7 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake }) =>
 
     try {
       const values = await form.validateFields()
-      await generateMutation.mutateAsync({
+      const generated = await generateMutation.mutateAsync({
         media_id: selectedMediaId,
         num_questions: values.numQuestions,
         question_types: values.questionTypes,
@@ -88,7 +89,10 @@ export const GenerateTab: React.FC<GenerateTabProps> = ({ onNavigateToTake }) =>
       messageApi.success(
         t("option:quiz.generateSuccess", { defaultValue: "Quiz generated successfully!" })
       )
-      onNavigateToTake()
+      onNavigateToTake({
+        highlightQuizId: generated.quiz.id,
+        sourceTab: "generate"
+      })
     } catch (error) {
       messageApi.error(
         t("option:quiz.generateError", { defaultValue: "Failed to generate quiz" })

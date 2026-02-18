@@ -39,6 +39,7 @@ import {
   type DueStatus
 } from "../hooks"
 import { MarkdownWithBoundary, FlashcardActionsMenu, FlashcardEditDrawer, FlashcardCreateDrawer } from "../components"
+import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { formatCardType } from "../utils/model-type-labels"
 import {
   createFlashcard,
@@ -72,6 +73,7 @@ type MoveUndoSnapshot = {
 interface ManageTabProps {
   onNavigateToImport: () => void
   onReviewCard: (card: Flashcard) => void
+  openCreateSignal?: number
   isActive: boolean
 }
 
@@ -82,6 +84,7 @@ interface ManageTabProps {
 export const ManageTab: React.FC<ManageTabProps> = ({
   onNavigateToImport,
   onReviewCard,
+  openCreateSignal,
   isActive
 }) => {
   const { t } = useTranslation(["option", "common"])
@@ -661,6 +664,12 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   // Create drawer
   const [createOpen, setCreateOpen] = React.useState(false)
 
+  React.useEffect(() => {
+    if (!openCreateSignal) return
+    setViewMode("cards")
+    setCreateOpen(true)
+  }, [openCreateSignal])
+
   // Quick actions: duplicate
   const duplicateCard = async (card: Flashcard) => {
     try {
@@ -1226,7 +1235,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                       <>
                         <Button type="primary" onClick={() => setCreateOpen(true)}>
                           {t("option:flashcards.noCardsCreateCta", {
-                            defaultValue: "Create your first card"
+                            defaultValue: "Create card"
                           })}
                         </Button>
                         <Button onClick={onNavigateToImport}>
@@ -1555,7 +1564,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             : t("option:flashcards.bulkMove", { defaultValue: "Bulk Move" })
         }
         placement="right"
-        size={360}
+        styles={{ wrapper: { width: FLASHCARDS_DRAWER_WIDTH_PX } }}
         open={moveOpen}
         onClose={() => {
           setMoveOpen(false)
@@ -1563,16 +1572,17 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           setMoveDeckId(null)
         }}
         footer={
-          <div className="flex justify-between">
-            <Button
-              onClick={() => {
-                setMoveOpen(false)
-                setMoveCard(null)
-                setMoveDeckId(null)
-              }}
-            >
-              {t("common:cancel", { defaultValue: "Cancel" })}
-            </Button>
+          <div className="flex justify-end">
+            <Space>
+              <Button
+                onClick={() => {
+                  setMoveOpen(false)
+                  setMoveCard(null)
+                  setMoveDeckId(null)
+                }}
+              >
+                {t("common:cancel", { defaultValue: "Cancel" })}
+              </Button>
             <Button
               type="primary"
               onClick={submitMove}
@@ -1580,6 +1590,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             >
               {t("option:flashcards.move", { defaultValue: "Move" })}
             </Button>
+            </Space>
           </div>
         }
       >
@@ -1622,7 +1633,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
 
       {/* Floating Action Button for creating cards */}
       {viewMode === "cards" && !anySelection && (
-        <Tooltip title={t("option:flashcards.createCard", { defaultValue: "Create Flashcard" })}>
+        <Tooltip title={t("option:flashcards.createCard", { defaultValue: "Create card" })}>
           <Button
             type="primary"
             shape="circle"

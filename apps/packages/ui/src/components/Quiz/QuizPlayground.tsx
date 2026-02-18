@@ -2,6 +2,7 @@ import React from "react"
 import { Tabs } from "antd"
 import { useTranslation } from "react-i18next"
 import { TakeQuizTab, GenerateTab, CreateTab, ManageTab, ResultsTab } from "./tabs"
+import type { TakeTabNavigationIntent } from "./navigation"
 
 /**
  * QuizPlayground contains all the tabs and core quiz logic.
@@ -10,7 +11,17 @@ import { TakeQuizTab, GenerateTab, CreateTab, ManageTab, ResultsTab } from "./ta
 export const QuizPlayground: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const [activeTab, setActiveTab] = React.useState<string>("take")
-  const [startQuizId, setStartQuizId] = React.useState<number | null>(null)
+  const [takeTabIntent, setTakeTabIntent] = React.useState<TakeTabNavigationIntent | null>(null)
+
+  const navigateToTake = React.useCallback((intent?: TakeTabNavigationIntent) => {
+    setTakeTabIntent({
+      startQuizId: intent?.startQuizId ?? null,
+      highlightQuizId: intent?.highlightQuizId ?? intent?.startQuizId ?? null,
+      sourceTab: intent?.sourceTab ?? null,
+      attemptId: intent?.attemptId ?? null
+    })
+    setActiveTab("take")
+  }, [])
 
   return (
     <div className="mx-auto max-w-6xl p-4">
@@ -23,8 +34,31 @@ export const QuizPlayground: React.FC = () => {
             label: t("option:quiz.take", { defaultValue: "Take Quiz" }),
             children: (
               <TakeQuizTab
-                startQuizId={startQuizId}
-                onStartHandled={() => setStartQuizId(null)}
+                startQuizId={takeTabIntent?.startQuizId ?? null}
+                highlightQuizId={takeTabIntent?.highlightQuizId ?? null}
+                navigationSource={takeTabIntent?.sourceTab ?? null}
+                onStartHandled={() =>
+                  setTakeTabIntent((current) =>
+                    current
+                      ? {
+                        ...current,
+                        startQuizId: null
+                      }
+                      : current
+                  )
+                }
+                onHighlightHandled={() =>
+                  setTakeTabIntent((current) =>
+                    current
+                      ? {
+                        ...current,
+                        highlightQuizId: null,
+                        sourceTab: null,
+                        attemptId: null
+                      }
+                      : current
+                  )
+                }
                 onNavigateToGenerate={() => setActiveTab("generate")}
                 onNavigateToCreate={() => setActiveTab("create")}
               />
@@ -35,7 +69,7 @@ export const QuizPlayground: React.FC = () => {
             label: t("option:quiz.generate", { defaultValue: "Generate" }),
             children: (
               <GenerateTab
-                onNavigateToTake={() => setActiveTab("take")}
+                onNavigateToTake={(intent) => navigateToTake(intent)}
               />
             )
           },
@@ -44,7 +78,7 @@ export const QuizPlayground: React.FC = () => {
             label: t("option:quiz.create", { defaultValue: "Create" }),
             children: (
               <CreateTab
-                onNavigateToTake={() => setActiveTab("take")}
+                onNavigateToTake={(intent) => navigateToTake(intent)}
               />
             )
           },
@@ -56,8 +90,11 @@ export const QuizPlayground: React.FC = () => {
                 onNavigateToCreate={() => setActiveTab("create")}
                 onNavigateToGenerate={() => setActiveTab("generate")}
                 onStartQuiz={(quizId) => {
-                  setStartQuizId(quizId)
-                  setActiveTab("take")
+                  navigateToTake({
+                    startQuizId: quizId,
+                    highlightQuizId: quizId,
+                    sourceTab: "manage"
+                  })
                 }}
               />
             )
@@ -67,10 +104,7 @@ export const QuizPlayground: React.FC = () => {
             label: t("option:quiz.results", { defaultValue: "Results" }),
             children: (
               <ResultsTab
-                onRetakeQuiz={(quizId) => {
-                  setStartQuizId(quizId)
-                  setActiveTab("take")
-                }}
+                onRetakeQuiz={(intent) => navigateToTake(intent)}
               />
             )
           }
