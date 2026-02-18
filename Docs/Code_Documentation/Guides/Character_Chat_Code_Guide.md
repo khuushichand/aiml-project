@@ -53,6 +53,14 @@ Each router resolves the per-user DB via `get_chacha_db_for_user` and the authen
 Notes on images and attachments:
 - API message listings include `has_image` flags but do not return raw attachment bytes. Use library helpers like `retrieve_conversation_messages_for_ui(..., rich_output=true)` for in-process rich UI shaping when needed.
 
+## Delete and Recovery Policy
+
+- Character deletes are soft deletes. `DELETE /api/v1/characters/{id}` sets `deleted=1` and increments `version`.
+- Restore uses optimistic locking: `POST /api/v1/characters/{id}/restore?expected_version=<deleted_version>`.
+- If `expected_version` is stale, restore returns `409 Conflict` with a version-mismatch detail.
+- UI policy: single and bulk delete expose a 10-second undo action, and the Characters workspace includes a `Recently deleted` scope for out-of-toast recovery.
+- Recovery telemetry is emitted by the UI as `tldw:characters-recovery` with actions: `delete`, `undo`, `restore`, `restore_failed`, `bulk_delete`, `bulk_undo`, `bulk_restore`, `bulk_restore_failed`.
+
 ## Key Helpers (What to Call)
 - Characters
   - `create_new_character_from_data(db, payload)` → `int|None`

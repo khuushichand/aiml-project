@@ -12,6 +12,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     DictionaryEntryCreate,
     DictionaryEntryReorderRequest,
     DictionaryEntryUpdate,
+    ProcessTextRequest,
 )
 from tldw_Server_API.app.core.Character_Chat.chat_dictionary import ChatDictionaryService
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
@@ -355,6 +356,86 @@ async def test_list_chat_dictionaries_includes_usage_summary(chacha_db: Characte
 
     assert dictionary_b_payload.used_by_chat_count == 1
     assert dictionary_b_payload.used_by_active_chat_count == 1
+
+
+@pytest.mark.asyncio
+async def test_dictionary_statistics_exposes_expanded_stage1_fields(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Statistics Dictionary", "desc")
+    service.add_entry(dictionary_id, pattern="hello", replacement="hi")
+    service.add_entry(
+        dictionary_id,
+        pattern="pulse",
+        replacement="heart-rate",
+        probability=0.3,
+        timed_effects={"sticky": 15, "cooldown": 0, "delay": 0},
+        enabled=False,
+    )
+
+    initial_stats = await chat_endpoints.get_dictionary_statistics(dictionary_id, db=chacha_db)
+    assert initial_stats.total_entries == 2
+    assert initial_stats.enabled_entries == 1
+    assert initial_stats.disabled_entries == 1
+    assert initial_stats.probabilistic_entries == 1
+    assert initial_stats.timed_effect_entries == 1
+    assert initial_stats.zero_usage_entries == 2
+    assert len(initial_stats.entry_usage) == 2
+    assert isinstance(initial_stats.created_at, datetime.datetime)
+    assert isinstance(initial_stats.updated_at, datetime.datetime)
+    assert initial_stats.total_usage_count == 0
+    assert initial_stats.last_used is None
+
+    await chat_endpoints.process_text_with_dictionaries(
+        ProcessTextRequest(
+            text="hello there",
+            dictionary_id=dictionary_id,
+        ),
+        db=chacha_db,
+    )
+
+    usage_stats = await chat_endpoints.get_dictionary_statistics(dictionary_id, db=chacha_db)
+    assert usage_stats.total_usage_count >= 1
+    assert usage_stats.last_used is not None
+    assert isinstance(usage_stats.last_used, datetime.datetime)
+    assert usage_stats.zero_usage_entries == 1
+    assert len(usage_stats.entry_usage) == 2
+
+
+@pytest.mark.asyncio
+async def test_dictionary_entry_usage_counts_increment_after_processing(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Entry Usage Dictionary", "desc")
+    entry_id = service.add_entry(dictionary_id, pattern="term", replacement="TERM")
+
+    entries_before = await chat_endpoints.list_dictionary_entries(
+        dictionary_id,
+        group=None,
+        db=chacha_db,
+    )
+    before_entry = next(entry for entry in entries_before.entries if entry.id == entry_id)
+    assert before_entry.usage_count == 0
+    assert before_entry.last_used_at is None
+
+    await chat_endpoints.process_text_with_dictionaries(
+        ProcessTextRequest(
+            text="term term",
+            dictionary_id=dictionary_id,
+        ),
+        db=chacha_db,
+    )
+
+    entries_after = await chat_endpoints.list_dictionary_entries(
+        dictionary_id,
+        group=None,
+        db=chacha_db,
+    )
+    after_entry = next(entry for entry in entries_after.entries if entry.id == entry_id)
+    assert after_entry.usage_count >= 1
+    assert after_entry.last_used_at is not None
 
 
 @pytest.mark.asyncio

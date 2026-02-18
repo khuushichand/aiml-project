@@ -12,6 +12,13 @@ const state = vi.hoisted(() => ({
   prompts: [] as any[]
 }))
 
+const promptStudioStore = vi.hoisted(() => ({
+  setActiveSubTab: vi.fn(),
+  setSelectedProjectId: vi.fn(),
+  setSelectedPromptId: vi.fn(),
+  setExecutePlaygroundOpen: vi.fn()
+}))
+
 const mocks = vi.hoisted(() => ({
   getAllPrompts: vi.fn(),
   getAllCopilotPrompts: vi.fn(),
@@ -31,11 +38,15 @@ const mocks = vi.hoisted(() => ({
   autoSyncPrompt: vi.fn(async () => ({ success: true, syncStatus: "synced" })),
   pushToStudio: vi.fn(async () => ({ success: true })),
   pullFromStudio: vi.fn(async () => ({ success: true, localId: "local-1", syncStatus: "synced" })),
+  getStudioPromptById: vi.fn(),
+  getLlmProviders: vi.fn(),
   updatePrompt: vi.fn(async () => "updated-id"),
   incrementPromptUsage: vi.fn(async () => ({
     usageCount: 1,
     lastUsedAt: Date.now()
   })),
+  tldwInitialize: vi.fn(async () => undefined),
+  createChatCompletion: vi.fn(),
   hasPromptStudio: vi.fn(),
   navigate: vi.fn(),
   setSelectedQuickPrompt: vi.fn(),
@@ -239,7 +250,25 @@ vi.mock("@/services/prompts-api", () => ({
 
 vi.mock("@/services/prompt-studio", () => ({
   hasPromptStudio: (...args: unknown[]) =>
-    (mocks.hasPromptStudio as (...args: unknown[]) => unknown)(...args)
+    (mocks.hasPromptStudio as (...args: unknown[]) => unknown)(...args),
+  getPrompt: (...args: unknown[]) =>
+    (mocks.getStudioPromptById as (...args: unknown[]) => unknown)(...args),
+  getLlmProviders: (...args: unknown[]) =>
+    (mocks.getLlmProviders as (...args: unknown[]) => unknown)(...args)
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    initialize: (...args: unknown[]) =>
+      (mocks.tldwInitialize as (...args: unknown[]) => unknown)(...args),
+    createChatCompletion: (...args: unknown[]) =>
+      (mocks.createChatCompletion as (...args: unknown[]) => unknown)(...args)
+  }
+}))
+
+vi.mock("@/store/prompt-studio", () => ({
+  usePromptStudioStore: (selector: (state: typeof promptStudioStore) => unknown) =>
+    selector(promptStudioStore)
 }))
 
 vi.mock("@/services/prompt-sync", () => ({
@@ -301,6 +330,13 @@ vi.mock("../PromptActionsMenu", () => ({
         onClick={() => props?.onUseInChat?.()}
       >
         use in chat
+      </button>
+      <button
+        type="button"
+        data-testid={`mock-quick-test-${props?.promptId || "unknown"}`}
+        onClick={() => props?.onQuickTest?.()}
+      >
+        quick test
       </button>
     </div>
   )
@@ -412,6 +448,32 @@ describe("PromptBody server search and pagination", () => {
       localId: "local-1",
       syncStatus: "synced"
     })
+    mocks.getStudioPromptById.mockResolvedValue({
+      data: {
+        data: {
+          id: 101,
+          project_id: 10
+        }
+      }
+    })
+    mocks.getLlmProviders.mockResolvedValue({
+      providers: [
+        {
+          name: "openai",
+          display_name: "OpenAI",
+          default_model: "gpt-4o-mini",
+          models: ["gpt-4o-mini"]
+        }
+      ],
+      default_provider: "openai"
+    })
+    mocks.createChatCompletion.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "Quick test output" } }]
+        })
+      )
+    )
     mocks.exportPrompts.mockResolvedValue([])
     mocks.incrementPromptUsage.mockResolvedValue({
       usageCount: 1,
@@ -983,6 +1045,76 @@ describe("PromptBody server search and pagination", () => {
     expect(mocks.setSelectedQuickPrompt).toHaveBeenCalledWith("Quick insert content")
     expect(mocks.setSelectedSystemPrompt).toHaveBeenCalledWith(undefined)
     expect(mocks.navigate).toHaveBeenCalledWith("/chat")
+  })
+
+  it("opens local quick test modal for unsynced prompts and renders response output", async () => {
+    state.prompts = [
+      {
+        id: "local-only",
+        name: "Local Prompt",
+        title: "Local Prompt",
+        content: "Summarize {{text}}",
+        user_prompt: "Summarize {{text}}",
+        is_system: false,
+        createdAt: 100,
+        keywords: []
+      }
+    ]
+    mocks.getAllPrompts.mockResolvedValue(state.prompts)
+
+    renderPromptBody()
+
+    await waitFor(() => {
+      expect(screen.getByTestId("table-row-count")).toHaveTextContent("1")
+    })
+
+    fireEvent.click(screen.getByTestId("mock-quick-test-local-only"))
+
+    const input = await screen.findByTestId("prompts-local-quick-test-input")
+    fireEvent.change(input, { target: { value: "draft the release note" } })
+    fireEvent.click(screen.getByTestId("prompts-local-quick-test-run"))
+
+    await waitFor(() => {
+      expect(mocks.createChatCompletion).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId("prompts-local-quick-test-output")).toHaveTextContent(
+        "Quick test output"
+      )
+    })
+  })
+
+  it("opens studio execute context for synced prompts when quick test is clicked", async () => {
+    state.prompts = [
+      {
+        id: "synced-1",
+        name: "Synced Prompt",
+        title: "Synced Prompt",
+        content: "content",
+        is_system: false,
+        createdAt: 100,
+        serverId: 501,
+        studioProjectId: 77,
+        keywords: []
+      }
+    ]
+    mocks.getAllPrompts.mockResolvedValue(state.prompts)
+    mocks.hasPromptStudio.mockResolvedValue(true)
+
+    renderPromptBody()
+
+    await waitFor(() => {
+      expect(screen.getByTestId("table-row-count")).toHaveTextContent("1")
+    })
+
+    fireEvent.click(screen.getByTestId("mock-quick-test-synced-1"))
+
+    await waitFor(() => {
+      expect(promptStudioStore.setSelectedProjectId).toHaveBeenCalledWith(77)
+    })
+    expect(promptStudioStore.setSelectedPromptId).toHaveBeenCalledWith(501)
+    expect(promptStudioStore.setActiveSubTab).toHaveBeenCalledWith("prompts")
+    expect(promptStudioStore.setExecutePlaygroundOpen).toHaveBeenCalledWith(true)
   })
 
   it("opens the edit drawer from prompt deep-link query parameter", async () => {

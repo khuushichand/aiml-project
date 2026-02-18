@@ -13,7 +13,7 @@ import {
   Alert,
   type InputRef
 } from "antd"
-import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers, Cloud, Clipboard, Copy, Keyboard, FolderPlus } from "lucide-react"
+import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers, Cloud, Clipboard, Copy, Keyboard, FolderPlus, Play } from "lucide-react"
 import { PromptActionsMenu } from "./PromptActionsMenu"
 import { PromptDrawer } from "./PromptDrawer"
 import { SyncStatusBadge } from "./SyncStatusBadge"
@@ -71,8 +71,19 @@ import {
   updatePromptCollectionServer,
   type PromptCollection
 } from "@/services/prompts-api"
-import { hasPromptStudio } from "@/services/prompt-studio"
+import {
+  hasPromptStudio,
+  getPrompt as getStudioPromptById,
+  getLlmProviders
+} from "@/services/prompt-studio"
 import { StudioTabContainer } from "./Studio/StudioTabContainer"
+import {
+  getExecuteDefaultModel,
+  getExecuteDefaultProvider,
+  normalizeExecuteProvidersCatalog
+} from "./Studio/Prompts/execute-playground-provider-utils"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { usePromptStudioStore } from "@/store/prompt-studio"
 import {
   mapServerSearchItemsToLocalPrompts,
   matchesPromptSearchText,
@@ -145,6 +156,13 @@ type PromptSortState = {
   order: PromptSortOrder
 }
 
+type LocalQuickTestPrompt = {
+  id: string
+  name: string
+  systemText?: string
+  userText?: string
+}
+
 const PROMPTS_CUSTOM_SORT_STORAGE_KEY = "tldw-prompts-custom-sort-v1"
 const PROMPTS_MOBILE_BREAKPOINT_PX = 768
 
@@ -185,6 +203,16 @@ export const PromptBody = () => {
   const { t } = useTranslation(["settings", "common", "option"])
   const navigate = useNavigate()
   const isOnline = useServerOnline()
+  const setStudioActiveSubTab = usePromptStudioStore((s) => s.setActiveSubTab)
+  const setStudioSelectedProjectId = usePromptStudioStore(
+    (s) => s.setSelectedProjectId
+  )
+  const setStudioSelectedPromptId = usePromptStudioStore(
+    (s) => s.setSelectedPromptId
+  )
+  const setStudioExecutePlaygroundOpen = usePromptStudioStore(
+    (s) => s.setExecutePlaygroundOpen
+  )
 
   // Get initial segment from URL param
   const initialSegment = getSegmentFromParam(searchParams.get("tab"))
@@ -252,6 +280,17 @@ export const PromptBody = () => {
     id: string
     systemText?: string
     userText?: string
+  } | null>(null)
+  const [localQuickTestPrompt, setLocalQuickTestPrompt] =
+    useState<LocalQuickTestPrompt | null>(null)
+  const [localQuickTestInput, setLocalQuickTestInput] = useState("")
+  const [localQuickTestOutput, setLocalQuickTestOutput] = useState<string | null>(
+    null
+  )
+  const [isRunningLocalQuickTest, setIsRunningLocalQuickTest] = useState(false)
+  const [localQuickTestRunInfo, setLocalQuickTestRunInfo] = useState<{
+    provider?: string
+    model: string
   } | null>(null)
   const confirmDanger = useConfirmDanger()
 
@@ -2256,6 +2295,239 @@ export const PromptBody = () => {
     [t]
   )
 
+  const closeLocalQuickTestModal = React.useCallback(() => {
+    setLocalQuickTestPrompt(null)
+    setLocalQuickTestInput("")
+    setLocalQuickTestOutput(null)
+    setLocalQuickTestRunInfo(null)
+  }, [])
+
+  const openLocalQuickTestModal = React.useCallback(
+    (record: any) => {
+      const { systemText, userText } = getPromptTexts(record)
+      setLocalQuickTestPrompt({
+        id: String(record?.id || ""),
+        name: record?.name || record?.title || "Prompt",
+        systemText: systemText?.trim() || undefined,
+        userText: userText?.trim() || undefined
+      })
+      setLocalQuickTestInput("")
+      setLocalQuickTestOutput(null)
+      setLocalQuickTestRunInfo(null)
+    },
+    [getPromptTexts]
+  )
+
+  const openStudioQuickTest = React.useCallback(
+    async (record: any) => {
+      const serverPromptId = Number(record?.serverId)
+      if (!Number.isInteger(serverPromptId) || serverPromptId <= 0) {
+        openLocalQuickTestModal(record)
+        return
+      }
+
+      if (!isOnline || hasStudio === false) {
+        notification.warning({
+          message: t("managePrompts.quickTest.studioUnavailableTitle", {
+            defaultValue: "Studio quick test unavailable"
+          }),
+          description: t("managePrompts.quickTest.studioUnavailableDesc", {
+            defaultValue:
+              "Prompt Studio is unavailable right now, so local quick test is opening instead."
+          })
+        })
+        openLocalQuickTestModal(record)
+        return
+      }
+
+      let projectId =
+        typeof record?.studioProjectId === "number" && record.studioProjectId > 0
+          ? record.studioProjectId
+          : null
+
+      if (!projectId) {
+        try {
+          const response = await getStudioPromptById(serverPromptId)
+          const serverPrompt = (response as any)?.data?.data
+          if (
+            typeof serverPrompt?.project_id === "number" &&
+            serverPrompt.project_id > 0
+          ) {
+            projectId = serverPrompt.project_id
+          }
+        } catch {
+          projectId = null
+        }
+      }
+
+      if (!projectId) {
+        notification.warning({
+          message: t("managePrompts.quickTest.missingProjectTitle", {
+            defaultValue: "Quick test unavailable"
+          }),
+          description: t("managePrompts.quickTest.missingProjectDesc", {
+            defaultValue:
+              "This prompt is synced, but its Prompt Studio project could not be resolved."
+          })
+        })
+        return
+      }
+
+      setStudioSelectedProjectId(projectId)
+      setStudioSelectedPromptId(serverPromptId)
+      setStudioActiveSubTab("prompts")
+      setStudioExecutePlaygroundOpen(true)
+      setSelectedSegment("studio")
+    },
+    [
+      hasStudio,
+      isOnline,
+      openLocalQuickTestModal,
+      setStudioActiveSubTab,
+      setStudioExecutePlaygroundOpen,
+      setStudioSelectedProjectId,
+      setStudioSelectedPromptId,
+      t
+    ]
+  )
+
+  const handleQuickTest = React.useCallback(
+    async (record: any) => {
+      const hasServerPromptId =
+        typeof record?.serverId === "number" && record.serverId > 0
+      if (hasServerPromptId) {
+        await openStudioQuickTest(record)
+        return
+      }
+      openLocalQuickTestModal(record)
+    },
+    [openLocalQuickTestModal, openStudioQuickTest]
+  )
+
+  const runLocalQuickTest = React.useCallback(async () => {
+    if (!localQuickTestPrompt || isRunningLocalQuickTest) return
+
+    const userTemplate = localQuickTestPrompt.userText || ""
+    const systemTemplate = localQuickTestPrompt.systemText || ""
+    const normalizedInput = localQuickTestInput.trim()
+    const textTemplateRegex = /\{\{\s*text\s*\}\}/gi
+    const hasTextTemplateVar = textTemplateRegex.test(userTemplate)
+
+    if (hasTextTemplateVar && normalizedInput.length === 0) {
+      notification.warning({
+        message: t("managePrompts.quickTest.inputRequiredTitle", {
+          defaultValue: "Input required"
+        }),
+        description: t("managePrompts.quickTest.inputRequiredDesc", {
+          defaultValue:
+            "This prompt uses {{text}}. Enter sample input before running quick test."
+        })
+      })
+      return
+    }
+
+    let userMessage = userTemplate
+    if (hasTextTemplateVar) {
+      userMessage = userTemplate.replace(/\{\{\s*text\s*\}\}/gi, normalizedInput)
+    } else if (userTemplate && normalizedInput) {
+      userMessage = `${userTemplate}\n\n${normalizedInput}`
+    } else if (!userTemplate) {
+      userMessage = normalizedInput
+    }
+
+    if (!userMessage.trim()) {
+      notification.warning({
+        message: t("managePrompts.quickTest.noMessageTitle", {
+          defaultValue: "Nothing to test"
+        }),
+        description: t("managePrompts.quickTest.noMessageDesc", {
+          defaultValue:
+            "Add prompt content or input text before running quick test."
+        })
+      })
+      return
+    }
+
+    setIsRunningLocalQuickTest(true)
+    setLocalQuickTestOutput(null)
+    setLocalQuickTestRunInfo(null)
+
+    let provider: string | undefined
+    let model = "gpt-4o-mini"
+
+    try {
+      const llmProvidersResponse = await getLlmProviders()
+      const providersPayload =
+        (llmProvidersResponse as any)?.data ?? llmProvidersResponse
+      const providersCatalog = normalizeExecuteProvidersCatalog(providersPayload)
+      const resolvedProvider = getExecuteDefaultProvider(providersCatalog) || undefined
+      const resolvedModel =
+        getExecuteDefaultModel(providersCatalog, resolvedProvider) || null
+      provider = resolvedProvider
+      if (resolvedModel) {
+        model = resolvedModel
+      }
+    } catch {
+      // Keep fallback defaults when provider lookup fails.
+    }
+
+    try {
+      await tldwClient.initialize().catch(() => null)
+      const messages: Array<{ role: "system" | "user"; content: string }> = []
+
+      if (systemTemplate.trim()) {
+        messages.push({
+          role: "system",
+          content: systemTemplate.trim()
+        })
+      }
+
+      messages.push({
+        role: "user",
+        content: userMessage
+      })
+
+      const completionResponse = await tldwClient.createChatCompletion({
+        model,
+        api_provider: provider,
+        messages,
+        temperature: 0.2
+      })
+      const completionPayload = await completionResponse.json()
+      const outputCandidate =
+        completionPayload?.choices?.[0]?.message?.content ??
+        completionPayload?.output ??
+        completionPayload?.content
+      const output =
+        typeof outputCandidate === "string" ? outputCandidate.trim() : ""
+
+      if (!output) {
+        throw new Error(
+          t("managePrompts.quickTest.emptyResultError", {
+            defaultValue: "The model returned an empty result."
+          })
+        )
+      }
+
+      setLocalQuickTestOutput(output)
+      setLocalQuickTestRunInfo({ provider, model })
+    } catch (error: any) {
+      notification.error({
+        message: t("managePrompts.quickTest.runFailedTitle", {
+          defaultValue: "Quick test failed"
+        }),
+        description:
+          error?.message ||
+          t("managePrompts.quickTest.runFailedDesc", {
+            defaultValue:
+              "The quick test request could not be completed."
+          })
+      })
+    } finally {
+      setIsRunningLocalQuickTest(false)
+    }
+  }, [isRunningLocalQuickTest, localQuickTestInput, localQuickTestPrompt, t])
+
   // Keyboard shortcuts: N = new prompt, / = focus search, Esc = close drawer, ? = open shortcut help
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -3454,6 +3726,9 @@ export const PromptBody = () => {
                         navigate("/chat")
                       }
                     }}
+                    onQuickTest={() => {
+                      void handleQuickTest(record)
+                    }}
                     onDelete={async () => {
                       const ok = await confirmDanger({
                         title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
@@ -4293,6 +4568,118 @@ export const PromptBody = () => {
           })}
           data-testid="prompts-bulk-keyword-input"
         />
+      </Modal>
+
+      <Modal
+        title={t("managePrompts.quickTest.modalTitle", {
+          defaultValue: "Quick test prompt"
+        })}
+        open={!!localQuickTestPrompt}
+        onCancel={closeLocalQuickTestModal}
+        footer={[
+          <button
+            key="cancel"
+            type="button"
+            data-testid="prompts-local-quick-test-cancel"
+            className="inline-flex items-center justify-center rounded-md border border-border bg-bg px-3 py-2 text-sm text-text hover:bg-surface2"
+            onClick={closeLocalQuickTestModal}
+            disabled={isRunningLocalQuickTest}
+          >
+            {t("common:cancel", { defaultValue: "Cancel" })}
+          </button>,
+          <button
+            key="run"
+            type="button"
+            data-testid="prompts-local-quick-test-run"
+            className="inline-flex items-center justify-center rounded-md border border-transparent bg-primary px-3 py-2 text-sm text-white hover:bg-primaryStrong disabled:opacity-50"
+            onClick={() => {
+              void runLocalQuickTest()
+            }}
+            disabled={isRunningLocalQuickTest}
+          >
+            <Play className="mr-1 size-4" />
+            {isRunningLocalQuickTest
+              ? t("managePrompts.quickTest.running", { defaultValue: "Running..." })
+              : t("managePrompts.quickTest.runAction", { defaultValue: "Run test" })}
+          </button>
+        ]}
+        width={720}
+      >
+        {localQuickTestPrompt && (
+          <div className="space-y-3">
+            <div className="rounded border border-border bg-surface2 p-3">
+              <div className="text-sm font-medium text-text">
+                {localQuickTestPrompt.name}
+              </div>
+              {localQuickTestPrompt.systemText && (
+                <div className="mt-2 text-xs text-text-muted">
+                  <span className="font-medium">
+                    {t("managePrompts.systemPrompt", {
+                      defaultValue: "System prompt"
+                    })}
+                    :
+                  </span>{" "}
+                  <span className="line-clamp-2">{localQuickTestPrompt.systemText}</span>
+                </div>
+              )}
+              {localQuickTestPrompt.userText && (
+                <div className="mt-2 text-xs text-text-muted">
+                  <span className="font-medium">
+                    {t("managePrompts.quickPrompt", {
+                      defaultValue: "Quick prompt"
+                    })}
+                    :
+                  </span>{" "}
+                  <span className="line-clamp-3">{localQuickTestPrompt.userText}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-text">
+                {t("managePrompts.quickTest.inputLabel", {
+                  defaultValue: "Sample input"
+                })}
+              </label>
+              <Input.TextArea
+                value={localQuickTestInput}
+                onChange={(event) => setLocalQuickTestInput(event.target.value)}
+                placeholder={t("managePrompts.quickTest.inputPlaceholder", {
+                  defaultValue:
+                    "Optional input text. Used for {{text}} templates or appended to quick prompts."
+                })}
+                autoSize={{ minRows: 3, maxRows: 8 }}
+                data-testid="prompts-local-quick-test-input"
+              />
+            </div>
+
+            {localQuickTestOutput && (
+              <div
+                className="rounded border border-border bg-bg p-3"
+                data-testid="prompts-local-quick-test-output"
+              >
+                <div className="mb-1 text-xs text-text-muted">
+                  {localQuickTestRunInfo
+                    ? t("managePrompts.quickTest.outputMeta", {
+                        defaultValue: "Result ({{provider}} / {{model}})",
+                        provider:
+                          localQuickTestRunInfo.provider ||
+                          t("managePrompts.quickTest.defaultProvider", {
+                            defaultValue: "default provider"
+                          }),
+                        model: localQuickTestRunInfo.model
+                      })
+                    : t("managePrompts.quickTest.outputTitle", {
+                        defaultValue: "Result"
+                      })}
+                </div>
+                <pre className="whitespace-pre-wrap break-words text-sm text-text">
+                  {localQuickTestOutput}
+                </pre>
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
 
       <Modal

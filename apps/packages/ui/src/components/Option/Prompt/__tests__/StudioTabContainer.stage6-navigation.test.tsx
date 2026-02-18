@@ -1,6 +1,6 @@
 import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { usePromptStudioStore } from "../../../../store/prompt-studio"
 import {
@@ -15,8 +15,10 @@ const state = vi.hoisted(() => ({
 }))
 
 const useQueryMock = vi.hoisted(() => vi.fn())
+const useMutationMock = vi.hoisted(() => vi.fn())
 const invalidateQueriesMock = vi.hoisted(() => vi.fn())
 const getConfigMock = vi.hoisted(() => vi.fn())
+const setPromptStudioDefaultsMock = vi.hoisted(() => vi.fn())
 
 let latestSocket: MockWebSocket | null = null
 
@@ -78,9 +80,12 @@ vi.mock("@/hooks/useMediaQuery", () => ({
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (...args: unknown[]) =>
     (useQueryMock as (...args: unknown[]) => unknown)(...args),
+  useMutation: (...args: unknown[]) =>
+    (useMutationMock as (...args: unknown[]) => unknown)(...args),
   useQueryClient: () => ({
     invalidateQueries: (...args: unknown[]) =>
-      (invalidateQueriesMock as (...args: unknown[]) => unknown)(...args)
+      (invalidateQueriesMock as (...args: unknown[]) => unknown)(...args),
+    setQueryData: vi.fn()
   })
 }))
 
@@ -101,18 +106,42 @@ vi.mock("antd", () => ({
       ))}
     </div>
   ),
-  Select: ({ value, options, ...rest }: any) => (
+  Select: ({ value, options, onChange, ...rest }: any) => (
     <div data-testid={rest["data-testid"] || "mock-select"}>
       <div data-testid="select-value">{String(value)}</div>
       {options?.map((option: any) => (
-        <div key={String(option.value)} data-testid={`select-option-${option.value}`}>
+        <button
+          key={String(option.value)}
+          type="button"
+          data-testid={`select-option-${option.value}`}
+          onClick={() => onChange?.(option.value)}
+        >
           {String(option.label)}
-        </div>
+        </button>
       ))}
     </div>
   ),
+  Popover: ({ children, content }: any) => (
+    <div>
+      {children}
+      <div data-testid="mock-popover-content">{content}</div>
+    </div>
+  ),
+  Switch: ({ checked, onChange, ...rest }: any) => (
+    <button
+      type="button"
+      data-testid={rest["data-testid"] || "mock-switch"}
+      onClick={() => onChange?.(!checked)}
+    >
+      {checked ? "on" : "off"}
+    </button>
+  ),
   Badge: ({ count }: any) => <span data-testid="mock-badge">{count}</span>,
-  Tooltip: ({ children }: any) => <>{children}</>
+  Tooltip: ({ children }: any) => <>{children}</>,
+  notification: {
+    success: vi.fn(),
+    error: vi.fn()
+  }
 }))
 
 vi.mock("../Studio/QueueHealthWidget", () => ({
@@ -146,6 +175,15 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   }
 }))
 
+vi.mock("@/services/prompt-studio-settings", () => ({
+  getPromptStudioDefaults: vi.fn(async () => ({
+    defaultProjectId: null,
+    autoSyncWorkspacePrompts: true
+  })),
+  setPromptStudioDefaults: (...args: unknown[]) =>
+    (setPromptStudioDefaultsMock as (...args: unknown[]) => unknown)(...args)
+}))
+
 describe("StudioTabContainer stage 6 navigation and polling", () => {
   let statusQueryOptions: any
 
@@ -158,6 +196,15 @@ describe("StudioTabContainer stage 6 navigation and polling", () => {
     ;(globalThis as any).WebSocket = MockWebSocket
     invalidateQueriesMock.mockReset()
     getConfigMock.mockReset()
+    setPromptStudioDefaultsMock.mockReset()
+    setPromptStudioDefaultsMock.mockImplementation(async (updates: any) => ({
+      defaultProjectId:
+        updates?.defaultProjectId !== undefined ? updates.defaultProjectId : null,
+      autoSyncWorkspacePrompts:
+        updates?.autoSyncWorkspacePrompts !== undefined
+          ? updates.autoSyncWorkspacePrompts
+          : true
+    }))
     getConfigMock.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",
       authMode: "single-user",
@@ -169,6 +216,20 @@ describe("StudioTabContainer stage 6 navigation and polling", () => {
       selectedProjectId: null
     })
     useQueryMock.mockReset()
+    useMutationMock.mockReset()
+    useMutationMock.mockImplementation((options: any) => ({
+      mutate: async (variables: any) => {
+        try {
+          const result = await options?.mutationFn?.(variables)
+          options?.onSuccess?.(result, variables, undefined)
+          return result
+        } catch (error) {
+          options?.onError?.(error, variables, undefined)
+          throw error
+        }
+      },
+      isPending: false
+    }))
     useQueryMock.mockImplementation((options: any) => {
       const key = String(options?.queryKey?.[1] || "")
       if (key === "capability") {
@@ -187,6 +248,26 @@ describe("StudioTabContainer stage 6 navigation and polling", () => {
               }
             }
           }
+        }
+      }
+      if (key === "settings-defaults") {
+        return {
+          data: {
+            defaultProjectId: null,
+            autoSyncWorkspacePrompts: true
+          },
+          isLoading: false
+        }
+      }
+      if (key === "settings-projects") {
+        return {
+          data: {
+            data: [
+              { id: 11, name: "Project Eleven" },
+              { id: 12, name: "Project Twelve" }
+            ]
+          },
+          isLoading: false
         }
       }
       return { data: undefined, isLoading: false }
@@ -270,6 +351,40 @@ describe("StudioTabContainer stage 6 navigation and polling", () => {
     await waitFor(() => {
       expect(invalidateQueriesMock).toHaveBeenCalledWith({
         queryKey: ["prompt-studio", "status"]
+      })
+    })
+  })
+
+  it("persists default project selection from studio settings", async () => {
+    render(
+      <MemoryRouter>
+        <StudioTabContainer />
+      </MemoryRouter>
+    )
+
+    expect(screen.getByTestId("studio-settings-button")).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("select-option-12"))
+
+    await waitFor(() => {
+      expect(setPromptStudioDefaultsMock).toHaveBeenCalledWith({
+        defaultProjectId: 12
+      })
+    })
+  })
+
+  it("persists auto-sync toggle from studio settings", async () => {
+    render(
+      <MemoryRouter>
+        <StudioTabContainer />
+      </MemoryRouter>
+    )
+
+    const autoSyncToggle = screen.getByTestId("studio-settings-auto-sync")
+    autoSyncToggle.click()
+
+    await waitFor(() => {
+      expect(setPromptStudioDefaultsMock).toHaveBeenCalledWith({
+        autoSyncWorkspacePrompts: false
       })
     })
   })

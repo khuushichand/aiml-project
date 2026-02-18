@@ -9,7 +9,8 @@ import {
   CloudDownload,
   Unlink,
   AlertTriangle,
-  Link
+  Link,
+  Play
 } from "lucide-react"
 import React from "react"
 import { useTranslation } from "react-i18next"
@@ -23,6 +24,7 @@ interface PromptActionsMenuProps {
   onEdit: () => void
   onDuplicate: () => void
   onUseInChat: () => void
+  onQuickTest?: () => void
   onDelete: () => void
   onShareLink?: () => void
   onPushToServer?: () => void
@@ -39,6 +41,7 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
   onEdit,
   onDuplicate,
   onUseInChat,
+  onQuickTest,
   onDelete,
   onShareLink,
   onPushToServer,
@@ -88,6 +91,22 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
 
   const overflowItems: MenuProps["items"] = [
     ...syncItems,
+    ...(onQuickTest
+      ? [
+          {
+            key: "quickTest",
+            label: t("managePrompts.quickTest.action", {
+              defaultValue: "Quick test"
+            }),
+            icon: <Play className="size-4" />,
+            disabled,
+            onClick: onQuickTest
+          },
+          {
+            type: "divider" as const
+          }
+        ]
+      : []),
     ...(onShareLink && isSynced
       ? [
           {

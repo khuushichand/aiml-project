@@ -181,6 +181,36 @@ class TestEntryManagement:
         assert 'dragon' in entries[0]['keywords']
 
     @pytest.mark.unit
+    def test_entry_group_roundtrip_and_backfill_behavior(self, world_book_service):
+        """Entries expose nullable group while preserving metadata group values."""
+        service = world_book_service
+        wb_id = service.create_world_book(name="Entry Group Test")
+
+        grouped_entry_id = service.add_entry(
+            world_book_id=wb_id,
+            keywords=["city"],
+            content="City lore",
+            metadata={"group": "Locations"}
+        )
+        service.add_entry(
+            world_book_id=wb_id,
+            keywords=["general"],
+            content="Ungrouped lore"
+        )
+
+        entries_by_id = {int(entry["id"]): entry for entry in service.get_entries(wb_id)}
+
+        grouped_entry = entries_by_id[grouped_entry_id]
+        assert grouped_entry["group"] == "Locations"
+        assert grouped_entry["metadata"]["group"] == "Locations"
+
+        ungrouped_entries = [
+            entry for entry_id, entry in entries_by_id.items() if entry_id != grouped_entry_id
+        ]
+        assert len(ungrouped_entries) == 1
+        assert ungrouped_entries[0]["group"] is None
+
+    @pytest.mark.unit
     def test_add_recursive_entry(self, world_book_service):
         """Test adding recursive scanning entry."""
         service = world_book_service

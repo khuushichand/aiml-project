@@ -45,7 +45,7 @@ Finding IDs: `C-24` through `C-26`
 - Backend tests for soft-deleted query + restore behavior.
 - Component tests for deleted list rendering and restore action.
 - Integration tests for delete -> toast timeout -> restore from trash flow.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Operational Hardening and Observability
 **Goal**: Detect and debug recovery-flow failures early.
@@ -56,7 +56,7 @@ Finding IDs: `C-24` through `C-26`
 **Tests**:
 - Integration tests for restore conflict/error paths.
 - QA checklist for policy messaging and edge-case behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

@@ -35,6 +35,17 @@ import {
 
 const RUN_NOTIFICATIONS_POLL_MS = 15_000
 const RUN_NOTIFICATIONS_PAGE_SIZE = 25
+const RUN_NOTIFICATIONS_MIN_POLL_MS = 100
+
+const resolveRunNotificationsPollMs = (): number => {
+  if (typeof window === "undefined") return RUN_NOTIFICATIONS_POLL_MS
+  const override = Number(
+    (window as { __TLDW_WATCHLISTS_RUN_NOTIFICATIONS_POLL_MS?: unknown })
+      .__TLDW_WATCHLISTS_RUN_NOTIFICATIONS_POLL_MS
+  )
+  if (!Number.isFinite(override)) return RUN_NOTIFICATIONS_POLL_MS
+  return Math.max(RUN_NOTIFICATIONS_MIN_POLL_MS, Math.floor(override))
+}
 
 /**
  * WatchlistsPlaygroundPage
@@ -160,10 +171,11 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
 
   useEffect(() => {
     if (!isOnline) return
+    const pollIntervalMs = resolveRunNotificationsPollMs()
     void pollRunNotifications()
     runNotificationsTimerRef.current = setInterval(() => {
       void pollRunNotifications()
-    }, RUN_NOTIFICATIONS_POLL_MS)
+    }, pollIntervalMs)
     return () => {
       if (runNotificationsTimerRef.current) {
         clearInterval(runNotificationsTimerRef.current)

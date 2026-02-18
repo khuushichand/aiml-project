@@ -192,6 +192,8 @@ class DictionaryEntryResponse(DictionaryEntryBase):
     enabled: bool = Field(..., description="Whether the entry is enabled")
     case_sensitive: bool = Field(..., description="Case-sensitive matching for literal patterns")
     priority: Optional[int] = Field(None, ge=1, description="Execution priority (1 = first)")
+    usage_count: int = Field(0, ge=0, description="Total number of times this entry has fired")
+    last_used_at: Optional[datetime] = Field(None, description="Timestamp when this entry last fired")
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
 
@@ -356,6 +358,14 @@ class DictionaryEntryReorderResponse(BaseModel):
     message: str = Field(..., description="Operation result message")
 
 
+class DictionaryEntryUsageStatistic(BaseModel):
+    """Per-entry usage statistic row."""
+    entry_id: int = Field(..., description="Entry ID")
+    pattern: str = Field(..., description="Entry pattern")
+    usage_count: int = Field(0, ge=0, description="Times this entry fired")
+    last_used_at: Optional[datetime] = Field(None, description="Entry last-used timestamp")
+
+
 class DictionaryStatistics(BaseModel):
     """Statistics for a dictionary."""
     dictionary_id: int = Field(..., description="Dictionary ID")
@@ -363,8 +373,19 @@ class DictionaryStatistics(BaseModel):
     total_entries: int = Field(..., description="Total number of entries")
     regex_entries: int = Field(..., description="Number of regex entries")
     literal_entries: int = Field(..., description="Number of literal entries")
+    enabled_entries: int = Field(0, description="Number of enabled entries")
+    disabled_entries: int = Field(0, description="Number of disabled entries")
+    probabilistic_entries: int = Field(0, description="Entries with probability below 1.0")
+    timed_effect_entries: int = Field(0, description="Entries with any timed effect configured")
     groups: list[str] = Field(..., description="List of unique groups")
     average_probability: float = Field(..., description="Average replacement probability")
+    created_at: datetime = Field(..., description="Dictionary creation timestamp")
+    updated_at: datetime = Field(..., description="Dictionary last-update timestamp")
+    zero_usage_entries: int = Field(0, description="Entries that have never fired")
+    entry_usage: list[DictionaryEntryUsageStatistic] = Field(
+        default_factory=list,
+        description="Per-entry usage snapshot for maintenance workflows",
+    )
     total_usage_count: Optional[int] = Field(None, description="Total times used (if tracked)")
     last_used: Optional[datetime] = Field(None, description="Last usage timestamp (if tracked)")
 

@@ -86,6 +86,14 @@ import {
   getMediaPermalinkIdFromSearch,
   normalizeMediaPermalinkId
 } from '@/components/Review/mediaPermalink'
+import {
+  getImmediateCachedMediaTypes,
+  isMediaTypesCacheFresh,
+  MEDIA_TYPES_CACHE_KEY,
+  MEDIA_TYPES_CACHE_TTL_MS,
+  normalizeMediaTypesCacheRecord,
+  seedMediaTypesCache
+} from '@/components/Review/mediaTypeCache'
 
 const MEDIA_NAVIGATION_PANEL_VISIBLE_STORAGE_KEY =
   'media:navigation:panelVisible'
@@ -274,6 +282,21 @@ const extractKeywordsFromMedia = (m: any): string[] => {
   return []
 }
 
+const getErrorStatusCode = (error: unknown): number | null => {
+  if (!error || typeof error !== 'object') return null
+  const candidate = error as Record<string, unknown>
+  const rawStatus =
+    candidate.status ??
+    (candidate.response &&
+    typeof candidate.response === 'object' &&
+    (candidate.response as Record<string, unknown>).status != null
+      ? (candidate.response as Record<string, unknown>).status
+      : null) ??
+    candidate.statusCode
+  const parsed = Number(rawStatus)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 const MediaPageContent: React.FC = () => {
   const { t } = useTranslation(['review', 'common'])
   const navigate = useNavigate()
@@ -358,6 +381,10 @@ const MediaPageContent: React.FC = () => {
   const [navigationDisplayModeLoaded, setNavigationDisplayModeLoaded] =
     useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [detailFetchError, setDetailFetchError] = useState<{
+    mediaId: string | number
+    message: string
+  } | null>(null)
   const [contentHeight, setContentHeight] = useState<number>(0)
   const permalinkMediaId = useMemo(
     () => getMediaPermalinkIdFromSearch(location.search),
@@ -1522,25 +1549,25 @@ const MediaPageContent: React.FC = () => {
 
   // Initial load: populate media types and auto-browse first page
   useEffect(() => {
+    const immediateCachedTypes = getImmediateCachedMediaTypes()
+    if (immediateCachedTypes.length > 0) {
+      setAvailableMediaTypes((prev) =>
+        Array.from(new Set<string>([...prev, ...immediateCachedTypes])) as string[]
+      )
+    }
+
     ;(async () => {
       try {
         const storage = new Storage({ area: 'local', serde: safeStorageSerde } as any)
-        const cacheKey = 'reviewMediaTypesCache'
-        const cached = (await storage.get(cacheKey).catch(() => null)) as {
-          types?: string[]
-          cachedAt?: number
-        } | null
+        const cached = normalizeMediaTypesCacheRecord(
+          await storage.get(MEDIA_TYPES_CACHE_KEY).catch(() => null)
+        )
         const now = Date.now()
-        const ttlMs = 24 * 60 * 60 * 1000 // 24h
-        if (
-          cached?.types &&
-          Array.isArray(cached.types) &&
-          typeof cached.cachedAt === 'number' &&
-          now - cached.cachedAt < ttlMs
-        ) {
+        if (cached && isMediaTypesCacheFresh(cached.cachedAt, now, MEDIA_TYPES_CACHE_TTL_MS)) {
           setAvailableMediaTypes(
             Array.from(new Set<string>(cached.types)) as string[]
           )
+          seedMediaTypesCache(cached.types, { cachedAt: cached.cachedAt })
         }
 
         // Sample first up-to-3 pages to enrich types list
@@ -1576,7 +1603,10 @@ const MediaPageContent: React.FC = () => {
           setAvailableMediaTypes((prev) =>
             Array.from(new Set<string>([...prev, ...newTypes])) as string[]
           )
-          await storage.set(cacheKey, { types: newTypes, cachedAt: now })
+          const cacheRecord = seedMediaTypesCache(newTypes, { cachedAt: now })
+          if (cacheRecord) {
+            await storage.set(MEDIA_TYPES_CACHE_KEY, cacheRecord)
+          }
         }
       } catch {}
 
@@ -1660,19 +1690,14 @@ const MediaPageContent: React.FC = () => {
   }, [loadKeywordSuggestions, results])
 
   const fetchSelectedDetails = useCallback(async (item: MediaResultItem) => {
-    try {
-      if (item.kind === 'media') {
-        const detail = await bgRequest<any>({
-          path: `/api/v1/media/${item.id}` as any,
-          method: 'GET' as any
-        })
-        return detail
-      }
-      if (item.kind === 'note') {
-        return item.raw
-      }
-    } catch (err) {
-      console.error('Error fetching media details:', err)
+    if (item.kind === 'media') {
+      return bgRequest<any>({
+        path: `/api/v1/media/${item.id}` as any,
+        method: 'GET' as any
+      })
+    }
+    if (item.kind === 'note') {
+      return item.raw
     }
     return null
   }, [])
@@ -1745,8 +1770,65 @@ const MediaPageContent: React.FC = () => {
     return extractKeywordsFromMedia(detail)
   }
 
+  const resolveDetailFetchErrorMessage = useCallback((error: unknown): string => {
+    const statusCode = getErrorStatusCode(error)
+    if (statusCode === 404) {
+      return t('review:mediaPage.detailUnavailable', {
+        defaultValue: 'This item is no longer available. It may have been deleted.'
+      })
+    }
+    return t('review:mediaPage.detailFetchFailed', {
+      defaultValue: 'Unable to load this item. Please try again.'
+    })
+  }, [t])
+
   // Track selected ID to avoid re-fetching on keyword updates
   const [lastFetchedId, setLastFetchedId] = useState<string | number | null>(null)
+
+  const loadSelectedDetails = useCallback(async (item: MediaResultItem) => {
+    setDetailLoading(true)
+    setDetailFetchError(null)
+    setSelectedContent('')
+    setSelectedDetail(null)
+
+    try {
+      const detail = await fetchSelectedDetails(item)
+      const content = contentFromDetail(detail)
+      setSelectedContent(String(content || ''))
+      setSelectedDetail(detail)
+      setLastFetchedId(item.id)
+
+      const keywords = extractKeywordsFromDetail(detail)
+      if (keywords.length > 0 && (!item.keywords || item.keywords.length === 0)) {
+        setSelected((prev) => {
+          if (!prev || prev.id !== item.id) return prev
+          return { ...prev, keywords }
+        })
+      }
+
+      return true
+    } catch (error) {
+      console.error('Error fetching media details:', error)
+      setSelectedContent('')
+      setSelectedDetail(null)
+      setDetailFetchError({
+        mediaId: item.id,
+        message: resolveDetailFetchErrorMessage(error)
+      })
+      return false
+    } finally {
+      setDetailLoading(false)
+    }
+  }, [
+    contentFromDetail,
+    fetchSelectedDetails,
+    resolveDetailFetchErrorMessage
+  ])
+  const loadSelectedDetailsRef = useRef(loadSelectedDetails)
+
+  useEffect(() => {
+    loadSelectedDetailsRef.current = loadSelectedDetails
+  }, [loadSelectedDetails])
 
   useEffect(() => {
     if (!pendingInitialMediaId) return
@@ -1814,47 +1896,22 @@ const MediaPageContent: React.FC = () => {
 
   // Load selected item content
   useEffect(() => {
-    ;(async () => {
-      try {
-        if (!selected) {
-          setSelectedContent('')
-          setSelectedDetail(null)
-          setLastFetchedId(null)
-          setDetailLoading(false)
-          return
-        }
+    const currentSelection = selected
+    if (!currentSelection) {
+      setSelectedContent('')
+      setSelectedDetail(null)
+      setLastFetchedId(null)
+      setDetailFetchError(null)
+      setDetailLoading(false)
+      return
+    }
 
-        const isNewSelection = selected.id !== lastFetchedId
-        if (isNewSelection) {
-          setDetailLoading(true)
-          setSelectedContent('')
-          setSelectedDetail(null)
-        }
+    if (currentSelection.id === lastFetchedId) {
+      return
+    }
 
-        // Skip if we already fetched this item's details
-        if (!isNewSelection) {
-          return
-        }
-
-        const detail = await fetchSelectedDetails(selected)
-        const content = contentFromDetail(detail)
-        setSelectedContent(String(content || ''))
-        setSelectedDetail(detail)
-        setLastFetchedId(selected.id)
-
-        // Extract keywords from detail and update selected item
-        const keywords = extractKeywordsFromDetail(detail)
-        if (keywords.length > 0 && (!selected.keywords || selected.keywords.length === 0)) {
-          setSelected({ ...selected, keywords })
-        }
-      } catch {
-        setSelectedContent('')
-        setSelectedDetail(null)
-      } finally {
-        setDetailLoading(false)
-      }
-    })()
-  }, [selected?.id, fetchSelectedDetails, contentFromDetail])
+    void loadSelectedDetailsRef.current(currentSelection)
+  }, [lastFetchedId, selected?.id])
 
   const selectedMediaPermalinkId =
     selected?.kind === 'media' && selected?.id != null ? String(selected.id) : null
@@ -1902,25 +1959,21 @@ const MediaPageContent: React.FC = () => {
   // Refresh media details (e.g., after generating analysis)
   const handleRefreshMedia = useCallback(async () => {
     if (!selected) return
-    try {
-      const detail = await fetchSelectedDetails(selected)
-      const content = contentFromDetail(detail)
-      setSelectedContent(String(content || ''))
-      setSelectedDetail(detail)
-      if (showNavigationPanel) {
-        void refetchNavigation()
-      }
-    } catch {
-      setSelectedContent('')
-      setSelectedDetail(null)
+    const refreshed = await loadSelectedDetails(selected)
+    if (refreshed && showNavigationPanel) {
+      void refetchNavigation()
     }
   }, [
-    contentFromDetail,
-    fetchSelectedDetails,
+    loadSelectedDetails,
     refetchNavigation,
     selected,
     showNavigationPanel
   ])
+
+  const handleRetryDetailFetch = useCallback(() => {
+    if (!selected) return
+    void loadSelectedDetails(selected)
+  }, [loadSelectedDetails, selected])
 
   const handleSearch = () => {
     setPage(1)
@@ -2808,6 +2861,24 @@ const MediaPageContent: React.FC = () => {
           ) : null}
 
           <div className="flex-1 flex flex-col min-h-0">
+            {selected &&
+            detailFetchError &&
+            String(detailFetchError.mediaId) === String(selected.id) ? (
+              <div
+                className="mx-3 mt-3 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-sm text-warn"
+                data-testid="media-detail-fetch-error"
+              >
+                <p className="m-0">{detailFetchError.message}</p>
+                <button
+                  type="button"
+                  onClick={handleRetryDetailFetch}
+                  className="mt-2 inline-flex items-center rounded border border-warn/40 bg-surface px-2 py-1 text-xs text-warn hover:bg-surface2"
+                  data-testid="media-detail-fetch-retry"
+                >
+                  {t('common:retry', { defaultValue: 'Retry' })}
+                </button>
+              </div>
+            ) : null}
             <ContentViewer
               selectedMedia={selected}
               content={effectiveContent}

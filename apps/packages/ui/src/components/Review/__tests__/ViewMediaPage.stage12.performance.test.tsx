@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ViewMediaPage from '../ViewMediaPage'
+import { MEDIA_TYPES_CACHE_KEY } from '../mediaTypeCache'
 
 const mocks = vi.hoisted(() => ({
   queryData: [] as Array<any>,
@@ -168,7 +169,13 @@ vi.mock('@/components/Media/SearchBar', () => ({
 }))
 
 vi.mock('@/components/Media/FilterPanel', () => ({
-  FilterPanel: () => <div data-testid="filter-panel" />
+  FilterPanel: ({ mediaTypes }: { mediaTypes?: string[] }) => (
+    <div data-testid="filter-panel">
+      <div data-testid="filter-panel-media-types">
+        {(mediaTypes || []).join(',')}
+      </div>
+    </div>
+  )
 }))
 
 vi.mock('@/components/Media/JumpToNavigator', () => ({
@@ -301,6 +308,7 @@ describe('ViewMediaPage stage 12 performance guardrails', () => {
       }
       return {}
     })
+    window.localStorage.removeItem(MEDIA_TYPES_CACHE_KEY)
   })
 
   it('debounces rapid query changes before triggering refetch', async () => {
@@ -403,6 +411,95 @@ describe('ViewMediaPage stage 12 performance guardrails', () => {
       configurable: true,
       writable: true,
       value: originalCancelAnimationFrame
+    })
+  })
+
+  it('hydrates media type filters from cache before background sampling resolves', async () => {
+    window.localStorage.setItem(
+      MEDIA_TYPES_CACHE_KEY,
+      JSON.stringify({
+        types: ['pdf', 'video'],
+        cachedAt: Date.now()
+      })
+    )
+
+    let resolveSampling: ((value: any) => void) | null = null
+    const samplingPromise = new Promise((resolve) => {
+      resolveSampling = resolve
+    })
+
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      if (path === '/api/v1/media/?page=1&results_per_page=50') {
+        return samplingPromise
+      }
+      if (path.startsWith('/api/v1/media/?page=')) {
+        return { items: [], pagination: { total_pages: 1, total_items: 0 } }
+      }
+      if (path.startsWith('/api/v1/media/keywords')) {
+        return { keywords: [] }
+      }
+      if (path.startsWith('/api/v1/media/')) {
+        const id = path.replace('/api/v1/media/', '').split('?')[0]
+        return {
+          id,
+          title: `Media ${id}`,
+          type: 'document',
+          content: { text: `Content for ${id}` }
+        }
+      }
+      if (path.startsWith('/api/v1/notes')) {
+        return { items: [], pagination: { total_items: 0 } }
+      }
+      return {}
+    })
+
+    renderMediaPage('/media')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('filter-panel-media-types')).toHaveTextContent('pdf,video')
+    })
+
+    resolveSampling?.({
+      items: [],
+      pagination: { total_pages: 1, total_items: 0 }
+    })
+  })
+
+  it('falls back to sampled media types when no fresh cache is available', async () => {
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      if (path === '/api/v1/media/?page=1&results_per_page=50') {
+        return {
+          items: [{ id: 10, title: 'Doc 10', type: 'pdf' }],
+          pagination: { total_pages: 1, total_items: 1 }
+        }
+      }
+      if (path.startsWith('/api/v1/media/?page=')) {
+        return { items: [], pagination: { total_pages: 1, total_items: 0 } }
+      }
+      if (path.startsWith('/api/v1/media/keywords')) {
+        return { keywords: [] }
+      }
+      if (path.startsWith('/api/v1/media/')) {
+        const id = path.replace('/api/v1/media/', '').split('?')[0]
+        return {
+          id,
+          title: `Media ${id}`,
+          type: 'document',
+          content: { text: `Content for ${id}` }
+        }
+      }
+      if (path.startsWith('/api/v1/notes')) {
+        return { items: [], pagination: { total_items: 0 } }
+      }
+      return {}
+    })
+
+    renderMediaPage('/media')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('filter-panel-media-types')).toHaveTextContent('pdf')
     })
   })
 })

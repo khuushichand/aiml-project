@@ -191,6 +191,15 @@ Constraints:
 - every turn ends with an open loop
 - at turn 8, post a scene-state snapshot
 
+## Character recovery workflow
+
+When managing characters in the Characters page:
+- delete is reversible for 10 seconds via the undo toast
+- bulk delete follows the same soft-delete + undo behavior
+- after the toast expires, use the `Recently deleted` scope and click `Restore`
+
+If restore fails because the record changed in another tab/session, refresh the list and retry restore.
+
 ## Companion docs
 
 - Core onboarding: `Docs/User_Guides/Effective_Character_Roleplay_and_You.md`

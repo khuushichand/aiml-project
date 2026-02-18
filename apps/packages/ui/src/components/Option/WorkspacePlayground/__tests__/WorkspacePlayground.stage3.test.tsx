@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import axe from "axe-core"
 import { WorkspacePlayground } from "../index"
 
 const { mockGetMediaDetails } = vi.hoisted(() => ({
@@ -171,6 +172,51 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
       }
       expect(dialog).toHaveClass("ant-zoom-leave")
     })
+  })
+
+  it("provides skip links and labeled complementary landmarks", () => {
+    render(<WorkspacePlayground />)
+
+    expect(
+      screen.getByRole("link", { name: "Skip to chat content" })
+    ).toHaveAttribute("href", "#workspace-main-content")
+    expect(
+      screen.getByRole("link", { name: "Skip to sources panel" })
+    ).toHaveAttribute("href", "#workspace-sources-panel")
+    expect(
+      screen.getByRole("link", { name: "Skip to studio panel" })
+    ).toHaveAttribute("href", "#workspace-studio-panel")
+
+    expect(screen.getByRole("main")).toHaveAttribute(
+      "id",
+      "workspace-main-content"
+    )
+    expect(
+      screen.getByRole("complementary", { name: "Sources panel" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("complementary", { name: "Studio panel" })
+    ).toBeInTheDocument()
+  })
+
+  it("has no axe-core violations for landmark and naming rules", async () => {
+    const { container } = render(<WorkspacePlayground />)
+    const results = await axe.run(container, {
+      runOnly: {
+        type: "rule",
+        values: [
+          "landmark-one-main",
+          "region",
+          "button-name",
+          "link-name",
+          "aria-required-attr",
+          "aria-valid-attr",
+          "aria-valid-attr-value"
+        ]
+      }
+    })
+
+    expect(results.violations).toEqual([])
   })
 
   it("routes source search selection to source focus", async () => {

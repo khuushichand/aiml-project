@@ -45,11 +45,16 @@ export const StudioPromptsTab: React.FC = () => {
 
   const [searchText, setSearchText] = useState("")
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false)
-  const [playgroundOpen, setPlaygroundOpen] = useState(false)
 
   const selectedProjectId = usePromptStudioStore((s) => s.selectedProjectId)
   const selectedPromptId = usePromptStudioStore((s) => s.selectedPromptId)
   const setSelectedPromptId = usePromptStudioStore((s) => s.setSelectedPromptId)
+  const isExecutePlaygroundOpen = usePromptStudioStore(
+    (s) => s.isExecutePlaygroundOpen
+  )
+  const setExecutePlaygroundOpen = usePromptStudioStore(
+    (s) => s.setExecutePlaygroundOpen
+  )
   const isPromptEditorOpen = usePromptStudioStore((s) => s.isPromptEditorOpen)
   const setPromptEditorOpen = usePromptStudioStore((s) => s.setPromptEditorOpen)
   const editingPromptId = usePromptStudioStore((s) => s.editingPromptId)
@@ -132,7 +137,7 @@ export const StudioPromptsTab: React.FC = () => {
 
   const handleExecute = (prompt: Prompt) => {
     setSelectedPromptId(prompt.id)
-    setPlaygroundOpen(true)
+    setExecutePlaygroundOpen(true)
   }
 
   const handleDuplicate = (prompt: Prompt) => {
@@ -427,9 +432,9 @@ export const StudioPromptsTab: React.FC = () => {
 
       {/* Execute playground drawer */}
       <ExecutePlayground
-        open={playgroundOpen}
+        open={isExecutePlaygroundOpen}
         promptId={selectedPromptId}
-        onClose={() => setPlaygroundOpen(false)}
+        onClose={() => setExecutePlaygroundOpen(false)}
       />
     </div>
   )

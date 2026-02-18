@@ -1,14 +1,37 @@
-import { Segmented, Badge, Select, Tooltip } from "antd"
-import { FolderKanban, FileText, TestTube, BarChart3, Sparkles } from "lucide-react"
+import {
+  Segmented,
+  Badge,
+  Select,
+  Tooltip,
+  Popover,
+  Switch,
+  notification
+} from "antd"
+import {
+  FolderKanban,
+  FileText,
+  TestTube,
+  BarChart3,
+  Sparkles,
+  Settings
+} from "lucide-react"
 import React, { useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { useSearchParams } from "react-router-dom"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   usePromptStudioStore,
   type StudioSubTab
 } from "@/store/prompt-studio"
-import { hasPromptStudio, getPromptStudioStatus } from "@/services/prompt-studio"
+import {
+  hasPromptStudio,
+  getPromptStudioStatus,
+  listProjects
+} from "@/services/prompt-studio"
+import {
+  getPromptStudioDefaults,
+  setPromptStudioDefaults
+} from "@/services/prompt-studio-settings"
 import {
   buildPromptStudioWebSocketUrl,
   isPromptStudioStatusEvent
@@ -50,6 +73,7 @@ export const StudioTabContainer: React.FC = () => {
   const activeSubTab = usePromptStudioStore((s) => s.activeSubTab)
   const setActiveSubTab = usePromptStudioStore((s) => s.setActiveSubTab)
   const selectedProjectId = usePromptStudioStore((s) => s.selectedProjectId)
+  const setSelectedProjectId = usePromptStudioStore((s) => s.setSelectedProjectId)
 
   // Capability check
   const { data: hasStudio, isLoading: isCheckingCapability } = useQuery({
@@ -68,6 +92,80 @@ export const StudioTabContainer: React.FC = () => {
   })
 
   const status = (statusResponse as any)?.data?.data
+
+  const { data: settingsDefaultsResponse } = useQuery({
+    queryKey: ["prompt-studio", "settings-defaults"],
+    queryFn: getPromptStudioDefaults,
+    enabled: isOnline && hasStudio === true
+  })
+
+  const { data: settingsProjectsResponse } = useQuery({
+    queryKey: ["prompt-studio", "settings-projects"],
+    queryFn: () => listProjects({ page: 1, per_page: 200 }),
+    enabled: isOnline && hasStudio === true
+  })
+
+  const settingsDefaults = {
+    defaultProjectId:
+      typeof settingsDefaultsResponse?.defaultProjectId === "number"
+        ? settingsDefaultsResponse.defaultProjectId
+        : null,
+    autoSyncWorkspacePrompts:
+      settingsDefaultsResponse?.autoSyncWorkspacePrompts !== false
+  }
+
+  const settingsProjects: Array<{ id: number; name: string }> =
+    (settingsProjectsResponse as any)?.data?.data ??
+    (settingsProjectsResponse as any)?.data ??
+    []
+
+  const updateSettingsMutation = useMutation({
+    mutationFn: (updates: {
+      defaultProjectId?: number | null
+      autoSyncWorkspacePrompts?: boolean
+    }) => setPromptStudioDefaults(updates),
+    onSuccess: (nextDefaults, updates) => {
+      queryClient.setQueryData(["prompt-studio", "settings-defaults"], nextDefaults)
+      if (
+        typeof updates.defaultProjectId === "number" &&
+        updates.defaultProjectId > 0 &&
+        selectedProjectId === null
+      ) {
+        setSelectedProjectId(updates.defaultProjectId)
+      }
+      notification.success({
+        message: t("managePrompts.studio.settings.saved", {
+          defaultValue: "Studio settings updated"
+        })
+      })
+    },
+    onError: (error: any) => {
+      notification.error({
+        message: t("managePrompts.studio.settings.saveFailed", {
+          defaultValue: "Could not save Studio settings"
+        }),
+        description: error?.message
+      })
+    }
+  })
+
+  const defaultProjectValue =
+    typeof settingsDefaults.defaultProjectId === "number"
+      ? settingsDefaults.defaultProjectId
+      : "none"
+
+  const settingsProjectOptions = [
+    {
+      value: "none",
+      label: t("managePrompts.studio.settings.noDefaultProject", {
+        defaultValue: "No default project"
+      })
+    },
+    ...settingsProjects.map((project) => ({
+      value: project.id,
+      label: project.name
+    }))
+  ]
 
   // Sync URL with active sub-tab
   useEffect(() => {
@@ -153,6 +251,20 @@ export const StudioTabContainer: React.FC = () => {
     if (isValidSubTab(value as string)) {
       setActiveSubTab(value as StudioSubTab)
     }
+  }
+
+  const handleDefaultProjectChange = (value: string | number) => {
+    const nextDefaultProjectId =
+      value === "none" ? null : Number.isFinite(Number(value)) ? Number(value) : null
+    updateSettingsMutation.mutate({
+      defaultProjectId: nextDefaultProjectId
+    })
+  }
+
+  const handleAutoSyncChange = (checked: boolean) => {
+    updateSettingsMutation.mutate({
+      autoSyncWorkspacePrompts: checked
+    })
   }
 
   // Offline state
@@ -393,7 +505,67 @@ export const StudioTabContainer: React.FC = () => {
           />
         )}
 
-        <QueueHealthWidget status={status} />
+        <div className="flex items-center gap-2">
+          <Popover
+            trigger="click"
+            placement="bottomRight"
+            content={
+              <div className="w-72 space-y-4" data-testid="studio-settings-popover">
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-text-muted">
+                    {t("managePrompts.studio.settings.defaultProjectLabel", {
+                      defaultValue: "Default project"
+                    })}
+                  </p>
+                  <Select
+                    value={defaultProjectValue}
+                    options={settingsProjectOptions}
+                    onChange={handleDefaultProjectChange}
+                    loading={updateSettingsMutation.isPending}
+                    data-testid="studio-settings-default-project"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-text">
+                      {t("managePrompts.studio.settings.autoSyncLabel", {
+                        defaultValue: "Auto-sync workspace prompts"
+                      })}
+                    </p>
+                    <p className="text-xs text-text-muted">
+                      {t("managePrompts.studio.settings.autoSyncHint", {
+                        defaultValue:
+                          "When enabled, local prompt saves will auto-push to Studio when possible."
+                      })}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settingsDefaults.autoSyncWorkspacePrompts}
+                    loading={updateSettingsMutation.isPending}
+                    onChange={handleAutoSyncChange}
+                    data-testid="studio-settings-auto-sync"
+                  />
+                </div>
+              </div>
+            }
+          >
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded border border-border bg-bg px-2 py-1 text-xs text-text-muted hover:text-text hover:bg-surface2"
+              data-testid="studio-settings-button"
+            >
+              <Settings className="size-4" />
+              {!isMobile && (
+                <span>
+                  {t("managePrompts.studio.settings.button", {
+                    defaultValue: "Settings"
+                  })}
+                </span>
+              )}
+            </button>
+          </Popover>
+          <QueueHealthWidget status={status} />
+        </div>
       </div>
 
       {/* Project context reminder */}

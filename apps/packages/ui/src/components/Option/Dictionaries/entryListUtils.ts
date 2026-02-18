@@ -5,6 +5,7 @@ export type DictionaryEntryListItem = {
   type?: string | null
   probability?: number | null
   group?: string | null
+  usage_count?: number | null
 }
 
 function normalizeText(value: unknown): string {
@@ -62,4 +63,5 @@ export const DICTIONARY_ENTRY_COLUMN_RESPONSIVE = {
   type: ["sm"] as string[],
   probability: ["md"] as string[],
   group: ["sm"] as string[],
+  usage: ["md"] as string[],
 }

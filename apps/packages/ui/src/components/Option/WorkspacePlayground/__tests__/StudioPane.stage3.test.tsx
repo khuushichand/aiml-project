@@ -325,4 +325,70 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     expect(speedSlider?.className).toContain("[&_.ant-slider-track]:!h-2")
     expect(speedSlider?.className).toContain("[&_.ant-slider-handle]:!h-5")
   })
+
+  it("exposes aria-expanded metadata for collapsible studio sections", () => {
+    const { container } = render(<StudioPane />)
+
+    const outputTypesToggle = screen.getByRole("button", {
+      name: /Output Types/
+    })
+    expect(outputTypesToggle).toHaveAttribute("aria-expanded", "true")
+    expect(outputTypesToggle).toHaveAttribute(
+      "aria-controls",
+      "studio-output-types-section"
+    )
+
+    const outputsToggle = screen.getByRole("button", {
+      name: /Generated Outputs/
+    })
+    expect(outputsToggle).toHaveAttribute("aria-expanded", "true")
+    expect(outputsToggle).toHaveAttribute(
+      "aria-controls",
+      "studio-generated-outputs-section"
+    )
+
+    fireEvent.click(outputsToggle)
+    expect(outputsToggle).toHaveAttribute("aria-expanded", "false")
+    expect(
+      container.querySelector("#studio-generated-outputs-section")
+    ).toHaveAttribute("hidden")
+
+    const audioSettingsToggle = screen.getByRole("button", {
+      name: /Audio Settings/
+    })
+    expect(audioSettingsToggle).toHaveAttribute("aria-expanded", "false")
+    expect(audioSettingsToggle).toHaveAttribute(
+      "aria-controls",
+      "studio-audio-settings-panel"
+    )
+  })
+
+  it("ensures icon-only action buttons include aria-labels", () => {
+    workspaceStoreState.generatedArtifacts = [
+      {
+        id: "artifact-summary-a11y",
+        type: "summary",
+        title: "A11y Summary",
+        status: "completed",
+        content: "A11y text",
+        createdAt: new Date("2026-02-18T08:00:00.000Z")
+      }
+    ]
+
+    const { container } = render(<StudioPane />)
+
+    const iconOnlyButtons = Array.from(
+      container.querySelectorAll("button")
+    ).filter((button) => {
+      const hasIcon = Boolean(button.querySelector("svg"))
+      const hasText = (button.textContent || "").trim().length > 0
+      return hasIcon && !hasText
+    })
+
+    expect(iconOnlyButtons.length).toBeGreaterThan(0)
+    iconOnlyButtons.forEach((button) => {
+      expect(button).toHaveAttribute("aria-label")
+      expect(button.getAttribute("aria-label")?.trim().length).toBeGreaterThan(0)
+    })
+  })
 })

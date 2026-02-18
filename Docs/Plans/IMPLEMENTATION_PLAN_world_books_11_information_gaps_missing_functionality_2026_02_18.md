@@ -36,7 +36,7 @@ Finding IDs: `11.1` through `11.6`
 - Backend schema/migration tests for nullable group field handling.
 - API integration tests for create/update/filter by group.
 - UI tests for group display and filtering behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Add Budget Visualization Across Key Surfaces
 **Goal**: Make budget pressure visible during authoring, not only after-the-fact.
@@ -48,7 +48,7 @@ Finding IDs: `11.1` through `11.6`
 - Unit tests for utilization calculations and threshold mapping.
 - Component tests for drawer-header and modal budget bars.
 - Regression tests for over-budget warning rendering.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Add AI-Assisted Entry Generation
 **Goal**: Reduce manual drafting burden and increase onboarding success.

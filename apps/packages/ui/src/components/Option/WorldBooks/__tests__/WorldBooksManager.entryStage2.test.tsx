@@ -1,6 +1,6 @@
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { WorldBooksManager } from "../Manager"
 
@@ -182,6 +182,18 @@ describe("WorldBooksManager entry drawer stage-2 authoring controls", () => {
               case_sensitive: false,
               regex_match: false,
               whole_word_match: true,
+              appendable: false,
+              group: "History"
+            },
+            {
+              entry_id: 11,
+              keywords: ["seed-generic"],
+              content: "Ungrouped note",
+              priority: 30,
+              enabled: true,
+              case_sensitive: false,
+              regex_match: false,
+              whole_word_match: true,
               appendable: false
             }
           ],
@@ -211,9 +223,42 @@ describe("WorldBooksManager entry drawer stage-2 authoring controls", () => {
     const keywordsHeader = screen.getByRole("columnheader", { name: "Keywords" })
     const tableWrapper = keywordsHeader.closest(".ant-table-wrapper")
     expect(tableWrapper).not.toBeNull()
-    await user.click(within(tableWrapper as HTMLElement).getByRole("button", { name: "Edit entry" }))
+    await user.click(
+      within(tableWrapper as HTMLElement).getAllByRole("button", { name: "Edit entry" })[0]
+    )
     expect(await screen.findByRole("button", { name: "Save Changes" })).toBeInTheDocument()
     expect(screen.getAllByText("seed-keyword", { selector: ".ant-tag" }).length).toBeGreaterThan(1)
+  }, 30000)
+
+  it("supports entry group field in table and add payload", async () => {
+    const user = userEvent.setup()
+    render(<WorldBooksManager />)
+
+    await user.click(screen.getByRole("button", { name: "Manage entries" }))
+    expect(await screen.findByRole("columnheader", { name: "Group" })).toBeInTheDocument()
+    expect(screen.getByText("History", { selector: ".ant-tag" })).toBeInTheDocument()
+    expect(screen.getByText("Ungrouped")).toBeInTheDocument()
+
+    await user.click(screen.getByLabelText("Filter entries by group"))
+    await user.click(
+      await screen.findByText("History", { selector: ".ant-select-item-option-content" })
+    )
+    expect(screen.getByText("Seed entry")).toBeInTheDocument()
+    expect(screen.queryByText("Ungrouped note")).not.toBeInTheDocument()
+
+    await user.type(screen.getByRole("textbox", { name: "Content" }), "Harbor overview")
+    await user.type(screen.getByRole("textbox", { name: "Group (optional)" }), "  Geography  ")
+    await user.click(screen.getByRole("button", { name: "Add Entry" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.addWorldBookEntry).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          content: "Harbor overview",
+          group: "Geography"
+        })
+      )
+    })
   }, 30000)
 
   it("blocks add submit on invalid regex keyword patterns", async () => {

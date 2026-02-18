@@ -234,6 +234,7 @@ describe("DictionariesManager entry stage-1 information architecture", () => {
               type: "literal",
               probability: 1,
               group: "Clinical",
+              usage_count: 4,
               enabled: true,
               case_sensitive: false
             },
@@ -245,6 +246,7 @@ describe("DictionariesManager entry stage-1 information architecture", () => {
               type: "literal",
               probability: 0.5,
               group: "clinical",
+              usage_count: 0,
               enabled: true,
               case_sensitive: false
             },
@@ -256,6 +258,7 @@ describe("DictionariesManager entry stage-1 information architecture", () => {
               type: "regex",
               probability: 0.75,
               group: "Titles",
+              usage_count: 2,
               enabled: true,
               case_sensitive: true
             }
@@ -278,6 +281,9 @@ describe("DictionariesManager entry stage-1 information architecture", () => {
     expect(await screen.findByRole("columnheader", { name: "Type" })).toBeInTheDocument()
     expect(screen.getByRole("columnheader", { name: "Probability" })).toBeInTheDocument()
     expect(screen.getByRole("columnheader", { name: "Group" })).toBeInTheDocument()
+    expect(screen.getByRole("columnheader", { name: "Usage" })).toBeInTheDocument()
+    expect(screen.getByText("Unused")).toBeInTheDocument()
+    expect(screen.getByText("heart rate").closest("tr")).toHaveClass("bg-surface2/40")
 
     await user.click(screen.getByLabelText("Filter entries by group"))
     expect(

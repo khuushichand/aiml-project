@@ -169,6 +169,27 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     expect(removeButton.className).toContain("[@media(hover:none)]:opacity-100")
   })
 
+  it("keeps keyboard focus order logical within each source row", () => {
+    render(<SourcesPane />)
+
+    const checkbox = screen
+      .getByTestId("source-checkbox-hitarea-s1")
+      .querySelector("input[type='checkbox']") as HTMLInputElement | null
+    const removeButton = screen.getByTestId("remove-source-s1")
+
+    expect(checkbox).toBeTruthy()
+    if (checkbox) {
+      const relation = checkbox.compareDocumentPosition(removeButton)
+      expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+      checkbox.focus()
+      expect(checkbox).toHaveFocus()
+    }
+
+    removeButton.focus()
+    expect(removeButton).toHaveFocus()
+  })
+
   it("shows processing status and disables selection for non-ready sources", () => {
     render(<SourcesPane />)
 

@@ -782,6 +782,73 @@ class TestCharacterAPIIntegration:
         assert deleted_record["deleted"] == 1
         assert deleted_record["version"] == original_version + 1
 
+    def test_restore_character_integration(self, client: TestClient, test_db: CharactersRAGDB):
+        create_payload = create_sample_character_payload("RestoreMe")
+        create_response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=create_payload)
+        assert create_response.status_code == 201, create_response.text
+        created = create_response.json()
+        char_id = int(created["id"])
+
+        delete_response = client.delete(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={created['version']}"
+        )
+        assert delete_response.status_code == 200, delete_response.text
+
+        conn = test_db.get_connection()
+        deleted_record = conn.execute(
+            "SELECT deleted, version FROM character_cards WHERE id = ?",
+            (char_id,),
+        ).fetchone()
+        assert deleted_record is not None
+        assert int(deleted_record["deleted"]) == 1
+        deleted_version = int(deleted_record["version"])
+
+        restore_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}/restore?expected_version={deleted_version}"
+        )
+        assert restore_response.status_code == 200, restore_response.text
+        restored = restore_response.json()
+        assert int(restored["id"]) == char_id
+        assert restored["name"] == created["name"]
+        assert int(restored["version"]) == deleted_version + 1
+
+        restored_db = test_db.get_character_card_by_id(char_id)
+        assert restored_db is not None
+        assert int(restored_db["deleted"]) == 0
+
+    def test_restore_character_version_conflict_integration(
+        self, client: TestClient, test_db: CharactersRAGDB
+    ):
+        create_payload = create_sample_character_payload("RestoreConflict")
+        create_response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=create_payload)
+        assert create_response.status_code == 201, create_response.text
+        created = create_response.json()
+        char_id = int(created["id"])
+
+        delete_response = client.delete(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={created['version']}"
+        )
+        assert delete_response.status_code == 200, delete_response.text
+
+        conn = test_db.get_connection()
+        deleted_record = conn.execute(
+            "SELECT version FROM character_cards WHERE id = ?",
+            (char_id,),
+        ).fetchone()
+        assert deleted_record is not None
+        deleted_version = int(deleted_record["version"])
+
+        response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}/restore?expected_version={deleted_version + 1}"
+        )
+        assert response.status_code == 409, response.text
+        assert "version mismatch" in response.json()["detail"].lower()
+
+    def test_restore_character_not_found_returns_conflict(self, client: TestClient):
+        response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/999999/restore?expected_version=1")
+        assert response.status_code == 409, response.text
+        assert "not found" in response.json()["detail"].lower()
+
     def test_search_character_integration(self, client: TestClient, test_db: CharactersRAGDB):
         unique_name_search = f"SearchableNameAPI_{uuid.uuid4().hex[:6]}"
         desc_keyword = f"unique_keyword_search_api_{uuid.uuid4().hex[:4]}"

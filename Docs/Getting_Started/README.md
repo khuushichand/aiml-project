@@ -14,6 +14,8 @@ Choose your path based on what you want to accomplish:
 ```bash
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
 make quickstart-install
+# If `python3` is older than 3.10 on your machine:
+# make quickstart-install PYTHON=python3.12
 # Verify: curl http://localhost:8000/health
 ```
 

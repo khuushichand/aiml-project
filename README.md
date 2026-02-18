@@ -77,7 +77,7 @@ Good fit for:
 - Running local or hosted LLMs behind a consistent OpenAI-compatible API.
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
-**New here?** Jump to [Quickstart](#quickstart) or try `make quickstart` after cloning.
+**New here?** Jump to [Quickstart](#quickstart) or try `make quickstart-install` after cloning.
 
 
 ## Current Status
@@ -180,12 +180,16 @@ For now, use this repository checkout with the Makefile targets below.
 # No Docker: installs deps, initializes auth, starts API
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
 make quickstart-install
+# If `python3` is older than 3.10 on your machine:
+# make quickstart-install PYTHON=python3.12
 
 # Docker: API only
 make quickstart-docker
 
 # Docker: API + WebUI
 make quickstart-docker-webui
+# Optional (non-localhost deployments):
+# make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
 ```
 
 ### No-Docker Path (Makefile)
@@ -193,6 +197,8 @@ make quickstart-docker-webui
 ```bash
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
 make quickstart-install
+# If `python3` is older than 3.10 on your machine:
+# make quickstart-install PYTHON=python3.12
 ```
 
 This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts the server. Verify with:
@@ -200,7 +206,7 @@ This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts t
 curl http://localhost:8000/health  # No auth needed!
 ```
 
-Already have dependencies installed locally? Use `make quickstart`.
+Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
 
 ### Manual Setup
 
@@ -382,6 +388,8 @@ Quickest full-stack path (containerized API + WebUI):
 make quickstart-docker-webui
 # API:   http://localhost:8000
 # WebUI: http://localhost:8080
+# Optional (non-localhost deployments):
+# make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
 ```
 
 Local WebUI development (API should already be running, for example via `make quickstart`):
@@ -425,6 +433,8 @@ Quick start with Docker + containerized WebUI:
 make quickstart-docker-webui
 # API:   http://localhost:8000
 # WebUI: http://localhost:8080
+# Optional (non-localhost deployments):
+# make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
 ```
 
 Or manually:

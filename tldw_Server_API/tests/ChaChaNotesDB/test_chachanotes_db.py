@@ -539,6 +539,42 @@ class TestMessageMetadata:
         current_version_of_deleted_card = raw_retrieved_after_first_delete['version']  # This is 2
         assert db_instance.soft_delete_character_card(card_id, expected_version=current_version_of_deleted_card) is True
 
+    def test_restore_character_card_conflict_then_success(self, db_instance: CharactersRAGDB):
+        card_data = _create_sample_card_data("Restore")
+        card_id = db_instance.add_character_card(card_data)
+        assert card_id is not None
+
+        original = db_instance.get_character_card_by_id(card_id)
+        assert original is not None
+        original_version = int(original["version"])
+
+        deleted = db_instance.soft_delete_character_card(card_id, expected_version=original_version)
+        assert deleted is True
+
+        conn = db_instance.get_connection()
+        deleted_row = conn.execute(
+            "SELECT deleted, version FROM character_cards WHERE id = ?",
+            (card_id,),
+        ).fetchone()
+        assert deleted_row is not None
+        assert int(deleted_row["deleted"]) == 1
+        deleted_version = int(deleted_row["version"])
+        assert deleted_version == original_version + 1
+
+        with pytest.raises(ConflictError, match="version mismatch"):
+            db_instance.restore_character_card(card_id, expected_version=original_version)
+
+        restored = db_instance.restore_character_card(card_id, expected_version=deleted_version)
+        assert restored is True
+
+        restored_row = conn.execute(
+            "SELECT deleted, version FROM character_cards WHERE id = ?",
+            (card_id,),
+        ).fetchone()
+        assert restored_row is not None
+        assert int(restored_row["deleted"]) == 0
+        assert int(restored_row["version"]) == deleted_version + 1
+
     def test_search_character_cards(self, db_instance: CharactersRAGDB):
         card1_data = _create_sample_card_data("Searchable Alpha")
         card1_data["description"] = "Unique keyword: ZYX"

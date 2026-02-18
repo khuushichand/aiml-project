@@ -409,6 +409,10 @@ test.describe('Watchlists playground smoke', () => {
     await page.goto(optionsUrl + '#/watchlists', { waitUntil: 'domcontentloaded' })
 
     await expect(page.getByRole('heading', { name: 'Watchlists' })).toBeVisible()
+    await expect(page.getByRole('tab', { name: 'Overview' })).toBeVisible()
+    await expect(page.getByText('At-a-glance watchlist health')).toBeVisible()
+
+    await page.getByRole('tab', { name: 'Sources' }).click()
     await expect(page.getByText('Tech Daily')).toBeVisible()
 
     await page.getByRole('tab', { name: 'Jobs' }).click()
@@ -460,6 +464,217 @@ test.describe('Watchlists playground smoke', () => {
     await page.getByRole('tab', { name: 'Settings' }).click()
     await expect(page.getByText('Claim Clusters')).toBeVisible()
     await expect(page.getByText('Cluster about solar energy')).toBeVisible()
+
+    await context.close()
+  })
+
+  test('overview health and failed-run notification click-through', async () => {
+    const extPath = path.resolve('build/chrome-mv3')
+    const { context, page, optionsUrl } = await launchWithExtension(extPath, {
+      seedConfig: {
+        __tldw_first_run_complete: true,
+        __tldw_allow_offline: true
+      }
+    })
+
+    await context.addInitScript(() => {
+      ;(window as any).__TLDW_WATCHLISTS_RUN_NOTIFICATIONS_POLL_MS = 200
+
+      const now = () => new Date().toISOString()
+      const sources = [
+        {
+          id: 1,
+          name: 'Alert Feed',
+          url: 'https://example.com/alerts.xml',
+          source_type: 'rss',
+          active: true,
+          tags: ['alerts'],
+          status: 'error',
+          created_at: now(),
+          updated_at: now(),
+          last_scraped_at: now()
+        }
+      ]
+
+      const jobs = [
+        {
+          id: 77,
+          name: 'Alert Monitor',
+          description: 'Monitors incident sources',
+          active: true,
+          scope: { sources: [1], groups: [], tags: ['alerts'] },
+          schedule_expr: '*/5 * * * *',
+          timezone: 'UTC',
+          job_filters: { filters: [] },
+          created_at: now(),
+          updated_at: now(),
+          last_run_at: now(),
+          next_run_at: now()
+        }
+      ]
+
+      const runningRun = {
+        id: 101,
+        job_id: 77,
+        status: 'running',
+        started_at: now(),
+        finished_at: null,
+        error_msg: null,
+        stats: {
+          items_found: 3,
+          items_ingested: 1,
+          items_filtered: 0,
+          items_errored: 0
+        }
+      }
+
+      const failedRun = {
+        id: 101,
+        job_id: 77,
+        status: 'failed',
+        started_at: now(),
+        finished_at: now(),
+        error_msg: 'Rate limit exceeded while fetching source',
+        stats: {
+          items_found: 3,
+          items_ingested: 1,
+          items_filtered: 0,
+          items_errored: 1
+        }
+      }
+
+      const runDetails = {
+        ...failedRun,
+        filter_tallies: { include: 1 },
+        log_text: 'Rate limit exceeded while fetching source',
+        log_path: null,
+        truncated: false,
+        filtered_sample: null
+      }
+
+      let runListCalls = 0
+
+      const paginate = (list, page, size) => {
+        const current = page || 1
+        const limit = size || list.length || 1
+        const start = (current - 1) * limit
+        const end = start + limit
+        return {
+          items: list.slice(start, end),
+          total: list.length,
+          page: current,
+          size: limit,
+          has_more: end < list.length
+        }
+      }
+
+      const handleRequest = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'GET').toUpperCase()
+        const [pathname, queryString] = path.split('?')
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        if (pathname === '/api/v1/watchlists/sources' && method === 'GET') {
+          return paginate(sources, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/jobs' && method === 'GET') {
+          return paginate(jobs, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/items' && method === 'GET') {
+          if (params.get('reviewed') === 'false') {
+            return {
+              items: [],
+              total: 9,
+              page,
+              size,
+              has_more: false
+            }
+          }
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/runs' && method === 'GET') {
+          const q = params.get('q')
+          if (q === 'running') return paginate([runningRun], page, size)
+          if (q === 'pending') return paginate([], page, size)
+          if (q === 'failed') return paginate([failedRun], page, size)
+
+          runListCalls += 1
+          const list = runListCalls === 1 ? [runningRun] : [failedRun]
+          return paginate(list, page, size)
+        }
+
+        const runDetailsMatch = pathname.match(/^\/api\/v1\/watchlists\/runs\/(\d+)\/details$/)
+        if (runDetailsMatch && method === 'GET') {
+          return runDetails
+        }
+
+        return null
+      }
+
+      const patchRuntime = (runtime) => {
+        if (!runtime?.sendMessage) return
+        const original = runtime.sendMessage.bind(runtime)
+        const handler = async (message) => {
+          if (message?.type === 'tldw:request') {
+            try {
+              const data = handleRequest(message.payload || {})
+              if (data == null) {
+                return { ok: false, status: 404, error: 'Not found' }
+              }
+              return { ok: true, status: 200, data }
+            } catch (error) {
+              return { ok: false, status: 500, error: String(error || '') }
+            }
+          }
+          return original ? original(message) : { ok: true, status: 200, data: {} }
+        }
+        try {
+          runtime.sendMessage = handler
+          return
+        } catch {}
+        try {
+          Object.defineProperty(runtime, 'sendMessage', {
+            value: handler,
+            configurable: true,
+            writable: true
+          })
+        } catch {}
+      }
+
+      if (window.chrome?.runtime) {
+        patchRuntime(window.chrome.runtime)
+      }
+
+      if (window.browser?.runtime) {
+        patchRuntime(window.browser.runtime)
+      }
+    })
+
+    await page.goto(optionsUrl + '#/watchlists', { waitUntil: 'domcontentloaded' })
+
+    await expect(page.getByRole('heading', { name: 'Watchlists' })).toBeVisible()
+    await expect(page.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByText('System requires attention')).toBeVisible()
+    await expect(page.getByText('Recent Failed Runs')).toBeVisible()
+    await expect(page.getByText('Alert Monitor')).toBeVisible()
+
+    const failureNotice = page
+      .locator('.ant-notification-notice')
+      .filter({ hasText: 'Run failed' })
+      .first()
+    await expect(failureNotice).toBeVisible({ timeout: 10_000 })
+    await expect(failureNotice).toContainText('rate-limiting requests')
+    await failureNotice.getByRole('button', { name: 'View run' }).click()
+
+    await expect(page.getByRole('tab', { name: 'Runs' })).toHaveAttribute('aria-selected', 'true')
+    const runDialog = page.getByRole('dialog', { name: 'Run Details' })
+    await expect(runDialog).toBeVisible()
+    await expect(runDialog.getByText('Rate limit exceeded while fetching source')).toBeVisible()
 
     await context.close()
   })

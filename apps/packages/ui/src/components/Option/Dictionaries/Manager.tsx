@@ -1172,20 +1172,107 @@ export const DictionariesManager: React.FC = () => {
       </Modal>
       <Modal title="Dictionary Statistics" open={!!statsFor} onCancel={() => setStatsFor(null)} footer={null}>
         {statsFor && (
-          <Descriptions size="small" bordered column={1}>
-            <Descriptions.Item label="ID">{statsFor.dictionary_id}</Descriptions.Item>
-            <Descriptions.Item label="Name">{statsFor.name}</Descriptions.Item>
-            <Descriptions.Item label="Total Entries">{statsFor.total_entries}</Descriptions.Item>
-            <Descriptions.Item label="Regex Entries">{statsFor.regex_entries}</Descriptions.Item>
-            <Descriptions.Item label="Literal Entries">{statsFor.literal_entries}</Descriptions.Item>
-            <Descriptions.Item label="Groups">{(statsFor.groups||[]).join(', ')}</Descriptions.Item>
-            <Descriptions.Item label="Average Probability">{statsFor.average_probability}</Descriptions.Item>
-            <Descriptions.Item label="Total Usage Count">{statsFor.total_usage_count}</Descriptions.Item>
-          </Descriptions>
+          <div className="space-y-3">
+            <Descriptions size="small" bordered column={1}>
+              <Descriptions.Item label="ID">{statsFor.dictionary_id}</Descriptions.Item>
+              <Descriptions.Item label="Name">{statsFor.name}</Descriptions.Item>
+              <Descriptions.Item label="Total Entries">{statsFor.total_entries}</Descriptions.Item>
+              <Descriptions.Item label="Regex Entries">{statsFor.regex_entries}</Descriptions.Item>
+              <Descriptions.Item label="Literal Entries">{statsFor.literal_entries}</Descriptions.Item>
+              <Descriptions.Item label="Enabled Entries">
+                {toDisplayStatNumber(statsFor.enabled_entries)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Disabled Entries">
+                {toDisplayStatNumber(statsFor.disabled_entries)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Probabilistic Entries">
+                {toDisplayStatNumber(statsFor.probabilistic_entries)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Timed Effect Entries">
+                {toDisplayStatNumber(statsFor.timed_effect_entries)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Unused Entries">
+                {toDisplayStatNumber(statsFor.zero_usage_entries)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Groups">{toDisplayGroupSummary(statsFor.groups)}</Descriptions.Item>
+              <Descriptions.Item label="Average Probability">
+                {toDisplayProbabilitySummary(statsFor.average_probability)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Created">
+                {formatRelativeTimestamp(statsFor.created_at)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Updated">
+                {formatRelativeTimestamp(statsFor.updated_at)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Last Used">
+                {formatRelativeTimestamp(statsFor.last_used)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Total Usage Count">
+                {toDisplayStatNumber(statsFor.total_usage_count)}
+              </Descriptions.Item>
+            </Descriptions>
+
+            {Array.isArray(statsFor.entry_usage) && statsFor.entry_usage.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs font-medium text-text">Entry usage snapshot</div>
+                <div className="space-y-1 rounded border border-border bg-surface2/40 p-2">
+                  {statsFor.entry_usage.slice(0, 6).map((item: any) => (
+                    <div
+                      key={`entry-usage-${item?.entry_id}`}
+                      className="flex items-center justify-between gap-2 text-xs"
+                    >
+                      <span className="truncate font-mono text-text">
+                        {item?.pattern || `Entry ${item?.entry_id}`}
+                      </span>
+                      <span className="shrink-0 text-text-muted">
+                        {toDisplayStatNumber(item?.usage_count)} uses
+                        {item?.last_used_at
+                          ? ` · last ${formatRelativeTimestamp(item.last_used_at)}`
+                          : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </Modal>
     </div>
   )
+}
+
+function toDisplayStatNumber(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value)
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return String(parsed)
+  }
+  return "0"
+}
+
+function toDisplayGroupSummary(value: unknown): string {
+  if (!Array.isArray(value)) return "—"
+  const groups = value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0)
+  if (!groups.length) return "—"
+  return groups.join(", ")
+}
+
+function toDisplayProbabilitySummary(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value.toFixed(2)
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) {
+      return parsed.toFixed(2)
+    }
+  }
+  return "0.00"
 }
 
 /** Validates regex pattern and returns error message or null if valid */
@@ -2965,11 +3052,14 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
             size="small"
             rowKey={(r: any) => r.id}
             dataSource={filteredEntries}
-            rowClassName={(record: any) =>
-              Number(record?.id) === highlightedValidationEntryId
-                ? "bg-warn/10"
+            rowClassName={(record: any) => {
+              if (Number(record?.id) === highlightedValidationEntryId) {
+                return "bg-warn/10"
+              }
+              return toSafeNonNegativeInteger(record?.usage_count) === 0
+                ? "bg-surface2/40"
                 : ""
-            }
+            }}
             rowSelection={{
               selectedRowKeys: selectedEntryRowKeys,
               onChange: (keys) => setSelectedEntryRowKeys(keys),
@@ -3196,6 +3286,23 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                     return <span className="text-xs text-text-muted">—</span>
                   }
                   return <Tag>{group}</Tag>
+                }
+              },
+              {
+                title: "Usage",
+                dataIndex: "usage_count",
+                key: "usage_count",
+                responsive: DICTIONARY_ENTRY_COLUMN_RESPONSIVE.usage,
+                render: (value: number | null | undefined) => {
+                  const usageCount = toSafeNonNegativeInteger(value)
+                  return (
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs font-mono">{usageCount}</span>
+                      {usageCount === 0 && (
+                        <Tag className="text-[10px]">Unused</Tag>
+                      )}
+                    </div>
+                  )
                 }
               },
               {

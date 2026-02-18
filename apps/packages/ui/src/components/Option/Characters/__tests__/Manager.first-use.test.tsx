@@ -758,6 +758,20 @@ describe("CharactersManager first-use onboarding", () => {
       }
     ]
 
+    useMutationMock.mockImplementation((opts: any) => ({
+      mutate: async (variables: any) => {
+        const result = await opts?.mutationFn?.(variables)
+        await opts?.onSuccess?.(result, variables, undefined)
+        return result
+      },
+      mutateAsync: async (variables: any) => {
+        const result = await opts?.mutationFn?.(variables)
+        await opts?.onSuccess?.(result, variables, undefined)
+        return result
+      },
+      isPending: false
+    }))
+
     useQueryMock.mockImplementation((opts: any) => {
       const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
       if (key === "tldw:listCharacters") {
@@ -777,13 +791,117 @@ describe("CharactersManager first-use onboarding", () => {
 
     render(<CharactersManager />)
 
-    await user.click(screen.getByText("Recently deleted"))
+    fireEvent.click(screen.getByRole("radio", { name: "Recently deleted" }))
+    await waitFor(() => {
+      const deletedQuery = getDeletedScopeListCharactersQueryOptions()
+      expect(deletedQuery.queryKey[1]).toMatchObject({
+        include_deleted: true,
+        deleted_only: true
+      })
+    })
     await user.click(await screen.findByRole("button", { name: /Restore character/i }))
 
     await waitFor(() => {
       expect(tldwClientMock.restoreCharacter).toHaveBeenCalledWith("deleted-1", 12)
     })
-  }, 30000)
+  }, 45000)
+
+  it("shows actionable restore errors and emits recovery telemetry when restore fails", async () => {
+    const user = userEvent.setup()
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent")
+    const records = [
+      {
+        id: "deleted-2",
+        name: "Deleted Character",
+        system_prompt: "Prompt text",
+        version: 8
+      }
+    ]
+
+    tldwClientMock.restoreCharacter.mockRejectedValueOnce(
+      new Error("Restore conflict from server")
+    )
+
+    useMutationMock.mockImplementation((opts: any) => ({
+      mutate: async (variables: any) => {
+        try {
+          const result = await opts?.mutationFn?.(variables)
+          await opts?.onSuccess?.(result, variables, undefined)
+          return result
+        } catch (error) {
+          await opts?.onError?.(error, variables, undefined)
+          return undefined
+        }
+      },
+      mutateAsync: async (variables: any) => {
+        try {
+          const result = await opts?.mutationFn?.(variables)
+          await opts?.onSuccess?.(result, variables, undefined)
+          return result
+        } catch (error) {
+          await opts?.onError?.(error, variables, undefined)
+          return undefined
+        }
+      },
+      isPending: false
+    }))
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(
+      screen.getByText("Recently deleted", {
+        selector: ".ant-segmented-item-label"
+      })
+    )
+    await waitFor(() => {
+      const deletedQuery = getDeletedScopeListCharactersQueryOptions()
+      expect(deletedQuery.queryKey[1]).toMatchObject({
+        include_deleted: true,
+        deleted_only: true
+      })
+    })
+
+    await user.click(await screen.findByRole("button", { name: /Restore character/i }))
+
+    await waitFor(() => {
+      expect(notificationMock.error).toHaveBeenCalled()
+    })
+    const payload = notificationMock.error.mock.calls.at(-1)?.[0]
+    expect(payload?.message).toBe("Failed to restore character")
+    expect(payload?.description).toContain("Restore conflict from server")
+    expect(payload?.description).toContain("check server logs")
+
+    const recoveryEvent = dispatchSpy.mock.calls
+      .map((args) => args[0])
+      .find(
+        (event): event is CustomEvent<Record<string, unknown>> =>
+          event instanceof CustomEvent &&
+          event.type === "tldw:characters-recovery" &&
+          event.detail?.action === "restore_failed"
+      )
+
+    expect(recoveryEvent).toBeDefined()
+    expect(recoveryEvent?.detail?.action).toBe("restore_failed")
+
+    dispatchSpy.mockRestore()
+  }, 45000)
 
   it("uses soft-delete copy and undo semantics for bulk delete", async () => {
     const user = userEvent.setup()

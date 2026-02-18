@@ -141,6 +141,9 @@ vi.mock("antd", async () => {
     message: {
       useMessage: () => [
         {
+          open: vi.fn(),
+          warning: vi.fn(),
+          destroy: vi.fn(),
           success: mockMessageSuccess,
           error: mockMessageError,
           info: mockMessageInfo

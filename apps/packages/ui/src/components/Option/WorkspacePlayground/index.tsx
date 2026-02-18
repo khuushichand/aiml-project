@@ -652,7 +652,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
           <FileText className="h-4 w-4" />
           <span>{t("playground:sources.title", "Sources")}</span>
           {selectedSourceIds.length > 0 && (
-            <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-xs text-white">
+            <span className="ml-1 rounded-full border border-border bg-surface2 px-1.5 py-0.5 text-xs text-text">
               {selectedSourceIds.length}
             </span>
           )}
@@ -677,7 +677,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
           <Sparkles className="h-4 w-4" />
           <span>{t("playground:studio.title", "Studio")}</span>
           {generatedArtifacts.length > 0 && (
-            <span className="ml-1 rounded-full bg-success px-1.5 py-0.5 text-xs text-white">
+            <span className="ml-1 rounded-full border border-border bg-surface2 px-1.5 py-0.5 text-xs text-text">
               {generatedArtifacts.length}
             </span>
           )}
@@ -693,6 +693,25 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
   return (
     <div className="relative flex h-full flex-col bg-bg text-text">
+      <a
+        href="#workspace-main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-2 focus:z-[60] focus:rounded focus:bg-surface focus:px-3 focus:py-1.5 focus:text-sm focus:shadow-card"
+      >
+        {t("playground:workspace.skipToMain", "Skip to chat content")}
+      </a>
+      <a
+        href="#workspace-sources-panel"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-12 focus:z-[60] focus:rounded focus:bg-surface focus:px-3 focus:py-1.5 focus:text-sm focus:shadow-card"
+      >
+        {t("playground:workspace.skipToSources", "Skip to sources panel")}
+      </a>
+      <a
+        href="#workspace-studio-panel"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-[5.5rem] focus:z-[60] focus:rounded focus:bg-surface focus:px-3 focus:py-1.5 focus:text-sm focus:shadow-card"
+      >
+        {t("playground:workspace.skipToStudio", "Skip to studio panel")}
+      </a>
+
       {(showStorageQuotaWarning || showCrossTabSyncWarning) && (
         <div className="space-y-2 border-b border-border bg-surface px-3 py-2">
           {showStorageQuotaWarning && (
@@ -781,7 +800,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
           <div className="flex min-h-0 flex-1">
             {leftPaneOpen && (
-              <aside className="hidden w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col">
+              <aside
+                id="workspace-sources-panel"
+                role="complementary"
+                aria-label={t("playground:workspace.sourcesPanel", "Sources panel")}
+                className="hidden w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col"
+              >
                 <SourcesPane onHide={() => setLeftPaneCollapsed(true)} />
               </aside>
             )}
@@ -803,12 +827,20 @@ const WorkspacePlaygroundBody: React.FC = () => {
               <SourcesPane />
             </Drawer>
 
-            <main className="flex min-w-0 flex-1 flex-col">
+            <main
+              id="workspace-main-content"
+              className="flex min-w-0 flex-1 flex-col"
+            >
               <ChatPane />
             </main>
 
             {rightPaneOpen && (
-              <aside className="hidden w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col">
+              <aside
+                id="workspace-studio-panel"
+                role="complementary"
+                aria-label={t("playground:workspace.studioPanel", "Studio panel")}
+                className="hidden w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col"
+              >
                 <StudioPane onHide={() => setRightPaneCollapsed(true)} />
               </aside>
             )}

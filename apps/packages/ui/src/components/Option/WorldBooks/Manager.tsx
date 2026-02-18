@@ -9,7 +9,7 @@ import {
 } from "@/services/tldw/TldwApiClient"
 import { Pen, Trash2, BookOpen, HelpCircle, Link2, Download, BarChart3, Copy, List, MoreHorizontal, Upload as UploadIcon } from "lucide-react"
 import { useServerOnline } from "@/hooks/useServerOnline"
-import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
+import FeatureEmptyState from "../../Common/FeatureEmptyState"
 import { useTranslation } from "react-i18next"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useUndoNotification } from "@/hooks/useUndoNotification"
@@ -32,6 +32,7 @@ import {
 } from "./worldBookListUtils"
 import {
   formatEntryContentStats,
+  estimateEntryTokens,
   getPriorityBand,
   getPriorityTagColor,
   normalizeKeywordList,
@@ -142,6 +143,18 @@ const LOREBOOK_METRIC_LABELS = {
   tokenBudget: "Token budget"
 } as const
 const TEST_MATCHING_SAMPLE_STORAGE_KEY = "tldw:world-books:test-match:sample:v1"
+const FALLBACK_AI_GENERATION_MODEL = "gpt-4o-mini"
+const DEFAULT_AI_GENERATION_COUNT = 3
+const MIN_AI_GENERATION_COUNT = 1
+const MAX_AI_GENERATION_COUNT = 8
+
+type WorldBookGeneratedEntryDraft = {
+  id: string
+  keywordsText: string
+  content: string
+  priority: number
+  group: string
+}
 
 const loadSavedTestMatchingSample = (): string => {
   if (typeof window === "undefined") return ""
@@ -164,6 +177,95 @@ const persistTestMatchingSample = (value: string) => {
   } catch {
     // ignore storage failures
   }
+}
+
+const toWorldBookGenerationString = (value: unknown): string | null => {
+  if (typeof value === "string") {
+    const normalized = value.trim()
+    return normalized.length > 0 ? normalized : null
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return String(value)
+  return null
+}
+
+const toWorldBookGenerationModel = (value: unknown): string | null => {
+  const direct = toWorldBookGenerationString(value)
+  if (direct) return direct
+  if (!value || typeof value !== "object") return null
+  const modelRecord = value as Record<string, unknown>
+  return (
+    toWorldBookGenerationString(modelRecord.name) ||
+    toWorldBookGenerationString(modelRecord.id) ||
+    toWorldBookGenerationString(modelRecord.model_id) ||
+    toWorldBookGenerationString(modelRecord.display_name)
+  )
+}
+
+const pickWorldBookGenerationModel = (provider: unknown): string | null => {
+  if (!provider || typeof provider !== "object") return null
+  const providerRecord = provider as Record<string, unknown>
+  const modelsRaw = Array.isArray(providerRecord.models)
+    ? providerRecord.models
+    : Array.isArray(providerRecord.models_info)
+      ? providerRecord.models_info
+      : []
+  for (const modelEntry of modelsRaw) {
+    const model = toWorldBookGenerationModel(modelEntry)
+    if (model) return model
+  }
+  return null
+}
+
+const resolveWorldBookGenerationProviderConfig = (
+  payload: unknown
+): { provider?: string; model: string } => {
+  const result: { provider?: string; model: string } = {
+    model: FALLBACK_AI_GENERATION_MODEL
+  }
+  if (!payload || typeof payload !== "object") return result
+
+  const root = payload as Record<string, unknown>
+  const providersRaw = Array.isArray(root.providers) ? root.providers : []
+  const defaultProviderName = toWorldBookGenerationString(root.default_provider)
+
+  const providers = providersRaw
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null
+      const providerRecord = entry as Record<string, unknown>
+      const name =
+        toWorldBookGenerationString(providerRecord.name) ||
+        toWorldBookGenerationString(providerRecord.provider)
+      if (!name) return null
+      return {
+        name,
+        model: pickWorldBookGenerationModel(providerRecord)
+      }
+    })
+    .filter((entry): entry is { name: string; model: string | null } => entry !== null)
+
+  const selected =
+    providers.find((provider) => provider.name === defaultProviderName) || providers[0] || null
+  if (!selected) return result
+
+  result.provider = selected.name
+  result.model = selected.model || result.model
+  return result
+}
+
+const normalizeWorldBookCompletionText = (candidate: unknown): string => {
+  if (typeof candidate === "string") return candidate.trim()
+  if (Array.isArray(candidate)) {
+    return candidate
+      .map((part) => {
+        if (typeof part === "string") return part
+        if (!part || typeof part !== "object") return ""
+        const partRecord = part as Record<string, unknown>
+        return toWorldBookGenerationString(partRecord.text) || ""
+      })
+      .join("\n")
+      .trim()
+  }
+  return ""
 }
 
 type WorldBookFormMode = "create" | "edit"
@@ -637,7 +739,9 @@ export const WorldBooksManager: React.FC = () => {
   const { showUndoNotification } = useUndoNotification()
   const [open, setOpen] = React.useState(false)
   const [openEdit, setOpenEdit] = React.useState(false)
-  const [openEntries, setOpenEntries] = React.useState<null | { id: number; name: string; entryCount?: number }>(null)
+  const [openEntries, setOpenEntries] = React.useState<
+    null | { id: number; name: string; entryCount?: number; tokenBudget?: number }
+  >(null)
   const [openAttach, setOpenAttach] = React.useState<null | number>(null)
   const [editId, setEditId] = React.useState<number | null>(null)
   const [editExpectedVersion, setEditExpectedVersion] = React.useState<number | null>(null)
@@ -1744,11 +1848,16 @@ export const WorldBooksManager: React.FC = () => {
 
   const openEntriesWithPreset = React.useCallback(
     (
-      book: { id: number; name: string; entryCount?: number },
+      book: { id: number; name: string; entryCount?: number; tokenBudget?: number },
       preset: EntryFilterPreset = DEFAULT_ENTRY_FILTER_PRESET
     ) => {
       setEntryFilterPreset({ ...DEFAULT_ENTRY_FILTER_PRESET, ...(preset || {}) })
-      setOpenEntries({ id: book.id, name: book.name, entryCount: book.entryCount })
+      setOpenEntries({
+        id: book.id,
+        name: book.name,
+        entryCount: book.entryCount,
+        tokenBudget: book.tokenBudget
+      })
     },
     []
   )
@@ -1760,9 +1869,11 @@ export const WorldBooksManager: React.FC = () => {
       const worldBookName = String(statsFor?.name || `World Book ${worldBookId}`)
       const entryCount =
         typeof statsFor?.total_entries === "number" ? statsFor.total_entries : undefined
+      const tokenBudget =
+        typeof statsFor?.token_budget === "number" ? statsFor.token_budget : undefined
       setEntryFilterPreset({ ...DEFAULT_ENTRY_FILTER_PRESET, ...(preset || {}) })
       setStatsFor(null)
-      setOpenEntries({ id: worldBookId, name: worldBookName, entryCount })
+      setOpenEntries({ id: worldBookId, name: worldBookName, entryCount, tokenBudget })
     },
     [statsFor]
   )
@@ -1781,7 +1892,8 @@ export const WorldBooksManager: React.FC = () => {
       setOpenEntries({
         id: Number(source.id),
         name: String(source.name || `World Book ${source.id}`),
-        entryCount: typeof source.entry_count === "number" ? source.entry_count : undefined
+        entryCount: typeof source.entry_count === "number" ? source.entry_count : undefined,
+        tokenBudget: typeof source.token_budget === "number" ? source.token_budget : undefined
       })
     },
     [data]
@@ -2011,7 +2123,12 @@ export const WorldBooksManager: React.FC = () => {
           icon={<List className="w-4 h-4" />}
           onClick={() =>
             openEntriesWithPreset(
-              { id: record.id, name: record.name, entryCount: record.entry_count },
+              {
+                id: record.id,
+                name: record.name,
+                entryCount: record.entry_count,
+                tokenBudget: record.token_budget
+              },
               DEFAULT_ENTRY_FILTER_PRESET
             )
           }
@@ -2077,7 +2194,12 @@ export const WorldBooksManager: React.FC = () => {
         label: "Manage Entries",
         onClick: () =>
           openEntriesWithPreset(
-            { id: record.id, name: record.name, entryCount: record.entry_count },
+            {
+              id: record.id,
+              name: record.name,
+              entryCount: record.entry_count,
+              tokenBudget: record.token_budget
+            },
             DEFAULT_ENTRY_FILTER_PRESET
           )
       },
@@ -2722,9 +2844,14 @@ export const WorldBooksManager: React.FC = () => {
                             size="small"
                           />
                           {utilizationPercent > 100 && (
-                            <p className="text-xs text-danger">
-                              Estimated token usage exceeds the configured budget.
-                            </p>
+                            <div className="space-y-0.5">
+                              <p className="text-xs text-danger">
+                                Estimated token usage exceeds the configured budget.
+                              </p>
+                              <p className="text-xs text-text-muted">
+                                Reduce entry content or increase token budget.
+                              </p>
+                            </div>
                           )}
                         </div>
                       ) : (
@@ -2790,6 +2917,16 @@ export const WorldBooksManager: React.FC = () => {
                         strokeColor={utilizationColor}
                         size="small"
                       />
+                      {utilizationPercent > 100 && (
+                        <div className="space-y-0.5">
+                          <p className="text-xs text-danger">
+                            Estimated token usage exceeds the configured budget.
+                          </p>
+                          <p className="text-xs text-text-muted">
+                            Reduce entry content or increase token budget.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <span className="text-text-muted">Budget unavailable</span>
@@ -2925,6 +3062,9 @@ export const WorldBooksManager: React.FC = () => {
               <Tag color="blue">Editing: {openEntries.name}</Tag>
               <Tag>Entries: {openEntries.entryCount ?? '—'}</Tag>
               <Tag>Attached: {getAttachedCharacters(openEntries.id).length}</Tag>
+              {typeof openEntries.tokenBudget === "number" && (
+                <Tag>Budget: {openEntries.tokenBudget}</Tag>
+              )}
             </div>
             <Button
               size="small"
@@ -2938,6 +3078,7 @@ export const WorldBooksManager: React.FC = () => {
         <EntryManager
           worldBookId={openEntries?.id!}
           worldBookName={openEntries?.name}
+          tokenBudget={openEntries?.tokenBudget}
           worldBooks={(data || []) as any[]}
           entryFilterPreset={entryFilterPreset}
           form={entryForm}
@@ -3401,12 +3542,14 @@ const WorldBookEntryPreview: React.FC<{ worldBookId: number; entryCount: number 
 const EntryManager: React.FC<{
   worldBookId: number
   worldBookName?: string
+  tokenBudget?: number | null
   worldBooks: Array<{ id?: number; name?: string }>
   entryFilterPreset?: EntryFilterPreset
   form: any
 }> = ({
   worldBookId,
   worldBookName,
+  tokenBudget,
   worldBooks,
   entryFilterPreset = DEFAULT_ENTRY_FILTER_PRESET,
   form
@@ -3461,6 +3604,17 @@ const EntryManager: React.FC<{
     entryFilterPreset.matchFilter
   )
   const [entryGroupFilter, setEntryGroupFilter] = React.useState<string>("all")
+  const [openAiGenerate, setOpenAiGenerate] = React.useState(false)
+  const [aiPrompt, setAiPrompt] = React.useState("")
+  const [aiDefaultGroup, setAiDefaultGroup] = React.useState("")
+  const [aiEntryCount, setAiEntryCount] = React.useState(DEFAULT_AI_GENERATION_COUNT)
+  const [aiGenerating, setAiGenerating] = React.useState(false)
+  const [aiApplying, setAiApplying] = React.useState(false)
+  const [aiError, setAiError] = React.useState<string | null>(null)
+  const [aiSuggestions, setAiSuggestions] = React.useState<WorldBookGeneratedEntryDraft[]>([])
+  const [aiRunInfo, setAiRunInfo] = React.useState<{ provider?: string; model: string } | null>(
+    null
+  )
   const [addMatchingOptionsOpen, setAddMatchingOptionsOpen] = React.useState<boolean>(() =>
     readSessionBoolean("worldbooks:add-matching-options-open", false)
   )
@@ -3519,7 +3673,34 @@ const EntryManager: React.FC<{
         : normalizedEntries.length
     return { entries: normalizedEntries, totalEntryCount: normalizedTotal }
   }, [entryQueryData])
-  const { mutate: addEntry, isPending: adding } = useMutation({
+  const configuredTokenBudget = React.useMemo(() => {
+    const value = Number(tokenBudget)
+    if (!Number.isFinite(value) || value <= 0) return null
+    return value
+  }, [tokenBudget])
+  const estimatedEntryTokens = React.useMemo(
+    () =>
+      (entries || []).reduce(
+        (total: number, entry: any) => total + estimateEntryTokens(entry?.content),
+        0
+      ),
+    [entries]
+  )
+  const entryBudgetUtilizationPercent = React.useMemo(
+    () => getBudgetUtilizationPercent(estimatedEntryTokens, configuredTokenBudget),
+    [configuredTokenBudget, estimatedEntryTokens]
+  )
+  const entryBudgetUtilizationBand = React.useMemo(
+    () => getBudgetUtilizationBand(entryBudgetUtilizationPercent),
+    [entryBudgetUtilizationPercent]
+  )
+  const entryBudgetUtilizationColor = React.useMemo(
+    () => getBudgetUtilizationColor(entryBudgetUtilizationBand),
+    [entryBudgetUtilizationBand]
+  )
+  const isEntryBudgetOverLimit =
+    typeof entryBudgetUtilizationPercent === "number" && entryBudgetUtilizationPercent > 100
+  const { mutate: addEntry, mutateAsync: addEntryAsync, isPending: adding } = useMutation({
     mutationFn: (v: any) =>
       tldwClient.addWorldBookEntry(worldBookId, {
         ...v,
@@ -3879,6 +4060,175 @@ const EntryManager: React.FC<{
     }
   }
 
+  const resolveAiGenerationConfig = React.useCallback(async () => {
+    try {
+      await tldwClient.initialize()
+      const providersResponse = await tldwClient.getProviders()
+      const payload = (providersResponse as any)?.data ?? providersResponse
+      return resolveWorldBookGenerationProviderConfig(payload)
+    } catch {
+      return { model: FALLBACK_AI_GENERATION_MODEL }
+    }
+  }, [])
+
+  const handleGenerateSuggestions = async () => {
+    const topic = aiPrompt.trim()
+    if (!topic) {
+      setAiError("Add a topic or description before generating suggestions.")
+      return
+    }
+
+    setAiGenerating(true)
+    setAiError(null)
+
+    try {
+      const generationConfig = await resolveAiGenerationConfig()
+      const preferredCount = clampBulkPriority(aiEntryCount, DEFAULT_AI_GENERATION_COUNT)
+      const count = Math.min(MAX_AI_GENERATION_COUNT, Math.max(MIN_AI_GENERATION_COUNT, preferredCount))
+
+      const defaultGroup = normalizeEntryGroup(aiDefaultGroup)
+      const completionResponse = await tldwClient.createChatCompletion({
+        model: generationConfig.model,
+        api_provider: generationConfig.provider,
+        temperature: 0.3,
+        max_tokens: 900,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You generate world-book entry suggestions. Return plain text only with one suggestion per line. " +
+              'Each line must be: \"keyword1, keyword2 -> content\". ' +
+              "Do not include numbering, markdown, comments, or extra sections."
+          },
+          {
+            role: "user",
+            content:
+              `Topic: ${topic}\n` +
+              `Number of suggestions: ${count}\n` +
+              `World book: ${worldBookName || `World Book ${worldBookId}`}\n` +
+              (defaultGroup ? `Default group: ${defaultGroup}\n` : "") +
+              "Keep each content sentence concise, specific, and immediately useful in chat context."
+          }
+        ]
+      })
+      const completionPayload = await completionResponse.json()
+      const outputCandidate =
+        completionPayload?.choices?.[0]?.message?.content ??
+        completionPayload?.output ??
+        completionPayload?.content
+      const output = normalizeWorldBookCompletionText(outputCandidate)
+
+      if (!output) {
+        setAiSuggestions([])
+        throw new Error("The model returned an empty result.")
+      }
+
+      const parsed = parseBulkEntries(output)
+      const mappedSuggestions = parsed.entries.slice(0, count).map((entry, index) => ({
+        id: `${Date.now()}-${entry.sourceLine}-${index}`,
+        keywordsText: entry.keywords.join(", "),
+        content: entry.content,
+        priority: 50,
+        group: defaultGroup || ""
+      }))
+
+      if (mappedSuggestions.length === 0) {
+        const parseMessage = parsed.errors[0] || "Unable to parse generated suggestions."
+        throw new Error(parseMessage)
+      }
+
+      if (parsed.errors.length > 0) {
+        notification.warning({
+          message: "Some suggestions could not be parsed",
+          description: `${parsed.errors.length} lines were skipped.`
+        })
+      }
+
+      setAiRunInfo(generationConfig)
+      setAiSuggestions(mappedSuggestions)
+    } catch (error: any) {
+      setAiSuggestions([])
+      setAiError(error?.message || "Failed to generate suggestions.")
+    } finally {
+      setAiGenerating(false)
+    }
+  }
+
+  const updateAiSuggestion = (
+    id: string,
+    patch: Partial<WorldBookGeneratedEntryDraft>
+  ) => {
+    setAiSuggestions((previous) =>
+      previous.map((item) => (item.id === id ? { ...item, ...patch } : item))
+    )
+  }
+
+  const removeAiSuggestion = (id: string) => {
+    setAiSuggestions((previous) => previous.filter((item) => item.id !== id))
+  }
+
+  const buildAiSuggestionPayload = (
+    suggestion: WorldBookGeneratedEntryDraft
+  ): Record<string, unknown> => {
+    const keywords = normalizeKeywords(suggestion.keywordsText)
+    const content = String(suggestion.content || "").trim()
+    if (keywords.length === 0) {
+      throw new Error("Generated suggestion needs at least one keyword.")
+    }
+    if (!content) {
+      throw new Error("Generated suggestion needs content.")
+    }
+    return {
+      keywords,
+      content,
+      group: normalizeEntryGroup(suggestion.group),
+      priority: clampBulkPriority(suggestion.priority, 50),
+      enabled: true,
+      case_sensitive: false,
+      regex_match: false,
+      whole_word_match: true,
+      appendable: false,
+      metadata: {
+        generated_with_ai: true,
+        generated_provider: aiRunInfo?.provider || null,
+        generated_model: aiRunInfo?.model || FALLBACK_AI_GENERATION_MODEL,
+        generated_topic: aiPrompt.trim(),
+        generated_at: new Date().toISOString()
+      }
+    }
+  }
+
+  const applyAiSuggestion = async (suggestion: WorldBookGeneratedEntryDraft) => {
+    const payload = buildAiSuggestionPayload(suggestion)
+    await addEntryAsync(payload)
+    setAiSuggestions((previous) => previous.filter((item) => item.id !== suggestion.id))
+  }
+
+  const handleApplyAllAiSuggestions = async () => {
+    if (aiSuggestions.length === 0) return
+    setAiApplying(true)
+    setAiError(null)
+    try {
+      for (const suggestion of aiSuggestions) {
+        await applyAiSuggestion(suggestion)
+      }
+      notification.success({
+        message: "Generated suggestions saved",
+        description: "All generated entries were added to this world book."
+      })
+    } catch (error: any) {
+      setAiError(error?.message || "Failed to apply all generated suggestions.")
+    } finally {
+      setAiApplying(false)
+    }
+  }
+
+  const handleCloseAiGenerate = () => {
+    if (aiGenerating || aiApplying) return
+    setOpenAiGenerate(false)
+    setAiError(null)
+  }
+
   return (
     <div className="space-y-3">
       {status === 'pending' && <Skeleton active paragraph={{ rows: 4 }} />}
@@ -3902,6 +4252,45 @@ const EntryManager: React.FC<{
       )}
       {status === 'success' && entries.length > 0 && (
         <div className="space-y-3">
+          <div
+            className="rounded border border-border px-3 py-2 space-y-1"
+            aria-label="Entry budget utilization"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-text-muted">Estimated using ~4 characters per token.</p>
+              {typeof entryBudgetUtilizationPercent === "number" ? (
+                <p className="text-xs font-medium">
+                  {estimatedEntryTokens}/{configuredTokenBudget} ({entryBudgetUtilizationPercent.toFixed(1)}%)
+                </p>
+              ) : (
+                <p className="text-xs text-text-muted">Budget unavailable</p>
+              )}
+            </div>
+            {typeof entryBudgetUtilizationPercent === "number" ? (
+              <>
+                <Progress
+                  percent={Math.min(entryBudgetUtilizationPercent, 100)}
+                  status={isEntryBudgetOverLimit ? "exception" : "normal"}
+                  strokeColor={entryBudgetUtilizationColor}
+                  size="small"
+                />
+                {isEntryBudgetOverLimit && (
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-danger">
+                      Estimated token usage exceeds the configured budget.
+                    </p>
+                    <p className="text-xs text-text-muted">
+                      Reduce entry content or increase token budget.
+                    </p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-text-muted">
+                Configure a token budget in world book settings to track utilization.
+              </p>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <Input
               allowClear
@@ -4285,6 +4674,13 @@ const EntryManager: React.FC<{
         <div className="flex items-center justify-between mb-3">
           <h4 className="text-sm font-medium">Add New Entry</h4>
           <div className="flex items-center gap-2">
+            <Button
+              size="small"
+              onClick={() => setOpenAiGenerate(true)}
+              aria-label="Generate entries with AI"
+            >
+              Generate with AI
+            </Button>
             <Switch checked={bulkMode} onChange={setBulkMode} />
             <span className="text-xs text-text-muted">Bulk add mode</span>
           </div>
@@ -4438,6 +4834,192 @@ const EntryManager: React.FC<{
           </div>
         )}
       </div>
+
+      <Modal
+        title="Generate Entries with AI"
+        open={openAiGenerate}
+        onCancel={handleCloseAiGenerate}
+        footer={null}
+        width={900}
+        styles={{ body: MODAL_BODY_SCROLL_STYLE }}
+      >
+        <div className="space-y-3">
+          <p className="text-xs text-text-muted">
+            Generate draft keyword/content pairs, review them, and save only the ones you want.
+          </p>
+          <Form layout="vertical">
+            <Form.Item label="Topic / Notes">
+              <Input.TextArea
+                value={aiPrompt}
+                onChange={(event) => setAiPrompt(event.target.value)}
+                autoSize={{ minRows: 3, maxRows: 7 }}
+                placeholder="Describe the setting, concept, or facts you want entries for."
+                aria-label="AI generation topic"
+              />
+            </Form.Item>
+            <div className="grid gap-2 md:grid-cols-2">
+              <Form.Item label="Suggestion count">
+                <InputNumber
+                  min={MIN_AI_GENERATION_COUNT}
+                  max={MAX_AI_GENERATION_COUNT}
+                  value={aiEntryCount}
+                  onChange={(value) =>
+                    setAiEntryCount(
+                      Math.min(
+                        MAX_AI_GENERATION_COUNT,
+                        Math.max(
+                          MIN_AI_GENERATION_COUNT,
+                          Number(value || DEFAULT_AI_GENERATION_COUNT)
+                        )
+                      )
+                    )
+                  }
+                  style={{ width: "100%" }}
+                  aria-label="AI suggestion count"
+                />
+              </Form.Item>
+              <Form.Item label="Default group (optional)">
+                <Input
+                  value={aiDefaultGroup}
+                  onChange={(event) => setAiDefaultGroup(event.target.value)}
+                  placeholder="e.g., Geography"
+                  aria-label="AI default group"
+                />
+              </Form.Item>
+            </div>
+            <Button
+              type="primary"
+              loading={aiGenerating}
+              onClick={() => void handleGenerateSuggestions()}
+              aria-label="Run AI generation"
+            >
+              Generate suggestions
+            </Button>
+          </Form>
+
+          {aiRunInfo && (
+            <p className="text-xs text-text-muted">
+              Generated with {aiRunInfo.provider || "default"} / {aiRunInfo.model}.
+            </p>
+          )}
+          {aiError && (
+            <div className="rounded border border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
+              {aiError}
+            </div>
+          )}
+
+          {aiSuggestions.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-medium">
+                  Review generated suggestions ({aiSuggestions.length})
+                </p>
+                <Button
+                  size="small"
+                  type="primary"
+                  loading={aiApplying}
+                  onClick={() => void handleApplyAllAiSuggestions()}
+                  aria-label="Add all AI suggestions"
+                >
+                  Add All Suggestions
+                </Button>
+              </div>
+              <div className="space-y-2 max-h-[45vh] overflow-auto pr-1">
+                {aiSuggestions.map((suggestion, index) => (
+                  <div
+                    key={suggestion.id}
+                    className="rounded border border-border px-3 py-2 space-y-2"
+                  >
+                    <p className="text-xs text-text-muted">Suggestion {index + 1}</p>
+                    <Form layout="vertical">
+                      <Form.Item label="Keywords">
+                        <Input
+                          value={suggestion.keywordsText}
+                          onChange={(event) =>
+                            updateAiSuggestion(suggestion.id, {
+                              keywordsText: event.target.value
+                            })
+                          }
+                          aria-label={`Generated keywords ${index + 1}`}
+                        />
+                      </Form.Item>
+                      <Form.Item label="Content">
+                        <Input.TextArea
+                          value={suggestion.content}
+                          onChange={(event) =>
+                            updateAiSuggestion(suggestion.id, {
+                              content: event.target.value
+                            })
+                          }
+                          autoSize={{ minRows: 2, maxRows: 6 }}
+                          aria-label={`Generated content ${index + 1}`}
+                        />
+                      </Form.Item>
+                      <div className="grid gap-2 md:grid-cols-2">
+                        <Form.Item label="Group (optional)">
+                          <Input
+                            value={suggestion.group}
+                            onChange={(event) =>
+                              updateAiSuggestion(suggestion.id, {
+                                group: event.target.value
+                              })
+                            }
+                            aria-label={`Generated group ${index + 1}`}
+                          />
+                        </Form.Item>
+                        <Form.Item label="Priority">
+                          <InputNumber
+                            min={0}
+                            max={100}
+                            value={suggestion.priority}
+                            onChange={(value) =>
+                              updateAiSuggestion(suggestion.id, {
+                                priority: clampBulkPriority(value, 50)
+                              })
+                            }
+                            style={{ width: "100%" }}
+                            aria-label={`Generated priority ${index + 1}`}
+                          />
+                        </Form.Item>
+                      </div>
+                    </Form>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        size="small"
+                        type="primary"
+                        loading={aiApplying}
+                        onClick={async () => {
+                          setAiApplying(true)
+                          setAiError(null)
+                          try {
+                            await applyAiSuggestion(suggestion)
+                            notification.success({ message: "Generated entry added" })
+                          } catch (error: any) {
+                            setAiError(error?.message || "Failed to add generated entry.")
+                          } finally {
+                            setAiApplying(false)
+                          }
+                        }}
+                        aria-label={`Add generated suggestion ${index + 1}`}
+                      >
+                        Add Suggestion
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() => removeAiSuggestion(suggestion.id)}
+                        disabled={aiApplying}
+                        aria-label={`Discard generated suggestion ${index + 1}`}
+                      >
+                        Discard
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   )
 }

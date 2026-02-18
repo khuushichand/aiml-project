@@ -42,7 +42,7 @@ Finding IDs: `10.1` through `10.6`
 **Tests**:
 - Integration tests for share-link generation and open flows.
 - Negative-path tests for unauthorized/missing prompts.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Quick Test Path from Custom Tab
 **Goal**: Shorten feedback loop for prompt iteration.
@@ -53,7 +53,7 @@ Finding IDs: `10.1` through `10.6`
 **Tests**:
 - Component tests for quick-test action availability by prompt type/sync state.
 - Integration tests for quick-test submission and result rendering.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Prompt Studio Settings UI Exposure
 **Goal**: Make existing Studio settings user-configurable in-context.
@@ -64,7 +64,7 @@ Finding IDs: `10.1` through `10.6`
 **Tests**:
 - Component tests for settings panel controls and persistence.
 - Integration tests for default-project and auto-sync behavior changes.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

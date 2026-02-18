@@ -111,6 +111,32 @@ const normalizePageSize = (value: unknown): number => {
     : DEFAULT_PAGE_SIZE
 }
 
+type CharacterRecoveryTelemetryAction =
+  | "delete"
+  | "undo"
+  | "restore"
+  | "restore_failed"
+  | "bulk_delete"
+  | "bulk_undo"
+  | "bulk_restore"
+  | "bulk_restore_failed"
+
+const emitCharacterRecoveryTelemetry = (
+  action: CharacterRecoveryTelemetryAction,
+  payload?: Record<string, unknown>
+) => {
+  if (typeof window === "undefined") return
+  window.dispatchEvent(
+    new CustomEvent("tldw:characters-recovery", {
+      detail: {
+        action,
+        timestamp: new Date().toISOString(),
+        ...(payload || {})
+      }
+    })
+  )
+}
+
 const toCharactersSortBy = (column: string | null): CharacterListSortBy => {
   switch (column) {
     case "creator":
@@ -2970,6 +2996,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
 
       if (failedCount === 0) {
+        emitCharacterRecoveryTelemetry("bulk_restore", {
+          restored_count: restoredCount
+        })
         notification.success({
           message: t("settings:manageCharacters.bulk.restoreSuccess", {
             defaultValue: "Restored {{count}} characters",
@@ -2977,6 +3006,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           })
         })
       } else {
+        emitCharacterRecoveryTelemetry("bulk_restore_failed", {
+          restored_count: restoredCount,
+          failed_count: failedCount
+        })
         notification.warning({
           message: t("settings:manageCharacters.bulk.restorePartial", {
             defaultValue: "Restored {{success}} characters, {{fail}} failed",
@@ -3034,6 +3067,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
 
     if (successCount > 0) {
+      emitCharacterRecoveryTelemetry("bulk_delete", {
+        deleted_count: successCount,
+        failed_count: failCount
+      })
       if (bulkUndoDeleteRef.current) {
         clearTimeout(bulkUndoDeleteRef.current)
         bulkUndoDeleteRef.current = null
@@ -3066,6 +3103,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 clearTimeout(bulkUndoDeleteRef.current)
                 bulkUndoDeleteRef.current = null
               }
+              emitCharacterRecoveryTelemetry("bulk_undo", {
+                deleted_count: deletedCharacters.length
+              })
               void restoreBulkDeletedCharacters(deletedCharacters)
             }}>
             {t("common:undo", { defaultValue: "Undo" })}
@@ -3423,7 +3463,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const { mutate: restoreCharacter } = useMutation({
     mutationFn: async ({ id, version }: { id: string; version: number }) =>
       tldwClient.restoreCharacter(id, version),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      emitCharacterRecoveryTelemetry("restore", {
+        character_id: variables?.id ?? null
+      })
       qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
       notification.success({
         message: t("settings:manageCharacters.notification.restored", {
@@ -3432,12 +3475,26 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       })
     },
     onError: (e: any) => {
+      emitCharacterRecoveryTelemetry("restore_failed", {
+        reason: e?.message ?? "unknown_error"
+      })
       qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+      const detail = sanitizeServerErrorMessage(
+        e,
+        t("settings:manageCharacters.notification.restoreErrorDetail", {
+          defaultValue: "Try refreshing the list and restoring again."
+        })
+      )
       notification.error({
         message: t("settings:manageCharacters.notification.restoreError", {
           defaultValue: "Failed to restore character"
         }),
-        description: e?.message
+        description: `${detail} ${buildServerLogHint(
+          e,
+          t("settings:manageCharacters.notification.restoreLogHint", {
+            defaultValue: "If this keeps happening, check server logs."
+          })
+        )}`
       })
     }
   })
@@ -3625,6 +3682,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     // Delete the character (soft delete on backend)
     deleteCharacter({ id: characterId, expectedVersion: characterVersion }, {
       onSuccess: () => {
+        emitCharacterRecoveryTelemetry("delete", {
+          character_id: characterId
+        })
         // Create undo timeout - after 10 seconds, finalize delete
         const timeoutId = setTimeout(() => {
           setPendingDelete(null)
@@ -3653,6 +3713,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   undoDeleteRef.current = null
                 }
                 setPendingDelete(null)
+                emitCharacterRecoveryTelemetry("undo", {
+                  character_id: characterId
+                })
 
                 // Restore the character
                 // Version incremented by 1 after soft delete

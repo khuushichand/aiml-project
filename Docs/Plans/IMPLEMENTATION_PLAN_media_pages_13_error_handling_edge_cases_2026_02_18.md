@@ -22,7 +22,7 @@ Finding IDs: `13.1` through `13.7`
 - Integration tests for failed detail fetch -> inline error -> retry success.
 - Component tests for error-state rendering and reset behavior.
 - Regression tests for normal detail load transitions.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Stale Item Detection and Reconciliation
 **Goal**: Detect items deleted/changed by other clients and recover gracefully.

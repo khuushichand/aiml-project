@@ -1,6 +1,6 @@
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { WorldBooksManager } from "../Manager"
 
@@ -11,8 +11,7 @@ const {
   notificationMock,
   undoNotificationMock,
   confirmDangerMock,
-  tldwClientMock,
-  mockBreakpoints
+  tldwClientMock
 } = vi.hoisted(() => ({
   useQueryMock: vi.fn(),
   useMutationMock: vi.fn(),
@@ -43,20 +42,10 @@ const {
     bulkWorldBookEntries: vi.fn(async () => ({ success: true, affected_count: 0, failed_ids: [] })),
     exportWorldBook: vi.fn(async () => ({})),
     worldBookStatistics: vi.fn(async () => ({})),
-    importWorldBook: vi.fn(async () => ({ world_book_id: 99, name: "Arcana", entries_imported: 1, merged: false })),
+    importWorldBook: vi.fn(async () => ({})),
     attachWorldBookToCharacter: vi.fn(async () => ({})),
-    detachWorldBookFromCharacter: vi.fn(async () => ({})),
-    getWorldBookRuntimeConfig: vi.fn(async () => ({ max_recursive_depth: 10 })),
-    processWorldBookContext: vi.fn(async () => ({
-      injected_content: "",
-      entries_matched: 0,
-      books_used: 0,
-      tokens_used: 0,
-      entry_ids: [],
-      diagnostics: []
-    }))
-  },
-  mockBreakpoints: { md: true }
+    detachWorldBookFromCharacter: vi.fn(async () => ({}))
+  }
 }))
 
 vi.mock("@tanstack/react-query", () => ({
@@ -64,17 +53,6 @@ vi.mock("@tanstack/react-query", () => ({
   useMutation: useMutationMock,
   useQueryClient: useQueryClientMock
 }))
-
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>()
-  return {
-    ...actual,
-    Grid: {
-      ...actual.Grid,
-      useBreakpoint: () => mockBreakpoints
-    }
-  }
-})
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -130,7 +108,7 @@ const makeUseMutationResult = (opts: any) => ({
       return result
     } catch (error) {
       opts?.onError?.(error, variables, undefined)
-      return undefined
+      throw error
     }
   },
   mutateAsync: async (variables: any) => {
@@ -146,10 +124,9 @@ const makeUseMutationResult = (opts: any) => ({
   isPending: false
 })
 
-describe("WorldBooksManager information-gaps stage-1 test-match workflow", () => {
+describe("WorldBooksManager information gaps stage-3 budget visibility", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    window.sessionStorage.clear()
 
     useQueryClientMock.mockReturnValue({
       invalidateQueries: vi.fn()
@@ -167,17 +144,12 @@ describe("WorldBooksManager information-gaps stage-1 test-match workflow", () =>
               name: "Arcana",
               description: "Main lore",
               enabled: true,
-              scan_depth: 3,
-              token_budget: 500,
-              recursive_scanning: false,
-              entry_count: 2
+              entry_count: 2,
+              token_budget: 100
             }
           ],
           status: "success"
         })
-      }
-      if (key === "tldw:worldBookRuntimeConfig") {
-        return makeUseQueryResult({ data: { max_recursive_depth: 10 }, status: "success" })
       }
       if (key === "tldw:listCharactersForWB") {
         return makeUseQueryResult({ data: [] })
@@ -185,11 +157,34 @@ describe("WorldBooksManager information-gaps stage-1 test-match workflow", () =>
       if (key === "tldw:worldBookAttachments") {
         return makeUseQueryResult({ data: {}, isLoading: false })
       }
-      if (key === "tldw:worldBookGlobalStatistics") {
-        return makeUseQueryResult({ data: null, status: "success" })
-      }
-      if (key === "tldw:worldBookPreviewEntries") {
-        return makeUseQueryResult({ data: [], status: "success" })
+      if (key === "tldw:listWorldBookEntries") {
+        return makeUseQueryResult({
+          data: [
+            {
+              entry_id: 101,
+              keywords: ["alpha"],
+              content: "A".repeat(250),
+              priority: 80,
+              enabled: true,
+              case_sensitive: false,
+              regex_match: false,
+              whole_word_match: true,
+              appendable: false
+            },
+            {
+              entry_id: 102,
+              keywords: ["beta"],
+              content: "B".repeat(250),
+              priority: 60,
+              enabled: true,
+              case_sensitive: false,
+              regex_match: false,
+              whole_word_match: true,
+              appendable: false
+            }
+          ],
+          status: "success"
+        })
       }
       return makeUseQueryResult({})
     })
@@ -197,33 +192,23 @@ describe("WorldBooksManager information-gaps stage-1 test-match workflow", () =>
 
   afterEach(() => {
     vi.clearAllMocks()
-    window.sessionStorage.clear()
   })
 
-  it(
-    "persists sample text across component remounts within the same browser session",
-    async () => {
-      const user = userEvent.setup()
-      const { unmount } = render(<WorldBooksManager />)
+  it("shows entry drawer budget utilization and remediation when over budget", async () => {
+    const user = userEvent.setup()
+    render(<WorldBooksManager />)
 
-      await user.click(screen.getByRole("button", { name: "Open test matching modal" }))
-      const sampleInput = await screen.findByRole("textbox", {
-        name: "Sample text for keyword test"
-      })
-      fireEvent.change(sampleInput, {
-        target: { value: "The traveler mentions Arcana in passing." }
-      })
+    await user.click(screen.getByRole("button", { name: "Manage entries" }))
 
-      unmount()
-
-      render(<WorldBooksManager />)
-      await user.click(screen.getByRole("button", { name: "Open test matching modal" }))
-
-      const restoredSampleInput = await screen.findByRole("textbox", {
-        name: "Sample text for keyword test"
-      })
-      expect(restoredSampleInput).toHaveValue("The traveler mentions Arcana in passing.")
-    },
-    45000
-  )
+    await waitFor(() => {
+      expect(screen.getByLabelText("Entry budget utilization")).toBeInTheDocument()
+    })
+    expect(screen.getByText("126/100 (126.0%)")).toBeInTheDocument()
+    expect(
+      screen.getByText("Estimated token usage exceeds the configured budget.")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("Reduce entry content or increase token budget.")
+    ).toBeInTheDocument()
+  }, 15000)
 })

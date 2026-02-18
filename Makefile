@@ -10,6 +10,7 @@ TLDW_ENV_FILE ?= tldw_Server_API/Config_Files/.env
 TLDW_ENV_TEMPLATE ?= tldw_Server_API/Config_Files/.env.quickstart
 DOCKER_BASE_COMPOSE ?= Dockerfiles/docker-compose.yml
 DOCKER_WEBUI_COMPOSE ?= Dockerfiles/docker-compose.webui.yml
+NEXT_PUBLIC_API_URL ?= http://localhost:8000
 PYPI_BUILD_ARGS ?= --no-isolation
 
 quickstart-prereqs:
@@ -74,7 +75,8 @@ quickstart-docker: quickstart-docker-bootstrap
 quickstart-docker-webui: quickstart-docker-bootstrap
 	@echo "[quickstart-docker-webui] Starting API + WebUI via Docker Compose..."
 	@command -v docker >/dev/null 2>&1 || (echo "[quickstart-docker-webui] docker not found. Install Docker and retry." && exit 1)
-	docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) -f $(DOCKER_WEBUI_COMPOSE) up -d --build
+	@echo "[quickstart-docker-webui] Using NEXT_PUBLIC_API_URL=$(NEXT_PUBLIC_API_URL)"
+	NEXT_PUBLIC_API_URL="$(NEXT_PUBLIC_API_URL)" docker compose --env-file $(TLDW_ENV_FILE) -f $(DOCKER_BASE_COMPOSE) -f $(DOCKER_WEBUI_COMPOSE) up -d --build
 	@echo "[quickstart-docker-webui] First-use auth initialization is handled automatically by the app entrypoint."
 	@echo "[quickstart-docker-webui] API:   http://localhost:8000"
 	@echo "[quickstart-docker-webui] WebUI: http://localhost:8080"

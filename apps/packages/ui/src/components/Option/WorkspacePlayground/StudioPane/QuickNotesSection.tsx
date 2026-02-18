@@ -732,7 +732,8 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
     })
 
     const undoMessageKey = `workspace-note-clear-undo-${undoHandle.id}`
-    messageApi.open({
+    const maybeOpen = (messageApi as { open?: (config: unknown) => void }).open
+    const messageConfig = {
       key: undoMessageKey,
       type: "warning",
       duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
@@ -756,7 +757,17 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
           {t("common:undo", "Undo")}
         </Button>
       )
-    })
+    }
+    if (typeof maybeOpen === "function") {
+      maybeOpen(messageConfig)
+    } else {
+      const maybeWarning = (
+        messageApi as { warning?: (content: string) => void }
+      ).warning
+      if (typeof maybeWarning === "function") {
+        maybeWarning(t("playground:studio.noteCleared", "Note cleared."))
+      }
+    }
   }
 
   const handleClear = () => {

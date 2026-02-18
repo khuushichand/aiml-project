@@ -529,6 +529,8 @@ class ChatDictionaryService:
                             is_active BOOLEAN DEFAULT TRUE,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            usage_count INTEGER DEFAULT 0,
+                            last_used_at TIMESTAMP NULL,
                             version INTEGER DEFAULT 1,
                             deleted BOOLEAN DEFAULT FALSE
                         )
@@ -550,6 +552,8 @@ class ChatDictionaryService:
                             enabled BOOLEAN DEFAULT TRUE,
                             case_sensitive BOOLEAN DEFAULT TRUE,
                             sort_order INTEGER,
+                            usage_count INTEGER DEFAULT 0,
+                            last_used_at TIMESTAMP NULL,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY (dictionary_id) REFERENCES chat_dictionaries(id) ON DELETE CASCADE
@@ -566,6 +570,8 @@ class ChatDictionaryService:
                             is_active BOOLEAN DEFAULT 1,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            usage_count INTEGER DEFAULT 0,
+                            last_used_at TIMESTAMP NULL,
                             version INTEGER DEFAULT 1,
                             deleted BOOLEAN DEFAULT 0
                         )
@@ -587,6 +593,8 @@ class ChatDictionaryService:
                             enabled BOOLEAN DEFAULT 1,
                             case_sensitive BOOLEAN DEFAULT 1,
                             sort_order INTEGER,
+                            usage_count INTEGER DEFAULT 0,
+                            last_used_at TIMESTAMP NULL,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY (dictionary_id) REFERENCES chat_dictionaries(id) ON DELETE CASCADE
@@ -603,6 +611,8 @@ class ChatDictionaryService:
                 )
 
                 self._ensure_entry_sort_order_column(conn)
+                self._ensure_entry_usage_columns(conn)
+                self._ensure_dictionary_usage_columns(conn)
                 self._normalize_all_entry_sort_orders(conn)
 
                 conn.commit()
@@ -642,6 +652,112 @@ class ChatDictionaryService:
 
             if not has_column:
                 conn.execute("ALTER TABLE dictionary_entries ADD COLUMN sort_order INTEGER")
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
+            message = str(e).lower()
+            if "duplicate column" in message or "already exists" in message:
+                return
+            raise
+
+    def _ensure_entry_usage_columns(self, conn: Any) -> None:
+        """Ensure dictionary_entries has usage_count and last_used_at columns."""
+        try:
+            if self.db.backend_type == BackendType.POSTGRESQL:
+                usage_row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'dictionary_entries'
+                      AND column_name = 'usage_count'
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if not usage_row:
+                    conn.execute("ALTER TABLE dictionary_entries ADD COLUMN usage_count INTEGER DEFAULT 0")
+                    conn.execute("UPDATE dictionary_entries SET usage_count = 0 WHERE usage_count IS NULL")
+
+                last_used_row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'dictionary_entries'
+                      AND column_name = 'last_used_at'
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if not last_used_row:
+                    conn.execute("ALTER TABLE dictionary_entries ADD COLUMN last_used_at TIMESTAMP NULL")
+                return
+
+            rows = conn.execute("PRAGMA table_info(dictionary_entries)").fetchall()
+            column_names: set[str] = set()
+            for row in rows:
+                if isinstance(row, dict):
+                    name = row.get("name")
+                elif hasattr(row, "_mapping"):
+                    name = row._mapping.get("name")
+                else:
+                    name = row[1] if len(row) > 1 else None
+                if isinstance(name, str):
+                    column_names.add(name)
+
+            if "usage_count" not in column_names:
+                conn.execute("ALTER TABLE dictionary_entries ADD COLUMN usage_count INTEGER DEFAULT 0")
+                conn.execute("UPDATE dictionary_entries SET usage_count = 0 WHERE usage_count IS NULL")
+            if "last_used_at" not in column_names:
+                conn.execute("ALTER TABLE dictionary_entries ADD COLUMN last_used_at TIMESTAMP")
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
+            message = str(e).lower()
+            if "duplicate column" in message or "already exists" in message:
+                return
+            raise
+
+    def _ensure_dictionary_usage_columns(self, conn: Any) -> None:
+        """Ensure chat_dictionaries has usage_count and last_used_at columns."""
+        try:
+            if self.db.backend_type == BackendType.POSTGRESQL:
+                usage_row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'chat_dictionaries'
+                      AND column_name = 'usage_count'
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if not usage_row:
+                    conn.execute("ALTER TABLE chat_dictionaries ADD COLUMN usage_count INTEGER DEFAULT 0")
+                    conn.execute("UPDATE chat_dictionaries SET usage_count = 0 WHERE usage_count IS NULL")
+
+                last_used_row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'chat_dictionaries'
+                      AND column_name = 'last_used_at'
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if not last_used_row:
+                    conn.execute("ALTER TABLE chat_dictionaries ADD COLUMN last_used_at TIMESTAMP NULL")
+                return
+
+            rows = conn.execute("PRAGMA table_info(chat_dictionaries)").fetchall()
+            column_names: set[str] = set()
+            for row in rows:
+                if isinstance(row, dict):
+                    name = row.get("name")
+                elif hasattr(row, "_mapping"):
+                    name = row._mapping.get("name")
+                else:
+                    name = row[1] if len(row) > 1 else None
+                if isinstance(name, str):
+                    column_names.add(name)
+
+            if "usage_count" not in column_names:
+                conn.execute("ALTER TABLE chat_dictionaries ADD COLUMN usage_count INTEGER DEFAULT 0")
+                conn.execute("UPDATE chat_dictionaries SET usage_count = 0 WHERE usage_count IS NULL")
+            if "last_used_at" not in column_names:
+                conn.execute("ALTER TABLE chat_dictionaries ADD COLUMN last_used_at TIMESTAMP")
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             message = str(e).lower()
             if "duplicate column" in message or "already exists" in message:
@@ -1354,6 +1470,8 @@ class ChatDictionaryService:
                     entry["created_at"] = row_dict.get("created_at")
                     entry["updated_at"] = row_dict.get("updated_at")
                     entry["sort_order"] = row_dict.get("sort_order")
+                    entry["usage_count"] = int(row_dict.get("usage_count") or 0)
+                    entry["last_used_at"] = row_dict.get("last_used_at")
                     # Normalize group naming consistency
                     if not entry.get("group") and row_dict.get("group_name"):
                         entry["group"] = row_dict.get("group_name")
@@ -1396,6 +1514,8 @@ class ChatDictionaryService:
                 entry["created_at"] = row_dict.get("created_at")
                 entry["updated_at"] = row_dict.get("updated_at")
                 entry["sort_order"] = row_dict.get("sort_order")
+                entry["usage_count"] = int(row_dict.get("usage_count") or 0)
+                entry["last_used_at"] = row_dict.get("last_used_at")
                 if not entry.get("group") and row_dict.get("group_name"):
                     entry["group"] = row_dict.get("group_name")
                 return entry
@@ -1669,6 +1789,48 @@ class ChatDictionaryService:
 
     # --- Text Processing ---
 
+    def _record_dictionary_usage(self, dictionary_id: int) -> None:
+        """Persist usage metrics for a dictionary, best-effort."""
+        try:
+            with self.db.get_connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE chat_dictionaries
+                    SET usage_count = COALESCE(usage_count, 0) + 1,
+                        last_used_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND deleted = ?
+                    """,
+                    (dictionary_id, False),
+                )
+                conn.commit()
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
+            return
+
+    def _record_entry_usage_counts(self, usage_counts: dict[int, int]) -> None:
+        """Persist usage count increments for dictionary entries, best-effort."""
+        if not usage_counts:
+            return
+        try:
+            with self.db.get_connection() as conn:
+                for entry_id, increment in usage_counts.items():
+                    if entry_id <= 0:
+                        continue
+                    increment_value = int(increment)
+                    if increment_value <= 0:
+                        continue
+                    conn.execute(
+                        """
+                        UPDATE dictionary_entries
+                        SET usage_count = COALESCE(usage_count, 0) + ?,
+                            last_used_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (increment_value, int(entry_id)),
+                    )
+                conn.commit()
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
+            return
+
     def process_text(
         self,
         text: str,
@@ -1727,12 +1889,14 @@ class ChatDictionaryService:
             )
 
         stats = {"replacements": 0, "iterations": 0, "entries_used": [], "token_budget_exceeded": False}
+        entry_usage_increments: dict[int, int] = {}
 
-        # Track usage (in-memory)
+        # Track usage
         if dictionary_id is not None:
             try:
                 self._usage_counts[dictionary_id] = self._usage_counts.get(dictionary_id, 0) + 1
-                self._last_used_at[dictionary_id] = datetime.now()
+                self._last_used_at[dictionary_id] = datetime.now(timezone.utc)
+                self._record_dictionary_usage(dictionary_id)
             except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
                 pass
 
@@ -1756,6 +1920,10 @@ class ChatDictionaryService:
 
                         if entry.entry_id not in stats["entries_used"]:
                             stats["entries_used"].append(entry.entry_id)
+                        if isinstance(entry.entry_id, int) and entry.entry_id > 0:
+                            entry_usage_increments[entry.entry_id] = (
+                                entry_usage_increments.get(entry.entry_id, 0) + count
+                            )
 
                         # Check token budget
                         if token_budget and self.count_tokens(text) > token_budget:
@@ -1764,6 +1932,7 @@ class ChatDictionaryService:
                                 TokenBudgetExceededWarning, stacklevel=2,
                             )
                             stats["token_budget_exceeded"] = True
+                            self._record_entry_usage_counts(entry_usage_increments)
                             if return_stats:
                                 return text, stats
                             return _ProcessedTextResult(text, stats)
@@ -1773,6 +1942,7 @@ class ChatDictionaryService:
             # Stop if no replacements were made in this iteration
             if iteration_replacements == 0:
                 break
+        self._record_entry_usage_counts(entry_usage_increments)
         if return_stats:
             return text, stats
         return _ProcessedTextResult(text, stats)
@@ -2371,7 +2541,34 @@ class ChatDictionaryService:
             raise CharactersRAGDBError(f"Error cloning dictionary: {e}") from e
 
     def get_usage_statistics(self, dictionary_id: int) -> dict[str, Any]:
-        """Return simple usage statistics based on in-memory counters."""
+        """Return usage statistics for a dictionary."""
+        try:
+            with self.db.get_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT usage_count, last_used_at
+                    FROM chat_dictionaries
+                    WHERE id = ? AND deleted = ?
+                    """,
+                    (dictionary_id, False),
+                ).fetchone()
+                if row:
+                    if isinstance(row, dict):
+                        usage_count = row.get("usage_count")
+                        last_used_at = row.get("last_used_at")
+                    elif hasattr(row, "_mapping"):
+                        usage_count = row._mapping.get("usage_count")
+                        last_used_at = row._mapping.get("last_used_at")
+                    else:
+                        usage_count = row[0] if len(row) > 0 else 0
+                        last_used_at = row[1] if len(row) > 1 else None
+                    return {
+                        "times_used": int(usage_count or 0),
+                        "last_used_at": last_used_at,
+                    }
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
+            pass
+
         return {
             "times_used": int(self._usage_counts.get(dictionary_id, 0)) if hasattr(self, "_usage_counts") else 0,
             "last_used_at": (

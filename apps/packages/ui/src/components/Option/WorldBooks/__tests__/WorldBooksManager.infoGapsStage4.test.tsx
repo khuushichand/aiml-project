@@ -11,8 +11,7 @@ const {
   notificationMock,
   undoNotificationMock,
   confirmDangerMock,
-  tldwClientMock,
-  mockBreakpoints
+  tldwClientMock
 } = vi.hoisted(() => ({
   useQueryMock: vi.fn(),
   useMutationMock: vi.fn(),
@@ -31,6 +30,29 @@ const {
   confirmDangerMock: vi.fn(async () => true),
   tldwClientMock: {
     initialize: vi.fn(async () => undefined),
+    getProviders: vi.fn(async () => ({
+      default_provider: "openai",
+      providers: [
+        {
+          name: "openai",
+          models: ["gpt-4o-mini"]
+        }
+      ]
+    })),
+    createChatCompletion: vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content:
+                  "north, wind -> Northern winds carry frost from the mountain pass."
+              }
+            }
+          ]
+        })
+      )
+    ),
     createWorldBook: vi.fn(async () => ({ id: 1 })),
     updateWorldBook: vi.fn(async () => ({})),
     deleteWorldBook: vi.fn(async () => ({})),
@@ -43,20 +65,10 @@ const {
     bulkWorldBookEntries: vi.fn(async () => ({ success: true, affected_count: 0, failed_ids: [] })),
     exportWorldBook: vi.fn(async () => ({})),
     worldBookStatistics: vi.fn(async () => ({})),
-    importWorldBook: vi.fn(async () => ({ world_book_id: 99, name: "Arcana", entries_imported: 1, merged: false })),
+    importWorldBook: vi.fn(async () => ({})),
     attachWorldBookToCharacter: vi.fn(async () => ({})),
-    detachWorldBookFromCharacter: vi.fn(async () => ({})),
-    getWorldBookRuntimeConfig: vi.fn(async () => ({ max_recursive_depth: 10 })),
-    processWorldBookContext: vi.fn(async () => ({
-      injected_content: "",
-      entries_matched: 0,
-      books_used: 0,
-      tokens_used: 0,
-      entry_ids: [],
-      diagnostics: []
-    }))
-  },
-  mockBreakpoints: { md: true }
+    detachWorldBookFromCharacter: vi.fn(async () => ({}))
+  }
 }))
 
 vi.mock("@tanstack/react-query", () => ({
@@ -64,17 +76,6 @@ vi.mock("@tanstack/react-query", () => ({
   useMutation: useMutationMock,
   useQueryClient: useQueryClientMock
 }))
-
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>()
-  return {
-    ...actual,
-    Grid: {
-      ...actual.Grid,
-      useBreakpoint: () => mockBreakpoints
-    }
-  }
-})
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -130,7 +131,7 @@ const makeUseMutationResult = (opts: any) => ({
       return result
     } catch (error) {
       opts?.onError?.(error, variables, undefined)
-      return undefined
+      throw error
     }
   },
   mutateAsync: async (variables: any) => {
@@ -146,7 +147,7 @@ const makeUseMutationResult = (opts: any) => ({
   isPending: false
 })
 
-describe("WorldBooksManager information-gaps stage-2 grouping", () => {
+describe("WorldBooksManager information gaps stage-4 AI generation", () => {
   beforeEach(() => {
     vi.clearAllMocks()
 
@@ -166,17 +167,12 @@ describe("WorldBooksManager information-gaps stage-2 grouping", () => {
               name: "Arcana",
               description: "Main lore",
               enabled: true,
-              scan_depth: 3,
-              token_budget: 500,
-              recursive_scanning: false,
-              entry_count: 3
+              entry_count: 1,
+              token_budget: 200
             }
           ],
           status: "success"
         })
-      }
-      if (key === "tldw:worldBookRuntimeConfig") {
-        return makeUseQueryResult({ data: { max_recursive_depth: 10 }, status: "success" })
       }
       if (key === "tldw:listCharactersForWB") {
         return makeUseQueryResult({ data: [] })
@@ -184,51 +180,21 @@ describe("WorldBooksManager information-gaps stage-2 grouping", () => {
       if (key === "tldw:worldBookAttachments") {
         return makeUseQueryResult({ data: {}, isLoading: false })
       }
-      if (key === "tldw:worldBookGlobalStatistics") {
-        return makeUseQueryResult({ data: null, status: "success" })
-      }
-      if (key === "tldw:worldBookPreviewEntries") {
-        return makeUseQueryResult({ data: [], status: "success" })
-      }
       if (key === "tldw:listWorldBookEntries") {
         return makeUseQueryResult({
-          data: {
-            entries: [
-              {
-                entry_id: 10,
-                keywords: ["north sea"],
-                content: "Ocean routes and currents.",
-                group: "Geography",
-                priority: 50,
-                enabled: true,
-                case_sensitive: false,
-                regex_match: false,
-                whole_word_match: true
-              },
-              {
-                entry_id: 11,
-                keywords: ["fall of empires"],
-                content: "Timeline of the empire collapse.",
-                metadata: { group: "History" },
-                priority: 40,
-                enabled: true,
-                case_sensitive: false,
-                regex_match: false,
-                whole_word_match: true
-              },
-              {
-                entry_id: 12,
-                keywords: ["generic"],
-                content: "Ungrouped lore note.",
-                priority: 20,
-                enabled: true,
-                case_sensitive: false,
-                regex_match: false,
-                whole_word_match: true
-              }
-            ],
-            total: 3
-          },
+          data: [
+            {
+              entry_id: 11,
+              keywords: ["seed"],
+              content: "Seed lore entry",
+              priority: 40,
+              enabled: true,
+              case_sensitive: false,
+              regex_match: false,
+              whole_word_match: true,
+              appendable: false
+            }
+          ],
           status: "success"
         })
       }
@@ -240,52 +206,43 @@ describe("WorldBooksManager information-gaps stage-2 grouping", () => {
     vi.clearAllMocks()
   })
 
-  it(
-    "renders group badges and filters entries by group",
-    async () => {
-      const user = userEvent.setup()
-      render(<WorldBooksManager />)
+  it("generates, allows edits, and saves suggestions with provider/model metadata", async () => {
+    const user = userEvent.setup()
+    render(<WorldBooksManager />)
 
-      await user.click(screen.getByRole("button", { name: "Manage entries" }))
+    await user.click(screen.getByRole("button", { name: "Manage entries" }))
+    await user.click(screen.getByRole("button", { name: "Generate entries with AI" }))
 
-      expect(await screen.findByText("Geography")).toBeInTheDocument()
-      expect(screen.getByText("History")).toBeInTheDocument()
-      expect(screen.getByText("Ungrouped")).toBeInTheDocument()
+    await user.type(screen.getByLabelText("AI generation topic"), "Northern weather lore")
+    await user.type(screen.getByLabelText("AI default group"), " Weather ")
+    await user.clear(screen.getByLabelText("AI suggestion count"))
+    await user.type(screen.getByLabelText("AI suggestion count"), "1")
+    await user.click(screen.getByRole("button", { name: "Run AI generation" }))
 
-      await user.click(screen.getByRole("combobox", { name: "Filter entries by group" }))
-      await user.click(screen.getByRole("option", { name: "Geography" }))
+    await waitFor(() => {
+      expect(screen.getByText("Generated with openai / gpt-4o-mini.")).toBeInTheDocument()
+    })
 
-      expect(screen.getByText("Ocean routes and currents.")).toBeInTheDocument()
-      expect(screen.queryByText("Timeline of the empire collapse.")).not.toBeInTheDocument()
-      expect(screen.queryByText("Ungrouped lore note.")).not.toBeInTheDocument()
-    },
-    20000
-  )
+    const generatedContent = screen.getByLabelText("Generated content 1")
+    await user.clear(generatedContent)
+    await user.type(generatedContent, "Edited generated lore")
+    await user.click(screen.getByRole("button", { name: "Add generated suggestion 1" }))
 
-  it(
-    "sends normalized group values when adding entries",
-    async () => {
-      const user = userEvent.setup()
-      render(<WorldBooksManager />)
-
-      await user.click(screen.getByRole("button", { name: "Manage entries" }))
-
-      const contentInput = await screen.findByRole("textbox", { name: "Content" })
-      await user.type(contentInput, "Trade winds summary")
-      const groupInput = screen.getByRole("textbox", { name: "Group (optional)" })
-      await user.type(groupInput, "  Geography  ")
-      await user.click(screen.getByRole("button", { name: "Add Entry" }))
-
-      await waitFor(() => {
-        expect(tldwClientMock.addWorldBookEntry).toHaveBeenCalledWith(
-          1,
-          expect.objectContaining({
-            content: "Trade winds summary",
-            group: "Geography"
+    await waitFor(() => {
+      expect(tldwClientMock.addWorldBookEntry).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          keywords: ["north", "wind"],
+          content: "Edited generated lore",
+          group: "Weather",
+          metadata: expect.objectContaining({
+            generated_with_ai: true,
+            generated_provider: "openai",
+            generated_model: "gpt-4o-mini",
+            generated_topic: "Northern weather lore"
           })
-        )
-      })
-    },
-    20000
-  )
+        })
+      )
+    })
+  }, 20000)
 })

@@ -19,6 +19,8 @@ If you have Python 3.10+ (recommended: 3.12):
 ```bash
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
 make quickstart-install
+# If `python3` is older than 3.10 on your machine:
+# make quickstart-install PYTHON=python3.12
 ```
 
 This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts the server. Verify with:
@@ -26,7 +28,7 @@ This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts t
 curl http://localhost:8000/health
 ```
 
-Already have dependencies installed? Use `make quickstart`.
+Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
 
 **Not working?** Continue with the step-by-step options below.
 

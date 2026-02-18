@@ -96,8 +96,43 @@ def _entry_dict_to_response(
             if entry_data.get("sort_order") is not None
             else None
         ),
+        usage_count=int(entry_data.get("usage_count", 0) or 0),
+        last_used_at=_coerce_optional_datetime(entry_data.get("last_used_at")),
         created_at=coerce_datetime(entry_data.get("created_at")),
         updated_at=coerce_datetime(entry_data.get("updated_at")),
+    )
+
+
+def _coerce_optional_datetime(value: Any) -> datetime.datetime | None:
+    """Best-effort conversion for optional datetime fields."""
+    if value is None:
+        return None
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, str):
+        normalized = value.replace("Z", "+00:00").replace(" ", "T")
+        try:
+            return datetime.datetime.fromisoformat(normalized)
+        except ValueError:
+            for fmt in (
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S.%f",
+            ):
+                try:
+                    return datetime.datetime.strptime(normalized, fmt)
+                except ValueError:
+                    continue
+            return None
+    return None
+
+
+def _entry_has_timed_effects(entry_data: dict[str, Any]) -> bool:
+    timed_effects = parse_timed_effects(entry_data.get("timed_effects"))
+    if not timed_effects:
+        return False
+    return any(
+        int(getattr(timed_effects, key, 0) or 0) > 0
+        for key in ("sticky", "cooldown", "delay")
     )
 
 
@@ -863,8 +898,27 @@ async def get_dictionary_statistics(
     regex_count = int(stats.get("regex_entries", 0))
     total_entries = int(stats.get("total_entries", len(entries)))
     literal_count = int(stats.get("literal_entries", total_entries - regex_count))
-    groups = list({e.get("group") for e in entries if e.get("group")})
+    groups = sorted({str(e.get("group")).strip() for e in entries if str(e.get("group") or "").strip()})
     avg_probability = sum(float(e.get("probability", 1.0)) for e in entries) / len(entries) if entries else 0.0
+    enabled_entries = sum(1 for entry in entries if bool(entry.get("enabled", True)))
+    disabled_entries = max(total_entries - enabled_entries, 0)
+    probabilistic_entries = int(stats.get("probabilistic_entries", 0))
+    timed_effect_entries = sum(1 for entry in entries if _entry_has_timed_effects(entry))
+    entry_usage = [
+        {
+            "entry_id": int(entry.get("id")),
+            "pattern": str(entry.get("pattern") or entry.get("key") or ""),
+            "usage_count": int(entry.get("usage_count", 0) or 0),
+            "last_used_at": _coerce_optional_datetime(entry.get("last_used_at")),
+        }
+        for entry in entries
+        if entry.get("id") is not None
+    ]
+    entry_usage.sort(
+        key=lambda item: (item.get("usage_count", 0), int(item.get("entry_id", 0))),
+        reverse=True,
+    )
+    zero_usage_entries = sum(1 for item in entry_usage if int(item.get("usage_count", 0) or 0) == 0)
 
     return DictionaryStatistics(
         dictionary_id=dictionary_id,
@@ -872,8 +926,16 @@ async def get_dictionary_statistics(
         total_entries=total_entries,
         regex_entries=regex_count,
         literal_entries=literal_count,
+        enabled_entries=enabled_entries,
+        disabled_entries=disabled_entries,
+        probabilistic_entries=probabilistic_entries,
+        timed_effect_entries=timed_effect_entries,
         groups=groups,
         average_probability=avg_probability,
-        total_usage_count=usage_stats.get("times_used"),
-        last_used=None,
+        created_at=coerce_datetime(dict_data.get("created_at")),
+        updated_at=coerce_datetime(dict_data.get("updated_at")),
+        zero_usage_entries=zero_usage_entries,
+        entry_usage=entry_usage,
+        total_usage_count=int(usage_stats.get("times_used", 0) or 0),
+        last_used=_coerce_optional_datetime(usage_stats.get("last_used_at")),
     )

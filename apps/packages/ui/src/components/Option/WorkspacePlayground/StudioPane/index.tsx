@@ -502,7 +502,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         })
 
         const undoMessageKey = `workspace-artifact-undo-${undoHandle.id}`
-        messageApi.open({
+        const maybeOpen = (messageApi as { open?: (config: unknown) => void })
+          .open
+        const messageConfig = {
           key: undoMessageKey,
           type: "warning",
           duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
@@ -526,7 +528,19 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
               {t("common:undo", "Undo")}
             </Button>
           )
-        })
+        }
+        if (typeof maybeOpen === "function") {
+          maybeOpen(messageConfig)
+        } else {
+          const maybeWarning = (
+            messageApi as { warning?: (content: string) => void }
+          ).warning
+          if (typeof maybeWarning === "function") {
+            maybeWarning(
+              t("playground:studio.undoDeleteOutput", "Output deleted.")
+            )
+          }
+        }
       }
     })
   }
@@ -1104,6 +1118,8 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         <button
           type="button"
           onClick={() => setStudioExpanded(!studioExpanded)}
+          aria-expanded={studioExpanded}
+          aria-controls="studio-output-types-section"
           className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-surface2/50"
         >
           <h3 className="text-xs font-semibold uppercase text-text-muted">
@@ -1115,8 +1131,11 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             <ChevronDown className="h-4 w-4 text-text-muted" />
           )}
         </button>
-        {studioExpanded && (
-          <div className="px-4 pb-4">
+        <div
+          id="studio-output-types-section"
+          hidden={!studioExpanded}
+          className="px-4 pb-4"
+        >
         {isGeneratingOutput && (
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-text-muted">
@@ -1225,6 +1244,8 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           <button
             type="button"
             onClick={() => setShowTtsSettings(!showTtsSettings)}
+            aria-expanded={showAudioSettingsPanel}
+            aria-controls="studio-audio-settings-panel"
             className="flex w-full items-center justify-between rounded border border-border bg-surface2/50 px-3 py-2 text-xs text-text-muted hover:bg-surface2"
           >
             <span className="flex items-center gap-2">
@@ -1240,6 +1261,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
 
           {showAudioSettingsPanel && (
             <div
+              id="studio-audio-settings-panel"
               className={`mt-2 rounded border border-border bg-surface2/30 p-3 ${
                 isMobile ? "space-y-4" : "space-y-3"
               }`}
@@ -1374,7 +1396,6 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           )}
         </div>
         </div>
-        )}
       </div>
 
       {/* Generated Outputs Section - Collapsible */}
@@ -1382,6 +1403,8 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         <button
           type="button"
           onClick={() => setOutputsExpanded(!outputsExpanded)}
+          aria-expanded={outputsExpanded}
+          aria-controls="studio-generated-outputs-section"
           className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-surface2/50"
         >
           <h3 className="text-xs font-semibold uppercase text-text-muted">
@@ -1398,11 +1421,12 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             <ChevronDown className="h-4 w-4 text-text-muted" />
           )}
         </button>
-        {outputsExpanded && (
-          <div
-            className="custom-scrollbar min-h-[10rem] overflow-y-auto px-4 pb-4"
-            style={{ maxHeight: "40vh" }}
-          >
+        <div
+          id="studio-generated-outputs-section"
+          hidden={!outputsExpanded}
+          className="custom-scrollbar min-h-[10rem] overflow-y-auto px-4 pb-4"
+          style={{ maxHeight: "40vh" }}
+        >
           {generatedArtifacts.length === 0 ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -1618,7 +1642,6 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             </div>
           )}
           </div>
-        )}
       </div>
 
       {/* Quick Notes Section - Collapsible, fills remaining height */}

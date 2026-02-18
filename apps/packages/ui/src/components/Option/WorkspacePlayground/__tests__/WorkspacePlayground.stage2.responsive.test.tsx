@@ -105,6 +105,7 @@ vi.mock("antd", () => ({
       {Array.isArray(items)
         ? items.map((item: any) => (
             <div key={item.key} data-testid={`tab-${item.key}`}>
+              <div data-testid={`tab-label-${item.key}`}>{item.label}</div>
               {item.children}
             </div>
           ))
@@ -138,5 +139,27 @@ describe("WorkspacePlayground Stage 2 drawer responsiveness", () => {
       "data-mask",
       "false"
     )
+  })
+
+  it("renders mobile tab count badges with AA-safe token classes", () => {
+    testState.isMobile = true
+    testState.selectedSourceIds = ["source-1", "source-2"]
+    testState.generatedArtifacts = [
+      { id: "artifact-1" },
+      { id: "artifact-2" },
+      { id: "artifact-3" }
+    ]
+
+    render(<WorkspacePlayground />)
+
+    const sourcesLabel = screen.getByTestId("tab-label-sources")
+    const studioLabel = screen.getByTestId("tab-label-studio")
+    const sourceCountBadge = screen.getByText("2", { selector: "span" })
+    const studioCountBadge = screen.getByText("3", { selector: "span" })
+
+    expect(sourcesLabel).toContainElement(sourceCountBadge)
+    expect(studioLabel).toContainElement(studioCountBadge)
+    expect(sourceCountBadge).toHaveClass("bg-surface2", "text-text")
+    expect(studioCountBadge).toHaveClass("bg-surface2", "text-text")
   })
 })

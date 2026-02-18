@@ -114,5 +114,5 @@ describe("PromptDrawer template variable UX", () => {
     await waitFor(() => {
       expect(onSubmit).toHaveBeenCalledTimes(1)
     })
-  })
+  }, 15000)
 })

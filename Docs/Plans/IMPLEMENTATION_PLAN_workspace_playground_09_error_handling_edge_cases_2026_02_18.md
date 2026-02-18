@@ -46,7 +46,7 @@ Finding IDs: `9.1` through `9.7`
 - Unit tests for rehydrate migration of interrupted artifacts.
 - Integration tests for undo manager restore/purge lifecycle.
 - Regression tests across source/artifact/workspace/note destructive actions.
-**Status**: In Progress
+**Status**: Complete
 
 ## Dependencies
 
@@ -106,3 +106,32 @@ Finding IDs: `9.1` through `9.7`
 - Stage 3 files updated:
   - `apps/packages/ui/src/store/workspace.ts`
   - `apps/packages/ui/src/store/__tests__/workspace.test.ts`
+- Stage 3 completed:
+  - Added shared workspace undo manager with 5-second restore window and timeout purge:
+    - `scheduleWorkspaceUndoAction`,
+    - `undoWorkspaceAction`,
+    - pending-action lifecycle cleanup after timeout.
+  - Added store undo primitives for destructive flows:
+    - `restoreSource`,
+    - `restoreArtifact`,
+    - `captureUndoSnapshot`,
+    - `restoreUndoSnapshot`.
+  - Wired undo-toast behavior across destructive workspace actions:
+    - source removal (Sources pane),
+    - output deletion (Studio),
+    - workspace deletion (Workspace header),
+    - quick note clear (Quick Notes).
+  - Kept interrupted-generation recovery migration (generating -> failed) and added additional snapshot/restore tests for destructive undo semantics.
+- Stage 3 additional files updated:
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/undo-manager.ts`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/SourcesPane/index.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/QuickNotesSection.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/WorkspaceHeader.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/undo-manager.test.ts`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/SourcesPane.stage2.test.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage1.test.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage3.test.tsx`
+- Stage 3 validation:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__/undo-manager.test.ts src/store/__tests__/workspace.test.ts src/components/Option/WorkspacePlayground/__tests__/SourcesPane.stage2.test.tsx src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage1.test.tsx src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage3.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspaceHeader.test.tsx src/components/Option/WorkspacePlayground/__tests__/QuickNotesSection.stage2.test.tsx src/components/Option/WorkspacePlayground/__tests__/QuickNotesSection.stage3.test.tsx src/components/Option/WorkspacePlayground/__tests__/QuickNotesSection.stage4.test.tsx --reporter=dot`

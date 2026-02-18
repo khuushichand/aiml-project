@@ -313,7 +313,10 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
             })
 
             const undoMessageKey = `workspace-source-undo-${undoHandle.id}`
-            messageApi.open({
+            const maybeOpen = (
+              messageApi as { open?: (config: unknown) => void }
+            ).open
+            const messageConfig = {
               key: undoMessageKey,
               type: "warning",
               duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
@@ -337,7 +340,17 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
                   {t("common:undo", "Undo")}
                 </Button>
               )
-            })
+            }
+            if (typeof maybeOpen === "function") {
+              maybeOpen(messageConfig)
+            } else {
+              const maybeWarning = (
+                messageApi as { warning?: (content: string) => void }
+              ).warning
+              if (typeof maybeWarning === "function") {
+                maybeWarning(t("playground:sources.undoRemove", "Source removed."))
+              }
+            }
           }}
           data-testid={`remove-source-${source.id}`}
           className="shrink-0 rounded p-1 text-text-muted opacity-0 transition hover:bg-error/10 hover:text-error group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11 [@media(hover:none)]:opacity-100"

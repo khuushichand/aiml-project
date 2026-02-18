@@ -101,4 +101,27 @@ describe("PromptActionsMenu", () => {
     await user.click(shareItem)
     expect(onShareLink).toHaveBeenCalledTimes(1)
   })
+
+  it("shows quick test action when handler is provided", async () => {
+    const user = userEvent.setup()
+    const onQuickTest = vi.fn()
+
+    render(
+      <PromptActionsMenu
+        promptId="p4"
+        syncStatus="local"
+        onEdit={vi.fn()}
+        onDuplicate={vi.fn()}
+        onUseInChat={vi.fn()}
+        onQuickTest={onQuickTest}
+        onDelete={vi.fn()}
+      />
+    )
+
+    const quickTestItem = screen.getByTestId("menu-item-quickTest")
+    expect(quickTestItem).toBeInTheDocument()
+
+    await user.click(quickTestItem)
+    expect(onQuickTest).toHaveBeenCalledTimes(1)
+  })
 })

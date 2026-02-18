@@ -143,7 +143,9 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         })
 
         const undoMessageKey = `workspace-delete-undo-${undoHandle.id}`
-        messageApi.open({
+        const maybeOpen = (messageApi as { open?: (config: unknown) => void })
+          .open
+        const messageConfig = {
           key: undoMessageKey,
           type: "warning",
           duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
@@ -170,7 +172,17 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
               {t("common:undo", "Undo")}
             </button>
           )
-        })
+        }
+        if (typeof maybeOpen === "function") {
+          maybeOpen(messageConfig)
+        } else {
+          const maybeWarning = (
+            messageApi as { warning?: (content: string) => void }
+          ).warning
+          if (typeof maybeWarning === "function") {
+            maybeWarning(t("playground:workspace.deleted", "Workspace deleted."))
+          }
+        }
       },
       centered: true,
       maskClosable: false

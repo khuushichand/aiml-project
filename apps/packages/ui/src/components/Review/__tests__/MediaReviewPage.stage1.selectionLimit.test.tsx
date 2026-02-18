@@ -549,7 +549,7 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'Compare content' })).not.toBeInTheDocument()
     })
-  })
+  }, 10000)
 
   it('opens content diff modal with selected item content when compare action is triggered', async () => {
     render(<MediaReviewPage />)

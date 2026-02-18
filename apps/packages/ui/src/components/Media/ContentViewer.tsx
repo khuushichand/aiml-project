@@ -114,6 +114,10 @@ const TEXT_SIZE_CONTROL_OPTIONS: Array<{
 const LEADING_TRANSCRIPT_TIMESTAMP_PATTERN =
   /^(\s*)(?:\[(\d{1,2}:\d{2}(?::\d{2})?)\]|(\d{1,2}:\d{2}(?::\d{2})?))(\s*[-–—:]?\s*)(.*)$/
 
+export const LARGE_PLAIN_CONTENT_THRESHOLD_CHARS = 120_000
+export const LARGE_PLAIN_CONTENT_CHUNK_CHARS = 32_000
+const LARGE_PLAIN_CONTENT_PREFETCH_MARGIN_PX = 640
+
 const parseTimestampToSeconds = (value: string): number | null => {
   const trimmed = value.trim()
   if (!trimmed) return null
@@ -320,6 +324,37 @@ export const getNextFindMatchIndex = (
     return (currentIndex + 1) % totalMatches
   }
   return (currentIndex - 1 + totalMatches) % totalMatches
+}
+
+const LARGE_PLAIN_TEXT_THRESHOLD_CHARS = 200_000
+const LARGE_PLAIN_TEXT_CHUNK_SIZE = 16_000
+const LARGE_PLAIN_TEXT_INITIAL_CHUNKS = 3
+const LARGE_PLAIN_TEXT_INCREMENT_CHUNKS = 2
+const LARGE_PLAIN_TEXT_SCROLL_PREFETCH_PX = 480
+
+export const splitLargePlainTextChunks = (
+  text: string,
+  targetChunkSize: number = LARGE_PLAIN_TEXT_CHUNK_SIZE
+): string[] => {
+  if (!text) return []
+  if (!Number.isFinite(targetChunkSize) || targetChunkSize <= 0) {
+    return [text]
+  }
+
+  const chunks: string[] = []
+  let start = 0
+  while (start < text.length) {
+    let end = Math.min(text.length, start + targetChunkSize)
+    if (end < text.length) {
+      const newlineIndex = text.lastIndexOf('\n', end)
+      if (newlineIndex > start + Math.floor(targetChunkSize / 3)) {
+        end = newlineIndex + 1
+      }
+    }
+    chunks.push(text.slice(start, end))
+    start = end
+  }
+  return chunks
 }
 
 const findHeadingMatchInContent = (
@@ -572,6 +607,9 @@ export function ContentViewer({
   const [editingContentText, setEditingContentText] = useState('')
   const [metadataDetailsExpanded, setMetadataDetailsExpanded] = useState(false)
   const [showBackToTop, setShowBackToTop] = useState(false)
+  const [visiblePlainContentChars, setVisiblePlainContentChars] = useState(
+    () => content.length
+  )
   const [embeddedMediaUrl, setEmbeddedMediaUrl] = useState<string | null>(null)
   const [embeddedMediaLoading, setEmbeddedMediaLoading] = useState(false)
   const [embeddedMediaError, setEmbeddedMediaError] = useState<string | null>(null)
@@ -784,6 +822,7 @@ export function ContentViewer({
       }),
     [allowRichRendering, contentDisplayMode, resolvedContentFormat]
   )
+  const normalizedFindQuery = useMemo(() => normalizeFindQuery(findQuery), [findQuery])
   const transcriptLines = useMemo(
     () => (content ? content.replace(/\r\n/g, '\n').split('\n') : []),
     [content]
@@ -794,7 +833,27 @@ export function ContentViewer({
       transcriptLines.some((line) => LEADING_TRANSCRIPT_TIMESTAMP_PATTERN.test(line)),
     [shouldShowEmbeddedPlayer, transcriptLines]
   )
-  const normalizedFindQuery = useMemo(() => normalizeFindQuery(findQuery), [findQuery])
+  const shouldUseChunkedPlainRendering = useMemo(
+    () =>
+      effectiveRenderMode === 'plain' &&
+      !hasClickableTranscriptTimestamps &&
+      !normalizedFindQuery &&
+      content.length > LARGE_PLAIN_CONTENT_THRESHOLD_CHARS,
+    [content.length, effectiveRenderMode, hasClickableTranscriptTimestamps, normalizedFindQuery]
+  )
+  const visiblePlainContent = useMemo(() => {
+    if (!content) return ''
+    if (!shouldUseChunkedPlainRendering) return content
+    return content.slice(0, Math.max(0, Math.min(content.length, visiblePlainContentChars)))
+  }, [content, shouldUseChunkedPlainRendering, visiblePlainContentChars])
+  const hasUnrenderedPlainContent =
+    shouldUseChunkedPlainRendering && visiblePlainContentChars < content.length
+  const loadMorePlainContent = useCallback(() => {
+    if (!shouldUseChunkedPlainRendering) return
+    setVisiblePlainContentChars((prev) =>
+      Math.min(content.length, Math.max(0, prev) + LARGE_PLAIN_CONTENT_CHUNK_CHARS)
+    )
+  }, [content.length, shouldUseChunkedPlainRendering])
   const findMatchCount = findMatchOffsets.length
 
   const moveFindMatch = useCallback(
@@ -822,7 +881,7 @@ export function ContentViewer({
       })
     }
     if (!normalizedFindQuery || findMatchOffsets.length === 0) {
-      return content
+      return shouldUseChunkedPlainRendering ? visiblePlainContent : content
     }
 
     const parts: React.ReactNode[] = []
@@ -860,7 +919,59 @@ export function ContentViewer({
     }
 
     return <>{parts}</>
-  }, [activeFindMatchIndex, content, findMatchOffsets, normalizedFindQuery, t])
+  }, [
+    activeFindMatchIndex,
+    content,
+    findMatchOffsets,
+    normalizedFindQuery,
+    shouldUseChunkedPlainRendering,
+    t,
+    visiblePlainContent
+  ])
+
+  useEffect(() => {
+    if (!content) {
+      setVisiblePlainContentChars(0)
+      return
+    }
+    if (!shouldUseChunkedPlainRendering) {
+      setVisiblePlainContentChars(content.length)
+      return
+    }
+    setVisiblePlainContentChars(Math.min(content.length, LARGE_PLAIN_CONTENT_CHUNK_CHARS))
+  }, [content.length, selectedMedia?.id, shouldUseChunkedPlainRendering])
+
+  useEffect(() => {
+    if (!hasUnrenderedPlainContent) return
+    const container = contentScrollContainerRef.current
+    if (!container) return
+
+    const maybeLoadMore = () => {
+      if (container.clientHeight <= 0 || container.scrollHeight <= 0) {
+        return
+      }
+      if (
+        container.scrollTop + container.clientHeight <
+        container.scrollHeight - LARGE_PLAIN_CONTENT_PREFETCH_MARGIN_PX
+      ) {
+        return
+      }
+      setVisiblePlainContentChars((prev) =>
+        Math.min(content.length, Math.max(0, prev) + LARGE_PLAIN_CONTENT_CHUNK_CHARS)
+      )
+    }
+
+    if (
+      visiblePlainContentChars === LARGE_PLAIN_CONTENT_CHUNK_CHARS &&
+      container.scrollTop > 0
+    ) {
+      maybeLoadMore()
+    }
+    container.addEventListener('scroll', maybeLoadMore, { passive: true })
+    return () => {
+      container.removeEventListener('scroll', maybeLoadMore)
+    }
+  }, [content.length, hasUnrenderedPlainContent, visiblePlainContentChars])
 
   useEffect(() => {
     const offsets = findInContentOffsets(content, findQuery)
@@ -1986,7 +2097,11 @@ export function ContentViewer({
       </div>
 
       {/* Content Area */}
-      <div ref={contentScrollContainerRef} className="flex-1 overflow-y-auto p-4">
+      <div
+        ref={contentScrollContainerRef}
+        className="flex-1 overflow-y-auto p-4"
+        data-testid="content-scroll-container"
+      >
         {isDetailLoading ? (
           <div
             className="flex flex-col items-center justify-center h-64 text-text-muted"
@@ -2493,11 +2608,37 @@ export function ContentViewer({
                         })}
                       </div>
                     ) : (
-                      <pre
-                        className={`whitespace-pre-wrap text-text font-mono m-0 ${contentBodyTypographyClass}`}
-                      >
-                        {highlightedPlainContent}
-                      </pre>
+                      <div className="space-y-2">
+                        <pre
+                          className={`whitespace-pre-wrap text-text font-mono m-0 ${contentBodyTypographyClass}`}
+                        >
+                          {highlightedPlainContent}
+                        </pre>
+                        {hasUnrenderedPlainContent ? (
+                          <div
+                            className="flex flex-wrap items-center justify-between gap-2 rounded border border-border bg-surface2 px-2 py-1 text-[11px] text-text-muted"
+                            data-testid="large-content-window-status"
+                            data-visible-chars={visiblePlainContentChars}
+                            data-total-chars={content.length}
+                          >
+                            <span data-testid="large-content-window-progress">
+                              {t('review:mediaPage.largeContentProgress', {
+                                defaultValue: `Showing ${visiblePlainContentChars}/${content.length} characters`
+                              })}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={loadMorePlainContent}
+                              className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-primary hover:bg-surface2"
+                              data-testid="large-content-window-load-more"
+                            >
+                              {t('review:mediaPage.largeContentLoadMore', {
+                                defaultValue: 'Load more'
+                              })}
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
                     )
                   ) : effectiveRenderMode === 'html' ? (
                     content ? (

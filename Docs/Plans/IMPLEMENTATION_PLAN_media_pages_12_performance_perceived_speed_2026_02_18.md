@@ -32,7 +32,7 @@ Finding IDs: `12.1` through `12.6`
 - Unit tests for cache TTL and invalidation behavior.
 - Integration tests for cached-first render path.
 - Regression tests for uncached first-load fallback behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Extremely Long Content Rendering Strategy
 **Goal**: Keep content viewer responsive for very large documents.
@@ -44,7 +44,7 @@ Finding IDs: `12.1` through `12.6`
 - Performance-oriented component tests with large fixture documents.
 - Integration tests for scroll smoothness and interaction correctness.
 - Regression tests for normal-size content rendering path.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
