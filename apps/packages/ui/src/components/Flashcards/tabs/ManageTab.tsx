@@ -41,6 +41,8 @@ import {
 import { MarkdownWithBoundary, FlashcardActionsMenu, FlashcardEditDrawer, FlashcardCreateDrawer } from "../components"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { formatCardType } from "../utils/model-type-labels"
+import { getFlashcardSourceMeta } from "../utils/source-reference"
+import { useFlashcardsShortcutHintDensity } from "../hooks/useFlashcardsShortcutHintDensity"
 import {
   createFlashcard,
   deleteFlashcard,
@@ -115,6 +117,26 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(20)
   const [listDensity, setListDensity] = React.useState<"compact" | "expanded">("compact")
+  const [shortcutHintDensity, setShortcutHintDensity] = useFlashcardsShortcutHintDensity()
+  const cycleShortcutHintDensity = React.useCallback(() => {
+    void setShortcutHintDensity((prev) => {
+      if (prev === "expanded") return "compact"
+      if (prev === "compact") return "hidden"
+      return "expanded"
+    })
+  }, [setShortcutHintDensity])
+  const shortcutHintToggleLabel =
+    shortcutHintDensity === "expanded"
+      ? t("option:flashcards.shortcutHintsCompact", {
+          defaultValue: "Compact hints"
+        })
+      : shortcutHintDensity === "compact"
+        ? t("option:flashcards.shortcutHintsHide", {
+            defaultValue: "Hide hints"
+          })
+        : t("option:flashcards.shortcutHintsShow", {
+            defaultValue: "Show hints"
+          })
 
   // Check if any filters are active
   const hasActiveFilters = !!(mQuery || mTag || mDeckId != null || mDue !== "all")
@@ -986,12 +1008,61 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             />
             {/* Keyboard shortcut hint */}
             {viewMode === "cards" && (
-              <Tooltip title={t("option:flashcards.keyboardShortcutsHint", { defaultValue: "Press ? for keyboard shortcuts" })}>
-                <span className="inline-flex items-center gap-1 text-xs text-text-muted cursor-help">
-                  <Keyboard className="size-3.5" aria-hidden="true" />
-                  <span className="hidden sm:inline">?</span>
-                </span>
-              </Tooltip>
+              <div
+                className="hidden md:flex items-center gap-1.5"
+                data-testid="flashcards-manage-shortcut-chips"
+              >
+                <Tooltip
+                  title={t("option:flashcards.keyboardShortcutsHint", {
+                    defaultValue: "Press ? for keyboard shortcuts"
+                  })}
+                >
+                  <span className="inline-flex items-center gap-1 text-xs text-text-muted cursor-help">
+                    <Keyboard className="size-3.5" aria-hidden="true" />
+                    <span>?</span>
+                  </span>
+                </Tooltip>
+                {shortcutHintDensity === "expanded" && (
+                  <>
+                    <Tag className="!m-0 text-[11px]">
+                      {t("option:flashcards.shortcutChipManageNav", {
+                        defaultValue: "J/K Navigate"
+                      })}
+                    </Tag>
+                    <Tag className="!m-0 text-[11px]">
+                      {t("option:flashcards.shortcutChipManageEdit", {
+                        defaultValue: "Enter Edit"
+                      })}
+                    </Tag>
+                    <Tag className="!m-0 text-[11px]">
+                      {t("option:flashcards.shortcutChipManageSelect", {
+                        defaultValue: "Space Select"
+                      })}
+                    </Tag>
+                    <Tag className="!m-0 text-[11px]">
+                      {t("option:flashcards.shortcutChipManageDelete", {
+                        defaultValue: "Delete Remove"
+                      })}
+                    </Tag>
+                  </>
+                )}
+                {shortcutHintDensity === "compact" && (
+                  <Tag className="!m-0 text-[11px]">
+                    {t("option:flashcards.shortcutChipManageCompact", {
+                      defaultValue: "J/K · Enter · Space · Delete"
+                    })}
+                  </Tag>
+                )}
+                <Button
+                  type="link"
+                  size="small"
+                  className="!h-auto !px-0 text-xs"
+                  onClick={cycleShortcutHintDensity}
+                  data-testid="flashcards-manage-shortcut-hints-toggle"
+                >
+                  {shortcutHintToggleLabel}
+                </Button>
+              </div>
             )}
           </div>
           {viewMode === "trash" && pendingDeletionCount > 0 && (
@@ -1254,6 +1325,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             const isFocused = index === focusedIndex
             const compactSchedule = compactSchedulingLabels(item)
             const expandedSchedule = expandedSchedulingLabels(item)
+            const sourceMeta = getFlashcardSourceMeta(item)
             return (
             <List.Item
               data-testid={`flashcard-item-${item.uuid}`}
@@ -1316,6 +1388,24 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                             {dayjs(item.due_at).fromNow()}
                           </span>
                         )}
+                        {sourceMeta && (
+                          sourceMeta.href ? (
+                            <a
+                              href={sourceMeta.href}
+                              onClick={(event) => event.stopPropagation()}
+                              className="text-primary hover:underline"
+                              title={t("option:flashcards.sourceOpenLink", {
+                                defaultValue: "Open source"
+                              })}
+                            >
+                              {sourceMeta.label}
+                            </a>
+                          ) : (
+                            <span className="text-text-subtle">
+                              {sourceMeta.label}
+                            </span>
+                          )
+                        )}
                       </div>
                       <div className="flex flex-wrap items-center gap-2 text-text-subtle">
                         <Tooltip
@@ -1374,6 +1464,27 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                         {(item.tags || []).map((tg) => (
                           <Tag key={tg}>{tg}</Tag>
                         ))}
+                        {sourceMeta && (
+                          <Tag
+                            color={
+                              sourceMeta.unavailable
+                                ? "default"
+                                : sourceMeta.type === "media"
+                                  ? "blue"
+                                  : sourceMeta.type === "note"
+                                    ? "gold"
+                                    : "green"
+                            }
+                          >
+                            {sourceMeta.href ? (
+                              <a href={sourceMeta.href} onClick={(event) => event.stopPropagation()}>
+                                {sourceMeta.label}
+                              </a>
+                            ) : (
+                              sourceMeta.label
+                            )}
+                          </Tag>
+                        )}
                         {item.due_at && (
                           <Tag color="green">
                             {t("option:flashcards.due", { defaultValue: "Due" })}:{" "}

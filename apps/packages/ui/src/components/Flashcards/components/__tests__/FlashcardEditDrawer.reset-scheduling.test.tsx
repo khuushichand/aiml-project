@@ -70,7 +70,10 @@ const sampleCard: Flashcard = {
   client_id: "1",
   version: 5,
   model_type: "basic",
-  reverse: false
+  reverse: false,
+  source_ref_type: "message",
+  source_ref_id: "m-12",
+  conversation_id: "c-3"
 }
 
 describe("FlashcardEditDrawer reset scheduling action", () => {
@@ -98,10 +101,16 @@ describe("FlashcardEditDrawer reset scheduling action", () => {
       />
     )
 
+    expect(screen.getByText("Message #m-12")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Reset scheduling" }))
     expect(
       screen.getByText("Reset scheduling for this card?")
     ).toBeInTheDocument()
+    expect(screen.getByText("Current scheduling state:")).toBeInTheDocument()
+    expect(screen.getByText("Memory strength: 1.80")).toBeInTheDocument()
+    expect(screen.getByText("Next review gap: 17 day(s)")).toBeInTheDocument()
+    expect(screen.getByText("Recall runs: 6")).toBeInTheDocument()
+    expect(screen.getByText("Relearns: 4")).toBeInTheDocument()
 
     const resetButtons = screen.getAllByRole("button", { name: "Reset scheduling" })
     fireEvent.click(resetButtons[resetButtons.length - 1])
@@ -109,5 +118,5 @@ describe("FlashcardEditDrawer reset scheduling action", () => {
     await waitFor(() => {
       expect(onResetScheduling).toHaveBeenCalledTimes(1)
     })
-  })
+  }, 15000)
 })

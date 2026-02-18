@@ -13,6 +13,7 @@ const {
   mockNavigate,
   mockConfirmDanger,
   mockGetSetting,
+  mockSetSetting,
   mockClearSetting
 } = vi.hoisted(() => {
   return {
@@ -24,6 +25,7 @@ const {
     mockNavigate: vi.fn(),
     mockConfirmDanger: vi.fn(),
     mockGetSetting: vi.fn(),
+    mockSetSetting: vi.fn(),
     mockClearSetting: vi.fn()
   }
 })
@@ -107,6 +109,7 @@ vi.mock("@/services/settings/registry", async (importOriginal) => {
   return {
     ...actual,
     getSetting: mockGetSetting,
+    setSetting: mockSetSetting,
     clearSetting: mockClearSetting
   }
 })
@@ -149,6 +152,7 @@ describe("NotesManagerPage stage 10 AI title generation", () => {
     vi.clearAllMocks()
     mockConfirmDanger.mockResolvedValue(true)
     mockGetSetting.mockResolvedValue(null)
+    mockSetSetting.mockResolvedValue(undefined)
     mockClearSetting.mockResolvedValue(undefined)
     mockBgRequest.mockImplementation(async (request: { path?: string; method?: string; body?: any }) => {
       const path = String(request.path || "")
@@ -157,6 +161,14 @@ describe("NotesManagerPage stage 10 AI title generation", () => {
         return {
           items: [],
           pagination: { total_items: 0, total_pages: 1 }
+        }
+      }
+      if (path === "/api/v1/admin/notes/title-settings" && method === "GET") {
+        return {
+          llm_enabled: false,
+          default_strategy: "heuristic",
+          effective_strategy: "heuristic",
+          strategies: ["heuristic", "llm", "llm_fallback"]
         }
       }
       if (path === "/api/v1/notes/title/suggest" && method === "POST") {
@@ -229,5 +241,109 @@ describe("NotesManagerPage stage 10 AI title generation", () => {
     await waitFor(() => {
       expect(mockMessageError).toHaveBeenCalledWith("title service unavailable")
     })
+  })
+
+  it("shows strategy selector and uses persisted strategy when server allows switching", async () => {
+    mockGetSetting.mockImplementation(async (setting: { key?: string }) => {
+      if (setting?.key === "tldw:notesTitleSuggestStrategy") return "llm_fallback"
+      return null
+    })
+    mockBgRequest.mockImplementation(async (request: { path?: string; method?: string }) => {
+      const path = String(request.path || "")
+      const method = String(request.method || "GET").toUpperCase()
+      if (path.startsWith("/api/v1/notes/?")) {
+        return { items: [], pagination: { total_items: 0, total_pages: 1 } }
+      }
+      if (path === "/api/v1/admin/notes/title-settings" && method === "GET") {
+        return {
+          llm_enabled: true,
+          default_strategy: "heuristic",
+          effective_strategy: "heuristic",
+          strategies: ["heuristic", "llm", "llm_fallback"]
+        }
+      }
+      if (path === "/api/v1/notes/title/suggest" && method === "POST") {
+        return { title: "AI Suggested Title" }
+      }
+      return {}
+    })
+
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-title-strategy-select")).toBeTruthy()
+    })
+    fireEvent.change(screen.getByPlaceholderText("Write your note here... (Markdown supported)"), {
+      target: { value: "strategy aware title generation content" }
+    })
+
+    fireEvent.click(screen.getByTestId("notes-generate-title-button"))
+
+    await waitFor(() => {
+      expect(mockConfirmDanger).toHaveBeenCalled()
+    })
+    const suggestCall = mockBgRequest.mock.calls.find(([request]) => {
+      return (
+        String(request?.path || "") === "/api/v1/notes/title/suggest" &&
+        String(request?.method || "GET").toUpperCase() === "POST"
+      )
+    })
+    expect(suggestCall?.[0]?.body?.title_strategy).toBe("llm_fallback")
+  })
+
+  it("hides strategy selector and falls back to heuristic when policy disables llm", async () => {
+    renderPage()
+    expect(screen.queryByTestId("notes-title-strategy-select")).toBeNull()
+    fireEvent.change(screen.getByPlaceholderText("Write your note here... (Markdown supported)"), {
+      target: { value: "heuristic fallback content" }
+    })
+
+    fireEvent.click(screen.getByTestId("notes-generate-title-button"))
+
+    await waitFor(() => {
+      expect(mockConfirmDanger).toHaveBeenCalled()
+    })
+    const suggestCall = mockBgRequest.mock.calls.find(([request]) => {
+      return (
+        String(request?.path || "") === "/api/v1/notes/title/suggest" &&
+        String(request?.method || "GET").toUpperCase() === "POST"
+      )
+    })
+    expect(suggestCall?.[0]?.body?.title_strategy).toBe("heuristic")
+  })
+
+  it("persists selected strategy changes when switching is enabled", async () => {
+    mockBgRequest.mockImplementation(async (request: { path?: string; method?: string }) => {
+      const path = String(request.path || "")
+      const method = String(request.method || "GET").toUpperCase()
+      if (path.startsWith("/api/v1/notes/?")) {
+        return { items: [], pagination: { total_items: 0, total_pages: 1 } }
+      }
+      if (path === "/api/v1/admin/notes/title-settings" && method === "GET") {
+        return {
+          llm_enabled: true,
+          default_strategy: "heuristic",
+          effective_strategy: "heuristic",
+          strategies: ["heuristic", "llm", "llm_fallback"]
+        }
+      }
+      if (path === "/api/v1/notes/title/suggest" && method === "POST") {
+        return { title: "AI Suggested Title" }
+      }
+      return {}
+    })
+
+    renderPage()
+    const strategySelect = await screen.findByTestId("notes-title-strategy-select")
+    const selectTrigger = strategySelect.closest(".ant-select") || strategySelect
+    fireEvent.mouseDown(selectTrigger)
+    fireEvent.click(await screen.findByText("LLM (quality)"))
+
+    await waitFor(() => {
+      expect(mockSetSetting).toHaveBeenCalled()
+    })
+    const persistedCall = mockSetSetting.mock.calls.find(([setting]) => {
+      return setting?.key === "tldw:notesTitleSuggestStrategy"
+    })
+    expect(persistedCall?.[1]).toBe("llm")
   })
 })

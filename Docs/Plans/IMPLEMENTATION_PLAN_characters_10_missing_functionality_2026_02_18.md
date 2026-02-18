@@ -22,7 +22,15 @@ Finding IDs: `C-31` through `C-34`
 - Backend tests for version snapshot retrieval and diff payload integrity.
 - Integration tests for revert flow and post-revert version lineage.
 - UI tests for timeline selection and diff rendering.
-**Status**: Not Started
+**Status**: In Progress
+**Update (2026-02-18)**:
+- Added backend version-diff endpoint `GET /api/v1/characters/{id}/versions/diff` and schema contracts for field-level diffs.
+- Added/reused version-history and revert endpoints in the API client (`listCharacterVersions`, `diffCharacterVersions`, `revertCharacter`).
+- Added Characters Manager version-history modal with timeline metadata (timestamp + client_id), field diff rendering, and revert action.
+- Added integration tests for versions listing, diff payload, and revert lineage in `test_characters_endpoint.py`.
+- Added UI coverage for opening version history and reverting from selected version in `Manager.first-use.test.tsx`.
+- Added "Version history" action wiring in table overflow and gallery preview popup.
+- Added locale entries for new version-history action labels/ARIA text.
 
 ## Stage 2: Favorites and Collection Baseline
 **Goal**: Introduce lightweight organization primitives for large libraries.
@@ -34,7 +42,13 @@ Finding IDs: `C-31` through `C-34`
 - Backend tests for favorite flag persistence/query behavior.
 - Component tests for toggle state and optimistic update behavior.
 - Integration test for favorites-only filtering.
-**Status**: Not Started
+**Status**: In Progress
+**Update (2026-02-18)**:
+- Added `extensions.tldw.favorite` read/write support in Characters Manager without schema migration, preserving backward compatibility for records without favorites.
+- Added visible favorite toggles in both table row actions and gallery cards.
+- Added "Favorites only" filter control and wired it into both server-query and legacy client-side filtering paths.
+- Added API query contract support for `favorite_only=true` in `/api/v1/characters/query` and DB-layer filtering in `query_character_cards`.
+- Added UI tests for favorites-only filtering and favorite toggle mutation payload, plus backend integration coverage for `favorite_only`.
 
 ## Stage 3: World-Book Attachment in Character Editing
 **Goal**: Expose existing world-book capability in character authoring flow.

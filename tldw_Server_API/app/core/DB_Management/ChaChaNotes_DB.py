@@ -6539,6 +6539,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         match_all_tags: bool = False,
         creator: str | None = None,
         has_conversations: bool | None = None,
+        favorite_only: bool = False,
         created_from: str | None = None,
         created_to: str | None = None,
         updated_from: str | None = None,
@@ -6632,6 +6633,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 f"WHERE conv.deleted = {deleted_false} AND conv.character_id = cc.id"
                 ")"
             )
+
+        if favorite_only:
+            if self.backend_type == BackendType.SQLITE:
+                filters.append(
+                    "("
+                    "json_valid(cc.extensions) AND "
+                    "LOWER(COALESCE("
+                    "CAST(json_extract(cc.extensions, '$.tldw.favorite') AS TEXT), "
+                    "CAST(json_extract(cc.extensions, '$.favorite') AS TEXT), "
+                    "'false'"
+                    ")) IN ('1', 'true')"
+                    ")"
+                )
+            else:
+                filters.append(
+                    "("
+                    "LOWER(COALESCE("
+                    "cc.extensions::jsonb #>> '{tldw,favorite}', "
+                    "cc.extensions::jsonb ->> 'favorite', "
+                    "'false'"
+                    ")) IN ('1', 'true')"
+                    ")"
+                )
 
         if created_from:
             filters.append("cc.created_at >= ?")

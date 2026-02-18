@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import React from "react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ManageTab } from "../ManageTab"
@@ -59,6 +60,8 @@ if (!(globalThis as any).ResizeObserver) {
 }
 
 describe("ManageTab undo accessibility", () => {
+  const deleteQuizMutateAsync = vi.fn(async () => undefined)
+
   beforeEach(() => {
     vi.clearAllMocks()
 
@@ -91,7 +94,7 @@ describe("ManageTab undo accessibility", () => {
     } as any)
 
     vi.mocked(useDeleteQuizMutation).mockReturnValue({
-      mutateAsync: vi.fn(async () => undefined)
+      mutateAsync: deleteQuizMutateAsync
     } as any)
 
     vi.mocked(useUpdateQuizMutation).mockReturnValue({ mutateAsync: vi.fn() } as any)
@@ -145,7 +148,7 @@ describe("ManageTab undo accessibility", () => {
     await waitFor(() => {
       expect(editTrigger).toHaveFocus()
     })
-  })
+  }, 30000)
 
   it("links inline validation errors and restores focus when question modal closes", async () => {
     render(
@@ -186,4 +189,85 @@ describe("ManageTab undo accessibility", () => {
       expect(addQuestionButton).toHaveFocus()
     })
   })
+
+  it("keeps undo available after temporary tab-style visibility switches", async () => {
+    const VisibilityHarness = () => {
+      const [manageVisible, setManageVisible] = React.useState(true)
+      return (
+        <div>
+          <button type="button" onClick={() => setManageVisible(false)}>
+            Show Other Tab
+          </button>
+          <button type="button" onClick={() => setManageVisible(true)}>
+            Show Manage Tab
+          </button>
+          <div style={{ display: manageVisible ? "block" : "none" }}>
+            <ManageTab
+              onNavigateToCreate={() => {}}
+              onNavigateToGenerate={() => {}}
+              onStartQuiz={() => {}}
+            />
+          </div>
+        </div>
+      )
+    }
+
+    render(<VisibilityHarness />)
+
+    fireEvent.click(screen.getAllByRole("button", { name: /delete/i })[0])
+    await waitFor(() => {
+      expect(screen.queryByText("Biology Basics")).not.toBeInTheDocument()
+    })
+    expect(screen.getByRole("button", { name: /undo/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: /show other tab/i }))
+    fireEvent.click(screen.getByRole("button", { name: /show manage tab/i }))
+
+    const undoButton = screen.getByRole("button", { name: /undo/i })
+    expect(undoButton).toBeInTheDocument()
+    fireEvent.click(undoButton)
+
+    await waitFor(() => {
+      expect(screen.getByText("Biology Basics")).toBeInTheDocument()
+    })
+  }, 20000)
+
+  it("commits deletion only after grace period and cancels commit on undo", async () => {
+    vi.useFakeTimers()
+    try {
+      render(
+        <ManageTab
+          onNavigateToCreate={() => {}}
+          onNavigateToGenerate={() => {}}
+          onStartQuiz={() => {}}
+        />
+      )
+
+      fireEvent.click(screen.getByRole("button", { name: /delete/i }))
+      expect(screen.queryByText("Biology Basics")).not.toBeInTheDocument()
+
+      await act(async () => {
+        vi.advanceTimersByTime(7999)
+        await Promise.resolve()
+      })
+      expect(deleteQuizMutateAsync).not.toHaveBeenCalled()
+
+      fireEvent.click(screen.getByRole("button", { name: /undo/i }))
+      await act(async () => {
+        vi.advanceTimersByTime(1)
+        await Promise.resolve()
+      })
+      expect(deleteQuizMutateAsync).not.toHaveBeenCalled()
+      expect(screen.getByText("Biology Basics")).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole("button", { name: /delete/i }))
+      await act(async () => {
+        vi.advanceTimersByTime(8000)
+        await Promise.resolve()
+      })
+      expect(deleteQuizMutateAsync).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 20000)
 })

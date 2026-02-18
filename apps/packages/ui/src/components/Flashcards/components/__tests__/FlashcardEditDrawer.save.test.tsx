@@ -114,9 +114,52 @@ describe("FlashcardEditDrawer save handling", () => {
     })
 
     consoleErrorSpy.mockRestore()
-  })
+  }, 15000)
 
   it("shows actionable validation when cloze template is selected without cloze syntax", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <FlashcardEditDrawer
+        open
+        onClose={vi.fn()}
+        card={{
+          ...sampleCard,
+          model_type: "cloze",
+          is_cloze: true
+        }}
+        onSave={onSave}
+        onDelete={vi.fn()}
+        decks={[
+          {
+            id: 1,
+            name: "Deck 1",
+            description: null,
+            deleted: false,
+            client_id: "1",
+            version: 1
+          }
+        ]}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText("Card template")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "For Cloze cards, include at least one deletion like {{c1::answer}}."
+        )
+      ).toBeInTheDocument()
+    })
+    expect(onSave).not.toHaveBeenCalled()
+  }, 15000)
+
+  it("blocks saving when front content exceeds byte limit", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined)
 
     render(
@@ -140,20 +183,17 @@ describe("FlashcardEditDrawer save handling", () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByText("Card template")).toBeInTheDocument()
+      expect(screen.getByDisplayValue("Front text")).toBeInTheDocument()
     })
 
-    fireEvent.mouseDown(screen.getByLabelText("Card template"))
-    fireEvent.click(screen.getByText("Cloze (Fill in the blank)"))
+    fireEvent.change(screen.getByDisplayValue("Front text"), {
+      target: { value: "a".repeat(8193) }
+    })
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
     await waitFor(() => {
-      expect(
-        screen.getByText(
-          "For Cloze cards, include at least one deletion like {{c1::answer}}."
-        )
-      ).toBeInTheDocument()
+      expect(screen.getByText("Front must be 8192 bytes or fewer.")).toBeInTheDocument()
     })
     expect(onSave).not.toHaveBeenCalled()
-  })
+  }, 15000)
 })

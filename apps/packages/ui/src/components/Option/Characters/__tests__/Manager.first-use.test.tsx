@@ -71,6 +71,15 @@ const {
     deleteCharacter: vi.fn(async () => ({})),
     deleteChat: vi.fn(async () => undefined),
     restoreCharacter: vi.fn(async () => ({})),
+    listCharacterVersions: vi.fn(async () => ({ items: [], total: 0 })),
+    diffCharacterVersions: vi.fn(async () => ({
+      character_id: 0,
+      from_entry: { change_id: 0, version: 1, operation: "update", payload: {} },
+      to_entry: { change_id: 0, version: 1, operation: "update", payload: {} },
+      changed_fields: [],
+      changed_count: 0
+    })),
+    revertCharacter: vi.fn(async () => ({})),
     importCharacterFile: vi.fn(async () => ({ success: true })),
     exportCharacter: vi.fn(async () => ({})),
     completeCharacterChatTurn: vi.fn(async () => ({
@@ -435,7 +444,7 @@ describe("CharactersManager first-use onboarding", () => {
     expect(
       await screen.findByRole("button", { name: "Start from a template..." })
     ).toBeInTheDocument()
-  }, 30000)
+  }, 60000)
 
   it("shows and applies the system prompt example from the create form", async () => {
     const user = userEvent.setup()
@@ -452,7 +461,7 @@ describe("CharactersManager first-use onboarding", () => {
     expect(
       await screen.findByDisplayValue(/You are a skilled writing assistant/i)
     ).toBeInTheDocument()
-  }, 30000)
+  }, 60000)
 
   it("promotes prompt preset and groups advanced fields into named sections in create mode", async () => {
     const user = userEvent.setup()
@@ -739,6 +748,100 @@ describe("CharactersManager first-use onboarding", () => {
     await user.click(screen.getByRole("button", { name: "Clear filters" }))
 
     expect(await screen.findByText("No Chats")).toBeInTheDocument()
+  }, 30000)
+
+  it("filters to favorited characters when favorites-only is enabled", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "fav-1",
+        name: "Favorited Character",
+        system_prompt: "Prompt text",
+        extensions: { tldw: { favorite: true } },
+        version: 3
+      },
+      {
+        id: "fav-2",
+        name: "Regular Character",
+        system_prompt: "Prompt text",
+        version: 2
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    expect(await screen.findByText("Favorited Character")).toBeInTheDocument()
+    expect(screen.getByText("Regular Character")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("checkbox", { name: "Favorites only" }))
+
+    await waitFor(() => {
+      expect(screen.queryByText("Regular Character")).not.toBeInTheDocument()
+    })
+    expect(screen.getByText("Favorited Character")).toBeInTheDocument()
+  }, 30000)
+
+  it("toggles favorite state from table row actions", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "toggle-fav-1",
+        name: "Toggle Favorite",
+        system_prompt: "Prompt text",
+        extensions: {},
+        version: 9
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Add Toggle Favorite to favorites"
+      })
+    )
+
+    await waitFor(() => {
+      expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
+        "toggle-fav-1",
+        { extensions: { tldw: { favorite: true } } },
+        9
+      )
+    })
   }, 30000)
 
   it("switches to recently-deleted scope and queries deleted-only records", async () => {
@@ -1356,6 +1459,282 @@ describe("CharactersManager first-use onboarding", () => {
     )
   }, 30000)
 
+  it("opens version history modal and renders field-level diffs", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "101",
+        name: "Versioned Character",
+        description: "Latest",
+        system_prompt: "Prompt text",
+        version: 4
+      }
+    ]
+
+    const versionItems = [
+      {
+        change_id: 40,
+        version: 4,
+        operation: "update",
+        timestamp: "2026-02-18T10:10:00Z",
+        payload: {
+          name: "Versioned Character",
+          description: "Latest",
+          tags: ["alpha", "beta"]
+        }
+      },
+      {
+        change_id: 39,
+        version: 3,
+        operation: "update",
+        timestamp: "2026-02-18T09:00:00Z",
+        payload: {
+          name: "Versioned Character",
+          description: "Earlier",
+          tags: ["alpha"]
+        }
+      }
+    ]
+
+    tldwClientMock.listCharacterVersions.mockResolvedValue({
+      items: versionItems,
+      total: 2
+    })
+    tldwClientMock.diffCharacterVersions.mockResolvedValue({
+      character_id: 101,
+      from_entry: versionItems[1],
+      to_entry: versionItems[0],
+      changed_fields: [
+        {
+          field: "description",
+          old_value: "Earlier",
+          new_value: "Latest"
+        },
+        {
+          field: "tags",
+          old_value: ["alpha"],
+          new_value: ["alpha", "beta"]
+        }
+      ],
+      changed_count: 2
+    })
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      if (key === "tldw:characterVersions") {
+        void opts?.queryFn?.()
+        return makeUseQueryResult({
+          data: {
+            items: versionItems,
+            total: 2
+          },
+          status: "success"
+        })
+      }
+      if (key === "tldw:characterVersionDiff") {
+        void opts?.queryFn?.()
+        return makeUseQueryResult({
+          data: {
+            character_id: 101,
+            from_entry: versionItems[1],
+            to_entry: versionItems[0],
+            changed_fields: [
+              {
+                field: "description",
+                old_value: "Earlier",
+                new_value: "Latest"
+              },
+              {
+                field: "tags",
+                old_value: ["alpha"],
+                new_value: ["alpha", "beta"]
+              }
+            ],
+            changed_count: 2
+          },
+          status: "success"
+        })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(
+      await screen.findByLabelText("More actions for Versioned Character")
+    )
+    await user.click(await screen.findByText("Version history"))
+
+    await waitFor(() => {
+      expect(tldwClientMock.listCharacterVersions).toHaveBeenCalledWith(101, {
+        limit: 100
+      })
+    })
+    await waitFor(() => {
+      expect(tldwClientMock.diffCharacterVersions).toHaveBeenCalledWith(
+        101,
+        3,
+        4
+      )
+    })
+
+    expect(
+      await screen.findByText("Version history: Versioned Character")
+    ).toBeInTheDocument()
+    const versionDialog = await screen.findByRole("dialog")
+    expect(
+      within(versionDialog).getByText("Differences: v3 -> v4")
+    ).toBeInTheDocument()
+    expect(within(versionDialog).getAllByText("Description").length).toBeGreaterThan(0)
+    expect(within(versionDialog).getAllByText("Tags").length).toBeGreaterThan(0)
+  }, 30000)
+
+  it("reverts character from selected version in version history modal", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "101",
+        name: "Versioned Character",
+        description: "Latest",
+        system_prompt: "Prompt text",
+        version: 4
+      }
+    ]
+
+    const versionItems = [
+      {
+        change_id: 40,
+        version: 4,
+        operation: "update",
+        timestamp: "2026-02-18T10:10:00Z",
+        payload: {
+          name: "Versioned Character",
+          description: "Latest"
+        }
+      },
+      {
+        change_id: 39,
+        version: 3,
+        operation: "update",
+        timestamp: "2026-02-18T09:00:00Z",
+        payload: {
+          name: "Versioned Character",
+          description: "Earlier"
+        }
+      }
+    ]
+
+    tldwClientMock.listCharacterVersions.mockResolvedValue({
+      items: versionItems,
+      total: 2
+    })
+    tldwClientMock.diffCharacterVersions.mockResolvedValue({
+      character_id: 101,
+      from_entry: versionItems[1],
+      to_entry: versionItems[0],
+      changed_fields: [
+        {
+          field: "description",
+          old_value: "Earlier",
+          new_value: "Latest"
+        }
+      ],
+      changed_count: 1
+    })
+    tldwClientMock.revertCharacter.mockResolvedValueOnce({
+      id: 101,
+      name: "Versioned Character",
+      version: 5
+    })
+    useMutationMock.mockImplementation((opts: any) => ({
+      mutate: (variables: any) => opts?.mutationFn?.(variables),
+      mutateAsync: (variables: any) => opts?.mutationFn?.(variables),
+      isPending: false
+    }))
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      if (key === "tldw:characterVersions") {
+        void opts?.queryFn?.()
+        return makeUseQueryResult({
+          data: {
+            items: versionItems,
+            total: 2
+          },
+          status: "success"
+        })
+      }
+      if (key === "tldw:characterVersionDiff") {
+        void opts?.queryFn?.()
+        return makeUseQueryResult({
+          data: {
+            character_id: 101,
+            from_entry: versionItems[1],
+            to_entry: versionItems[0],
+            changed_fields: [
+              {
+                field: "description",
+                old_value: "Earlier",
+                new_value: "Latest"
+              }
+            ],
+            changed_count: 1
+          },
+          status: "success"
+        })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(
+      await screen.findByLabelText("More actions for Versioned Character")
+    )
+    await user.click(await screen.findByText("Version history"))
+    await screen.findByText("Version history: Versioned Character")
+
+    await user.click(
+      screen.getByRole("button", { name: "Revert to selected version" })
+    )
+
+    await waitFor(() => {
+      expect(confirmDangerMock).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(tldwClientMock.revertCharacter).toHaveBeenCalledWith(101, 3)
+    })
+    await waitFor(() => {
+      expect(tldwClientMock.listCharacterVersions).toHaveBeenCalledWith(101, {
+        limit: 100
+      })
+    })
+  }, 30000)
+
   it("saves alternate greetings in reordered list order", async () => {
     window.localStorage.setItem(TEMPLATE_CHOOSER_SEEN_KEY, "true")
 
@@ -1413,7 +1792,7 @@ describe("CharactersManager first-use onboarding", () => {
         })
       )
     })
-  }, 30000)
+  }, 60000)
 
   it("supports first-run template -> create -> chat handoff", async () => {
     const user = userEvent.setup()

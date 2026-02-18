@@ -8,8 +8,11 @@ import {
   compareDictionaryName,
   filterDictionariesBySearch,
   isDictionaryVersionConflictError,
+  formatDictionaryChatReferenceTitle,
   formatDictionaryUsageLabel,
-  formatRelativeTimestamp
+  formatRelativeTimestamp,
+  normalizeDictionaryChatState,
+  resolveDictionaryChatReferenceId
 } from "../listUtils"
 
 describe("dictionary list utils", () => {
@@ -92,6 +95,23 @@ describe("dictionary list utils", () => {
     expect(
       formatDictionaryUsageLabel({ used_by_chat_count: 5, used_by_active_chat_count: 2 })
     ).toBe("5 chats (2 active)")
+  })
+
+  it("normalizes chat references for list/table renderers", () => {
+    expect(resolveDictionaryChatReferenceId({ chat_id: "abc-123" })).toBe("abc-123")
+    expect(resolveDictionaryChatReferenceId({ id: 42 })).toBe("42")
+    expect(resolveDictionaryChatReferenceId(null)).toBe("")
+
+    expect(formatDictionaryChatReferenceTitle({ chat_id: "abcdef123456", title: "" })).toBe(
+      "Chat abcdef12"
+    )
+    expect(formatDictionaryChatReferenceTitle({ id: "chat-7", title: "Triage Session" })).toBe(
+      "Triage Session"
+    )
+
+    expect(normalizeDictionaryChatState("resolved")).toBe("resolved")
+    expect(normalizeDictionaryChatState(" backlog ")).toBe("backlog")
+    expect(normalizeDictionaryChatState("unknown")).toBe("in-progress")
   })
 
   it("builds deactivation warning only when active chats are linked", () => {

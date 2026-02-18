@@ -144,6 +144,8 @@ from tldw_Server_API.app.api.v1.schemas.character_schemas import (
     CharacterTagOperationResponse,
     CharacterResponse,
     CharacterUpdate,
+    CharacterVersionDiffField,
+    CharacterVersionDiffResponse,
     CharacterVersionEntry,
     CharacterVersionListResponse,
     DeletionResponse,
@@ -267,6 +269,54 @@ def _build_character_revert_payload(
     if not payload.get("name"):
         raise InputError("Target version snapshot is missing a valid character name.")
     return payload
+
+
+def _build_character_version_entry(entry: dict[str, Any]) -> CharacterVersionEntry:
+    raw_version = int(entry.get("version") or 0)
+    normalized_version = raw_version if raw_version >= 1 else 1
+    return CharacterVersionEntry(
+        change_id=int(entry.get("change_id") or 0),
+        version=normalized_version,
+        operation=str(entry.get("operation") or "update"),
+        timestamp=entry.get("timestamp"),
+        client_id=entry.get("client_id"),
+        payload=entry.get("payload")
+        if isinstance(entry.get("payload"), dict)
+        else {},
+    )
+
+
+def _normalize_snapshot_comparison_value(value: Any) -> str:
+    if value is None:
+        return "__null__"
+    if isinstance(value, str):
+        return f"str:{value}"
+    if isinstance(value, (int, float, bool)):
+        return f"scalar:{value}"
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False)
+    except TypeError:
+        return str(value)
+
+
+def _build_character_version_diff_fields(
+    from_payload: dict[str, Any],
+    to_payload: dict[str, Any],
+) -> list[CharacterVersionDiffField]:
+    changed_fields: list[CharacterVersionDiffField] = []
+    for field in _CHARACTER_REVERT_FIELDS:
+        old_value = from_payload.get(field)
+        new_value = to_payload.get(field)
+        if _normalize_snapshot_comparison_value(old_value) == _normalize_snapshot_comparison_value(new_value):
+            continue
+        changed_fields.append(
+            CharacterVersionDiffField(
+                field=field,
+                old_value=old_value,
+                new_value=new_value,
+            )
+        )
+    return changed_fields
 
 
 # --- Helper Functions (Keep _convert_db_char_to_response_model as is) ---
@@ -817,6 +867,7 @@ async def query_characters(
         match_all_tags: bool = Query(False, description="Require all tags instead of any tag"),
         creator: Optional[str] = Query(None, description="Filter by creator"),
         has_conversations: Optional[bool] = Query(None, description="Filter by conversation existence"),
+        favorite_only: bool = Query(False, description="Return only favorited characters"),
         created_from: Optional[str] = Query(None, description="Created-at lower bound (ISO timestamp)"),
         created_to: Optional[str] = Query(None, description="Created-at upper bound (ISO timestamp)"),
         updated_from: Optional[str] = Query(None, description="Updated-at lower bound (ISO timestamp)"),
@@ -842,6 +893,7 @@ async def query_characters(
             match_all_tags=match_all_tags,
             creator=creator,
             has_conversations=has_conversations,
+            favorite_only=favorite_only,
             created_from=created_from,
             created_to=created_to,
             updated_from=updated_from,
@@ -1437,6 +1489,92 @@ async def get_character_by_id_endpoint(  # Renamed from get_character
 
 
 @router.get(
+    "/{character_id}/versions/diff",
+    response_model=CharacterVersionDiffResponse,
+    summary="Diff two character versions",
+    tags=["characters"],
+)
+async def get_character_versions_diff_endpoint(
+    character_id: int = FastAPIPath(..., description="ID of the character.", gt=0),
+    from_version: int = Query(..., ge=1, description="Baseline version number."),
+    to_version: int = Query(..., ge=1, description="Comparison version number."),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        current_char = get_character_details(db, character_id)
+        if not current_char:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {character_id} not found.",
+            )
+        if from_version == to_version:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="from_version and to_version must be different.",
+            )
+
+        history_entries = db.get_character_version_history(character_id, limit=500)
+        from_entry = next(
+            (
+                entry
+                for entry in history_entries
+                if int(entry.get("version") or -1) == from_version
+            ),
+            None,
+        )
+        to_entry = next(
+            (
+                entry
+                for entry in history_entries
+                if int(entry.get("version") or -1) == to_version
+            ),
+            None,
+        )
+
+        if not from_entry:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Version {from_version} not found for character {character_id}.",
+            )
+        if not to_entry:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Version {to_version} not found for character {character_id}.",
+            )
+
+        from_payload = from_entry.get("payload")
+        to_payload = to_entry.get("payload")
+        if not isinstance(from_payload, dict) or not isinstance(to_payload, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="One or both version payloads are missing or malformed.",
+            )
+
+        changed_fields = _build_character_version_diff_fields(from_payload, to_payload)
+        return CharacterVersionDiffResponse(
+            character_id=character_id,
+            from_entry=_build_character_version_entry(from_entry),
+            to_entry=_build_character_version_entry(to_entry),
+            changed_fields=changed_fields,
+            changed_count=len(changed_fields),
+        )
+    except CharactersRAGDBError as e:
+        logger.error(
+            f"DB error getting character version diff for {character_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(
+            f"Unexpected error getting character version diff for {character_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
+
+
+@router.get(
     "/{character_id}/versions",
     response_model=CharacterVersionListResponse,
     summary="Get character version history",
@@ -1456,19 +1594,7 @@ async def get_character_versions_endpoint(
             )
 
         raw_entries = db.get_character_version_history(character_id, limit=limit)
-        items = [
-            CharacterVersionEntry(
-                change_id=int(entry.get("change_id") or 0),
-                version=int(entry.get("version") or 0),
-                operation=str(entry.get("operation") or "update"),
-                timestamp=entry.get("timestamp"),
-                client_id=entry.get("client_id"),
-                payload=entry.get("payload")
-                if isinstance(entry.get("payload"), dict)
-                else {},
-            )
-            for entry in raw_entries
-        ]
+        items = [_build_character_version_entry(entry) for entry in raw_entries]
         return CharacterVersionListResponse(items=items, total=len(items))
     except CharactersRAGDBError as e:
         logger.error(f"DB error getting character versions for {character_id}: {e}", exc_info=True)

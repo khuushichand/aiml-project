@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Divider,
   Empty,
   Form,
@@ -10,6 +11,7 @@ import {
   InputNumber,
   List,
   Modal,
+  Popconfirm,
   Radio,
   Select,
   Space,
@@ -20,6 +22,9 @@ import {
 } from "antd"
 import { useTranslation } from "react-i18next"
 import {
+  ArrowDownOutlined,
+  ArrowUpOutlined,
+  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   PlusOutlined,
@@ -29,6 +34,7 @@ import {
   UndoOutlined
 } from "@ant-design/icons"
 import {
+  useCreateQuizMutation,
   useCreateQuestionMutation,
   useDeleteQuestionMutation,
   useDeleteQuizMutation,
@@ -37,12 +43,16 @@ import {
   useUpdateQuestionMutation,
   useUpdateQuizMutation
 } from "../hooks"
+import { listQuestions } from "@/services/quizzes"
 import type { AnswerValue, Question, QuestionType, Quiz } from "@/services/quizzes"
 
 interface ManageTabProps {
   onNavigateToCreate: () => void
   onNavigateToGenerate: () => void
   onStartQuiz: (quizId: number) => void
+  externalSearchQuery?: string | null
+  externalSearchToken?: number | null
+  onExternalSearchHandled?: () => void
 }
 
 type QuestionDraft = {
@@ -67,7 +77,10 @@ const QUESTION_OPTIONS_ERROR_ID = "manage-question-options-error"
 export const ManageTab: React.FC<ManageTabProps> = ({
   onNavigateToCreate,
   onNavigateToGenerate,
-  onStartQuiz
+  onStartQuiz,
+  externalSearchQuery,
+  externalSearchToken,
+  onExternalSearchHandled
 }) => {
   const { t } = useTranslation(["option", "common"])
   const [searchQuery, setSearchQuery] = React.useState("")
@@ -79,12 +92,13 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const [questionModalOpen, setQuestionModalOpen] = React.useState(false)
   const [questionDraft, setQuestionDraft] = React.useState<QuestionDraft | null>(null)
   const [isNewQuestion, setIsNewQuestion] = React.useState(false)
-  const [questionPage, setQuestionPage] = React.useState(1)
-  const [questionPageSize, setQuestionPageSize] = React.useState(5)
+  const [reorderPendingQuestionId, setReorderPendingQuestionId] = React.useState<number | null>(null)
   const [editForm] = Form.useForm()
   const [questionValidationErrors, setQuestionValidationErrors] = React.useState<QuestionValidationErrors>({})
   const editModalTriggerRef = React.useRef<HTMLElement | null>(null)
   const questionModalTriggerRef = React.useRef<HTMLElement | null>(null)
+  const lastExternalSearchToken = React.useRef<number | null>(null)
+  const searchInputRef = React.useRef<any>(null)
 
   // Undo deletion state
   const UNDO_GRACE_PERIOD = 8000 // 8 seconds
@@ -100,6 +114,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const [deletedQuestionIds, setDeletedQuestionIds] = React.useState<Set<number>>(new Set())
   const [pendingQuizUndoName, setPendingQuizUndoName] = React.useState<string | null>(null)
   const [pendingQuestionUndoText, setPendingQuestionUndoText] = React.useState<string | null>(null)
+  const [selectedQuizIds, setSelectedQuizIds] = React.useState<Set<number>>(new Set())
+  const [bulkDeleteInFlight, setBulkDeleteInFlight] = React.useState(false)
+  const [duplicateInFlightQuizId, setDuplicateInFlightQuizId] = React.useState<number | null>(null)
 
   // Cleanup pending deletions on unmount
   React.useEffect(() => {
@@ -117,25 +134,38 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     setPage(1)
   }, [searchQuery])
 
+  React.useEffect(() => {
+    if (externalSearchToken == null || lastExternalSearchToken.current === externalSearchToken) {
+      return
+    }
+    lastExternalSearchToken.current = externalSearchToken
+    setSearchQuery(externalSearchQuery ?? "")
+    setPage(1)
+    window.setTimeout(() => {
+      searchInputRef.current?.focus?.()
+    }, 0)
+    onExternalSearchHandled?.()
+  }, [externalSearchQuery, externalSearchToken, onExternalSearchHandled])
+
   const offset = (page - 1) * pageSize
   const { data, isLoading, refetch } = useQuizzesQuery({
     q: searchQuery || undefined,
     limit: pageSize,
     offset
   })
+  const createQuizMutation = useCreateQuizMutation()
   const deleteMutation = useDeleteQuizMutation()
   const updateQuizMutation = useUpdateQuizMutation()
   const createQuestionMutation = useCreateQuestionMutation()
   const updateQuestionMutation = useUpdateQuestionMutation()
   const deleteQuestionMutation = useDeleteQuestionMutation()
 
-  const questionOffset = (questionPage - 1) * questionPageSize
   const questionsQuery = useQuestionsQuery(
     editingQuiz?.id,
     {
       include_answers: true,
-      limit: questionPageSize,
-      offset: questionOffset
+      limit: 200,
+      offset: 0
     },
     { enabled: editModalOpen && !!editingQuiz }
   )
@@ -146,6 +176,22 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const allQuestions = (questionsQuery.data?.items ?? []) as Question[]
   const questions = allQuestions.filter((q) => !deletedQuestionIds.has(q.id))
   const questionTotal = questionsQuery.data?.count ?? 0
+  const sortedQuestions = React.useMemo(
+    () => [...questions].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0)),
+    [questions]
+  )
+  const reorderBusy = reorderPendingQuestionId != null || updateQuestionMutation.isPending
+
+  React.useEffect(() => {
+    setSelectedQuizIds((prev) => {
+      const visibleIds = new Set(quizzes.map((quiz) => quiz.id))
+      const next = new Set<number>()
+      prev.forEach((id) => {
+        if (visibleIds.has(id)) next.add(id)
+      })
+      return next
+    })
+  }, [quizzes])
 
   const questionTypeLabel = (questionType: QuestionType) => {
     if (questionType === "multiple_choice") {
@@ -234,6 +280,152 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     pendingQuizDeletion.current = { quiz, timeoutId }
   }
 
+  const toggleQuizSelection = (quizId: number, checked: boolean) => {
+    setSelectedQuizIds((prev) => {
+      const next = new Set(prev)
+      if (checked) {
+        next.add(quizId)
+      } else {
+        next.delete(quizId)
+      }
+      return next
+    })
+  }
+
+  const clearQuizSelection = () => {
+    setSelectedQuizIds(new Set())
+  }
+
+  const handleDuplicateQuiz = async (quiz: Quiz) => {
+    setDuplicateInFlightQuizId(quiz.id)
+    try {
+      const response = await listQuestions(quiz.id, {
+        include_answers: true,
+        limit: 200,
+        offset: 0
+      })
+      const sourceQuestions = (response.items as Question[]).slice()
+      sourceQuestions.sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+
+      const duplicateQuiz = await createQuizMutation.mutateAsync({
+        name: t("option:quiz.duplicateQuizName", {
+          defaultValue: "{{name}} (Copy)",
+          name: quiz.name
+        }),
+        description: quiz.description ?? undefined,
+        workspace_tag: quiz.workspace_tag ?? undefined,
+        media_id: quiz.media_id ?? undefined,
+        time_limit_seconds: quiz.time_limit_seconds ?? undefined,
+        passing_score: quiz.passing_score ?? undefined
+      })
+
+      const failedQuestionNumbers: number[] = []
+      for (let i = 0; i < sourceQuestions.length; i++) {
+        const sourceQuestion = sourceQuestions[i]
+        try {
+          await createQuestionMutation.mutateAsync({
+            quizId: duplicateQuiz.id,
+            question: {
+              question_type: sourceQuestion.question_type,
+              question_text: sourceQuestion.question_text,
+              options:
+                sourceQuestion.question_type === "multiple_choice"
+                  ? (sourceQuestion.options ?? [])
+                  : undefined,
+              correct_answer: sourceQuestion.correct_answer,
+              explanation: sourceQuestion.explanation ?? undefined,
+              points: sourceQuestion.points,
+              order_index: sourceQuestion.order_index
+            }
+          })
+        } catch {
+          failedQuestionNumbers.push(i + 1)
+        }
+      }
+
+      if (failedQuestionNumbers.length > 0) {
+        messageApi.warning(
+          t("option:quiz.duplicatePartialFailure", {
+            defaultValue:
+              "Quiz duplicated, but failed to copy question(s): {{questions}}.",
+            questions: failedQuestionNumbers.join(", ")
+          })
+        )
+      } else {
+        messageApi.success(
+          t("option:quiz.duplicateSuccess", {
+            defaultValue: "Quiz duplicated successfully."
+          })
+        )
+      }
+      refetch()
+    } catch (error) {
+      messageApi.error(
+        t("option:quiz.duplicateError", {
+          defaultValue: "Failed to duplicate quiz."
+        })
+      )
+    } finally {
+      setDuplicateInFlightQuizId(null)
+    }
+  }
+
+  const executeBulkDelete = async () => {
+    const selectedQuizzes = quizzes.filter((quiz) => selectedQuizIds.has(quiz.id))
+    if (selectedQuizzes.length === 0) {
+      return
+    }
+
+    setBulkDeleteInFlight(true)
+    const failed: string[] = []
+    let successCount = 0
+
+    try {
+      for (const quiz of selectedQuizzes) {
+        try {
+          await deleteMutation.mutateAsync({ quizId: quiz.id, version: quiz.version })
+          successCount += 1
+        } catch {
+          failed.push(quiz.name)
+        }
+      }
+
+      if (successCount > 0) {
+        refetch()
+      }
+
+      if (failed.length === 0) {
+        messageApi.success(
+          t("option:quiz.bulkDeleteSuccess", {
+            defaultValue: "Deleted {{count}} quiz(es).",
+            count: successCount
+          })
+        )
+      } else {
+        messageApi.warning(
+          t("option:quiz.bulkDeletePartialFailure", {
+            defaultValue:
+              "Deleted {{success}} quiz(es). Failed to delete: {{failed}}.",
+            success: successCount,
+            failed: failed.join(", ")
+          })
+        )
+      }
+    } finally {
+      setBulkDeleteInFlight(false)
+      if (failed.length === 0) {
+        clearQuizSelection()
+      } else {
+        const failedSet = new Set(
+          selectedQuizzes
+            .filter((quiz) => failed.includes(quiz.name))
+            .map((quiz) => quiz.id)
+        )
+        setSelectedQuizIds(failedSet)
+      }
+    }
+  }
+
   React.useEffect(() => {
     if (!editingQuiz) return
     editForm.setFieldsValue({
@@ -244,7 +436,6 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         : undefined,
       passingScore: editingQuiz.passing_score ?? undefined
     })
-    setQuestionPage(1)
   }, [editingQuiz, editForm])
 
   const openEditModal = (quiz: Quiz) => {
@@ -495,6 +686,52 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     pendingQuestionDeletion.current = { question, timeoutId }
   }
 
+  const handleReorderQuestion = async (questionId: number, direction: "up" | "down") => {
+    if (!editingQuiz) return
+    const currentIndex = sortedQuestions.findIndex((question) => question.id === questionId)
+    if (currentIndex < 0) return
+
+    const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1
+    if (nextIndex < 0 || nextIndex >= sortedQuestions.length) return
+
+    const currentQuestion = sortedQuestions[currentIndex]
+    const targetQuestion = sortedQuestions[nextIndex]
+    const currentOrder = currentQuestion.order_index ?? currentIndex
+    const targetOrder = targetQuestion.order_index ?? nextIndex
+
+    setReorderPendingQuestionId(questionId)
+    try {
+      await updateQuestionMutation.mutateAsync({
+        quizId: editingQuiz.id,
+        questionId: currentQuestion.id,
+        update: {
+          order_index: targetOrder
+        }
+      })
+      await updateQuestionMutation.mutateAsync({
+        quizId: editingQuiz.id,
+        questionId: targetQuestion.id,
+        update: {
+          order_index: currentOrder
+        }
+      })
+      messageApi.success(
+        t("option:quiz.reorderQuestionsSuccess", {
+          defaultValue: "Question order updated."
+        })
+      )
+      questionsQuery.refetch()
+    } catch (error) {
+      messageApi.error(
+        t("option:quiz.reorderQuestionsError", {
+          defaultValue: "Failed to reorder questions."
+        })
+      )
+    } finally {
+      setReorderPendingQuestionId(null)
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="flex justify-center py-12">
@@ -551,6 +788,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
 
       <div className="flex justify-between items-center">
         <Input
+          ref={searchInputRef}
           placeholder={t("option:quiz.searchQuizzes", { defaultValue: "Search quizzes..." })}
           prefix={<SearchOutlined />}
           value={searchQuery}
@@ -567,6 +805,45 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           </Button>
         </Space>
       </div>
+
+      {selectedQuizIds.size > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          message={t("option:quiz.bulkSelectionMessage", {
+            defaultValue: "{{count}} quiz(es) selected",
+            count: selectedQuizIds.size
+          })}
+          action={(
+            <Space>
+              <Button size="small" onClick={clearQuizSelection} disabled={bulkDeleteInFlight}>
+                {t("common:clear", { defaultValue: "Clear" })}
+              </Button>
+              <Popconfirm
+                title={t("option:quiz.bulkDeleteConfirmTitle", {
+                  defaultValue: "Delete selected quizzes?"
+                })}
+                description={t("option:quiz.bulkDeleteConfirmDescription", {
+                  defaultValue: "This will permanently delete {{count}} quiz(es).",
+                  count: selectedQuizIds.size
+                })}
+                okText={t("common:delete", { defaultValue: "Delete" })}
+                cancelText={t("common:cancel", { defaultValue: "Cancel" })}
+                onConfirm={() => executeBulkDelete()}
+              >
+                <Button
+                  size="small"
+                  danger
+                  loading={bulkDeleteInFlight}
+                  data-testid="manage-bulk-delete"
+                >
+                  {t("option:quiz.deleteSelected", { defaultValue: "Delete Selected" })}
+                </Button>
+              </Popconfirm>
+            </Space>
+          )}
+        />
+      )}
 
       {quizzes.length === 0 ? (
         <Empty
@@ -621,6 +898,18 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                   {t("option:quiz.start", { defaultValue: "Start" })}
                 </Button>,
                 <Button
+                  key="duplicate"
+                  type="link"
+                  icon={<CopyOutlined />}
+                  onClick={() => {
+                    void handleDuplicateQuiz(quiz)
+                  }}
+                  loading={duplicateInFlightQuizId === quiz.id}
+                  data-testid={`quiz-duplicate-${quiz.id}`}
+                >
+                  {t("option:quiz.duplicate", { defaultValue: "Duplicate" })}
+                </Button>,
+                <Button
                   key="edit"
                   type="link"
                   icon={<EditOutlined />}
@@ -644,9 +933,17 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             >
               <List.Item.Meta
                 title={
-                  <span className="font-medium">
-                    {quiz.name}
-                  </span>
+                  <Space size="small" align="center">
+                    <Checkbox
+                      checked={selectedQuizIds.has(quiz.id)}
+                      onChange={(event) => toggleQuizSelection(quiz.id, event.target.checked)}
+                      aria-label={t("option:quiz.selectQuiz", {
+                        defaultValue: "Select quiz {{name}}",
+                        name: quiz.name
+                      })}
+                    />
+                    <span className="font-medium">{quiz.name}</span>
+                  </Space>
                 }
                 description={
                   <div className="space-y-1">
@@ -687,7 +984,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         okText={t("common:save", { defaultValue: "Save" })}
         cancelText={t("common:cancel", { defaultValue: "Cancel" })}
         confirmLoading={updateQuizMutation.isPending}
-        width={860}
+        width="95vw"
+        style={{ top: 16 }}
       >
         <Form form={editForm} layout="vertical">
           <Form.Item
@@ -751,54 +1049,66 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             description={t("option:quiz.noQuestionsYet", { defaultValue: "No questions added yet" })}
           />
         ) : (
-          <List
-            dataSource={questions}
-            pagination={{
-              current: questionPage,
-              pageSize: questionPageSize,
-              total: questionTotal,
-              showSizeChanger: true,
-              onChange: (nextPage, nextPageSize) => {
-                setQuestionPage(nextPage)
-                if (nextPageSize && nextPageSize !== questionPageSize) {
-                  setQuestionPageSize(nextPageSize)
-                  setQuestionPage(1)
-                }
-              }
-            }}
-            renderItem={(question) => (
-              <List.Item
-                actions={[
-                  <Button
-                    key="edit"
-                    type="link"
-                    onClick={() => openQuestionModal(question)}
-                    data-testid={`manage-edit-question-${question.id}`}
-                  >
-                    {t("common:edit", { defaultValue: "Edit" })}
-                  </Button>,
-                  <Button
-                    key="delete"
-                    type="link"
-                    danger
-                    onClick={() => handleDeleteQuestion(question)}
-                  >
-                    {t("option:quiz.delete", { defaultValue: "Delete" })}
-                  </Button>
-                ]}
-              >
-                <List.Item.Meta
-                  title={question.question_text}
-                  description={
-                    <div className="flex flex-wrap gap-2">
-                      <Tag>{questionTypeLabel(question.question_type)}</Tag>
-                      <Tag>{t("option:quiz.points", { defaultValue: "Points" })}: {question.points}</Tag>
-                    </div>
-                  }
-                />
-              </List.Item>
-            )}
-          />
+          <div className="max-h-[50vh] overflow-y-auto pr-1" data-testid="manage-questions-scroll-container">
+            <List
+              dataSource={sortedQuestions}
+              renderItem={(question, index) => (
+                <List.Item
+                  actions={[
+                    <Button
+                      key="move-up"
+                      type="text"
+                      icon={<ArrowUpOutlined />}
+                      aria-label={t("option:quiz.moveQuestionUp", {
+                        defaultValue: "Move question {{number}} up",
+                        number: index + 1
+                      })}
+                      disabled={reorderBusy || index === 0}
+                      onClick={() => handleReorderQuestion(question.id, "up")}
+                    />,
+                    <Button
+                      key="move-down"
+                      type="text"
+                      icon={<ArrowDownOutlined />}
+                      aria-label={t("option:quiz.moveQuestionDown", {
+                        defaultValue: "Move question {{number}} down",
+                        number: index + 1
+                      })}
+                      disabled={reorderBusy || index === sortedQuestions.length - 1}
+                      onClick={() => handleReorderQuestion(question.id, "down")}
+                    />,
+                    <Button
+                      key="edit"
+                      type="link"
+                      onClick={() => openQuestionModal(question)}
+                      data-testid={`manage-edit-question-${question.id}`}
+                    >
+                      {t("common:edit", { defaultValue: "Edit" })}
+                    </Button>,
+                    <Button
+                      key="delete"
+                      type="link"
+                      danger
+                      onClick={() => handleDeleteQuestion(question)}
+                    >
+                      {t("option:quiz.delete", { defaultValue: "Delete" })}
+                    </Button>
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={question.question_text}
+                    description={(
+                      <div className="flex flex-wrap gap-2">
+                        <Tag>{questionTypeLabel(question.question_type)}</Tag>
+                        <Tag>{t("option:quiz.points", { defaultValue: "Points" })}: {question.points}</Tag>
+                        <Tag>{t("option:quiz.orderIndex", { defaultValue: "Order" })}: {(question.order_index ?? 0) + 1}</Tag>
+                      </div>
+                    )}
+                  />
+                </List.Item>
+              )}
+            />
+          </div>
         )}
       </Modal>
 

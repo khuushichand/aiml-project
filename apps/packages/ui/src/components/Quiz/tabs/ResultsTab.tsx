@@ -25,10 +25,10 @@ import {
 import { useAllAttemptsQuery, useAttemptQuery, useQuizzesQuery } from "../hooks"
 import type { AnswerValue, QuestionPublic, QuizAnswer } from "@/services/quizzes"
 import type { TakeTabNavigationIntent } from "../navigation"
+import { RESULTS_FILTER_PREFS_KEY } from "../stateKeys"
 
 const { Text } = Typography
 
-const RESULTS_FILTER_PREFS_KEY = "quiz-results-filters-v1"
 const DEFAULT_PASSING_SCORE = 70
 type PassFilterKey = "all" | "pass" | "fail"
 type DateRangeFilterKey = "all" | "7d" | "30d" | "90d"

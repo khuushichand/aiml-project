@@ -21,7 +21,17 @@ Finding IDs: `H5-1` through `H5-3`
 - Form unit tests for cloze validator success/failure cases.
 - Integration tests for limit warnings and submit disable/enable transitions.
 - Regression tests for non-cloze templates to ensure no false-positive validation.
-**Status**: Not Started
+**Status**: Complete
+
+**Implementation Notes (2026-02-18)**:
+- Added shared UTF-8 byte-length utilities (`utils/field-byte-limit.ts`) with a `8192` byte guardrail and near-limit warning state.
+- Updated create/edit forms to show live Front/Back byte usage hints with warning/over-limit messaging.
+- Added explicit Front/Back byte-limit validators in both drawers with field-level error messages.
+- Preserved cloze validation while adding non-cloze regression coverage to avoid false-positive cloze blocking.
+
+**Validation Completed**:
+- `FlashcardCreateDrawer.cloze-help.test.tsx`
+- `FlashcardEditDrawer.save.test.tsx`
 
 ## Stage 2: Import Guardrails and Diagnostics
 **Goal**: Catch structural import mistakes before and during upload.
@@ -33,7 +43,17 @@ Finding IDs: `H5-1` through `H5-3`
 - Integration tests for bad delimiter, malformed row, and encoding error handling.
 - Component tests for line error table rendering and summary badges.
 - E2E import test covering mixed-validity input and user correction loop.
-**Status**: Not Started
+**Status**: Complete
+
+**Implementation Notes (2026-02-18)**:
+- Added preflight import warnings for likely delimiter mismatch and header columns missing Front/Back.
+- Expanded inline format documentation to enumerate accepted columns and tag parsing expectations.
+- Added per-error recovery guidance in the import results panel (missing front/deck, invalid cloze, field/line length, max-limit cases).
+- Preserved and validated persistent partial-import summaries with line-level diagnostics.
+
+**Validation Completed**:
+- `ImportExportTab.import-results.test.tsx`
+- `src/components/Flashcards/**/__tests__/*.test.tsx` (full Flashcards regression run)
 
 ## Stage 3: Preventive UX for High-Risk Operations
 **Goal**: Reduce accidental invalid state transitions during bulk or advanced actions.
@@ -45,7 +65,17 @@ Finding IDs: `H5-1` through `H5-3`
 - End-to-end tests for high-risk flows and confirmation messaging.
 - Contract tests ensuring backend validation codes map to UI message catalog.
 - Accessibility tests for error announcements (`aria-live`) and focus on first invalid field.
-**Status**: Not Started
+**Status**: Complete
+
+**Implementation Notes (2026-02-18)**:
+- Added large-import confirmation modal (threshold-based) with impact summary (estimated rows, delimiter, header mode, payload bytes) before executing high-volume imports.
+- Enhanced reset-scheduling confirmation with card-specific current scheduling metrics (memory strength, gap, recall runs, relearns) so impact is explicit before confirming.
+- Kept import/result guidance vocabulary aligned across preflight warnings, post-import diagnostics, and existing cloze validation copy.
+
+**Validation Completed**:
+- `ImportExportTab.import-results.test.tsx` (large import confirmation flow)
+- `FlashcardEditDrawer.reset-scheduling.test.tsx`
+- `src/components/Flashcards/**/__tests__/*.test.tsx` (full Flashcards regression run)
 
 ## Dependencies
 

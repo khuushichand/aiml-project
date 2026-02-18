@@ -1244,6 +1244,9 @@
   "manageCharacters_actions_viewConversations": {
     "message": "View conversations"
   },
+  "manageCharacters_actions_versionHistory": {
+    "message": "Version history"
+  },
   "manageCharacters_table_noDescription": {
     "message": "—"
   },
@@ -1285,6 +1288,9 @@
   },
   "manageCharacters_aria_viewConversations": {
     "message": "View conversations for {{name}}"
+  },
+  "manageCharacters_aria_viewVersionHistory": {
+    "message": "View version history for {{name}}"
   },
   "manageCharacters_aria_searchResults": {
     "message": "{{count}} characters found"
@@ -1438,6 +1444,87 @@
   },
   "manageCharacters_quickChat_emptyResponse": {
     "message": "No response received from the model."
+  },
+  "manageCharacters_versionHistory_title": {
+    "message": "Version history: {{name}}"
+  },
+  "manageCharacters_versionHistory_description": {
+    "message": "Review revision metadata, compare field-level changes, and restore earlier versions safely."
+  },
+  "manageCharacters_versionHistory_empty": {
+    "message": "No version snapshots available yet."
+  },
+  "manageCharacters_versionHistory_timeline": {
+    "message": "Timeline"
+  },
+  "manageCharacters_versionHistory_unknownTimestamp": {
+    "message": "Unknown time"
+  },
+  "manageCharacters_versionHistory_baseBadge": {
+    "message": "Base"
+  },
+  "manageCharacters_versionHistory_compareBadge": {
+    "message": "Compare"
+  },
+  "manageCharacters_versionHistory_clientId": {
+    "message": "Client: {{clientId}}"
+  },
+  "manageCharacters_versionHistory_baseVersion": {
+    "message": "Base version"
+  },
+  "manageCharacters_versionHistory_compareVersion": {
+    "message": "Compare version"
+  },
+  "manageCharacters_versionHistory_sameVersion": {
+    "message": "Select two different versions to view a diff."
+  },
+  "manageCharacters_versionHistory_diffUnavailable": {
+    "message": "Unable to load version diff. Try selecting different revisions."
+  },
+  "manageCharacters_versionHistory_diffTitle": {
+    "message": "Differences: v{{from}} -> v{{to}}"
+  },
+  "manageCharacters_versionHistory_diffCount": {
+    "message": "{{count}} fields changed"
+  },
+  "manageCharacters_versionHistory_noFieldChanges": {
+    "message": "No tracked field changes were found between these versions."
+  },
+  "manageCharacters_versionHistory_beforeLabel": {
+    "message": "Before"
+  },
+  "manageCharacters_versionHistory_afterLabel": {
+    "message": "After"
+  },
+  "manageCharacters_versionHistory_restoreTitle": {
+    "message": "Restore a previous version"
+  },
+  "manageCharacters_versionHistory_restoreVersion": {
+    "message": "Version to restore"
+  },
+  "manageCharacters_versionHistory_revertConfirm": {
+    "message": "Restore version {{version}}? This creates a new latest version."
+  },
+  "manageCharacters_versionHistory_revertAction": {
+    "message": "Restore version"
+  },
+  "manageCharacters_versionHistory_revertSuccess": {
+    "message": "Version restored"
+  },
+  "manageCharacters_versionHistory_revertSuccessDescription": {
+    "message": "Character updated to version {{version}} from snapshot v{{targetVersion}}."
+  },
+  "manageCharacters_versionHistory_revertError": {
+    "message": "Failed to restore version"
+  },
+  "manageCharacters_versionHistory_unavailable": {
+    "message": "Version history unavailable"
+  },
+  "manageCharacters_versionHistory_unavailableDescription": {
+    "message": "Version history is available only for saved server characters."
+  },
+  "manageCharacters_versionHistory_inlineHint": {
+    "message": "Inspect revision metadata, compare fields, or restore an earlier version."
   },
   "manageCharacters_form_name_label": {
     "message": "Name"

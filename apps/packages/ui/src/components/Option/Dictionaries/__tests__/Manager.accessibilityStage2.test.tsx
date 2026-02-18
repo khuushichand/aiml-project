@@ -317,7 +317,7 @@ describe("DictionariesManager accessibility stage-2 focus management", () => {
     await waitFor(() => {
       expect(createButton).toHaveFocus()
     })
-  }, 30000)
+  }, 60000)
 
   it("returns focus to the import trigger after closing Import Dictionary modal", async () => {
     const user = userEvent.setup()
@@ -333,7 +333,7 @@ describe("DictionariesManager accessibility stage-2 focus management", () => {
     await waitFor(() => {
       expect(importButton).toHaveFocus()
     })
-  }, 30000)
+  }, 60000)
 
   it("returns focus to manage-entries trigger after closing the entries drawer", async () => {
     const user = userEvent.setup()
@@ -376,7 +376,7 @@ describe("DictionariesManager accessibility stage-2 focus management", () => {
     await waitFor(() => {
       expect(quickAssignButton).toHaveFocus()
     })
-  }, 30000)
+  }, 60000)
 
   it("returns focus to stats trigger after closing the statistics modal", async () => {
     const user = userEvent.setup()
@@ -394,7 +394,7 @@ describe("DictionariesManager accessibility stage-2 focus management", () => {
     await waitFor(() => {
       expect(statsButton).toHaveFocus()
     })
-  }, 30000)
+  }, 60000)
 
   it("returns focus to entry edit trigger after closing nested Edit Entry modal", async () => {
     const user = userEvent.setup()

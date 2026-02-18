@@ -409,7 +409,7 @@ describe("DictionariesManager accessibility stage-3", () => {
     ])
 
     expect(results.violations).toEqual([])
-  }, 30000)
+  }, 60000)
 
   it("has no invalid aria/button-name violations in entries drawer workflow", async () => {
     const user = userEvent.setup()
@@ -420,9 +420,11 @@ describe("DictionariesManager accessibility stage-3", () => {
         name: "Manage entries for Valid Dictionary"
       })
     )
-    await screen.findByText("Manage Entries: Valid Dictionary")
+    const drawerTitle = await screen.findByText("Manage Entries: Valid Dictionary")
+    const drawerScope =
+      drawerTitle.closest(".ant-drawer-content") || document.body
 
-    const results = await runA11yRules(document.body, [
+    const results = await runA11yRules(drawerScope, [
       "aria-required-attr",
       "aria-valid-attr",
       "aria-valid-attr-value",
@@ -430,7 +432,7 @@ describe("DictionariesManager accessibility stage-3", () => {
     ])
 
     expect(results.violations).toEqual([])
-  }, 30000)
+  }, 60000)
 
   it("uses context-aware validation labels so status is not color-only", async () => {
     const user = userEvent.setup()

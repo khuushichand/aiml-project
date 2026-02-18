@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AutoComplete, Button, Collapse, Divider, Drawer, Form, Input, Modal, Skeleton, Switch, Table, Tooltip, Tag, InputNumber, Select, Descriptions, Popover, Slider, Dropdown } from "antd"
+import { AutoComplete, Button, Collapse, Divider, Drawer, Form, Input, Modal, Skeleton, Switch, Table, Tooltip, Tag, InputNumber, Select, Descriptions, Popover, Slider } from "antd"
 import { useTranslation } from "react-i18next"
 import React from "react"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { Pen, Trash2, Book, Play, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, AlertTriangle, Loader2, Copy, Plus, Check, X, MessageCircle, MoreHorizontal } from "lucide-react"
+import { Pen, Trash2, Play, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Check, X } from "lucide-react"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useMobile } from "@/hooks/useMediaQuery"
@@ -14,17 +14,21 @@ import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { LabelWithHelp } from "@/components/Common/LabelWithHelp"
 import { useStoreMessageOption } from "@/store/option"
 import { shallow } from "zustand/shallow"
+import { DictionaryFormModal } from "./components/DictionaryFormModal"
+import { DictionaryQuickAssignModal } from "./components/DictionaryQuickAssignModal"
+import { DictionaryImportModal } from "./components/DictionaryImportModal"
+import { DictionaryListSection } from "./components/DictionaryListSection"
+import { useDictionaryTableColumns } from "./components/useDictionaryTableColumns"
+import { useDictionaryEntryTableColumns } from "./components/useDictionaryEntryTableColumns"
 import {
   buildDictionaryDeactivationWarning,
   buildDictionaryDeletionConfirmationCopy,
   buildDuplicateDictionaryName,
-  compareDictionaryActive,
-  compareDictionaryEntryCount,
-  compareDictionaryName,
+  formatDictionaryChatReferenceTitle,
   filterDictionariesBySearch,
   isDictionaryVersionConflictError,
-  formatDictionaryUsageLabel,
-  formatRelativeTimestamp
+  normalizeDictionaryChatState,
+  resolveDictionaryChatReferenceId
 } from "./listUtils"
 import {
   buildImportConflictRenameSuggestion,
@@ -37,6 +41,12 @@ import {
   DICTIONARY_ENTRY_COLUMN_RESPONSIVE,
   filterDictionaryEntriesBySearchAndGroup,
 } from "./entryListUtils"
+
+const LazyDictionaryStatsModal = React.lazy(() =>
+  import("./DictionaryStatsModal").then((module) => ({
+    default: module.DictionaryStatsModal
+  }))
+)
 
 function getActiveFocusableElement(): HTMLElement | null {
   if (typeof document === "undefined") return null
@@ -418,6 +428,27 @@ export const DictionariesManager: React.FC = () => {
       return id.includes(normalized) || title.includes(normalized)
     })
   }, [assignSearch, assignableChats])
+  const quickAssignChatOptions = React.useMemo(
+    () =>
+      filteredAssignableChats
+        .map((chat: any) => {
+          const chatId = resolveDictionaryChatReferenceId(chat)
+          if (!chatId) return null
+          return {
+            chat,
+            chatId,
+            title: formatDictionaryChatReferenceTitle(chat),
+            state: normalizeDictionaryChatState(chat?.state)
+          }
+        })
+        .filter((value): value is {
+          chat: any
+          chatId: string
+          title: string
+          state: string
+        } => value != null),
+    [filteredAssignableChats]
+  )
 
   const toggleAssignChatSelection = React.useCallback((chatId: string) => {
     if (!chatId) return
@@ -724,6 +755,32 @@ export const DictionariesManager: React.FC = () => {
     })
   }, [importFormat, importMarkdownName, importMode, importSourceContent])
 
+  const handleImportFormatChange = React.useCallback((value: DictionaryImportFormat) => {
+    setImportFormat(value)
+    setImportPreview(null)
+    setImportValidationErrors([])
+  }, [])
+
+  const handleImportModeChange = React.useCallback((value: DictionaryImportMode) => {
+    setImportMode(value)
+    setImportPreview(null)
+    setImportValidationErrors([])
+  }, [])
+
+  const handleImportSourceContentChange = React.useCallback((value: string) => {
+    setImportSourceContent(value)
+    setImportPreview(null)
+    setImportValidationErrors([])
+  }, [])
+
+  const handleImportMarkdownNameChange = React.useCallback((value: string) => {
+    setImportMarkdownName(value)
+  }, [])
+
+  const handleActivateOnImportChange = React.useCallback((value: boolean) => {
+    setActivateOnImport(value)
+  }, [])
+
   const runImportWithPreview = React.useCallback(
     async (preview: DictionaryImportPreview) => {
       if (preview.payload.kind === "json") {
@@ -926,649 +983,158 @@ export const DictionariesManager: React.FC = () => {
     if (ok) deleteDict(record.id)
   }, [confirmDanger, deleteDict, t])
 
-  const runDictionaryOverflowAction = React.useCallback((record: any, key: string) => {
-    switch (key) {
-      case "assign":
-        openQuickAssignModal(record)
-        return
-      case "json":
-        void exportDictionaryAsJson(record)
-        return
-      case "markdown":
-        void exportDictionaryAsMarkdown(record)
-        return
-      case "stats":
-        void openDictionaryStatsModal(record)
-        return
-      case "duplicate":
-        void duplicateDictionary(record)
-        return
-      case "delete":
-        void confirmAndDeleteDictionary(record)
-        return
-      default:
-        return
-    }
-  }, [confirmAndDeleteDictionary, duplicateDictionary, exportDictionaryAsJson, exportDictionaryAsMarkdown, openDictionaryStatsModal, openQuickAssignModal])
-
   const dictionariesUnsupported =
     !capsLoading && capabilities && !capabilities.hasChatDictionaries
+  const dictionariesUnsupportedTitle = t("option:dictionaries.offlineTitle", {
+    defaultValue: "Chat dictionaries API not available on this server"
+  })
+  const dictionariesUnsupportedDescription = t(
+    "option:dictionaries.offlineDescription",
+    {
+      defaultValue:
+        "This tldw server does not advertise the /api/v1/chat/dictionaries endpoints. Upgrade your server to a version that includes chat dictionaries to use this workspace."
+    }
+  )
+  const dictionariesUnsupportedPrimaryActionLabel = t(
+    "settings:healthSummary.diagnostics",
+    {
+      defaultValue: "Health & diagnostics"
+    }
+  )
+  const openHealthDiagnostics = React.useCallback(() => {
+    try {
+      window.location.hash = "#/settings/health"
+    } catch {
+      // best-effort navigation
+    }
+  }, [])
 
-  const columns = [
-    {
-      title: '',
-      key: 'icon',
-      width: 48,
-      render: () => <Book className="w-5 h-5 text-text-muted" aria-hidden="true" />
-    },
-    {
-      title: 'Name',
-      dataIndex: 'name',
-      key: 'name',
-      sorter: (a: any, b: any) => compareDictionaryName(a, b)
-    },
-    {
-      title: 'Description',
-      dataIndex: 'description',
-      key: 'description',
-      render: (v: string) => <span className="line-clamp-1">{v}</span>
-    },
-    {
-      title: 'Active',
-      dataIndex: 'is_active',
-      key: 'is_active',
-      sorter: (a: any, b: any) => compareDictionaryActive(a, b),
-      filters: [
-        { text: 'Active', value: true },
-        { text: 'Inactive', value: false }
-      ],
-      onFilter: (value: any, record: any) => {
-        const activeFilter = value === true || value === 'true'
-        return Boolean(record.is_active) === activeFilter
-      },
-      render: (v: boolean, record: any) => (
-        <Switch
-          checked={Boolean(v)}
-          loading={Boolean(activeUpdateMap[record.id])}
-          checkedChildren="On"
-          unCheckedChildren="Off"
-          onChange={async (checked) => {
-            const confirmed = await confirmDeactivationIfNeeded(record, checked)
-            if (!confirmed) return
+  const handleDictionaryActiveToggle = React.useCallback(
+    async (record: any, checked: boolean) => {
+      const confirmed = await confirmDeactivationIfNeeded(record, checked)
+      if (!confirmed) return
 
-            const dictionaryId = Number(record.id)
-            const version = Number(record?.version)
-            try {
-              await updateDictionaryActive({
-                dictionaryId,
-                isActive: checked,
-                version: Number.isFinite(version) && version > 0 ? version : undefined
-              })
-            } catch (e: any) {
-              if (isDictionaryVersionConflictError(e)) {
-                const shouldReload = await confirmDanger({
-                  title: "Dictionary changed in another session",
-                  content:
-                    "This dictionary was updated elsewhere. Reload the latest dictionary list and try again.",
-                  okText: "Reload",
-                  cancelText: t("common:cancel", { defaultValue: "Cancel" })
-                })
-                if (shouldReload) {
-                  qc.invalidateQueries({ queryKey: ["tldw:listDictionaries"] })
-                }
-                return
-              }
-              notification.error({
-                message: "Update failed",
-                description:
-                  e?.message || "Failed to update dictionary status. Please retry."
-              })
-            }
-          }}
-          aria-label={`Set dictionary ${record.name} ${v ? "inactive" : "active"}`}
-        />
-      )
-    },
-    {
-      title: 'Priority',
-      dataIndex: 'processing_priority',
-      key: 'processing_priority',
-      sorter: (a: any, b: any) => {
-        const toPriority = (record: any) => {
-          const isActive = Boolean(record?.is_active)
-          if (!isActive) return Number.POSITIVE_INFINITY
-          const priority = Number(record?.processing_priority)
-          return Number.isFinite(priority) && priority > 0
-            ? priority
-            : Number.POSITIVE_INFINITY - 1
+      const dictionaryId = Number(record?.id)
+      if (!Number.isFinite(dictionaryId) || dictionaryId <= 0) return
+
+      const version = Number(record?.version)
+      try {
+        await updateDictionaryActive({
+          dictionaryId,
+          isActive: checked,
+          version: Number.isFinite(version) && version > 0 ? version : undefined
+        })
+      } catch (e: any) {
+        if (isDictionaryVersionConflictError(e)) {
+          const shouldReload = await confirmDanger({
+            title: "Dictionary changed in another session",
+            content:
+              "This dictionary was updated elsewhere. Reload the latest dictionary list and try again.",
+            okText: "Reload",
+            cancelText: t("common:cancel", { defaultValue: "Cancel" })
+          })
+          if (shouldReload) {
+            qc.invalidateQueries({ queryKey: ["tldw:listDictionaries"] })
+          }
+          return
         }
-        return toPriority(a) - toPriority(b)
-      },
-      render: (_value: number | null | undefined, record: any) => {
-        if (!record?.is_active) {
-          return <span className="text-xs text-text-muted">inactive</span>
-        }
-        const priority = Number(record?.processing_priority)
-        if (!Number.isFinite(priority) || priority <= 0) {
-          return <span className="text-xs text-text-muted">pending</span>
-        }
-        return (
-          <Tooltip title="Processing order when multiple dictionaries are active">
-            <span className="text-xs font-mono">{`P${priority}`}</span>
-          </Tooltip>
-        )
+        notification.error({
+          message: "Update failed",
+          description: e?.message || "Failed to update dictionary status. Please retry."
+        })
       }
     },
-    {
-      title: 'Entries',
-      dataIndex: 'entry_count',
-      key: 'entry_count',
-      sorter: (a: any, b: any) => compareDictionaryEntryCount(a, b),
-      render: (_value: number, record: any) => {
-        const entryCount = Number(record?.entry_count || 0)
-        const regexCount = Number(record?.regex_entry_count ?? record?.regex_entries ?? 0)
-        if (regexCount > 0) {
-          return `${entryCount} entries (${regexCount} regex)`
-        }
-        return `${entryCount} entries`
-      }
-    },
-    {
-      title: 'Used by',
-      dataIndex: 'used_by_chat_count',
-      key: 'used_by_chat_count',
-      sorter: (a: any, b: any) => Number(a?.used_by_chat_count || 0) - Number(b?.used_by_chat_count || 0),
-      render: (_value: number, record: any) => {
-        const totalChats = Number(record?.used_by_chat_count || 0)
-        const chatRefs = Array.isArray(record?.used_by_chat_refs) ? record.used_by_chat_refs : []
+    [confirmDanger, confirmDeactivationIfNeeded, notification, qc, t, updateDictionaryActive]
+  )
 
-        if (totalChats <= 0) {
-          return <span className="text-xs text-text-muted">—</span>
-        }
-
-        const label = formatDictionaryUsageLabel(record)
-        if (chatRefs.length === 0) {
-          return <span className="text-xs">{label}</span>
-        }
-
-        const firstChat = chatRefs[0]
-        return (
-          <div className="space-y-1">
-            <button
-              type="button"
-              className="text-xs underline decoration-dotted cursor-pointer"
-              onClick={() => openChatContextFromDictionary(firstChat)}
-              aria-label={`Open most recent linked chat for ${record?.name || "dictionary"}`}
-            >
-              {label}
-            </button>
-            <Tooltip
-              title={
-                <div className="space-y-1">
-                  {chatRefs.map((chat: any) => {
-                    const chatId = resolveDictionaryChatReferenceId(chat)
-                    const title = formatDictionaryChatReferenceTitle(chat)
-                    const state = normalizeDictionaryChatState(chat?.state)
-                    return (
-                      <button
-                        key={chatId || `${title}-${state}`}
-                        type="button"
-                        className="block text-left text-xs hover:underline"
-                        onClick={(event) => {
-                          event.preventDefault()
-                          event.stopPropagation()
-                          openChatContextFromDictionary(chat)
-                        }}
-                        aria-label={`Open chat ${title} from dictionary usage`}
-                      >
-                        {title} <span className="text-text-muted">({state})</span>
-                      </button>
-                    )
-                  })}
-                </div>
-              }
-            >
-              <span className="text-[11px] text-text-muted underline decoration-dotted cursor-help">
-                View linked chats
-              </span>
-            </Tooltip>
-          </div>
-        )
-      }
+  const columns = useDictionaryTableColumns({
+    activeUpdateMap,
+    validationStatus,
+    useCompactDictionaryActions,
+    onToggleActive: handleDictionaryActiveToggle,
+    onValidateDictionary: validateDictionary,
+    onOpenChatContext: openChatContextFromDictionary,
+    onOpenEdit: openDictionaryEditModal,
+    onOpenEntries: openDictionaryEntriesPanel,
+    onOpenQuickAssign: openQuickAssignModal,
+    onExportJson: (value) => {
+      void exportDictionaryAsJson(value)
     },
-    {
-      title: 'Updated',
-      dataIndex: 'updated_at',
-      key: 'updated_at',
-      sorter: (a: any, b: any) => {
-        const valueA = new Date(a?.updated_at || 0).getTime()
-        const valueB = new Date(b?.updated_at || 0).getTime()
-        return valueA - valueB
-      },
-      render: (value: string | null | undefined) => {
-        const relative = formatRelativeTimestamp(value)
-        const absolute = value ? new Date(value).toLocaleString() : 'No updates yet'
-        return (
-          <Tooltip title={absolute}>
-            <span className="text-xs text-text-muted">{relative}</span>
-          </Tooltip>
-        )
-      }
+    onExportMarkdown: (value) => {
+      void exportDictionaryAsMarkdown(value)
     },
-    {
-      title: 'Status',
-      key: 'validation_status',
-      width: 132,
-      render: (_: any, record: any) => {
-        const status = validationStatus[record.id]
-        if (!status) {
-          return (
-            <Tooltip title="Click to validate">
-              <button
-                className="min-w-[36px] min-h-[36px] px-2 inline-flex items-center gap-1 text-xs text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
-                onClick={() => validateDictionary(record.id)}
-                aria-label={`Validate dictionary ${record.name}`}
-              >
-                <CheckCircle2 className="w-4 h-4 opacity-40" />
-                <span>Check</span>
-              </button>
-            </Tooltip>
-          )
-        }
-        if (status.status === 'loading') {
-          return (
-            <Tooltip title="Validating...">
-              <span className="inline-flex items-center gap-1 text-xs text-text-muted">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Checking</span>
-              </span>
-            </Tooltip>
-          )
-        }
-        if (status.status === 'valid') {
-          return (
-            <Tooltip title={status.message || 'Valid'}>
-              <button
-                className="min-w-[36px] min-h-[36px] px-2 inline-flex items-center gap-1 text-xs text-text hover:bg-success/10 rounded-md transition-colors"
-                onClick={() => validateDictionary(record.id)}
-                aria-label={`Dictionary ${record.name} is valid. Click to re-validate.`}
-              >
-                <CheckCircle2 className="w-4 h-4 text-success" />
-                <span>Valid</span>
-              </button>
-            </Tooltip>
-          )
-        }
-        if (status.status === 'warning') {
-          return (
-            <Tooltip title={status.message || 'Has warnings'}>
-              <button
-                className="min-w-[36px] min-h-[36px] px-2 inline-flex items-center gap-1 text-xs text-text hover:bg-warn/10 rounded-md transition-colors"
-                onClick={() => validateDictionary(record.id)}
-                aria-label={`Dictionary ${record.name} has warnings. Click to re-validate.`}
-              >
-                <AlertTriangle className="w-4 h-4 text-warn" />
-                <span>Warn</span>
-              </button>
-            </Tooltip>
-          )
-        }
-        // error
-        return (
-          <Tooltip title={status.message || 'Has errors'}>
-            <button
-              className="min-w-[36px] min-h-[36px] px-2 inline-flex items-center gap-1 text-xs text-text hover:bg-danger/10 rounded-md transition-colors"
-              onClick={() => validateDictionary(record.id)}
-              aria-label={`Dictionary ${record.name} has errors. Click to re-validate.`}
-            >
-              <AlertCircle className="w-4 h-4 text-danger" />
-              <span>Error</span>
-            </button>
-          </Tooltip>
-        )
-      }
+    onOpenStats: (value) => {
+      void openDictionaryStatsModal(value)
     },
-    { title: 'Actions', key: 'actions', render: (_: any, record: any) => (
-      <div className="flex gap-1 items-center">
-        <Tooltip title="Edit dictionary">
-          <button
-            className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
-            onClick={() => openDictionaryEditModal(record)}
-            aria-label={`Edit dictionary ${record.name}`}
-          >
-            <Pen className="w-5 h-5" />
-          </button>
-        </Tooltip>
-        <Tooltip title="Manage entries">
-          <button
-            className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
-            onClick={() => openDictionaryEntriesPanel(record.id)}
-            aria-label={`Manage entries for ${record.name}`}
-          >
-            Entries
-          </button>
-        </Tooltip>
-        {useCompactDictionaryActions ? (
-          <Dropdown
-            trigger={["click"]}
-            menu={{
-              items: [
-                { key: "assign", label: "Quick assign to chats", icon: <MessageCircle className="w-4 h-4" /> },
-                { key: "json", label: "Export JSON" },
-                { key: "markdown", label: "Export Markdown" },
-                { key: "stats", label: "View statistics" },
-                { key: "duplicate", label: "Duplicate dictionary", icon: <Copy className="w-4 h-4" /> },
-                { key: "delete", danger: true, label: "Delete dictionary", icon: <Trash2 className="w-4 h-4" /> }
-              ],
-              onClick: ({ key }) => {
-                runDictionaryOverflowAction(record, String(key))
-              }
-            }}
-            placement="bottomRight"
-          >
-            <button
-              type="button"
-              className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
-              aria-label={`More actions for ${record.name}`}
-              aria-haspopup="menu"
-            >
-              <MoreHorizontal className="w-5 h-5" />
-            </button>
-          </Dropdown>
-        ) : (
-          <>
-            <Tooltip title="Quick assign to chat sessions">
-              <button
-                className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
-                onClick={() => openQuickAssignModal(record)}
-                aria-label={`Quick assign ${record.name} to chats`}
-              >
-                <MessageCircle className="w-5 h-5" />
-              </button>
-            </Tooltip>
-            <Tooltip title="Export as JSON">
-              <button
-                className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
-                onClick={() => { void exportDictionaryAsJson(record) }}
-                aria-label={`Export ${record.name} as JSON`}
-              >
-                JSON
-              </button>
-            </Tooltip>
-            <Tooltip title="Export as Markdown">
-              <button
-                className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
-                onClick={() => { void exportDictionaryAsMarkdown(record) }}
-                aria-label={`Export ${record.name} as Markdown`}
-              >
-                MD
-              </button>
-            </Tooltip>
-            <Tooltip title="View statistics">
-              <button
-                className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
-                onClick={() => { void openDictionaryStatsModal(record) }}
-                aria-label={`View statistics for ${record.name}`}
-              >
-                Stats
-              </button>
-            </Tooltip>
-            <Tooltip title="Duplicate dictionary">
-              <button
-                className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
-                onClick={() => duplicateDictionary(record)}
-                aria-label={`Duplicate dictionary ${record.name}`}
-              >
-                <Copy className="w-5 h-5" />
-              </button>
-            </Tooltip>
-            <Tooltip title="Delete dictionary">
-              <button
-                className="min-w-[44px] min-h-[44px] flex items-center justify-center text-danger hover:bg-danger/10 rounded-md transition-colors"
-                onClick={() => { void confirmAndDeleteDictionary(record) }}
-                aria-label={`Delete dictionary ${record.name}`}
-              >
-                <Trash2 className="w-5 h-5" />
-              </button>
-            </Tooltip>
-          </>
-        )}
-      </div>
-    )}
-  ]
+    onDuplicate: (value) => {
+      void duplicateDictionary(value)
+    },
+    onDelete: (value) => {
+      void confirmAndDeleteDictionary(value)
+    }
+  })
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <Input
-          value={dictionarySearch}
-          onChange={(e) => setDictionarySearch(e.target.value)}
-          allowClear
-          className="sm:max-w-md"
-          placeholder="Search dictionaries by name or description"
-          aria-label="Search dictionaries"
-        />
-        <div className="flex justify-end gap-2">
-          <Button onClick={openImportDictionaryModal}>Import</Button>
-          <Button type="primary" icon={<Plus className="w-4 h-4" />} onClick={openCreateDictionaryModal}>
-            New Dictionary
-          </Button>
-        </div>
-      </div>
-      <div className="text-xs text-text-muted">
-        Processing order for active dictionaries uses Priority (alphabetical by dictionary name), then each dictionary&apos;s entry order.
-      </div>
-      {status === 'pending' && <Skeleton active paragraph={{ rows: 6 }} />}
-      {status === 'success' && dictionariesUnsupported && (
-        <FeatureEmptyState
-          title={t("option:dictionaries.offlineTitle", {
-            defaultValue: "Chat dictionaries API not available on this server"
-          })}
-          description={t("option:dictionaries.offlineDescription", {
-            defaultValue:
-              "This tldw server does not advertise the /api/v1/chat/dictionaries endpoints. Upgrade your server to a version that includes chat dictionaries to use this workspace."
-          })}
-          primaryActionLabel={t("settings:healthSummary.diagnostics", {
-            defaultValue: "Health & diagnostics"
-          })}
-          onPrimaryAction={() => {
-            try {
-              window.location.hash = "#/settings/health"
-            } catch {}
-          }}
-        />
-      )}
-      {status === 'success' && !dictionariesUnsupported && (
-        Array.isArray(data) && data.length === 0 ? (
-          <FeatureEmptyState
-            title="No dictionaries yet"
-            description="Create your first dictionary to transform text consistently across chats."
-            examples={[
-              "Medical abbreviations (e.g., BP -> blood pressure)",
-              "Custom terminology (e.g., internal product names)",
-              "Roleplay language style mappings",
-            ]}
-            primaryActionLabel="Create your first dictionary"
-            onPrimaryAction={openCreateDictionaryModal}
-            secondaryActionLabel="Import dictionary"
-            onSecondaryAction={openImportDictionaryModal}
-          />
-        ) : (
-        <Table
-          rowKey={(r: any) => r.id}
-          dataSource={filteredDictionaries}
-          columns={columns as any}
-          pagination={{
-            pageSize: 20,
-            showSizeChanger: true,
-            pageSizeOptions: [10, 20, 50, 100],
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`
-          }}
-        />
-        )
-      )}
-      {status === 'error' && !dictionariesUnsupported && (
-        <FeatureEmptyState
-          title="Unable to load dictionaries"
-          description={
-            error instanceof Error
-              ? `Could not load dictionaries: ${error.message}`
-              : "Could not load dictionaries right now. Check your server connection and try again."
-          }
-          primaryActionLabel="Retry"
-          onPrimaryAction={() => void refetch()}
-          secondaryActionLabel="Import dictionary"
-          onSecondaryAction={openImportDictionaryModal}
-        />
-      )}
-
-      <Modal
-        title={
-          assignFor?.name
-            ? `Quick assign: ${assignFor.name}`
-            : "Quick assign dictionary"
-        }
-        open={!!assignFor}
-        onCancel={closeQuickAssignModal}
-        onOk={() => void handleConfirmQuickAssign()}
-        okText={
-          assignChatIds.length === 1
-            ? "Assign to 1 chat"
-            : `Assign to ${assignChatIds.length} chats`
-        }
-        okButtonProps={{
-          disabled: assignChatIds.length === 0,
-          loading: assignSaving
+      <DictionaryListSection
+        dictionarySearch={dictionarySearch}
+        onDictionarySearchChange={setDictionarySearch}
+        onOpenImport={openImportDictionaryModal}
+        onOpenCreate={openCreateDictionaryModal}
+        status={status}
+        dictionariesUnsupported={Boolean(dictionariesUnsupported)}
+        unsupportedTitle={dictionariesUnsupportedTitle}
+        unsupportedDescription={dictionariesUnsupportedDescription}
+        unsupportedPrimaryActionLabel={dictionariesUnsupportedPrimaryActionLabel}
+        onOpenHealthDiagnostics={openHealthDiagnostics}
+        data={Array.isArray(data) ? data : undefined}
+        filteredDictionaries={filteredDictionaries}
+        columns={columns}
+        error={error}
+        onRetry={() => {
+          void refetch()
         }}
-        cancelButtonProps={{ disabled: assignSaving }}
-      >
-        <div className="space-y-3">
-          <p className="text-xs text-text-muted">
-            Choose chat sessions to link with this dictionary.
-          </p>
-          <Input
-            value={assignSearch}
-            onChange={(event) => setAssignSearch(event.target.value)}
-            allowClear
-            placeholder="Search chats by title or ID"
-            aria-label="Search chats for quick assign"
-          />
+      />
 
-          {assignableChatsStatus === "pending" && (
-            <Skeleton active paragraph={{ rows: 3 }} />
-          )}
+      <DictionaryQuickAssignModal
+        dictionaryName={assignFor?.name}
+        open={Boolean(assignFor)}
+        onCancel={closeQuickAssignModal}
+        onConfirm={() => void handleConfirmQuickAssign()}
+        selectedChatIds={assignChatIds}
+        assignSaving={assignSaving}
+        searchValue={assignSearch}
+        onSearchChange={setAssignSearch}
+        chatsStatus={assignableChatsStatus}
+        chatsError={assignableChatsError}
+        chatOptions={quickAssignChatOptions}
+        onRetry={() => void refetchAssignableChats()}
+        onToggleChatSelection={toggleAssignChatSelection}
+        onOpenChat={openChatContextFromDictionary}
+      />
 
-          {assignableChatsStatus === "error" && (
-            <div className="space-y-2 rounded-md border border-danger/30 bg-danger/5 p-3">
-              <p className="text-xs text-danger">
-                {assignableChatsError instanceof Error
-                  ? assignableChatsError.message
-                  : "Unable to load chat sessions for assignment."}
-              </p>
-              <Button size="small" onClick={() => void refetchAssignableChats()}>
-                Retry
-              </Button>
-            </div>
-          )}
+      <DictionaryFormModal
+        title="Create Dictionary"
+        open={open}
+        onCancel={() => setOpen(false)}
+        form={createForm}
+        onFinish={(values) => createDict(normalizeDictionaryFormPayload(values))}
+        submitLabel="Create"
+        submitLoading={creating}
+        tokenBudgetHelp="Optional. Used when preview or API processing calls omit token_budget."
+      />
 
-          {assignableChatsStatus === "success" &&
-            filteredAssignableChats.length === 0 && (
-              <div className="rounded-md border border-border bg-surface2/40 px-3 py-2 text-xs text-text-muted">
-                No chat sessions match your search.
-              </div>
-            )}
-
-          {assignableChatsStatus === "success" &&
-            filteredAssignableChats.length > 0 && (
-              <div className="max-h-72 space-y-1 overflow-y-auto rounded-md border border-border bg-surface2/20 p-2">
-                {filteredAssignableChats.map((chat: any) => {
-                  const chatId = resolveDictionaryChatReferenceId(chat)
-                  if (!chatId) return null
-                  const title = formatDictionaryChatReferenceTitle(chat)
-                  const state = normalizeDictionaryChatState(chat?.state)
-                  const checked = assignChatIds.includes(chatId)
-                  return (
-                    <label
-                      key={`assign-chat-${chatId}`}
-                      className="flex items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-surface2/60"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleAssignChatSelection(chatId)}
-                        aria-label={`Select chat ${title}`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate">{title}</div>
-                        <div className="text-[11px] text-text-muted">
-                          {chatId} · {state}
-                        </div>
-                      </div>
-                      <Button
-                        type="link"
-                        size="small"
-                        onClick={(event) => {
-                          event.preventDefault()
-                          event.stopPropagation()
-                          openChatContextFromDictionary(chat)
-                        }}
-                      >
-                        Open
-                      </Button>
-                    </label>
-                  )
-                })}
-              </div>
-            )}
-        </div>
-      </Modal>
-
-      <Modal title="Create Dictionary" open={open} onCancel={() => setOpen(false)} footer={null}>
-        <Form
-          layout="vertical"
-          form={createForm}
-          onFinish={(values) =>
-            createDict(normalizeDictionaryFormPayload(values))
-          }
-        >
-          <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="description" label="Description"><Input /></Form.Item>
-          <Form.Item
-            name="default_token_budget"
-            label={(
-              <LabelWithHelp
-                label="Default Token Budget"
-                help="Optional. Used when preview or API processing calls omit token_budget."
-              />
-            )}
-            rules={[{ type: "number", min: 1, message: "Must be at least 1 token." }]}
-          >
-            <InputNumber min={1} style={{ width: "100%" }} placeholder="Optional" />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" loading={creating} className="w-full">Create</Button>
-        </Form>
-      </Modal>
-
-      <Modal title="Edit Dictionary" open={openEdit} onCancel={closeDictionaryEditModal} footer={null}>
-        <Form layout="vertical" form={editForm} onFinish={handleEditSubmit}>
-          <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="description" label="Description"><Input /></Form.Item>
-          <Form.Item name="is_active" label="Active" valuePropName="checked"><Switch checkedChildren="On" unCheckedChildren="Off" /></Form.Item>
-          <Form.Item
-            name="default_token_budget"
-            label={(
-              <LabelWithHelp
-                label="Default Token Budget"
-                help="Optional. Clears when empty."
-              />
-            )}
-            rules={[{ type: "number", min: 1, message: "Must be at least 1 token." }]}
-          >
-            <InputNumber min={1} style={{ width: "100%" }} placeholder="Optional" />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" loading={updating} className="w-full">Save</Button>
-        </Form>
-      </Modal>
+      <DictionaryFormModal
+        title="Edit Dictionary"
+        open={openEdit}
+        onCancel={closeDictionaryEditModal}
+        form={editForm}
+        onFinish={handleEditSubmit}
+        submitLabel="Save"
+        submitLoading={updating}
+        tokenBudgetHelp="Optional. Clears when empty."
+        includeActiveField
+      />
 
       <Drawer
         title={
@@ -1584,373 +1150,42 @@ export const DictionariesManager: React.FC = () => {
       >
         {openEntries && <DictionaryEntryManager dictionaryId={openEntries} form={entryForm} />}
       </Drawer>
-      <Modal title="Import Dictionary" open={openImport} onCancel={handleCloseImportModal} footer={null}>
-        <div className="space-y-3">
-          <div className="grid gap-2 sm:grid-cols-2">
-            <div className="space-y-1">
-              <div className="text-xs font-medium text-text">Format</div>
-              <Select
-                value={importFormat}
-                onChange={(value) => {
-                  setImportFormat(value as DictionaryImportFormat)
-                  setImportPreview(null)
-                  setImportValidationErrors([])
-                }}
-                options={[
-                  { label: "JSON (full fidelity)", value: "json" },
-                  { label: "Markdown", value: "markdown" }
-                ]}
-              />
-            </div>
-            <div className="space-y-1">
-              <div className="text-xs font-medium text-text">Source</div>
-              <Select
-                value={importMode}
-                onChange={(value) => {
-                  setImportMode(value as DictionaryImportMode)
-                  setImportPreview(null)
-                  setImportValidationErrors([])
-                }}
-                options={[
-                  { label: "File upload", value: "file" },
-                  { label: "Paste content", value: "paste" }
-                ]}
-              />
-            </div>
-          </div>
-
-          {importMode === "file" ? (
-            <div className="space-y-2">
-              <input
-                type="file"
-                accept={
-                  importFormat === "markdown"
-                    ? ".md,.markdown,text/markdown,text/plain"
-                    : "application/json,.json"
-                }
-                onChange={handleImportFileSelection}
-              />
-              {importFileName && (
-                <p className="text-xs text-text-muted">Selected: {importFileName}</p>
-              )}
-            </div>
-          ) : (
-            <Input.TextArea
-              rows={6}
-              value={importSourceContent}
-              onChange={(event) => {
-                setImportSourceContent(event.target.value)
-                setImportPreview(null)
-                setImportValidationErrors([])
-              }}
-              placeholder={
-                importFormat === "markdown"
-                  ? "Paste markdown dictionary content..."
-                  : "Paste JSON dictionary content..."
-              }
-            />
-          )}
-
-          {importFormat === "markdown" && (
-            <div className="space-y-1">
-              <div className="text-xs font-medium text-text">Dictionary name</div>
-              <Input
-                value={importMarkdownName}
-                onChange={(event) => setImportMarkdownName(event.target.value)}
-                placeholder="Optional (defaults to markdown heading or file name)"
-              />
-            </div>
-          )}
-
-          <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={activateOnImport} onChange={(ev) => setActivateOnImport(ev.target.checked)} /> Activate after import</label>
-          <Button onClick={buildImportPreview} disabled={!importSourceContent.trim()}>
-            Preview import
-          </Button>
-          {importValidationErrors.length > 0 && (
-            <div className="rounded-md border border-danger/30 bg-danger/5 px-3 py-2">
-              <p className="text-sm font-medium text-danger">
-                Unable to import this file. Fix the following and retry:
-              </p>
-              <ul className="mt-1 list-disc pl-4 text-xs text-danger/90 space-y-1">
-                {importValidationErrors.map((issue, index) => (
-                  <li key={`${issue}-${index}`}>{issue}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {importPreview && (
-            <div className="space-y-2 rounded-md border border-border bg-surface2/40 px-3 py-2">
-              <div className="text-sm font-medium text-text">Import preview</div>
-              <Descriptions size="small" bordered column={1}>
-                <Descriptions.Item label="Format">
-                  {importPreview.format === "json" ? "JSON" : "Markdown"}
-                </Descriptions.Item>
-                <Descriptions.Item label="Dictionary name">
-                  {importPreview.summary.name}
-                </Descriptions.Item>
-                <Descriptions.Item label="Entries">
-                  {importPreview.summary.entryCount}
-                </Descriptions.Item>
-                <Descriptions.Item label="Groups">
-                  {importPreview.summary.groups.length > 0
-                    ? importPreview.summary.groups.join(", ")
-                    : "—"}
-                </Descriptions.Item>
-                <Descriptions.Item label="Advanced fields">
-                  {importPreview.summary.hasAdvancedFields ? "Detected" : "Not detected"}
-                </Descriptions.Item>
-              </Descriptions>
-              <Button type="primary" onClick={() => void handleConfirmImport()} loading={importing}>
-                Confirm import
-              </Button>
-            </div>
-          )}
-          {importing && (
-            <p className="text-xs text-text-muted">Importing dictionary...</p>
-          )}
-        </div>
-      </Modal>
-      <Modal
-        title="Dictionary name conflict"
-        open={!!importConflictResolution}
-        onCancel={() => setImportConflictResolution(null)}
-        footer={null}
-      >
-        {importConflictResolution && (
-          <div className="space-y-3">
-            <p className="text-sm text-text">
-              A dictionary named{" "}
-              <span className="font-medium">
-                {importConflictResolution.preview.summary.name}
-              </span>{" "}
-              already exists.
-            </p>
-            <div className="space-y-2">
-              <Button
-                type="primary"
-                onClick={() => void resolveImportConflictRename()}
-                loading={importing}
-                block
-              >
-                Rename to "{importConflictResolution.suggestedName}"
-              </Button>
-              <Button
-                danger
-                onClick={() => void resolveImportConflictReplace()}
-                loading={importing}
-                block
-              >
-                Replace existing
-              </Button>
-              <Button onClick={() => setImportConflictResolution(null)} block>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
-      </Modal>
-      <Modal title="Dictionary Statistics" open={!!statsFor} onCancel={() => setStatsFor(null)} footer={null}>
-        {statsFor && (
-          <div className="space-y-3">
-            <Descriptions size="small" bordered column={1}>
-              <Descriptions.Item label="ID">{statsFor.dictionary_id}</Descriptions.Item>
-              <Descriptions.Item label="Name">{statsFor.name}</Descriptions.Item>
-              <Descriptions.Item label="Total Entries">{statsFor.total_entries}</Descriptions.Item>
-              <Descriptions.Item label="Regex Entries">{statsFor.regex_entries}</Descriptions.Item>
-              <Descriptions.Item label="Literal Entries">{statsFor.literal_entries}</Descriptions.Item>
-              <Descriptions.Item label="Enabled Entries">
-                {toDisplayStatNumber(statsFor.enabled_entries)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Disabled Entries">
-                {toDisplayStatNumber(statsFor.disabled_entries)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Probabilistic Entries">
-                {toDisplayStatNumber(statsFor.probabilistic_entries)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Timed Effect Entries">
-                {toDisplayStatNumber(statsFor.timed_effect_entries)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Unused Entries">
-                {toDisplayStatNumber(statsFor.zero_usage_entries)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Pattern Conflicts">
-                {toDisplayStatNumber(statsFor.pattern_conflict_count)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Groups">{toDisplayGroupSummary(statsFor.groups)}</Descriptions.Item>
-              <Descriptions.Item label="Average Probability">
-                {toDisplayProbabilitySummary(statsFor.average_probability)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Default Token Budget">
-                {toDisplayTokenBudgetSummary(statsFor.default_token_budget)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Created">
-                {formatRelativeTimestamp(statsFor.created_at)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Updated">
-                {formatRelativeTimestamp(statsFor.updated_at)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Last Used">
-                {formatRelativeTimestamp(statsFor.last_used)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Total Usage Count">
-                {toDisplayStatNumber(statsFor.total_usage_count)}
-              </Descriptions.Item>
-            </Descriptions>
-
-            {Array.isArray(statsFor.entry_usage) && statsFor.entry_usage.length > 0 && (
-              <div className="space-y-2">
-                <div className="text-xs font-medium text-text">Entry usage snapshot</div>
-                <div className="space-y-1 rounded border border-border bg-surface2/40 p-2">
-                  {statsFor.entry_usage.slice(0, 6).map((item: any) => (
-                    <div
-                      key={`entry-usage-${item?.entry_id}`}
-                      className="flex items-center justify-between gap-2 text-xs"
-                    >
-                      <span className="truncate font-mono text-text">
-                        {item?.pattern || `Entry ${item?.entry_id}`}
-                      </span>
-                      <span className="shrink-0 text-text-muted">
-                        {toDisplayStatNumber(item?.usage_count)} uses
-                        {item?.last_used_at
-                          ? ` · last ${formatRelativeTimestamp(item.last_used_at)}`
-                          : ""}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div className="space-y-2">
-              <div className="text-xs font-medium text-text">Recent activity</div>
-              {Array.isArray(statsFor.recent_activity) && statsFor.recent_activity.length > 0 ? (
-                <div className="space-y-2 rounded border border-border bg-surface2/40 p-2">
-                  {statsFor.recent_activity.map((event: any, index: number) => (
-                    <div
-                      key={`dictionary-activity-${event?.id ?? index}`}
-                      className="space-y-1 rounded border border-border/70 bg-surface p-2 text-xs"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-text">{formatRelativeTimestamp(event?.created_at)}</span>
-                        <span className="text-text-muted">
-                          {toDisplayStatNumber(event?.replacements)} replacements ·{" "}
-                          {toDisplayStatNumber(event?.iterations)} iterations
-                          {event?.token_budget_used
-                            ? ` · budget ${toDisplayStatNumber(event.token_budget_used)}`
-                            : ""}
-                        </span>
-                      </div>
-                      <div className="text-text-muted">
-                        Chat: {String(event?.chat_id || "Preview/API call")}
-                      </div>
-                      <div className="text-text-muted">
-                        Entries: {formatActivityEntriesUsed(event?.entries_used)}
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-text">
-                          <span className="font-medium">Before:</span>{" "}
-                          {String(event?.original_text_preview || "—")}
-                        </div>
-                        <div className="text-text">
-                          <span className="font-medium">After:</span>{" "}
-                          {String(event?.processed_text_preview || "—")}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-xs text-text-muted">
-                  No transformation activity recorded yet.
-                </div>
-              )}
-            </div>
-            <div className="space-y-2">
-              <div className="text-xs font-medium text-text">Pattern conflicts</div>
-              {Array.isArray(statsFor.pattern_conflicts) && statsFor.pattern_conflicts.length > 0 ? (
-                <div className="space-y-1 rounded border border-border bg-surface2/40 p-2">
-                  {statsFor.pattern_conflicts.slice(0, 8).map((item: any, index: number) => (
-                    <div
-                      key={`pattern-conflict-${item?.entry_id_a}-${item?.entry_id_b}-${index}`}
-                      className="space-y-0.5 text-xs"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Tag color={toPatternConflictTagColor(item?.severity)}>
-                          {String(item?.severity || "low").toUpperCase()}
-                        </Tag>
-                        <span className="text-text">{item?.reason || "Potential overlap detected."}</span>
-                      </div>
-                      <div className="font-mono text-text-muted">
-                        {item?.pattern_a || "—"} {"\u2194"} {item?.pattern_b || "—"}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-xs text-text-muted">
-                  No potential conflicts detected.
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </Modal>
+      <DictionaryImportModal
+        open={openImport}
+        onCancel={handleCloseImportModal}
+        importFormat={importFormat}
+        onImportFormatChange={handleImportFormatChange}
+        importMode={importMode}
+        onImportModeChange={handleImportModeChange}
+        importSourceContent={importSourceContent}
+        onImportSourceContentChange={handleImportSourceContentChange}
+        importMarkdownName={importMarkdownName}
+        onImportMarkdownNameChange={handleImportMarkdownNameChange}
+        importFileName={importFileName}
+        onImportFileSelection={handleImportFileSelection}
+        activateOnImport={activateOnImport}
+        onActivateOnImportChange={handleActivateOnImportChange}
+        onBuildImportPreview={buildImportPreview}
+        importValidationErrors={importValidationErrors}
+        importPreview={importPreview}
+        onConfirmImport={() => void handleConfirmImport()}
+        importing={importing}
+        importConflictResolution={importConflictResolution}
+        onCloseConflictResolution={() => setImportConflictResolution(null)}
+        onResolveConflictRename={() => void resolveImportConflictRename()}
+        onResolveConflictReplace={() => void resolveImportConflictReplace()}
+      />
+      {statsFor && (
+        <React.Suspense fallback={null}>
+          <LazyDictionaryStatsModal
+            open={Boolean(statsFor)}
+            stats={statsFor}
+            onClose={() => setStatsFor(null)}
+          />
+        </React.Suspense>
+      )}
     </div>
   )
-}
-
-function toDisplayStatNumber(value: unknown): string {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value)
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed)) return String(parsed)
-  }
-  return "0"
-}
-
-function toDisplayGroupSummary(value: unknown): string {
-  if (!Array.isArray(value)) return "—"
-  const groups = value
-    .map((item) => (typeof item === "string" ? item.trim() : ""))
-    .filter((item) => item.length > 0)
-  if (!groups.length) return "—"
-  return groups.join(", ")
-}
-
-function toDisplayProbabilitySummary(value: unknown): string {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value.toFixed(2)
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed)) {
-      return parsed.toFixed(2)
-    }
-  }
-  return "0.00"
-}
-
-function toDisplayTokenBudgetSummary(value: unknown): string {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return `${Math.floor(value)} tokens`
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return `${Math.floor(parsed)} tokens`
-    }
-  }
-  return "Not set"
-}
-
-function formatActivityEntriesUsed(value: unknown): string {
-  if (!Array.isArray(value)) return "—"
-  const normalized = value
-    .map((item) => Number(item))
-    .filter((item) => Number.isInteger(item) && item > 0)
-  if (!normalized.length) return "—"
-  return normalized.join(", ")
 }
 
 function toOptionalPositiveInteger(value: unknown): number | undefined {
@@ -1990,13 +1225,6 @@ function normalizeDictionaryFormPayload(
     nextPayload.default_token_budget = normalizedBudget
   }
   return nextPayload
-}
-
-function toPatternConflictTagColor(value: unknown): string {
-  const normalized = String(value || "").toLowerCase()
-  if (normalized === "high") return "red"
-  if (normalized === "medium") return "orange"
-  return "blue"
 }
 
 const DICTIONARY_SETTINGS_SINGLE_KEYS = new Set([
@@ -2127,35 +1355,6 @@ function isDictionaryChatSettingsNotFound(error: unknown): boolean {
     message.includes("404") ||
     message.includes("not found")
   )
-}
-
-function resolveDictionaryChatReferenceId(chatRef: unknown): string {
-  if (!chatRef || typeof chatRef !== "object") return ""
-  const asRecord = chatRef as Record<string, unknown>
-  const raw = asRecord.chat_id ?? asRecord.id
-  if (raw == null) return ""
-  const normalized = String(raw).trim()
-  return normalized
-}
-
-function formatDictionaryChatReferenceTitle(chatRef: unknown): string {
-  const chatId = resolveDictionaryChatReferenceId(chatRef)
-  const shortId = chatId.length > 8 ? chatId.slice(0, 8) : chatId
-  if (chatRef && typeof chatRef === "object") {
-    const title = String(
-      (chatRef as Record<string, unknown>).title || ""
-    ).trim()
-    if (title) return title
-  }
-  return shortId ? `Chat ${shortId}` : "Chat"
-}
-
-function normalizeDictionaryChatState(value: unknown): "in-progress" | "resolved" | "backlog" | "non-viable" {
-  const normalized = String(value || "").trim().toLowerCase()
-  if (normalized === "resolved") return "resolved"
-  if (normalized === "backlog") return "backlog"
-  if (normalized === "non-viable") return "non-viable"
-  return "in-progress"
 }
 
 /** Validates regex pattern and returns error message or null if valid */
@@ -3165,6 +2364,122 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
     },
     [canReorderEntries, orderedEntryIds, persistEntryOrder, reorderBusyEntryId]
   )
+
+  const handleDeleteEntryWithUndo = React.useCallback(
+    async (entryRecord: any) => {
+      const ok = await confirmDanger({
+        title: t("common:confirmTitle", {
+          defaultValue: "Please confirm"
+        }),
+        content: "Delete entry?",
+        okText: t("common:delete", { defaultValue: "Delete" }),
+        cancelText: t("common:cancel", {
+          defaultValue: "Cancel"
+        })
+      })
+      if (!ok) return
+
+      const entryId = Number(entryRecord?.id)
+      if (!Number.isFinite(entryId) || entryId <= 0) {
+        notification.error({
+          message: "Delete failed",
+          description: "Entry ID is invalid. Please refresh and retry."
+        })
+        return
+      }
+
+      const entrySnapshot = { ...entryRecord }
+      const previousEntries = Array.isArray(entries) ? [...entries] : []
+
+      qc.setQueryData(entriesQueryKey, (current: any) => {
+        const currentEntries = Array.isArray(current) ? current : previousEntries
+        return currentEntries.filter((entry: any) => Number(entry?.id) !== entryId)
+      })
+      qc.setQueryData(allEntriesQueryKey, (current: any) => {
+        const currentEntries = Array.isArray(current) ? current : allEntries
+        return currentEntries.filter((entry: any) => Number(entry?.id) !== entryId)
+      })
+
+      try {
+        await deleteEntry(entryId)
+        const previewPattern = String(entrySnapshot?.pattern || "Entry")
+        showUndoNotification({
+          title: "Entry deleted",
+          description: `"${previewPattern}" was removed. Undo to restore it.`,
+          duration: 10,
+          onUndo: async () => {
+            const payload = buildRestorableDictionaryEntryPayload(entrySnapshot)
+            const restored = await tldwClient.addDictionaryEntry(dictionaryId, payload)
+            qc.setQueryData(entriesQueryKey, (current: any) => {
+              const currentEntries = Array.isArray(current) ? current : []
+              return [...currentEntries, restored || { ...entrySnapshot, ...payload }]
+            })
+            qc.setQueryData(allEntriesQueryKey, (current: any) => {
+              const currentEntries = Array.isArray(current) ? current : []
+              return [...currentEntries, restored || { ...entrySnapshot, ...payload }]
+            })
+            await qc.invalidateQueries({
+              queryKey: ["tldw:listDictionaryEntries", dictionaryId]
+            })
+            await qc.invalidateQueries({ queryKey: allEntriesQueryKey })
+          },
+          onDismiss: () => {
+            void qc.invalidateQueries({
+              queryKey: ["tldw:listDictionaryEntries", dictionaryId]
+            })
+            void qc.invalidateQueries({ queryKey: allEntriesQueryKey })
+          }
+        })
+      } catch (deleteError: any) {
+        qc.setQueryData(entriesQueryKey, previousEntries)
+        qc.setQueryData(allEntriesQueryKey, allEntries)
+        notification.error({
+          message: "Delete failed",
+          description:
+            (deleteError?.message
+              ? `${deleteError.message}.`
+              : "Failed to delete entry.") + " Please retry."
+        })
+      }
+    },
+    [
+      allEntries,
+      allEntriesQueryKey,
+      confirmDanger,
+      deleteEntry,
+      dictionaryId,
+      entries,
+      entriesQueryKey,
+      notification,
+      qc,
+      showUndoNotification,
+      t
+    ]
+  )
+
+  const entryTableColumns = useDictionaryEntryTableColumns({
+    inlineEdit,
+    setInlineEdit,
+    inlineEditError,
+    setInlineEditError,
+    inlineEditSaving,
+    cancelInlineEdit,
+    saveInlineEdit,
+    startInlineEdit,
+    entryPriorityById,
+    reorderBusyEntryId,
+    canReorderEntries,
+    orderedEntryCount: orderedEntryIds.length,
+    onMoveEntry: handleMoveEntry,
+    testingEntryId,
+    setTestingEntryId,
+    inlineTestInput,
+    setInlineTestInput,
+    inlineTestResult,
+    setInlineTestResult,
+    onOpenEditEntry: openEditEntryPanel,
+    onDeleteEntry: handleDeleteEntryWithUndo
+  })
 
   const { mutate: runValidation, isPending: validating } = useMutation({
     mutationFn: async () => {
@@ -4194,514 +3509,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                   ? "No entries match the current filters."
                   : "No entries available."
             }}
-            columns={[
-              {
-                title: "Pattern",
-                dataIndex: "pattern",
-                key: "pattern",
-                render: (v: string, r: any) => {
-                  const entryId = Number(r?.id)
-                  const isEditing =
-                    inlineEdit?.entryId === entryId &&
-                    inlineEdit?.field === "pattern"
-                  if (isEditing) {
-                    return (
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-1">
-                          <Input
-                            size="small"
-                            autoFocus
-                            value={inlineEdit.value}
-                            className="font-mono"
-                            onChange={(event) => {
-                              setInlineEdit((current) =>
-                                current
-                                  ? { ...current, value: event.target.value }
-                                  : current
-                              )
-                              setInlineEditError(null)
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Escape") {
-                                event.preventDefault()
-                                cancelInlineEdit()
-                                return
-                              }
-                              if (event.key === "Enter") {
-                                event.preventDefault()
-                                void saveInlineEdit()
-                              }
-                            }}
-                            onBlur={() => {
-                              void saveInlineEdit()
-                            }}
-                            disabled={inlineEditSaving}
-                            aria-label={`Inline edit pattern for ${r.pattern}`}
-                          />
-                          <button
-                            type="button"
-                            className="min-w-[28px] min-h-[28px] flex items-center justify-center rounded border border-border text-success hover:bg-success/10"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => {
-                              void saveInlineEdit()
-                            }}
-                            disabled={inlineEditSaving}
-                            aria-label={`Save pattern edit for ${r.pattern}`}
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            className="min-w-[28px] min-h-[28px] flex items-center justify-center rounded border border-border text-text-muted hover:bg-surface2"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={cancelInlineEdit}
-                            disabled={inlineEditSaving}
-                            aria-label={`Cancel pattern edit for ${r.pattern}`}
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                        {inlineEditError && (
-                          <p className="text-[11px] text-danger">{inlineEditError}</p>
-                        )}
-                      </div>
-                    )
-                  }
-
-                  return (
-                    <button
-                      type="button"
-                      className="group inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-surface2"
-                      onClick={() => startInlineEdit(r, "pattern")}
-                      disabled={inlineEditSaving}
-                      aria-label={`Inline edit pattern ${r.pattern}`}
-                    >
-                      <span className="font-mono text-xs truncate">{v}</span>
-                      {r.type === "regex" && (
-                        <Tag color="blue" className="ml-1 text-[10px]">regex</Tag>
-                      )}
-                    </button>
-                  )
-                }
-              },
-              {
-                title: "Replacement",
-                dataIndex: "replacement",
-                key: "replacement",
-                render: (v: string, r: any) => {
-                  const entryId = Number(r?.id)
-                  const isEditing =
-                    inlineEdit?.entryId === entryId &&
-                    inlineEdit?.field === "replacement"
-                  if (isEditing) {
-                    return (
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-1">
-                          <Input
-                            size="small"
-                            autoFocus
-                            value={inlineEdit.value}
-                            onChange={(event) => {
-                              setInlineEdit((current) =>
-                                current
-                                  ? { ...current, value: event.target.value }
-                                  : current
-                              )
-                              setInlineEditError(null)
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Escape") {
-                                event.preventDefault()
-                                cancelInlineEdit()
-                                return
-                              }
-                              if (event.key === "Enter") {
-                                event.preventDefault()
-                                void saveInlineEdit()
-                              }
-                            }}
-                            onBlur={() => {
-                              void saveInlineEdit()
-                            }}
-                            disabled={inlineEditSaving}
-                            aria-label={`Inline edit replacement for ${r.pattern}`}
-                          />
-                          <button
-                            type="button"
-                            className="min-w-[28px] min-h-[28px] flex items-center justify-center rounded border border-border text-success hover:bg-success/10"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => {
-                              void saveInlineEdit()
-                            }}
-                            disabled={inlineEditSaving}
-                            aria-label={`Save replacement edit for ${r.pattern}`}
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            className="min-w-[28px] min-h-[28px] flex items-center justify-center rounded border border-border text-text-muted hover:bg-surface2"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={cancelInlineEdit}
-                            disabled={inlineEditSaving}
-                            aria-label={`Cancel replacement edit for ${r.pattern}`}
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                        {inlineEditError && (
-                          <p className="text-[11px] text-danger">{inlineEditError}</p>
-                        )}
-                      </div>
-                    )
-                  }
-
-                  return (
-                    <button
-                      type="button"
-                      className="max-w-full rounded px-1 py-0.5 text-left text-xs hover:bg-surface2"
-                      onClick={() => startInlineEdit(r, "replacement")}
-                      disabled={inlineEditSaving}
-                      aria-label={`Inline edit replacement ${r.pattern}`}
-                    >
-                      <span className="truncate">{v}</span>
-                    </button>
-                  )
-                }
-              },
-              {
-                title: "Type",
-                dataIndex: "type",
-                key: "type",
-                responsive: DICTIONARY_ENTRY_COLUMN_RESPONSIVE.type,
-                render: (value: string) => {
-                  const normalized = value === "regex" ? "regex" : "literal"
-                  return (
-                    <Tag color={normalized === "regex" ? "blue" : "default"}>
-                      {normalized}
-                    </Tag>
-                  )
-                }
-              },
-              {
-                title: "Probability",
-                dataIndex: "probability",
-                key: "probability",
-                responsive: DICTIONARY_ENTRY_COLUMN_RESPONSIVE.probability,
-                render: (value: number | null | undefined) => {
-                  const safeValue =
-                    typeof value === "number" && Number.isFinite(value) ? value : 1
-                  return (
-                    <span className="text-xs font-mono">
-                      {safeValue.toFixed(2)}
-                    </span>
-                  )
-                }
-              },
-              {
-                title: "Group",
-                dataIndex: "group",
-                key: "group",
-                responsive: DICTIONARY_ENTRY_COLUMN_RESPONSIVE.group,
-                render: (value: string | null | undefined) => {
-                  const group = typeof value === "string" ? value.trim() : ""
-                  if (!group) {
-                    return <span className="text-xs text-text-muted">—</span>
-                  }
-                  return <Tag>{group}</Tag>
-                }
-              },
-              {
-                title: "Usage",
-                dataIndex: "usage_count",
-                key: "usage_count",
-                responsive: DICTIONARY_ENTRY_COLUMN_RESPONSIVE.usage,
-                render: (value: number | null | undefined) => {
-                  const usageCount = toSafeNonNegativeInteger(value)
-                  return (
-                    <div className="flex items-center gap-1">
-                      <span className="text-xs font-mono">{usageCount}</span>
-                      {usageCount === 0 && (
-                        <Tag className="text-[10px]">Unused</Tag>
-                      )}
-                    </div>
-                  )
-                }
-              },
-              {
-                title: "Priority",
-                key: "priority",
-                width: 128,
-                render: (_value: unknown, entry: any) => {
-                  const entryId = Number(entry?.id)
-                  const priority = entryPriorityById.get(entryId)
-                  const isBusy =
-                    reorderBusyEntryId != null &&
-                    (reorderBusyEntryId === -1 || reorderBusyEntryId === entryId)
-                  const canMoveUp =
-                    canReorderEntries &&
-                    Number.isFinite(entryId) &&
-                    !!priority &&
-                    priority > 1 &&
-                    !isBusy
-                  const canMoveDown =
-                    canReorderEntries &&
-                    Number.isFinite(entryId) &&
-                    !!priority &&
-                    priority < orderedEntryIds.length &&
-                    !isBusy
-
-                  return (
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        className="min-w-[28px] min-h-[28px] flex items-center justify-center rounded border border-border text-text-muted hover:bg-surface2 disabled:opacity-50"
-                        aria-label={`Move entry ${entry?.pattern || entryId} up`}
-                        onClick={() => {
-                          void handleMoveEntry(entryId, -1)
-                        }}
-                        disabled={!canMoveUp}
-                      >
-                        <ChevronUp className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        className="min-w-[28px] min-h-[28px] flex items-center justify-center rounded border border-border text-text-muted hover:bg-surface2 disabled:opacity-50"
-                        aria-label={`Move entry ${entry?.pattern || entryId} down`}
-                        onClick={() => {
-                          void handleMoveEntry(entryId, 1)
-                        }}
-                        disabled={!canMoveDown}
-                      >
-                        <ChevronDown className="w-3.5 h-3.5" />
-                      </button>
-                      <span className="min-w-[2ch] text-right text-xs font-mono">
-                        {priority ?? "—"}
-                      </span>
-                    </div>
-                  )
-                }
-              },
-              {
-                title: "Enabled",
-                dataIndex: "enabled",
-                key: "enabled",
-                width: 80,
-                render: (v: boolean) => (
-                  v ? (
-                    <Tag color="green" icon={<CheckCircle2 className="w-3 h-3 inline mr-1" />}>On</Tag>
-                  ) : (
-                    <Tag>Off</Tag>
-                  )
-                )
-              },
-              {
-                title: "Actions",
-                key: "actions",
-                width: 180,
-                render: (_: any, r: any) => (
-                  <div className="flex gap-1 items-center">
-                    {/* Inline Test Button */}
-                    <Popover
-                      trigger="click"
-                      open={testingEntryId === r.id}
-                      onOpenChange={(open) => {
-                        if (open) {
-                          setTestingEntryId(r.id)
-                          setInlineTestInput("")
-                          setInlineTestResult(null)
-                        } else {
-                          setTestingEntryId(null)
-                        }
-                      }}
-                      content={
-                        <div className="w-64 space-y-2">
-                          <div className="text-xs font-medium">Test this entry</div>
-                          <Input
-                            size="small"
-                            placeholder="Enter test text..."
-                            value={inlineTestInput}
-                            onChange={(e) => setInlineTestInput(e.target.value)}
-                            onPressEnter={() => {
-                              if (!inlineTestInput.trim()) return
-                              try {
-                                let result = inlineTestInput
-                                if (r.type === "regex") {
-                                  const regexMatch = r.pattern.match(/^\/(.*)\/([gimsuvy]*)$/)
-                                  const regex = regexMatch
-                                    ? new RegExp(regexMatch[1], regexMatch[2])
-                                    : new RegExp(r.pattern, r.case_sensitive ? "" : "i")
-                                  result = inlineTestInput.replace(regex, r.replacement)
-                                } else {
-                                  const flags = r.case_sensitive ? "g" : "gi"
-                                  result = inlineTestInput.replace(new RegExp(r.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags), r.replacement)
-                                }
-                                setInlineTestResult(result)
-                              } catch (e: any) {
-                                setInlineTestResult(`Error: ${e.message}`)
-                              }
-                            }}
-                          />
-                          <Button
-                            size="small"
-                            type="primary"
-                            className="w-full"
-                            onClick={() => {
-                              if (!inlineTestInput.trim()) return
-                              try {
-                                let result = inlineTestInput
-                                if (r.type === "regex") {
-                                  const regexMatch = r.pattern.match(/^\/(.*)\/([gimsuvy]*)$/)
-                                  const regex = regexMatch
-                                    ? new RegExp(regexMatch[1], regexMatch[2])
-                                    : new RegExp(r.pattern, r.case_sensitive ? "" : "i")
-                                  result = inlineTestInput.replace(regex, r.replacement)
-                                } else {
-                                  const flags = r.case_sensitive ? "g" : "gi"
-                                  result = inlineTestInput.replace(new RegExp(r.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags), r.replacement)
-                                }
-                                setInlineTestResult(result)
-                              } catch (e: any) {
-                                setInlineTestResult(`Error: ${e.message}`)
-                              }
-                            }}
-                          >
-                            Test
-                          </Button>
-                          {inlineTestResult !== null && (
-                            <div className="mt-2 p-2 bg-surface2 rounded text-xs">
-                              <div className="text-text-muted mb-1">Result:</div>
-                              <div className="font-mono break-all">{inlineTestResult}</div>
-                            </div>
-                          )}
-                        </div>
-                      }
-                    >
-                      <Tooltip title="Test entry">
-                        <button
-                          className="min-w-[36px] min-h-[36px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
-                          aria-label={`Test entry ${r.pattern}`}
-                        >
-                          <Play className="w-4 h-4" />
-                        </button>
-                      </Tooltip>
-                    </Popover>
-
-                    {/* Edit Button */}
-                    <Tooltip title="Edit entry">
-                      <button
-                        className="min-w-[36px] min-h-[36px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
-                        onClick={() => openEditEntryPanel(r)}
-                        aria-label={`Edit entry ${r.pattern}`}
-                      >
-                        <Pen className="w-4 h-4" />
-                      </button>
-                    </Tooltip>
-
-                    {/* Delete Button */}
-                    <Tooltip title="Delete entry">
-                      <button
-                        className="min-w-[36px] min-h-[36px] flex items-center justify-center text-danger hover:bg-danger/10 rounded-md transition-colors"
-                        onClick={async () => {
-                        const ok = await confirmDanger({
-                          title: t("common:confirmTitle", {
-                            defaultValue: "Please confirm"
-                          }),
-                          content: "Delete entry?",
-                            okText: t("common:delete", { defaultValue: "Delete" }),
-                            cancelText: t("common:cancel", {
-                            defaultValue: "Cancel"
-                          })
-                        })
-                        if (!ok) return
-
-                        const entryId = Number(r?.id)
-                        if (!Number.isFinite(entryId) || entryId <= 0) {
-                          notification.error({
-                            message: "Delete failed",
-                            description: "Entry ID is invalid. Please refresh and retry."
-                          })
-                          return
-                        }
-
-                        const entrySnapshot = { ...r }
-                        const previousEntries = Array.isArray(entries)
-                          ? [...entries]
-                          : []
-
-                        qc.setQueryData(entriesQueryKey, (current: any) => {
-                          const currentEntries = Array.isArray(current)
-                            ? current
-                            : previousEntries
-                          return currentEntries.filter(
-                            (entry: any) => Number(entry?.id) !== entryId
-                          )
-                        })
-                        qc.setQueryData(allEntriesQueryKey, (current: any) => {
-                          const currentEntries = Array.isArray(current)
-                            ? current
-                            : allEntries
-                          return currentEntries.filter(
-                            (entry: any) => Number(entry?.id) !== entryId
-                          )
-                        })
-
-                        try {
-                          await deleteEntry(entryId)
-                          const previewPattern = String(entrySnapshot?.pattern || "Entry")
-                          showUndoNotification({
-                            title: "Entry deleted",
-                            description: `"${previewPattern}" was removed. Undo to restore it.`,
-                            duration: 10,
-                            onUndo: async () => {
-                              const payload =
-                                buildRestorableDictionaryEntryPayload(entrySnapshot)
-                              const restored = await tldwClient.addDictionaryEntry(
-                                dictionaryId,
-                                payload
-                              )
-                              qc.setQueryData(entriesQueryKey, (current: any) => {
-                                const currentEntries = Array.isArray(current)
-                                  ? current
-                                  : []
-                                return [...currentEntries, restored || { ...entrySnapshot, ...payload }]
-                              })
-                              qc.setQueryData(allEntriesQueryKey, (current: any) => {
-                                const currentEntries = Array.isArray(current)
-                                  ? current
-                                  : []
-                                return [...currentEntries, restored || { ...entrySnapshot, ...payload }]
-                              })
-                              await qc.invalidateQueries({ queryKey: ["tldw:listDictionaryEntries", dictionaryId] })
-                              await qc.invalidateQueries({ queryKey: allEntriesQueryKey })
-                            },
-                            onDismiss: () => {
-                              void qc.invalidateQueries({ queryKey: ["tldw:listDictionaryEntries", dictionaryId] })
-                              void qc.invalidateQueries({ queryKey: allEntriesQueryKey })
-                            }
-                          })
-                        } catch (deleteError: any) {
-                          qc.setQueryData(entriesQueryKey, previousEntries)
-                          qc.setQueryData(allEntriesQueryKey, allEntries)
-                          notification.error({
-                            message: "Delete failed",
-                            description:
-                              (deleteError?.message
-                                ? `${deleteError.message}.`
-                                : "Failed to delete entry.") +
-                              " Please retry."
-                          })
-                        }
-                      }}
-                      aria-label={`Delete entry ${r.pattern}`}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      </button>
-                    </Tooltip>
-                  </div>
-                )
-              }
-            ] as any}
+            columns={entryTableColumns as any}
           />
         )
       )}

@@ -355,6 +355,7 @@ export interface CharacterListQueryParams {
   match_all_tags?: boolean
   creator?: string
   has_conversations?: boolean
+  favorite_only?: boolean
   created_from?: string
   created_to?: string
   updated_from?: string
@@ -386,6 +387,20 @@ export interface CharacterVersionEntry {
 export interface CharacterVersionListResponse {
   items: CharacterVersionEntry[]
   total: number
+}
+
+export interface CharacterVersionDiffField {
+  field: string
+  old_value: unknown
+  new_value: unknown
+}
+
+export interface CharacterVersionDiffResponse {
+  character_id: number
+  from_entry: CharacterVersionEntry
+  to_entry: CharacterVersionEntry
+  changed_fields: CharacterVersionDiffField[]
+  changed_count: number
 }
 
 // Admin / RBAC types
@@ -2371,6 +2386,67 @@ export class TldwApiClient {
         typeof response?.total === "number" && Number.isFinite(response.total)
           ? response.total
           : items.length
+    }
+  }
+
+  async diffCharacterVersions(
+    id: string | number,
+    fromVersion: number,
+    toVersion: number
+  ): Promise<CharacterVersionDiffResponse> {
+    const cid = String(id)
+    const query = this.buildQuery({
+      from_version: fromVersion,
+      to_version: toVersion
+    })
+    const template = await this.resolveApiPath("characters.versionDiff", [
+      "/api/v1/characters/{id}/versions/diff",
+      "/api/v1/characters/{id}/versions/diff/"
+    ])
+    const path = appendPathQuery(this.fillPathParams(template, cid), query)
+    const response = await bgRequest<any>({
+      path,
+      method: "GET"
+    })
+
+    const normalizeVersionEntry = (entry: any): CharacterVersionEntry => ({
+      change_id:
+        typeof entry?.change_id === "number" && Number.isFinite(entry.change_id)
+          ? entry.change_id
+          : Number(entry?.change_id || 0),
+      version:
+        typeof entry?.version === "number" && Number.isFinite(entry.version)
+          ? entry.version
+          : Number(entry?.version || 0),
+      operation: String(entry?.operation || "update"),
+      timestamp: entry?.timestamp ?? null,
+      client_id: entry?.client_id ?? null,
+      payload:
+        entry?.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload)
+          ? entry.payload
+          : {}
+    })
+
+    const changedFields = Array.isArray(response?.changed_fields)
+      ? response.changed_fields
+      : []
+
+    return {
+      character_id:
+        typeof response?.character_id === "number" && Number.isFinite(response.character_id)
+          ? response.character_id
+          : Number(response?.character_id || 0),
+      from_entry: normalizeVersionEntry(response?.from_entry),
+      to_entry: normalizeVersionEntry(response?.to_entry),
+      changed_fields: changedFields.map((field: any) => ({
+        field: String(field?.field || ""),
+        old_value: field?.old_value,
+        new_value: field?.new_value
+      })),
+      changed_count:
+        typeof response?.changed_count === "number" && Number.isFinite(response.changed_count)
+          ? response.changed_count
+          : changedFields.length
     }
   }
 

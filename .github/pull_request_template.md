@@ -17,6 +17,8 @@
 - [ ] No `Maximum update depth exceeded` warnings on audited routes
 - [ ] No unresolved `{{...}}` placeholders on audited routes
 - [ ] WebUI/extension parity validated for shared UI fixes
+- [ ] For Flashcards UI changes: tabs remain `Study` / `Manage` / `Transfer` and secondary create CTAs route through manager create-entry path
+- [ ] For Flashcards drawer changes: use `FLASHCARDS_DRAWER_WIDTH_PX` and keep footer action order `Cancel -> secondary -> primary`
 
 ## Risk & Rollback
 

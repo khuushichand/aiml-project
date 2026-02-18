@@ -46,6 +46,10 @@ export type Flashcard = {
   version: number
   model_type: "basic" | "basic_reverse" | "cloze"
   reverse: boolean
+  source_ref_type?: "media" | "message" | "note" | "manual" | null
+  source_ref_id?: string | null
+  conversation_id?: string | null
+  message_id?: string | null
 }
 
 export type FlashcardCreate = {

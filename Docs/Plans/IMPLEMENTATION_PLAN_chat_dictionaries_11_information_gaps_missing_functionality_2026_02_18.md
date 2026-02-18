@@ -25,7 +25,68 @@ Finding IDs: `11.1` through `11.8`
 - Component-level regression tests for each extracted module.
 - Integration tests for end-to-end dictionary CRUD flow parity.
 - Bundle analysis check confirming lazy-loaded chunks for optional features.
-**Status**: Not Started
+**Status**: In Progress
+**Progress Notes (2026-02-18)**:
+- Extracted create/edit dictionary modal form markup into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryFormModal.tsx`
+- Added targeted component coverage for reusable dictionary form behavior:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/DictionaryFormModal.test.tsx`
+- Extracted import + conflict-resolution modal markup into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryImportModal.tsx`
+- Added targeted component coverage for import modal interaction wiring:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/DictionaryImportModal.test.tsx`
+- Extracted dictionary list/search/empty-error state surface into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryListSection.tsx`
+- Added targeted component coverage for dictionary list section interactions:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/DictionaryListSection.test.tsx`
+- Extracted quick-assign modal UI into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryQuickAssignModal.tsx`
+- Replaced inline quick-assign modal markup in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Extracted dictionary statistics rendering from `Manager.tsx` into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/DictionaryStatsModal.tsx`
+- Added a lazy-load boundary for statistics UI in manager:
+  - `React.lazy` + `Suspense` wrapper in `apps/packages/ui/src/components/Option/Dictionaries/Manager.tsx`
+- Removed statistics-only helper functions from `Manager.tsx` to reduce monolith scope.
+- Regression validation completed for stats, accessibility focus, and responsive dictionary actions:
+  - `Manager.statsStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
+  - `Manager.responsiveStage1.test.tsx`
+- Additional regression validation completed for create/edit modal parity:
+  - `Manager.chatIntegrationStage3.test.tsx`
+  - `Manager.stage1.test.tsx`
+- Additional quick-assign parity validation completed with:
+  - `Manager.chatIntegrationStage1.test.tsx`
+- Additional import workflow parity validation completed with:
+  - `Manager.importStage1.test.tsx`
+- Extracted row action cell renderer into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryActionsCell.tsx`
+- Extracted validation status cell renderer into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/DictionaryValidationStatusCell.tsx`
+- Additional action/status parity validation completed with:
+  - `Manager.validationStage1.test.tsx`
+- Reliability hardening applied for lazy-loaded stats modal test timing:
+  - `Manager.statsStage1.test.tsx`
+- Extracted dictionary list table column construction into:
+  - `apps/packages/ui/src/components/Option/Dictionaries/components/useDictionaryTableColumns.tsx`
+- Moved shared dictionary chat-reference formatting/parsing helpers from manager to:
+  - `apps/packages/ui/src/components/Option/Dictionaries/listUtils.ts`
+- Added utility coverage for moved chat-reference helpers:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/listUtils.test.ts`
+- Regression validation completed across list/import/stats/chat/accessibility flows after column extraction:
+  - `listUtils.test.ts`
+  - `DictionaryListSection.test.tsx`
+  - `DictionaryImportModal.test.tsx`
+  - `DictionaryFormModal.test.tsx`
+  - `Manager.stage1.test.tsx`
+  - `Manager.importStage1.test.tsx`
+  - `Manager.statsStage1.test.tsx`
+  - `Manager.chatIntegrationStage1.test.tsx`
+  - `Manager.chatIntegrationStage2.test.tsx`
+  - `Manager.responsiveStage1.test.tsx`
+  - `Manager.accessibilityStage2.test.tsx`
+  - `Manager.accessibilityStage3.test.tsx`
 
 ## Stage 2: Power-User Baseline Features
 **Goal**: Improve first-run value and authoring speed for non-expert users.

@@ -539,7 +539,11 @@ class TestCharacterAPIIntegration:
         )
         resp_b = client.post(
             f"{CHARACTERS_ENDPOINT_PREFIX}/",
-            json=create_sample_character_payload(name=name_b, creator=creator)
+            json=create_sample_character_payload(
+                name=name_b,
+                creator=creator,
+                extensions={"tldw": {"favorite": True}},
+            )
         )
         resp_c = client.post(
             f"{CHARACTERS_ENDPOINT_PREFIX}/",
@@ -576,6 +580,16 @@ class TestCharacterAPIIntegration:
         creator_items = creator_response.json()["items"]
         assert len(creator_items) >= 2
         assert all((item.get("creator") or "").lower() == creator.lower() for item in creator_items)
+
+        favorite_only_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/query?page=1&page_size=20&favorite_only=true"
+        )
+        assert favorite_only_response.status_code == 200, favorite_only_response.text
+        favorite_ids = {
+            int(item["id"]) for item in favorite_only_response.json()["items"] if "id" in item
+        }
+        assert int(resp_b.json()["id"]) in favorite_ids
+        assert int(resp_a.json()["id"]) not in favorite_ids
 
         has_conv_response = client.get(
             f"{CHARACTERS_ENDPOINT_PREFIX}/query?page=1&page_size=20&has_conversations=true"
@@ -746,6 +760,120 @@ class TestCharacterAPIIntegration:
         assert db_char is not None
         assert db_char["name"] == "Updated Character Name"
         assert db_char["image"] is None
+
+    def test_get_character_versions_integration(self, client: TestClient):
+        create_payload = create_sample_character_payload(
+            "VersionList",
+            description="Version 1 description",
+        )
+        create_response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=create_payload)
+        assert create_response.status_code == 201, create_response.text
+        created = create_response.json()
+        char_id = int(created["id"])
+
+        update_one = client.put(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={created['version']}",
+            json={"description": "Version 2 description"},
+        )
+        assert update_one.status_code == 200, update_one.text
+        updated_one = update_one.json()
+
+        update_two = client.put(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={updated_one['version']}",
+            json={"description": "Version 3 description"},
+        )
+        assert update_two.status_code == 200, update_two.text
+
+        versions_response = client.get(f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}/versions?limit=10")
+        assert versions_response.status_code == 200, versions_response.text
+        payload = versions_response.json()
+        assert payload["total"] >= 3
+
+        items = payload["items"]
+        versions = [int(item["version"]) for item in items]
+        assert versions == sorted(versions, reverse=True)
+        assert {1, 2, 3}.issubset(set(versions))
+        operations = {str(item.get("operation", "")) for item in items}
+        assert "create" in operations
+        assert "update" in operations
+
+    def test_get_character_version_diff_integration(self, client: TestClient):
+        create_payload = create_sample_character_payload(
+            "VersionDiff",
+            description="Original description",
+            tags=["alpha"],
+        )
+        create_response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=create_payload)
+        assert create_response.status_code == 201, create_response.text
+        created = create_response.json()
+        char_id = int(created["id"])
+
+        update_one = client.put(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={created['version']}",
+            json={"description": "Updated description"},
+        )
+        assert update_one.status_code == 200, update_one.text
+        updated_one = update_one.json()
+
+        update_two = client.put(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={updated_one['version']}",
+            json={"tags": ["alpha", "beta"]},
+        )
+        assert update_two.status_code == 200, update_two.text
+
+        from_version = int(created["version"])
+        to_version = int(update_two.json()["version"])
+        diff_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}/versions/diff"
+            f"?from_version={from_version}&to_version={to_version}"
+        )
+        assert diff_response.status_code == 200, diff_response.text
+        diff_payload = diff_response.json()
+
+        assert int(diff_payload["character_id"]) == char_id
+        assert int(diff_payload["from_entry"]["version"]) == from_version
+        assert int(diff_payload["to_entry"]["version"]) == to_version
+        assert int(diff_payload["changed_count"]) >= 1
+        changed_fields = {field["field"] for field in diff_payload["changed_fields"]}
+        assert "description" in changed_fields
+        assert "tags" in changed_fields
+
+    def test_revert_character_to_previous_version_integration(self, client: TestClient):
+        create_payload = create_sample_character_payload(
+            "VersionRevert",
+            description="Baseline description",
+        )
+        create_response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=create_payload)
+        assert create_response.status_code == 201, create_response.text
+        created = create_response.json()
+        char_id = int(created["id"])
+        version_one = int(created["version"])
+
+        update_response = client.put(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={version_one}",
+            json={"description": "Mutated description"},
+        )
+        assert update_response.status_code == 200, update_response.text
+        updated = update_response.json()
+        version_two = int(updated["version"])
+        assert updated["description"] == "Mutated description"
+
+        revert_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}/revert",
+            json={"target_version": version_one},
+        )
+        assert revert_response.status_code == 200, revert_response.text
+        reverted = revert_response.json()
+        assert reverted["description"] == "Baseline description"
+        assert int(reverted["version"]) == version_two + 1
+
+        versions_response = client.get(f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}/versions?limit=10")
+        assert versions_response.status_code == 200, versions_response.text
+        versions_payload = versions_response.json()
+        latest_entry = versions_payload["items"][0]
+        assert int(latest_entry["version"]) == int(reverted["version"])
+        latest_payload = latest_entry.get("payload", {})
+        assert latest_payload.get("description") == "Baseline description"
 
     def test_update_character_version_conflict_integration(self, client: TestClient):
         create_payload = create_sample_character_payload("VersionConflict")

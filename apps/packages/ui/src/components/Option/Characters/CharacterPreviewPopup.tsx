@@ -1,5 +1,5 @@
 import { Modal, Button, Tooltip, Dropdown } from "antd"
-import { MessageCircle, Pen, Copy, History, Trash2, Download, ExternalLink } from "lucide-react"
+import { MessageCircle, Pen, Copy, History, Trash2, Download, ExternalLink, Clock3 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { CharacterPreview } from "./CharacterPreview"
 
@@ -26,6 +26,7 @@ interface CharacterPreviewPopupProps {
   onExport: (format?: 'json' | 'png') => void
   onDelete: () => void
   onViewConversations: () => void
+  onViewVersionHistory: () => void
   attachedWorldBooks?: Array<{ id: number; name: string }>
   attachedWorldBooksLoading?: boolean
   launchedFromWorldBooks?: boolean
@@ -46,6 +47,7 @@ export function CharacterPreviewPopup({
   onExport,
   onDelete,
   onViewConversations,
+  onViewVersionHistory,
   attachedWorldBooks = [],
   attachedWorldBooksLoading = false,
   launchedFromWorldBooks = false,
@@ -88,6 +90,12 @@ export function CharacterPreviewPopup({
     "settings:manageCharacters.actions.viewConversations",
     {
       defaultValue: "View conversations"
+    }
+  )
+  const versionHistoryLabel = t(
+    "settings:manageCharacters.actions.versionHistory",
+    {
+      defaultValue: "Version history"
     }
   )
   const characterIdParam = encodeURIComponent(String(character.id || ""))
@@ -294,6 +302,19 @@ export function CharacterPreviewPopup({
               })}
             >
               {viewConversationsLabel}
+            </Button>
+          </Tooltip>
+
+          <Tooltip title={versionHistoryLabel}>
+            <Button
+              icon={<Clock3 className="w-4 h-4" />}
+              onClick={onViewVersionHistory}
+              aria-label={t("settings:manageCharacters.aria.viewVersionHistory", {
+                defaultValue: "View version history for {{name}}",
+                name: displayName
+              })}
+            >
+              {versionHistoryLabel}
             </Button>
           </Tooltip>
 

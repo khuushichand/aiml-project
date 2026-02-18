@@ -52,7 +52,7 @@ Finding IDs: `H4-1` through `H4-3`
 - Component tests asserting shared size tokens and consistent footer controls.
 - Visual regression tests across desktop/mobile widths.
 - Accessibility tests for focus order and escape/close interactions.
-**Status**: In Progress
+**Status**: Complete
 
 **Progress Notes (2026-02-18)**:
 - Introduced shared drawer width token:
@@ -69,6 +69,9 @@ Finding IDs: `H4-1` through `H4-3`
   - `FlashcardCreateDrawer.cloze-help.test.tsx`
   - `FlashcardEditDrawer.scheduling-metadata.test.tsx`
   - `ManageTab.undo-stage3.test.tsx`
+- Harmonized create-drawer section structure/spacing with edit conventions:
+  - Added explicit `Organization` and `Content` sections in `FlashcardCreateDrawer`.
+  - Standardized section spacing to shared `mb-6` rhythm used by edit surfaces.
 - Validation:
   - `cd apps/packages/ui && bunx vitest run --config vitest.config.ts src/components/Flashcards/components/__tests__/FlashcardCreateDrawer.cloze-help.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.scheduling-metadata.test.tsx src/components/Flashcards/tabs/__tests__/ManageTab.undo-stage3.test.tsx` (pass: `3` files, `4` tests)
   - `cd apps/packages/ui && bunx vitest run --config vitest.config.ts src/components/Flashcards/__tests__/FlashcardsManager.consistency.test.tsx src/components/Flashcards/hooks/__tests__/useFlashcardShortcuts.test.ts src/components/Flashcards/components/__tests__/FlashcardCreateDrawer.cloze-help.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.reset-scheduling.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.save.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.scheduling-metadata.test.tsx src/components/Flashcards/components/__tests__/KeyboardShortcutsModal.rating-scale.test.tsx src/components/Flashcards/tabs/__tests__/ManageTab.scheduling-metadata.test.tsx src/components/Flashcards/tabs/__tests__/ManageTab.undo-stage3.test.tsx src/components/Flashcards/tabs/__tests__/ImportExportTab.import-results.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.analytics-summary.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.edit-in-review.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.cram-mode.test.tsx` (pass: `14` files, `24` tests)
@@ -83,7 +86,18 @@ Finding IDs: `H4-1` through `H4-3`
 - Docs link checks and CI validation for updated references.
 - Unit test or static rule enforcing shared drawer token usage.
 - Regression tests covering primary CTA visibility rules.
-**Status**: Not Started
+**Status**: Complete
+
+**Progress Notes (2026-02-18)**:
+- Added flashcards design conventions note:
+  - `Docs/Design/Flashcards.md` now documents tab naming, create-entry routing, drawer standards, and guardrail tests.
+- Updated PR checklist expectations:
+  - `.github/pull_request_template.md` now includes flashcards-specific checks for tab naming/create-entry routing and drawer token/action-order standards.
+- Guardrails in place:
+  - `FlashcardsManager.consistency.test.tsx` protects tab labels and routed create behavior.
+  - Drawer token usage assertions exist in create/edit/move test coverage.
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run --config vitest.config.ts src/components/Flashcards/__tests__/FlashcardsManager.consistency.test.tsx src/components/Flashcards/components/__tests__/FlashcardCreateDrawer.cloze-help.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.scheduling-metadata.test.tsx src/components/Flashcards/tabs/__tests__/ManageTab.undo-stage3.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx` (pass: `5` files, `8` tests)
 
 ## Dependencies
 

@@ -166,6 +166,20 @@ class CharacterVersionListResponse(BaseModel):
     total: int = Field(default=0, ge=0)
 
 
+class CharacterVersionDiffField(BaseModel):
+    field: str
+    old_value: Any = None
+    new_value: Any = None
+
+
+class CharacterVersionDiffResponse(BaseModel):
+    character_id: int = Field(gt=0)
+    from_entry: CharacterVersionEntry
+    to_entry: CharacterVersionEntry
+    changed_fields: list[CharacterVersionDiffField] = Field(default_factory=list)
+    changed_count: int = Field(default=0, ge=0)
+
+
 class CharacterRevertRequest(BaseModel):
     target_version: int = Field(..., ge=1)
 

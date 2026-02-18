@@ -1,6 +1,6 @@
 import React from 'react'
 import type { InputRef } from 'antd'
-import { Input, Typography, Select, Button, Tooltip } from 'antd'
+import { Input, Typography, Select, Button, Tooltip, Popover } from 'antd'
 import {
   Plus as PlusIcon,
   Search as SearchIcon,
@@ -46,8 +46,14 @@ import {
 } from "@/components/Notes/wikilinks"
 import { translateMessage } from "@/i18n/translateMessage"
 import { formatFileSize } from "@/utils/format"
-import { clearSetting, getSetting } from "@/services/settings/registry"
-import { LAST_NOTE_ID_SETTING } from "@/services/settings/ui-settings"
+import { clearSetting, getSetting, setSetting } from "@/services/settings/registry"
+import {
+  LAST_NOTE_ID_SETTING,
+  NOTES_RECENT_OPENED_SETTING,
+  NOTES_TITLE_SUGGEST_STRATEGY_SETTING,
+  type NotesRecentOpenedEntry,
+  type NotesTitleSuggestStrategy
+} from "@/services/settings/ui-settings"
 
 type NoteWithKeywords = {
   metadata?: { keywords?: any[] }
@@ -176,6 +182,7 @@ const normalizeGraphNoteId = (rawId: string | number | null | undefined): string
 // 120px offset accounts for page header and padding
 const MIN_SIDEBAR_HEIGHT = 600
 const NOTE_AUTOSAVE_DELAY_MS = 5000
+const NOTE_SEARCH_DEBOUNCE_MS = 350
 const calculateSidebarHeight = () => {
   const vh = typeof window !== 'undefined' ? window.innerHeight : MIN_SIDEBAR_HEIGHT
   return Math.max(MIN_SIDEBAR_HEIGHT, vh - 120)
@@ -189,10 +196,165 @@ type SaveIndicatorState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 type NotesEditorMode = 'edit' | 'split' | 'preview'
 type MarkdownToolbarAction = 'bold' | 'italic' | 'heading' | 'list' | 'link' | 'code'
 type RemoteVersionInfo = { version: number; lastModified: string | null }
+type NotesAssistAction = 'summarize' | 'expand_outline' | 'suggest_keywords'
+type EditProvenanceState =
+  | { mode: 'manual' }
+  | { mode: 'generated'; action: NotesAssistAction; at: number }
+type MonitoringAlertSeverity = 'info' | 'warning' | 'critical'
+type MonitoringNoticeState = {
+  severity: MonitoringAlertSeverity
+  title: string
+  guidance: string
+}
+type NotesTitleSettingsResponse = {
+  llm_enabled?: boolean
+  default_strategy?: string
+  effective_strategy?: string
+  strategies?: string[]
+}
+
+const NOTES_TITLE_STRATEGIES: NotesTitleSuggestStrategy[] = ['heuristic', 'llm', 'llm_fallback']
+const NOTE_ASSIST_STOP_WORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'that',
+  'this',
+  'from',
+  'have',
+  'has',
+  'you',
+  'your',
+  'are',
+  'was',
+  'were',
+  'about',
+  'into',
+  'within',
+  'also',
+  'they',
+  'their',
+  'there',
+  'will',
+  'would',
+  'should',
+  'could',
+  'can',
+  'not',
+  'but',
+  'than',
+  'then',
+  'when',
+  'what',
+  'where',
+  'which',
+  'while',
+  'because',
+  'using',
+  'used',
+  'between',
+  'through',
+  'about',
+  'into',
+  'over',
+  'under',
+  'after',
+  'before',
+  'our',
+  'out',
+  'its'
+])
+
+const normalizeNotesTitleStrategy = (value: unknown): NotesTitleSuggestStrategy | null => {
+  const normalized = String(value || '').toLowerCase()
+  if (normalized === 'heuristic' || normalized === 'llm' || normalized === 'llm_fallback') {
+    return normalized
+  }
+  return null
+}
+
+const deriveAllowedTitleStrategies = (
+  settings: NotesTitleSettingsResponse | null | undefined
+): NotesTitleSuggestStrategy[] => {
+  const rawStrategies = Array.isArray(settings?.strategies) ? settings.strategies : ['heuristic']
+  const base = rawStrategies
+    .map((entry) => normalizeNotesTitleStrategy(entry))
+    .filter((entry): entry is NotesTitleSuggestStrategy => entry != null)
+
+  const unique = Array.from(new Set(base))
+  if (settings?.llm_enabled) {
+    return unique.length > 0 ? unique : NOTES_TITLE_STRATEGIES
+  }
+  return ['heuristic']
+}
+
+const buildSummaryDraft = (rawContent: string): string => {
+  const normalized = rawContent.replace(/\s+/g, ' ').trim()
+  if (!normalized) return ''
+  const sentences = normalized
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+  const selected = (sentences.length > 0 ? sentences : [normalized]).slice(0, 3)
+  if (selected.length === 1) {
+    return `Summary: ${selected[0]}`
+  }
+  return ['Summary:', ...selected.map((sentence) => `- ${sentence}`)].join('\n')
+}
+
+const buildOutlineDraft = (rawContent: string): string => {
+  const baseHeadings = rawContent
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^(#+|[-*+]|\d+\.)\s*/, ''))
+    .filter((line) => line.length >= 3)
+  const uniqueHeadings: string[] = []
+  for (const heading of baseHeadings) {
+    const normalized = heading.toLowerCase()
+    if (uniqueHeadings.some((entry) => entry.toLowerCase() === normalized)) continue
+    uniqueHeadings.push(heading)
+    if (uniqueHeadings.length >= 3) break
+  }
+  const headings =
+    uniqueHeadings.length > 0 ? uniqueHeadings : ['Main idea', 'Supporting evidence', 'Open questions']
+  const sections = headings.map(
+    (heading) => `## ${heading}\n- Key point\n- Supporting detail\n- Next action`
+  )
+  return ['# Expanded Outline', '', ...sections].join('\n\n')
+}
+
+const suggestKeywordsDraft = (rawContent: string, existingKeywords: string[]): string[] => {
+  const existing = new Set(
+    existingKeywords
+      .map((keyword) => String(keyword || '').trim().toLowerCase())
+      .filter(Boolean)
+  )
+  const tokens = (rawContent.toLowerCase().match(/[a-z0-9][a-z0-9-]{2,}/g) || []).filter(
+    (token) => !NOTE_ASSIST_STOP_WORDS.has(token) && !/^\d+$/.test(token)
+  )
+  const counts = new Map<string, number>()
+  for (const token of tokens) {
+    counts.set(token, (counts.get(token) || 0) + 1)
+  }
+  const sorted = Array.from(counts.entries()).sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1]
+    return a[0].localeCompare(b[0])
+  })
+  const suggestions: string[] = []
+  for (const [token] of sorted) {
+    if (existing.has(token)) continue
+    suggestions.push(token)
+    if (suggestions.length >= 5) break
+  }
+  return suggestions
+}
 
 const NotesManagerPage: React.FC = () => {
   const { t } = useTranslation(['option', 'common'])
   const [query, setQuery] = React.useState('')
+  const [queryInput, setQueryInput] = React.useState('')
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(20)
   const [listMode, setListMode] = React.useState<'active' | 'trash'>('active')
@@ -226,9 +388,18 @@ const NotesManagerPage: React.FC = () => {
   const [manualLinkSaving, setManualLinkSaving] = React.useState(false)
   const [manualLinkDeletingEdgeId, setManualLinkDeletingEdgeId] = React.useState<string | null>(null)
   const [titleSuggestionLoading, setTitleSuggestionLoading] = React.useState(false)
+  const [assistLoadingAction, setAssistLoadingAction] = React.useState<NotesAssistAction | null>(null)
+  const [editProvenance, setEditProvenance] = React.useState<EditProvenanceState>({ mode: 'manual' })
+  const [monitoringNotice, setMonitoringNotice] = React.useState<MonitoringNoticeState | null>(
+    null
+  )
+  const [recentNotes, setRecentNotes] = React.useState<NotesRecentOpenedEntry[]>([])
+  const [titleSuggestStrategy, setTitleSuggestStrategy] =
+    React.useState<NotesTitleSuggestStrategy>('heuristic')
   const [editorMode, setEditorMode] = React.useState<NotesEditorMode>('edit')
   const [editorCursorIndex, setEditorCursorIndex] = React.useState<number | null>(null)
   const [wikilinkSelectionIndex, setWikilinkSelectionIndex] = React.useState(0)
+  const searchQueryTimeoutRef = React.useRef<number | null>(null)
   const keywordSearchTimeoutRef = React.useRef<number | null>(null)
   const autosaveTimeoutRef = React.useRef<number | null>(null)
   const contentTextareaRef = React.useRef<HTMLTextAreaElement | null>(null)
@@ -272,6 +443,13 @@ const NotesManagerPage: React.FC = () => {
     if (autosaveTimeoutRef.current != null) {
       window.clearTimeout(autosaveTimeoutRef.current)
       autosaveTimeoutRef.current = null
+    }
+  }, [])
+
+  const clearSearchQueryTimeout = React.useCallback(() => {
+    if (searchQueryTimeoutRef.current != null) {
+      window.clearTimeout(searchQueryTimeoutRef.current)
+      searchQueryTimeoutRef.current = null
     }
   }, [])
 
@@ -325,6 +503,62 @@ const NotesManagerPage: React.FC = () => {
     return `${versionText} · ${lastSavedText}`
   }, [selectedLastSavedAt, selectedVersion, t])
 
+  const provenanceSummaryText = React.useMemo(() => {
+    if (editProvenance.mode === 'manual') {
+      return t('option:notesSearch.provenanceManual', {
+        defaultValue: 'Edit source: Manual'
+      })
+    }
+    const actionLabel =
+      editProvenance.action === 'summarize'
+        ? t('option:notesSearch.assistSummarizeAction', { defaultValue: 'Summarize' })
+        : editProvenance.action === 'expand_outline'
+          ? t('option:notesSearch.assistExpandOutlineAction', { defaultValue: 'Expand outline' })
+          : t('option:notesSearch.assistSuggestKeywordsAction', { defaultValue: 'Suggest keywords' })
+    const generatedAt = new Date(editProvenance.at).toLocaleTimeString()
+    const generatedPrefix = t('option:notesSearch.provenanceGeneratedPrefix', {
+      defaultValue: 'Edit source: Generated'
+    })
+    return `${generatedPrefix} (${actionLabel} at ${generatedAt})`
+  }, [editProvenance, t])
+
+  const monitoringNoticeClasses = React.useMemo(() => {
+    if (!monitoringNotice) return ''
+    if (monitoringNotice.severity === 'critical') {
+      return 'border-danger/50 bg-danger/10 text-danger'
+    }
+    if (monitoringNotice.severity === 'warning') {
+      return 'border-warn/50 bg-warn/10 text-warn'
+    }
+    return 'border-primary/40 bg-primary/10 text-primary'
+  }, [monitoringNotice])
+
+  const markManualEdit = React.useCallback(() => {
+    setEditProvenance((current) => (current.mode === 'manual' ? current : { mode: 'manual' }))
+  }, [])
+
+  const markGeneratedEdit = React.useCallback((action: NotesAssistAction) => {
+    setEditProvenance({
+      mode: 'generated',
+      action,
+      at: Date.now()
+    })
+  }, [])
+
+  const rememberRecentNote = React.useCallback((noteId: string | number, noteTitle: string) => {
+    const normalizedId = String(noteId || '').trim()
+    const normalizedTitle = String(noteTitle || '').trim()
+    if (!normalizedId || !normalizedTitle) return
+    setRecentNotes((current) => {
+      const next = [
+        { id: normalizedId, title: normalizedTitle },
+        ...current.filter((entry) => entry.id !== normalizedId)
+      ].slice(0, 5)
+      void setSetting(NOTES_RECENT_OPENED_SETTING, next)
+      return next
+    })
+  }, [])
+
   const resizeEditorTextarea = React.useCallback(() => {
     const textarea = contentTextareaRef.current
     if (!textarea) return
@@ -340,11 +574,25 @@ const NotesManagerPage: React.FC = () => {
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden'
   }, [editorMode])
 
-  const setContentDirty = React.useCallback((nextContent: string) => {
-    setContent(nextContent)
-    setIsDirty(true)
-    setSaveIndicator('dirty')
-  }, [])
+  const setContentDirty = React.useCallback(
+    (
+      nextContent: string,
+      options?: {
+        provenance?: 'manual' | NotesAssistAction
+      }
+    ) => {
+      setContent(nextContent)
+      setIsDirty(true)
+      setSaveIndicator('dirty')
+      setMonitoringNotice(null)
+      if (options?.provenance && options.provenance !== 'manual') {
+        markGeneratedEdit(options.provenance)
+      } else {
+        markManualEdit()
+      }
+    },
+    [markGeneratedEdit, markManualEdit]
+  )
 
   const applyMarkdownToolbarAction = React.useCallback(
     (action: MarkdownToolbarAction) => {
@@ -606,7 +854,103 @@ const NotesManagerPage: React.FC = () => {
   })
 
   const filteredCount = Array.isArray(data) ? data.length : 0
-  const hasActiveFilters = listMode === 'active' && (query.trim().length > 0 || keywordTokens.length > 0)
+  const hasActiveFilters =
+    listMode === 'active' && (queryInput.trim().length > 0 || keywordTokens.length > 0)
+  const activeFilterSummary = React.useMemo(() => {
+    if (!hasActiveFilters || listMode !== 'active') return null
+    const effectiveQuery = query.trim() || queryInput.trim()
+    const details: string[] = []
+    if (effectiveQuery) {
+      details.push(
+        `${t('option:notesSearch.summaryQueryLabel', {
+          defaultValue: 'Query'
+        })}: "${effectiveQuery}"`
+      )
+    }
+    if (keywordTokens.length > 0) {
+      details.push(
+        `${t('option:notesSearch.summaryKeywordsLabel', {
+          defaultValue: 'Keywords'
+        })}: ${keywordTokens.join(', ')}`
+      )
+    }
+    const countText = `${t('option:notesSearch.summaryShowing', {
+      defaultValue: 'Showing'
+    })} ${filteredCount} ${t('option:notesSearch.summaryOf', {
+      defaultValue: 'of'
+    })} ${total} ${t('option:notesSearch.summaryNotes', {
+      defaultValue: 'notes'
+    })}`
+    return {
+      countText,
+      detailsText: details.join(' + ')
+    }
+  }, [filteredCount, hasActiveFilters, keywordTokens, listMode, query, queryInput, t, total])
+
+  const { data: notesTitleSettings } = useQuery({
+    queryKey: ['notes-title-settings'],
+    enabled: isOnline,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      try {
+        const settings = await bgRequest<NotesTitleSettingsResponse>({
+          path: '/api/v1/admin/notes/title-settings' as any,
+          method: 'GET' as any
+        })
+        return settings
+      } catch {
+        return null
+      }
+    }
+  })
+
+  const allowedTitleStrategies = React.useMemo(
+    () => deriveAllowedTitleStrategies(notesTitleSettings),
+    [notesTitleSettings]
+  )
+
+  const canSwitchTitleStrategy = allowedTitleStrategies.length > 1
+
+  const effectiveTitleSuggestStrategy = React.useMemo<NotesTitleSuggestStrategy>(() => {
+    const preferred = normalizeNotesTitleStrategy(titleSuggestStrategy)
+    if (preferred && allowedTitleStrategies.includes(preferred)) {
+      return preferred
+    }
+    const fromServer = normalizeNotesTitleStrategy(
+      notesTitleSettings?.effective_strategy ?? notesTitleSettings?.default_strategy
+    )
+    if (fromServer && allowedTitleStrategies.includes(fromServer)) {
+      return fromServer
+    }
+    return allowedTitleStrategies[0] ?? 'heuristic'
+  }, [allowedTitleStrategies, notesTitleSettings, titleSuggestStrategy])
+
+  const titleStrategyOptions = React.useMemo(() => {
+    return allowedTitleStrategies.map((strategy) => {
+      if (strategy === 'llm') {
+        return {
+          value: strategy,
+          label: t('option:notesSearch.titleStrategyLlm', {
+            defaultValue: 'LLM (quality)'
+          })
+        }
+      }
+      if (strategy === 'llm_fallback') {
+        return {
+          value: strategy,
+          label: t('option:notesSearch.titleStrategyLlmFallback', {
+            defaultValue: 'LLM fallback'
+          })
+        }
+      }
+      return {
+        value: strategy,
+        label: t('option:notesSearch.titleStrategyHeuristic', {
+          defaultValue: 'Heuristic (fast)'
+        })
+      }
+    })
+  }, [allowedTitleStrategies, t])
 
   const {
     data: noteNeighborsData,
@@ -897,6 +1241,7 @@ const NotesManagerPage: React.FC = () => {
     setLoadingDetail(true)
     try {
       const d = await bgRequest<any>({ path: `/api/v1/notes/${id}` as any, method: 'GET' as any })
+      const loadedTitle = String(d?.title || `Note ${id}`)
       setSelectedId(id)
       setTitle(String(d?.title || ''))
       setContent(String(d?.content || ''))
@@ -912,13 +1257,16 @@ const NotesManagerPage: React.FC = () => {
       setBacklinkMessageId(links.message_id)
       setIsDirty(false)
       setSaveIndicator('idle')
+      setEditProvenance({ mode: 'manual' })
+      setMonitoringNotice(null)
       setRemoteVersionInfo(null)
       setEditorCursorIndex(0)
       setWikilinkSelectionIndex(0)
+      rememberRecentNote(id, loadedTitle)
     } catch {
       message.error('Failed to load note')
     } finally { setLoadingDetail(false) }
-  }, [message])
+  }, [message, rememberRecentNote])
 
   const resetEditor = React.useCallback(() => {
     setSelectedId(null)
@@ -932,6 +1280,8 @@ const NotesManagerPage: React.FC = () => {
     setBacklinkMessageId(null)
     setIsDirty(false)
     setSaveIndicator('idle')
+    setEditProvenance({ mode: 'manual' })
+    setMonitoringNotice(null)
     setRemoteVersionInfo(null)
     setEditorCursorIndex(null)
     setWikilinkSelectionIndex(0)
@@ -958,6 +1308,7 @@ const NotesManagerPage: React.FC = () => {
       setPage(1)
       if (nextMode === 'trash') {
         setQuery('')
+        setQueryInput('')
         setKeywordTokens([])
       }
     },
@@ -1092,7 +1443,7 @@ const NotesManagerPage: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: {
           content: sourceContent,
-          title_strategy: 'heuristic'
+          title_strategy: effectiveTitleSuggestStrategy
         }
       })
       const suggested = String(response?.title || '').trim()
@@ -1120,12 +1471,144 @@ const NotesManagerPage: React.FC = () => {
       setTitle(suggested)
       setIsDirty(true)
       setSaveIndicator('dirty')
+      setMonitoringNotice(null)
     } catch (error: any) {
       message.error(String(error?.message || 'Could not generate title'))
     } finally {
       setTitleSuggestionLoading(false)
     }
-  }, [confirmDanger, content, editorDisabled, message, t, titleSuggestionLoading])
+  }, [
+    confirmDanger,
+    content,
+    editorDisabled,
+    effectiveTitleSuggestStrategy,
+    message,
+    t,
+    titleSuggestionLoading
+  ])
+
+  const runAssistAction = React.useCallback(
+    async (action: NotesAssistAction) => {
+      if (editorDisabled || assistLoadingAction) return
+      const sourceContent = content.trim()
+      if (!sourceContent) {
+        message.warning(
+          t('option:notesSearch.assistEmptyContentWarning', {
+            defaultValue: 'Write some content before using assist actions.'
+          })
+        )
+        return
+      }
+
+      setAssistLoadingAction(action)
+      try {
+        if (action === 'suggest_keywords') {
+          const suggestedKeywords = suggestKeywordsDraft(sourceContent, editorKeywords)
+          if (suggestedKeywords.length === 0) {
+            message.warning(
+              t('option:notesSearch.assistKeywordsNoResult', {
+                defaultValue: 'No additional keyword suggestions were found.'
+              })
+            )
+            return
+          }
+          const apply = await confirmDanger({
+            title: t('option:notesSearch.assistKeywordsApplyTitle', {
+              defaultValue: 'Apply suggested keywords?'
+            }),
+            content: suggestedKeywords.join(', '),
+            okText: t('option:notesSearch.assistApplyAction', {
+              defaultValue: 'Apply'
+            }),
+            cancelText: t('option:notesSearch.assistKeepCurrentAction', {
+              defaultValue: 'Keep current'
+            })
+          })
+          if (!apply) return
+          const merged: string[] = []
+          const seen = new Set<string>()
+          const append = (value: string) => {
+            const text = String(value || '').trim()
+            if (!text) return
+            const key = text.toLowerCase()
+            if (seen.has(key)) return
+            seen.add(key)
+            merged.push(text)
+          }
+          editorKeywords.forEach(append)
+          suggestedKeywords.forEach(append)
+          setEditorKeywords(merged)
+          setIsDirty(true)
+          setSaveIndicator('dirty')
+          setMonitoringNotice(null)
+          markGeneratedEdit('suggest_keywords')
+          message.success(
+            t('option:notesSearch.assistKeywordsApplied', {
+              defaultValue: 'Applied suggested keywords.'
+            })
+          )
+          return
+        }
+
+        const generatedContent =
+          action === 'summarize'
+            ? buildSummaryDraft(sourceContent)
+            : buildOutlineDraft(sourceContent)
+        if (!generatedContent.trim()) {
+          message.warning(
+            t('option:notesSearch.assistNoResult', {
+              defaultValue: 'No assist output was generated.'
+            })
+          )
+          return
+        }
+
+        const apply = await confirmDanger({
+          title:
+            action === 'summarize'
+              ? t('option:notesSearch.assistSummaryApplyTitle', {
+                  defaultValue: 'Apply generated summary?'
+                })
+              : t('option:notesSearch.assistOutlineApplyTitle', {
+                  defaultValue: 'Apply expanded outline?'
+                }),
+          content: generatedContent,
+          okText: t('option:notesSearch.assistApplyAction', {
+            defaultValue: 'Apply'
+          }),
+          cancelText: t('option:notesSearch.assistKeepCurrentAction', {
+            defaultValue: 'Keep current'
+          })
+        })
+        if (!apply) return
+        setContentDirty(generatedContent, { provenance: action })
+        message.success(
+          action === 'summarize'
+            ? t('option:notesSearch.assistSummaryApplied', {
+                defaultValue: 'Applied generated summary.'
+              })
+            : t('option:notesSearch.assistOutlineApplied', {
+                defaultValue: 'Applied expanded outline.'
+              })
+        )
+      } catch (error: any) {
+        message.error(String(error?.message || 'Assist action failed'))
+      } finally {
+        setAssistLoadingAction(null)
+      }
+    },
+    [
+      assistLoadingAction,
+      confirmDanger,
+      content,
+      editorDisabled,
+      editorKeywords,
+      markGeneratedEdit,
+      message,
+      setContentDirty,
+      t
+    ]
+  )
 
   const createManualLink = React.useCallback(async () => {
     if (manualLinkSaving) return
@@ -1234,6 +1717,70 @@ const NotesManagerPage: React.FC = () => {
     })
   }
 
+  const loadMonitoringNoticeForSavedNote = React.useCallback(
+    async (
+      noteId: string | number,
+      source: 'notes.create' | 'notes.update',
+      saveStartedAtMs: number
+    ) => {
+      try {
+        const params = new URLSearchParams()
+        params.set('source', source)
+        params.set('unread_only', 'true')
+        params.set('limit', '50')
+        const response = await bgRequest<any>({
+          path: `/api/v1/monitoring/alerts?${params.toString()}` as any,
+          method: 'GET' as any
+        })
+        const items = Array.isArray(response?.items) ? response.items : []
+        const noteIdText = String(noteId)
+        const minCreatedAtMs = saveStartedAtMs - 5000
+        const matchedAlert = items.find((item: any) => {
+          if (String(item?.source_id || '') !== noteIdText) return false
+          const createdAtMs = Date.parse(String(item?.created_at || ''))
+          if (Number.isFinite(createdAtMs) && createdAtMs < minCreatedAtMs) return false
+          return true
+        })
+        if (!matchedAlert) return
+
+        const severityRaw = String(matchedAlert?.rule_severity || 'info').toLowerCase()
+        const severity: MonitoringAlertSeverity =
+          severityRaw === 'critical'
+            ? 'critical'
+            : severityRaw === 'warning'
+              ? 'warning'
+              : 'info'
+
+        const titleCopy =
+          severity === 'critical'
+            ? t('option:notesSearch.monitoringAlertCriticalTitle', {
+                defaultValue: 'Sensitive-topic alert detected'
+              })
+            : severity === 'warning'
+              ? t('option:notesSearch.monitoringAlertWarningTitle', {
+                  defaultValue: 'Monitoring warning detected'
+                })
+              : t('option:notesSearch.monitoringAlertInfoTitle', {
+                  defaultValue: 'Monitored topic detected'
+                })
+
+        const guidanceCopy = t('option:notesSearch.monitoringAlertGuidance', {
+          defaultValue:
+            'Review this note for sensitive material before sharing. You can edit and save again.'
+        })
+
+        setMonitoringNotice({
+          severity,
+          title: titleCopy,
+          guidance: guidanceCopy
+        })
+      } catch {
+        // Endpoint may be disabled or permission-gated; do not interrupt save flow.
+      }
+    },
+    [t]
+  )
+
   const saveNote = React.useCallback(
     async ({ showSuccessMessage = true }: SaveNoteOptions = {}) => {
       if (saving) return
@@ -1264,6 +1811,8 @@ const NotesManagerPage: React.FC = () => {
       }
       setSaving(true)
       setSaveIndicator('saving')
+      setMonitoringNotice(null)
+      const saveStartedAtMs = Date.now()
       try {
         const metadata: Record<string, any> = {
           ...(originalMetadata || {}),
@@ -1297,7 +1846,10 @@ const NotesManagerPage: React.FC = () => {
           if (createdVersion != null) setSelectedVersion(createdVersion)
           if (createdLastSaved) setSelectedLastSavedAt(createdLastSaved)
           await refetch()
-          if (created?.id != null) await loadDetail(created.id)
+          if (created?.id != null) {
+            await loadDetail(created.id)
+            void loadMonitoringNoticeForSavedNote(created.id, 'notes.create', saveStartedAtMs)
+          }
         } else {
           let expectedVersion = selectedVersion
           if (expectedVersion == null) {
@@ -1357,6 +1909,9 @@ const NotesManagerPage: React.FC = () => {
           } else {
             setSelectedLastSavedAt(new Date().toISOString())
           }
+          if (selectedId != null) {
+            void loadMonitoringNoticeForSavedNote(selectedId, 'notes.update', saveStartedAtMs)
+          }
         }
       } catch (e: any) {
         setSaveIndicator('error')
@@ -1380,6 +1935,7 @@ const NotesManagerPage: React.FC = () => {
       handleVersionConflict,
       isVersionConflictError,
       loadDetail,
+      loadMonitoringNoticeForSavedNote,
       message,
       originalMetadata,
       refetch,
@@ -1870,9 +2426,28 @@ const NotesManagerPage: React.FC = () => {
 
   const handleClearFilters = React.useCallback(() => {
     setQuery('')
+    setQueryInput('')
     setKeywordTokens([])
     setPage(1)
   }, [])
+
+  React.useEffect(() => {
+    if (queryInput === query) return
+    if (typeof window === 'undefined') {
+      setQuery(queryInput)
+      setPage(1)
+      return
+    }
+    clearSearchQueryTimeout()
+    searchQueryTimeoutRef.current = window.setTimeout(() => {
+      setQuery(queryInput)
+      setPage(1)
+      searchQueryTimeoutRef.current = null
+    }, NOTE_SEARCH_DEBOUNCE_MS)
+    return () => {
+      clearSearchQueryTimeout()
+    }
+  }, [clearSearchQueryTimeout, query, queryInput])
 
   React.useEffect(() => {
     setWikilinkSelectionIndex(0)
@@ -1948,12 +2523,13 @@ const NotesManagerPage: React.FC = () => {
 
   React.useEffect(() => {
     return () => {
+      clearSearchQueryTimeout()
       if (keywordSearchTimeoutRef.current != null) {
         clearTimeout(keywordSearchTimeoutRef.current)
       }
       clearAutosaveTimeout()
     }
-  }, [clearAutosaveTimeout])
+  }, [clearAutosaveTimeout, clearSearchQueryTimeout])
 
   React.useEffect(() => {
     // When selecting a different note, default back to edit mode so users can start typing immediately.
@@ -1980,6 +2556,33 @@ const NotesManagerPage: React.FC = () => {
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [resizeEditorTextarea])
+
+  React.useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const savedStrategy = await getSetting(NOTES_TITLE_SUGGEST_STRATEGY_SETTING)
+      if (cancelled) return
+      const normalized = normalizeNotesTitleStrategy(savedStrategy)
+      if (!normalized) return
+      setTitleSuggestStrategy(normalized)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  React.useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const savedRecent = await getSetting(NOTES_RECENT_OPENED_SETTING)
+      if (cancelled) return
+      if (!Array.isArray(savedRecent)) return
+      setRecentNotes(savedRecent)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Deep-link support: if tldw:lastNoteId is set (e.g., from omni-search),
   // automatically load that note once when the list is available.
@@ -2027,6 +2630,34 @@ const NotesManagerPage: React.FC = () => {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  const searchTipsContent = React.useMemo(
+    () => (
+      <div className="max-w-[280px] space-y-1 text-xs text-text">
+        <div>
+          {t('option:notesSearch.searchTipPhrase', {
+            defaultValue: 'Use quotes for phrases, e.g. "project roadmap".'
+          })}
+        </div>
+        <div>
+          {t('option:notesSearch.searchTipPrefix', {
+            defaultValue: 'Use prefix terms (like analy*) for broader matches.'
+          })}
+        </div>
+        <div>
+          {t('option:notesSearch.searchTipAnd', {
+            defaultValue: 'Text query + selected keywords are combined with AND.'
+          })}
+        </div>
+        <div>
+          {t('option:notesSearch.searchTipInNote', {
+            defaultValue: 'To find text inside the open note, use browser Ctrl/Cmd+F.'
+          })}
+        </div>
+      </div>
+    ),
+    [t]
+  )
+
   return (
     <div className="flex h-full w-full bg-bg p-4 mt-16">
       {/* Collapsible Sidebar */}
@@ -2043,7 +2674,7 @@ const NotesManagerPage: React.FC = () => {
               <div className="text-xs uppercase tracking-[0.16em] text-text-muted">
                 {t('option:notesSearch.headerLabel', { defaultValue: 'Notes' })}
                 <span className="ml-2 text-text-subtle">
-                  {hasActiveFilters && filteredCount > 0 && total > 0
+                  {hasActiveFilters
                     ? t('option:notesSearch.headerCount', {
                         defaultValue: '{{visible}} of {{total}}',
                         visible: filteredCount,
@@ -2104,18 +2735,50 @@ const NotesManagerPage: React.FC = () => {
 	                  <Input
 	                    allowClear
 	                    placeholder={t('option:notesSearch.placeholder', {
-	                      defaultValue: 'Search notes...'
+	                      defaultValue: 'Search titles & content...'
 	                    })}
 	                    prefix={(<SearchIcon className="w-4 h-4 text-text-subtle" />) as any}
-	                    value={query}
+	                    value={queryInput}
 	                    onChange={(e) => {
-	                      setQuery(e.target.value)
-	                      setPage(1)
+	                      setQueryInput(e.target.value)
 	                    }}
 	                    onPressEnter={() => {
+                        clearSearchQueryTimeout()
+                        setQuery(queryInput)
 	                      setPage(1)
 	                    }}
 	                  />
+                    <div className="flex items-center justify-between gap-2">
+                      <Typography.Text
+                        type="secondary"
+                        className="block text-[11px] text-text-muted"
+                        data-testid="notes-search-helper-text"
+                      >
+                        {t('option:notesSearch.searchHelper', {
+                          defaultValue:
+                            'Full-text search across titles and content. Text + keyword filters use AND.'
+                        })}
+                      </Typography.Text>
+                      <Popover
+                        trigger="click"
+                        content={searchTipsContent}
+                        placement="bottomRight"
+                        title={t('option:notesSearch.searchTipsTitle', {
+                          defaultValue: 'Search tips'
+                        })}
+                      >
+                        <Button
+                          size="small"
+                          type="link"
+                          className="!px-0 text-xs"
+                          data-testid="notes-search-tips-button"
+                        >
+                          {t('option:notesSearch.searchTipsAction', {
+                            defaultValue: 'Search tips'
+                          })}
+                        </Button>
+                      </Popover>
+                    </div>
 	                  <Select
 	                    mode="tags"
 	                    allowClear
@@ -2151,11 +2814,73 @@ const NotesManagerPage: React.FC = () => {
 	                      </Typography.Text>
 	                    )}
 	                  </div>
+                    {activeFilterSummary && (
+                      <div
+                        className="rounded border border-border bg-surface2 px-2 py-1.5"
+                        role="status"
+                        aria-live="polite"
+                        aria-label={t('option:notesSearch.activeFilterSummaryAria', {
+                          defaultValue: 'Active filter summary'
+                        })}
+                        data-testid="notes-active-filter-summary"
+                      >
+                        <div className="text-[11px] font-medium text-text">
+                          {activeFilterSummary.countText}
+                        </div>
+                        {activeFilterSummary.detailsText ? (
+                          <div
+                            className="mt-1 text-[11px] text-text-muted"
+                            data-testid="notes-active-filter-summary-details"
+                          >
+                            {activeFilterSummary.detailsText}
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+                    {recentNotes.length > 0 && (
+                      <div
+                        className="rounded border border-border bg-surface2 p-2"
+                        data-testid="notes-recent-section"
+                      >
+                        <div className="text-[11px] uppercase tracking-[0.08em] text-text-muted">
+                          {t('option:notesSearch.recentNotesHeading', {
+                            defaultValue: 'Recent notes'
+                          })}
+                        </div>
+                        <div className="mt-1 space-y-1">
+                          {recentNotes.map((recent) => (
+                            <button
+                              key={recent.id}
+                              type="button"
+                              className="block w-full truncate rounded px-2 py-1 text-left text-xs text-text hover:bg-surface3"
+                              onClick={() => {
+                                void handleSelectNote(recent.id)
+                              }}
+                              data-testid={`notes-recent-item-${recent.id.replace(/[^a-z0-9_-]/gi, '_')}`}
+                            >
+                              {recent.title}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <Typography.Text
+                      type="secondary"
+                      className="block text-[11px] text-text-muted"
+                      data-testid="notes-in-note-search-guidance"
+                    >
+                      {t('option:notesSearch.inNoteSearchGuidance', {
+                        defaultValue: 'For in-note search, use browser Ctrl/Cmd+F.'
+                      })}
+                    </Typography.Text>
 	                  {hasActiveFilters && (
 	                    <Button
 	                      size="small"
 	                      onClick={handleClearFilters}
 	                      className="w-full text-xs"
+                        aria-label={t('option:notesSearch.clearAria', {
+                          defaultValue: 'Clear active note filters'
+                        })}
 	                    >
 	                      {t('option:notesSearch.clear', {
 	                        defaultValue: 'Clear search & filters'
@@ -2180,6 +2905,7 @@ const NotesManagerPage: React.FC = () => {
           <div className="flex-1 overflow-y-auto">
 	            <NotesListPanel
 	              listMode={listMode}
+                searchQuery={query}
 	              isOnline={isOnline}
 	              isFetching={isFetching}
 	              demoEnabled={demoEnabled}
@@ -2300,6 +3026,8 @@ const NotesManagerPage: React.FC = () => {
                 setTitle(e.target.value)
                 setIsDirty(true)
                 setSaveIndicator('dirty')
+                setMonitoringNotice(null)
+                markManualEdit()
               }}
               disabled={editorDisabled}
               ref={titleInputRef}
@@ -2328,6 +3056,25 @@ const NotesManagerPage: React.FC = () => {
                 })}
               </Button>
             </Tooltip>
+            {canSwitchTitleStrategy ? (
+              <Select
+                size="small"
+                className="min-w-[170px]"
+                value={effectiveTitleSuggestStrategy}
+                options={titleStrategyOptions}
+                onChange={(value) => {
+                  const normalized = normalizeNotesTitleStrategy(value)
+                  if (!normalized) return
+                  setTitleSuggestStrategy(normalized)
+                  void setSetting(NOTES_TITLE_SUGGEST_STRATEGY_SETTING, normalized)
+                }}
+                disabled={editorDisabled || titleSuggestionLoading}
+                aria-label={t('option:notesSearch.titleStrategyLabel', {
+                  defaultValue: 'Title generation strategy'
+                })}
+                data-testid="notes-title-strategy-select"
+              />
+            ) : null}
           </div>
           <div className="mt-3">
             <Select
@@ -2346,6 +3093,8 @@ const NotesManagerPage: React.FC = () => {
                 setEditorKeywords(vals as string[])
                 setIsDirty(true)
                 setSaveIndicator('dirty')
+                setMonitoringNotice(null)
+                markManualEdit()
               }}
               options={keywordOptions.map((k) => ({ label: k, value: k }))}
               disabled={editorDisabled}
@@ -2395,6 +3144,17 @@ const NotesManagerPage: React.FC = () => {
                     defaultValue: 'Reload note'
                   })}
                 </Button>
+              </div>
+            )}
+            {monitoringNotice && (
+              <div
+                className={`mt-2 rounded border px-2 py-2 text-[12px] ${monitoringNoticeClasses}`}
+                role="alert"
+                aria-live="polite"
+                data-testid="notes-monitoring-alert"
+              >
+                <div className="font-medium">{monitoringNotice.title}</div>
+                <div className="mt-1">{monitoringNotice.guidance}</div>
               </div>
             )}
           </div>
@@ -2707,6 +3467,78 @@ const NotesManagerPage: React.FC = () => {
                   data-testid="notes-toolbar-code"
                 />
               </Tooltip>
+              <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
+              <Typography.Text
+                type="secondary"
+                className="text-[11px] mr-1 uppercase tracking-[0.08em]"
+              >
+                {t('option:notesSearch.assistLabel', {
+                  defaultValue: 'Assist'
+                })}
+              </Typography.Text>
+              <Tooltip
+                title={t('option:notesSearch.assistSummarizeTooltip', {
+                  defaultValue: 'Generate a concise summary draft'
+                })}
+              >
+                <Button
+                  size="small"
+                  type="text"
+                  icon={(<SparklesIcon className="w-4 h-4" />) as any}
+                  onClick={() => {
+                    void runAssistAction('summarize')
+                  }}
+                  disabled={editorDisabled || content.trim().length === 0}
+                  loading={assistLoadingAction === 'summarize'}
+                  data-testid="notes-assist-summarize"
+                >
+                  {t('option:notesSearch.assistSummarizeAction', {
+                    defaultValue: 'Summarize'
+                  })}
+                </Button>
+              </Tooltip>
+              <Tooltip
+                title={t('option:notesSearch.assistExpandOutlineTooltip', {
+                  defaultValue: 'Generate an expanded outline draft'
+                })}
+              >
+                <Button
+                  size="small"
+                  type="text"
+                  icon={(<SparklesIcon className="w-4 h-4" />) as any}
+                  onClick={() => {
+                    void runAssistAction('expand_outline')
+                  }}
+                  disabled={editorDisabled || content.trim().length === 0}
+                  loading={assistLoadingAction === 'expand_outline'}
+                  data-testid="notes-assist-expand-outline"
+                >
+                  {t('option:notesSearch.assistExpandOutlineAction', {
+                    defaultValue: 'Expand outline'
+                  })}
+                </Button>
+              </Tooltip>
+              <Tooltip
+                title={t('option:notesSearch.assistSuggestKeywordsTooltip', {
+                  defaultValue: 'Suggest keywords from note content'
+                })}
+              >
+                <Button
+                  size="small"
+                  type="text"
+                  icon={(<SparklesIcon className="w-4 h-4" />) as any}
+                  onClick={() => {
+                    void runAssistAction('suggest_keywords')
+                  }}
+                  disabled={editorDisabled || content.trim().length === 0}
+                  loading={assistLoadingAction === 'suggest_keywords'}
+                  data-testid="notes-assist-suggest-keywords"
+                >
+                  {t('option:notesSearch.assistSuggestKeywordsAction', {
+                    defaultValue: 'Suggest keywords'
+                  })}
+                </Button>
+              </Tooltip>
               <input
                 ref={attachmentInputRef}
                 type="file"
@@ -2937,6 +3769,13 @@ const NotesManagerPage: React.FC = () => {
               data-testid="notes-editor-revision-meta"
             >
               {revisionSummaryText}
+            </Typography.Text>
+            <Typography.Text
+              type="secondary"
+              className="block text-[11px] text-text-muted mt-1"
+              data-testid="notes-editor-provenance"
+            >
+              {provenanceSummaryText}
             </Typography.Text>
           </div>
         </div>

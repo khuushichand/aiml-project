@@ -17,8 +17,49 @@ const truncateText = (value?: string | null, max?: number) => {
   return `${value.slice(0, max)}...`
 }
 
+const SEARCH_TERM_PATTERN = /"([^"]+)"|(\S+)/g
+
+const extractSearchTerms = (query?: string): string[] => {
+  const text = String(query || '').trim()
+  if (!text) return []
+  const terms: string[] = []
+  const seen = new Set<string>()
+  for (const match of text.matchAll(SEARCH_TERM_PATTERN)) {
+    const raw = (match[1] || match[2] || '').trim()
+    if (!raw) continue
+    const key = raw.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    terms.push(raw)
+  }
+  return terms.sort((a, b) => b.length - a.length)
+}
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const renderHighlightedText = (text: string, terms: string[]) => {
+  if (!text || terms.length === 0) return text
+  const pattern = terms.map((term) => escapeRegExp(term)).join('|')
+  if (!pattern) return text
+  const regex = new RegExp(`(${pattern})`, 'ig')
+  const parts = text.split(regex)
+  return parts.map((part, index) => {
+    const isMatch = terms.some((term) => term.toLowerCase() === part.toLowerCase())
+    if (!isMatch) return <React.Fragment key={`text-${index}`}>{part}</React.Fragment>
+    return (
+      <mark
+        key={`mark-${index}`}
+        className="rounded-sm bg-primary/20 px-0.5 text-text"
+      >
+        {part}
+      </mark>
+    )
+  })
+}
+
 type NotesListPanelProps = {
   listMode: 'active' | 'trash'
+  searchQuery?: string
   isOnline: boolean
   isFetching: boolean
   demoEnabled: boolean
@@ -42,6 +83,7 @@ type NotesListPanelProps = {
 
 const NotesListPanel: React.FC<NotesListPanelProps> = ({
   listMode,
+  searchQuery,
   isOnline,
   isFetching,
   demoEnabled,
@@ -66,6 +108,7 @@ const NotesListPanel: React.FC<NotesListPanelProps> = ({
   const { checkOnce } = useConnectionActions()
   const isTrashView = listMode === 'trash'
   const hasNotes = Array.isArray(notes) && notes.length > 0
+  const searchTerms = React.useMemo(() => extractSearchTerms(searchQuery), [searchQuery])
   const startItem = hasNotes ? (page - 1) * pageSize + 1 : 0
   const endItem = hasNotes ? Math.min(page * pageSize, total) : 0
   const exportDisabled = !isOnline || !hasNotes || isTrashView
@@ -288,17 +331,22 @@ const NotesListPanel: React.FC<NotesListPanelProps> = ({
                     className="w-full text-left"
                   >
                     <div className="w-full">
-                      <div className="text-sm font-medium text-text truncate">
-                        {truncateText(
+                      {(() => {
+                        const titleText = truncateText(
                           item.title || `Note ${item.id}`,
                           MAX_TITLE_LENGTH
-                        )}
-                      </div>
+                        )
+                        return (
+                          <div className="text-sm font-medium text-text truncate">
+                            {renderHighlightedText(titleText, searchTerms)}
+                          </div>
+                        )
+                      })()}
                       {item.content && (
                         <div className="text-xs text-text-muted truncate mt-1">
-                          {truncateText(
-                            String(item.content),
-                            MAX_PREVIEW_LENGTH
+                          {renderHighlightedText(
+                            truncateText(String(item.content), MAX_PREVIEW_LENGTH),
+                            searchTerms
                           )}
                         </div>
                       )}

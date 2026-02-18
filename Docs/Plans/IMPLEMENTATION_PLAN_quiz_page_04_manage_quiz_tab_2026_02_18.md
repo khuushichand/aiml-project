@@ -22,7 +22,7 @@ Finding IDs: `4.1` through `4.8`
 - Integration tests for undo availability after tab switch/navigation.
 - Accessibility tests for keyboard focusability of undo control.
 - Mutation tests for delete commit timing and cancellation behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Edit Modal Usability at Scale
 **Goal**: Reduce complexity when editing quizzes with many questions.
@@ -34,7 +34,7 @@ Finding IDs: `4.1` through `4.8`
 - Component tests for reorder actions and persisted order.
 - Integration tests for long-list edit interactions without pagination confusion.
 - Performance smoke tests for modal behavior with large question counts.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Bulk and Clone Operations
 **Goal**: Improve operational throughput for power users.
@@ -64,3 +64,33 @@ Finding IDs: `4.1` through `4.8`
 
 - Reorder implementation should share contracts with `IMPLEMENTATION_PLAN_quiz_page_03_create_quiz_tab_2026_02_18.md`.
 - Export format should align with import roadmap in `IMPLEMENTATION_PLAN_quiz_page_12_information_gaps_missing_functionality_2026_02_18.md`.
+
+## Progress Notes (2026-02-18)
+
+- Stage 1 completed:
+  - Replaced ephemeral undo toast behavior with persistent inline undo alerts in `ManageTab` for both quiz and question deletions.
+  - Kept undo controls keyboard-focusable and explicit in the active layout.
+  - Preserved pending undo state across tab-style visibility switches (with mounted-tab behavior from Rank 5).
+  - Verified 8-second grace period semantics:
+    - delete commit does not fire before the timer expires.
+    - undo within grace period cancels commit.
+    - commit executes after grace period when undo is not used.
+  - Added/expanded tests in `ManageTab.undo-accessibility.test.tsx`:
+    - undo availability after tab-style visibility switch.
+    - grace-period commit timing and undo cancellation behavior.
+
+- Stage 2 completed:
+  - Replaced nested question pagination in the edit modal with scroll-based question browsing:
+    - question list now renders in a bounded scroll container (`manage-questions-scroll-container`).
+    - removed inner modal pagination controls to reduce dual-pagination cognitive load.
+  - Upgraded edit modal layout for high-question-count workflows:
+    - widened to near full-screen (`95vw`) to better support dense question editing.
+  - Added question reorder controls directly in the edit modal list:
+    - move up/down actions with explicit ARIA labels matching Create tab semantics.
+    - persisted reorder by swapping `order_index` values across adjacent questions through existing update mutation path.
+  - Added tests in `ManageTab.edit-modal-scale.test.tsx`:
+    - verifies scroll-container layout and no modal-level pagination control.
+    - verifies reorder action issues the expected `order_index` swap mutations.
+
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run src/components/Quiz/tabs/__tests__/ManageTab.undo-accessibility.test.tsx src/components/Quiz/tabs/__tests__/ManageTab.edit-modal-scale.test.tsx src/components/Quiz/__tests__/QuizPlayground.navigation.test.tsx`

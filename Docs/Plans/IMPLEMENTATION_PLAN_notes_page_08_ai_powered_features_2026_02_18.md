@@ -34,7 +34,7 @@ Finding IDs: `8.1` through `8.4`
 - Contract tests for strategy capability flags.
 - Component tests for conditional selector rendering.
 - Persistence tests for strategy preference retention.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Content Assistance Extensions
 **Goal**: Introduce optional AI actions for drafting acceleration.
@@ -46,7 +46,7 @@ Finding IDs: `8.1` through `8.4`
 - Integration tests for each action pipeline and apply/discard behavior.
 - Safety tests for no silent content mutation.
 - Prompt contract tests for deterministic output envelope handling.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Topic Monitoring User Feedback
 **Goal**: Surface moderation/monitoring outcomes in a user-meaningful way.
@@ -58,7 +58,7 @@ Finding IDs: `8.1` through `8.4`
 - Integration tests for monitoring result surfacing on save.
 - Accessibility tests for alert semantics (`aria-live`).
 - Privacy tests confirming no sensitive internals leak in UI copy.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
@@ -76,3 +76,28 @@ Finding IDs: `8.1` through `8.4`
   - Verifies suggestion request/response apply flow.
   - Verifies reject/keep-current behavior.
   - Verifies backend failure error handling.
+- Completed Stage 2 in `/apps/packages/ui/src/components/Notes/NotesManagerPage.tsx`:
+  - Added server-policy probe for `/api/v1/admin/notes/title-settings` with safe fallback.
+  - Added strategy selector that only renders when more than one strategy is allowed.
+  - Persisted selected strategy via `NOTES_TITLE_SUGGEST_STRATEGY_SETTING`.
+  - Wired effective strategy into `/api/v1/notes/title/suggest` payloads.
+- Added Stage 2 verification in `/apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage10.ai-title.test.tsx`:
+  - Verifies selector visibility when switching is enabled.
+  - Verifies heuristic fallback behavior when LLM strategy is disabled by policy.
+  - Verifies preference persistence when strategy changes.
+- Completed Stage 3 in `/apps/packages/ui/src/components/Notes/NotesManagerPage.tsx`:
+  - Added assist actions for summarize, expand outline, and suggest keywords.
+  - Added explicit confirmation before applying any generated content or keyword mutations.
+  - Added edit provenance metadata in the footer to distinguish manual vs generated edits.
+- Added Stage 3 verification in `/apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage10.ai-content-assist.test.tsx`:
+  - Verifies summarize apply flow and manual-edit provenance reset.
+  - Verifies summarize reject flow keeps content unchanged.
+  - Verifies keyword suggestion confirm flow and generated provenance label.
+- Completed Stage 4 in `/apps/packages/ui/src/components/Notes/NotesManagerPage.tsx`:
+  - Added non-blocking monitoring alert lookup after note save.
+  - Added in-editor monitoring banner with severity-aware copy and actionable guidance.
+  - Kept messages privacy-safe by avoiding internal rule/pattern exposure.
+- Added Stage 4 verification in `/apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage10.ai-monitoring-feedback.test.tsx`:
+  - Verifies monitoring banner surfacing on save when alerts are detected.
+  - Verifies save success remains unaffected when monitoring endpoint access fails.
+  - Verifies accessibility semantics via `role=\"alert\"` and `aria-live=\"polite\"`.

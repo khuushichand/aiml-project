@@ -652,6 +652,62 @@ export const LAST_NOTE_ID_SETTING = defineSetting(
   }
 )
 
+const NOTES_TITLE_STRATEGY_VALUES = ["heuristic", "llm", "llm_fallback"] as const
+export type NotesTitleSuggestStrategy = (typeof NOTES_TITLE_STRATEGY_VALUES)[number]
+
+export const NOTES_TITLE_SUGGEST_STRATEGY_SETTING = defineSetting(
+  "tldw:notesTitleSuggestStrategy",
+  "heuristic" as NotesTitleSuggestStrategy,
+  (value) => {
+    const normalized = String(value || "").toLowerCase()
+    if (NOTES_TITLE_STRATEGY_VALUES.includes(normalized as NotesTitleSuggestStrategy)) {
+      return normalized as NotesTitleSuggestStrategy
+    }
+    return "heuristic"
+  },
+  {
+    area: "local",
+    localStorageKey: "tldw:notesTitleSuggestStrategy",
+    mirrorToLocalStorage: true
+  }
+)
+
+export type NotesRecentOpenedEntry = {
+  id: string
+  title: string
+}
+
+const coerceNotesRecentOpened = (value: unknown): NotesRecentOpenedEntry[] => {
+  if (!Array.isArray(value)) return []
+  const deduped: NotesRecentOpenedEntry[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue
+    const rawId = String((entry as any).id || "").trim()
+    const rawTitle = String((entry as any).title || "").trim()
+    if (!rawId || !rawTitle) continue
+    if (seen.has(rawId)) continue
+    seen.add(rawId)
+    deduped.push({
+      id: rawId,
+      title: rawTitle
+    })
+    if (deduped.length >= 5) break
+  }
+  return deduped
+}
+
+export const NOTES_RECENT_OPENED_SETTING = defineSetting(
+  "tldw:notesRecentOpened",
+  [] as NotesRecentOpenedEntry[],
+  coerceNotesRecentOpened,
+  {
+    area: "local",
+    localStorageKey: "tldw:notesRecentOpened",
+    mirrorToLocalStorage: true
+  }
+)
+
 export const LAST_DECK_ID_SETTING = defineSetting(
   "tldw:lastDeckId",
   undefined as string | undefined,
@@ -659,6 +715,35 @@ export const LAST_DECK_ID_SETTING = defineSetting(
   {
     area: "local",
     localStorageKey: "tldw:lastDeckId",
+    mirrorToLocalStorage: true
+  }
+)
+
+const FLASHCARDS_SHORTCUT_HINT_DENSITY_VALUES = [
+  "expanded",
+  "compact",
+  "hidden"
+] as const
+export type FlashcardsShortcutHintDensity =
+  (typeof FLASHCARDS_SHORTCUT_HINT_DENSITY_VALUES)[number]
+
+export const FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING = defineSetting(
+  "tldw:flashcards:shortcutHintDensity",
+  "expanded" as FlashcardsShortcutHintDensity,
+  (value) => {
+    const normalized = String(value || "").toLowerCase()
+    if (
+      FLASHCARDS_SHORTCUT_HINT_DENSITY_VALUES.includes(
+        normalized as FlashcardsShortcutHintDensity
+      )
+    ) {
+      return normalized as FlashcardsShortcutHintDensity
+    }
+    return "expanded"
+  },
+  {
+    area: "local",
+    localStorageKey: "tldw:flashcards:shortcutHintDensity",
     mirrorToLocalStorage: true
   }
 )

@@ -125,6 +125,38 @@ export function formatDictionaryUsageLabel(dictionary: DictionaryListItem): stri
   return `${totalChats} chats`
 }
 
+export function resolveDictionaryChatReferenceId(chatRef: unknown): string {
+  if (!chatRef || typeof chatRef !== "object") return ""
+  const asRecord = chatRef as Record<string, unknown>
+  const raw = asRecord.chat_id ?? asRecord.id
+  if (raw == null) return ""
+  return String(raw).trim()
+}
+
+export function formatDictionaryChatReferenceTitle(chatRef: unknown): string {
+  const chatId = resolveDictionaryChatReferenceId(chatRef)
+  const shortId = chatId.length > 8 ? chatId.slice(0, 8) : chatId
+  if (chatRef && typeof chatRef === "object") {
+    const title = String((chatRef as Record<string, unknown>).title || "").trim()
+    if (title) return title
+  }
+  return shortId ? `Chat ${shortId}` : "Chat"
+}
+
+export type DictionaryChatState =
+  | "in-progress"
+  | "resolved"
+  | "backlog"
+  | "non-viable"
+
+export function normalizeDictionaryChatState(value: unknown): DictionaryChatState {
+  const normalized = String(value || "").trim().toLowerCase()
+  if (normalized === "resolved") return "resolved"
+  if (normalized === "backlog") return "backlog"
+  if (normalized === "non-viable") return "non-viable"
+  return "in-progress"
+}
+
 export function buildDictionaryDeactivationWarning(
   dictionary: DictionaryListItem,
   cancelText: string

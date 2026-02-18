@@ -1427,7 +1427,8 @@
       "edit": "Edit",
       "delete": "Delete",
       "duplicate": "Duplicate",
-      "viewConversations": "View conversations"
+      "viewConversations": "View conversations",
+      "versionHistory": "Version history"
     },
     "table": {
       "noDescription": "—"
@@ -1452,6 +1453,7 @@
       "delete": "Delete character {{name}}",
       "duplicate": "Duplicate character {{name}}",
       "viewConversations": "View conversations for {{name}}",
+      "viewVersionHistory": "View version history for {{name}}",
       "searchResults": "{{count}} characters found"
     },
     "confirm": {
@@ -1517,6 +1519,35 @@
       "openFullChat": "Open full chat",
       "error": "Quick chat failed. Please try again.",
       "emptyResponse": "No response received from the model."
+    },
+    "versionHistory": {
+      "title": "Version history: {{name}}",
+      "description": "Review revision metadata, compare field-level changes, and restore earlier versions safely.",
+      "empty": "No version snapshots available yet.",
+      "timeline": "Timeline",
+      "unknownTimestamp": "Unknown time",
+      "baseBadge": "Base",
+      "compareBadge": "Compare",
+      "clientId": "Client: {{clientId}}",
+      "baseVersion": "Base version",
+      "compareVersion": "Compare version",
+      "sameVersion": "Select two different versions to view a diff.",
+      "diffUnavailable": "Unable to load version diff. Try selecting different revisions.",
+      "diffTitle": "Differences: v{{from}} -> v{{to}}",
+      "diffCount": "{{count}} fields changed",
+      "noFieldChanges": "No tracked field changes were found between these versions.",
+      "beforeLabel": "Before",
+      "afterLabel": "After",
+      "restoreTitle": "Restore a previous version",
+      "restoreVersion": "Version to restore",
+      "revertConfirm": "Restore version {{version}}? This creates a new latest version.",
+      "revertAction": "Restore version",
+      "revertSuccess": "Version restored",
+      "revertSuccessDescription": "Character updated to version {{version}} from snapshot v{{targetVersion}}.",
+      "revertError": "Failed to restore version",
+      "unavailable": "Version history unavailable",
+      "unavailableDescription": "Version history is available only for saved server characters.",
+      "inlineHint": "Inspect revision metadata, compare fields, or restore an earlier version."
     },
     "form": {
       "name": {

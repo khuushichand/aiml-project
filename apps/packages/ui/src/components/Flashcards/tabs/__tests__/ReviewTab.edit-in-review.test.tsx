@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ReviewTab } from "../ReviewTab"
+import { clearSetting } from "@/services/settings/registry"
+import { FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING } from "@/services/settings/ui-settings"
 import {
   useDecksQuery,
   useCramQueueQuery,
@@ -95,8 +97,9 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
 }
 
 describe("ReviewTab edit-in-review workflow", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks()
+    await clearSetting(FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING)
     vi.mocked(useDecksQuery).mockReturnValue({
       data: [{ id: 1, name: "Biology" }],
       isLoading: false
@@ -123,7 +126,9 @@ describe("ReviewTab edit-in-review workflow", () => {
         client_id: "test",
         version: 3,
         model_type: "basic",
-        reverse: false
+        reverse: false,
+        source_ref_type: "note",
+        source_ref_id: "88"
       }
     } as any)
     vi.mocked(useReviewFlashcardMutation).mockReturnValue({
@@ -166,15 +171,39 @@ describe("ReviewTab edit-in-review workflow", () => {
       />
     )
 
+    expect(screen.getByText("Note #88")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Edit card (E)" })
+    ).toBeInTheDocument()
+    expect(screen.getByTestId("flashcards-review-shortcut-chips-question")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Show answer (Space)" })
+    ).toBeInTheDocument()
+    const hintToggle = screen.getByTestId("flashcards-review-shortcut-hints-toggle")
+    expect(hintToggle).toHaveTextContent("Compact hints")
+    fireEvent.click(hintToggle)
+    await waitFor(() => {
+      expect(screen.getByText("Space / E")).toBeInTheDocument()
+    })
+    expect(screen.getByTestId("flashcards-review-shortcut-hints-toggle")).toHaveTextContent(
+      "Hide hints"
+    )
+    fireEvent.click(screen.getByTestId("flashcards-review-show-answer"))
+    expect(screen.getByTestId("flashcards-review-shortcut-chips-answer")).toBeInTheDocument()
+    expect(screen.getByText("1-4 / E / Ctrl+Z")).toBeInTheDocument()
     fireEvent.click(screen.getByTestId("flashcards-review-edit-card"))
     expect(screen.getByText("Edit Flashcard")).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    const discardButton = screen.queryByRole("button", { name: "Discard" })
+    if (discardButton) {
+      fireEvent.click(discardButton)
+    }
     await waitFor(() => {
       expect(screen.getByText("Edit Flashcard")).not.toBeVisible()
     })
     expect(screen.getByTestId("flashcards-review-edit-card")).toBeInTheDocument()
-  })
+  }, 15000)
 
   it("passes an edit shortcut callback when a review card is active", () => {
     render(
@@ -190,5 +219,5 @@ describe("ReviewTab edit-in-review workflow", () => {
     expect(useFlashcardShortcuts).toHaveBeenCalled()
     const lastCall = vi.mocked(useFlashcardShortcuts).mock.calls.at(-1)
     expect(lastCall?.[0]?.onEdit).toEqual(expect.any(Function))
-  })
+  }, 15000)
 })

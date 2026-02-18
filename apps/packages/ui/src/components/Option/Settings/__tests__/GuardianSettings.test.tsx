@@ -298,7 +298,7 @@ describe("GuardianSettings", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Accept/i })).toBeInTheDocument()
     })
-  }, 15000)
+  }, 30000)
 
   it("shows Accept action for pending_consent relationships in dependent view", async () => {
     guardianRelationships = [

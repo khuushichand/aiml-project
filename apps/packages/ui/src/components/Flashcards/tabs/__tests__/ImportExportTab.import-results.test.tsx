@@ -125,10 +125,69 @@ describe("ImportExportTab import result details", () => {
     expect(await screen.findByText("Last import: 2 imported, 1 skipped")).toBeInTheDocument()
     expect(screen.getByText("Line 15")).toBeInTheDocument()
     expect(screen.getByText("Missing required field: Front")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Add a non-empty Front value on that row, or map your header to the Front column."
+      )
+    ).toBeInTheDocument()
     expect(messageSpies.warning).toHaveBeenCalledWith(
       "Imported 2 cards, skipped 1 rows (1 errors)."
     )
   }, 15000)
+
+  it("shows preflight warning when selected delimiter does not match sample content", async () => {
+    vi.mocked(useImportFlashcardsMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+
+    render(<ImportExportTab />)
+
+    fireEvent.change(screen.getByTestId("flashcards-import-textarea"), {
+      target: {
+        value: "Deck,Front,Back\nBiology,Question,Answer"
+      }
+    })
+
+    expect(screen.getByTestId("flashcards-import-preflight-warning")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Selected delimiter (Tab) may be incorrect. This sample looks Comma-delimited."
+      )
+    ).toBeInTheDocument()
+  })
+
+  it("requires confirmation before importing very large batches", async () => {
+    const mutateAsync = vi.fn().mockResolvedValue({
+      imported: 0,
+      items: [],
+      errors: []
+    })
+    vi.mocked(useImportFlashcardsMutation).mockReturnValue({
+      mutateAsync,
+      isPending: false
+    } as any)
+
+    const rows = Array.from({ length: 301 }, (_, idx) => `Deck\tFront ${idx}\tBack ${idx}`).join("\n")
+
+    render(<ImportExportTab />)
+
+    fireEvent.change(screen.getByTestId("flashcards-import-textarea"), {
+      target: {
+        value: `Deck\tFront\tBack\n${rows}`
+      }
+    })
+    fireEvent.click(screen.getByTestId("flashcards-import-button"))
+
+    expect(screen.getByText("Confirm large import")).toBeInTheDocument()
+    expect(mutateAsync).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId("flashcards-import-confirm-large"))
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledTimes(1)
+    })
+  })
 
   it("offers undo rollback for the latest import batch", async () => {
     const mutateAsync = vi.fn().mockResolvedValue({

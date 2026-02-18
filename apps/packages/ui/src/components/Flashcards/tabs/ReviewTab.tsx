@@ -25,6 +25,8 @@ import { MarkdownWithBoundary, ReviewProgress, ReviewAnalyticsSummary, Flashcard
 import { calculateIntervals } from "../utils/calculateIntervals"
 import { formatCardType } from "../utils/model-type-labels"
 import { buildReviewUndoState } from "../utils/review-undo"
+import { getFlashcardSourceMeta } from "../utils/source-reference"
+import { useFlashcardsShortcutHintDensity } from "../hooks/useFlashcardsShortcutHintDensity"
 
 dayjs.extend(relativeTime)
 
@@ -65,6 +67,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   const [cramTag, setCramTag] = React.useState("")
   const [cramUpdatesSchedule, setCramUpdatesSchedule] = React.useState(false)
   const [cramQueueIndex, setCramQueueIndex] = React.useState(0)
+  const [shortcutHintDensity, setShortcutHintDensity] = useFlashcardsShortcutHintDensity()
 
   // Undo state - stores the last reviewed card for potential re-rating
   const [lastReviewedCard, setLastReviewedCard] = React.useState<Flashcard | null>(null)
@@ -108,6 +111,29 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   const reviewProgressTotal =
     reviewMode === "cram" ? cramQueue.length : dueCountsQuery.data?.total ?? 0
   const isCramMode = reviewMode === "cram"
+  const activeCardSource = React.useMemo(
+    () => (activeCard ? getFlashcardSourceMeta(activeCard) : null),
+    [activeCard]
+  )
+  const cycleShortcutHintDensity = React.useCallback(() => {
+    void setShortcutHintDensity((prev) => {
+      if (prev === "expanded") return "compact"
+      if (prev === "compact") return "hidden"
+      return "expanded"
+    })
+  }, [setShortcutHintDensity])
+  const shortcutHintToggleLabel =
+    shortcutHintDensity === "expanded"
+      ? t("option:flashcards.shortcutHintsCompact", {
+          defaultValue: "Compact hints"
+        })
+      : shortcutHintDensity === "compact"
+        ? t("option:flashcards.shortcutHintsHide", {
+            defaultValue: "Hide hints"
+          })
+        : t("option:flashcards.shortcutHintsShow", {
+            defaultValue: "Show hints"
+          })
 
   // Get deck name for progress display
   const currentDeckName = React.useMemo(() => {
@@ -619,15 +645,43 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                 {activeCard.tags?.map((tag) => (
                   <Tag key={tag}>{tag}</Tag>
                 ))}
-                <Button
-                  size="small"
-                  onClick={handleOpenEdit}
-                  data-testid="flashcards-review-edit-card"
-                >
-                  {t("option:flashcards.editCardAction", {
-                    defaultValue: "Edit"
+                {activeCardSource && (
+                  <Tag
+                    color={
+                      activeCardSource.unavailable
+                        ? "default"
+                        : activeCardSource.type === "media"
+                          ? "blue"
+                          : activeCardSource.type === "note"
+                            ? "gold"
+                            : "green"
+                    }
+                  >
+                    {activeCardSource.href ? (
+                      <a href={activeCardSource.href}>{activeCardSource.label}</a>
+                    ) : (
+                      activeCardSource.label
+                    )}
+                  </Tag>
+                )}
+                <Tooltip
+                  title={t("option:flashcards.shortcutEditTooltip", {
+                    defaultValue: "Shortcut: E"
                   })}
-                </Button>
+                >
+                  <Button
+                    size="small"
+                    onClick={handleOpenEdit}
+                    data-testid="flashcards-review-edit-card"
+                    aria-label={t("option:flashcards.shortcutEditAria", {
+                      defaultValue: "Edit card (E)"
+                    })}
+                  >
+                    {t("option:flashcards.editCardAction", {
+                      defaultValue: "Edit"
+                    })}
+                  </Button>
+                </Tooltip>
               </div>
             </div>
 
@@ -671,25 +725,59 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
             <div className="mt-2 flex flex-col gap-3">
               {!showAnswer ? (
                 <div className="flex flex-col gap-2">
-                  <Button
-                    type="primary"
-                    onClick={handleShowAnswer}
-                    data-testid="flashcards-review-show-answer"
+                  <Tooltip
+                    title={t("option:flashcards.shortcutFlipTooltip", {
+                      defaultValue: "Shortcut: Space"
+                    })}
                   >
-                    {t("option:flashcards.showAnswer", {
-                      defaultValue: "Show Answer"
-                    })}
-                  </Button>
-                  <Text type="secondary" className="text-xs">
-                    {t("option:flashcards.shortcutFlip", {
-                      defaultValue: "Press Space to flip"
-                    })}
-                  </Text>
-                  <Text type="secondary" className="text-xs">
-                    {t("option:flashcards.shortcutEdit", {
-                      defaultValue: "Press E to edit this card"
-                    })}
-                  </Text>
+                    <Button
+                      type="primary"
+                      onClick={handleShowAnswer}
+                      data-testid="flashcards-review-show-answer"
+                      aria-label={t("option:flashcards.shortcutFlipAria", {
+                        defaultValue: "Show answer (Space)"
+                      })}
+                    >
+                      {t("option:flashcards.showAnswer", {
+                        defaultValue: "Show Answer"
+                      })}
+                    </Button>
+                  </Tooltip>
+                  <div
+                    className="flex flex-wrap items-center gap-2"
+                    data-testid="flashcards-review-shortcut-chips-question"
+                  >
+                    {shortcutHintDensity === "expanded" && (
+                      <>
+                        <Tag className="!m-0">
+                          {t("option:flashcards.shortcutChipFlip", {
+                            defaultValue: "Space Flip"
+                          })}
+                        </Tag>
+                        <Tag className="!m-0">
+                          {t("option:flashcards.shortcutChipEdit", {
+                            defaultValue: "E Edit"
+                          })}
+                        </Tag>
+                      </>
+                    )}
+                    {shortcutHintDensity === "compact" && (
+                      <Tag className="!m-0">
+                        {t("option:flashcards.shortcutChipReviewCompactQuestion", {
+                          defaultValue: "Space / E"
+                        })}
+                      </Tag>
+                    )}
+                    <Button
+                      type="link"
+                      size="small"
+                      className="!h-auto !px-0 text-xs"
+                      onClick={cycleShortcutHintDensity}
+                      data-testid="flashcards-review-shortcut-hints-toggle"
+                    >
+                      {shortcutHintToggleLabel}
+                    </Button>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -780,16 +868,46 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                         </Text>
                       </div>
                     )}
-                    <Text type="secondary" className="text-xs">
-                      {t("option:flashcards.shortcutRate", {
-                        defaultValue: "Press 1-4 to rate"
-                      })}
-                    </Text>
-                    <Text type="secondary" className="text-xs">
-                      {t("option:flashcards.shortcutEdit", {
-                        defaultValue: "Press E to edit this card"
-                      })}
-                    </Text>
+                    <div
+                      className="flex flex-wrap items-center gap-2"
+                      data-testid="flashcards-review-shortcut-chips-answer"
+                    >
+                      {shortcutHintDensity === "expanded" && (
+                        <>
+                          <Tag className="!m-0">
+                            {t("option:flashcards.shortcutChipRate", {
+                              defaultValue: "1-4 Rate"
+                            })}
+                          </Tag>
+                          <Tag className="!m-0">
+                            {t("option:flashcards.shortcutChipEdit", {
+                              defaultValue: "E Edit"
+                            })}
+                          </Tag>
+                          <Tag className="!m-0">
+                            {t("option:flashcards.shortcutChipUndo", {
+                              defaultValue: "Ctrl+Z Re-rate"
+                            })}
+                          </Tag>
+                        </>
+                      )}
+                      {shortcutHintDensity === "compact" && (
+                        <Tag className="!m-0">
+                          {t("option:flashcards.shortcutChipReviewCompactAnswer", {
+                            defaultValue: "1-4 / E / Ctrl+Z"
+                          })}
+                        </Tag>
+                      )}
+                      <Button
+                        type="link"
+                        size="small"
+                        className="!h-auto !px-0 text-xs"
+                        onClick={cycleShortcutHintDensity}
+                        data-testid="flashcards-review-shortcut-hints-toggle"
+                      >
+                        {shortcutHintToggleLabel}
+                      </Button>
+                    </div>
 
                     {/* Re-rate button - appears briefly after rating with countdown */}
                     {showUndoButton && lastReviewedCard && (

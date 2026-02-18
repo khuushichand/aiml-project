@@ -25,9 +25,20 @@ This index maps the 15 notes-page category plans into one delivery sequence alig
   - Decision record: `DECISION_RECORD_notes_version_history_stage3_2026_02_18.md`
 - `IMPLEMENTATION_PLAN_notes_page_08_ai_powered_features_2026_02_18.md`
   - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+  - Stage 4: Complete
+- `IMPLEMENTATION_PLAN_notes_page_04_search_filtering_2026_02_18.md`
+  - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+  - Decision record: `DECISION_RECORD_notes_search_in_note_scope_stage3_2026_02_18.md`
+- `IMPLEMENTATION_PLAN_notes_page_01_notes_list_navigation_2026_02_18.md`
+  - Stage 1: Complete
   - Stage 2: Not Started
   - Stage 3: Not Started
   - Stage 4: Not Started
+  - Stage 5: Not Started
 
 ## Plan Catalog
 

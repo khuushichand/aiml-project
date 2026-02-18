@@ -1,6 +1,8 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ManageTab } from "../ManageTab"
+import { clearSetting } from "@/services/settings/registry"
+import { FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING } from "@/services/settings/ui-settings"
 import type { Flashcard } from "@/services/flashcards"
 import {
   useDecksQuery,
@@ -126,12 +128,15 @@ const sampleCard: Flashcard = {
   client_id: "test",
   version: 4,
   model_type: "basic",
-  reverse: false
+  reverse: false,
+  source_ref_type: "media",
+  source_ref_id: "42"
 }
 
 describe("ManageTab scheduling metadata visibility", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks()
+    await clearSetting(FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING)
     vi.mocked(useDecksQuery).mockReturnValue({
       data: [
         {
@@ -181,6 +186,8 @@ describe("ManageTab scheduling metadata visibility", () => {
     expect(screen.getByText("Next gap 5d")).toBeInTheDocument()
     expect(screen.getByText("Recall runs 3")).toBeInTheDocument()
     expect(screen.getByText("Relearns 1")).toBeInTheDocument()
+    expect(screen.getByText("Media #42")).toBeInTheDocument()
+    expect(screen.getByTestId("flashcards-manage-shortcut-chips")).toBeInTheDocument()
   }, 15000)
 
   it("shows scheduling metadata in expanded list rows", () => {
@@ -198,5 +205,73 @@ describe("ManageTab scheduling metadata visibility", () => {
     expect(screen.getByText("Next review gap 5d")).toBeInTheDocument()
     expect(screen.getByText("Recall runs 3")).toBeInTheDocument()
     expect(screen.getByText("Relearns 1")).toBeInTheDocument()
+    expect(screen.getByText("Media #42")).toBeInTheDocument()
+  }, 15000)
+
+  it("does not render source badges for manual cards", () => {
+    vi.mocked(useManageQuery).mockReturnValue({
+      data: {
+        items: [
+          {
+            ...sampleCard,
+            uuid: "card-manual-1",
+            source_ref_type: "manual",
+            source_ref_id: null
+          }
+        ],
+        count: 1,
+        total: 1
+      },
+      isFetching: false
+    } as any)
+
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive={false}
+      />
+    )
+
+    expect(screen.queryByText(/Media #/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Note #/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Message #/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/source unavailable/i)).not.toBeInTheDocument()
+  }, 15000)
+
+  it("cycles shortcut hint density and persists the choice", async () => {
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive={false}
+      />
+    )
+
+    const toggle = screen.getByTestId("flashcards-manage-shortcut-hints-toggle")
+    expect(toggle).toHaveTextContent("Compact hints")
+    expect(screen.getByText("J/K Navigate")).toBeInTheDocument()
+
+    fireEvent.click(toggle)
+    await waitFor(() => {
+      expect(screen.getByText("J/K · Enter · Space · Delete")).toBeInTheDocument()
+    })
+    expect(screen.getByTestId("flashcards-manage-shortcut-hints-toggle")).toHaveTextContent(
+      "Hide hints"
+    )
+
+    fireEvent.click(screen.getByTestId("flashcards-manage-shortcut-hints-toggle"))
+    await waitFor(() => {
+      expect(screen.getByTestId("flashcards-manage-shortcut-hints-toggle")).toHaveTextContent(
+        "Show hints"
+      )
+    })
+    expect(screen.queryByText("J/K · Enter · Space · Delete")).not.toBeInTheDocument()
+    expect(screen.queryByText("J/K Navigate")).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(window.localStorage.getItem("tldw:flashcards:shortcutHintDensity")).toBe(
+        "hidden"
+      )
+    })
   }, 15000)
 })

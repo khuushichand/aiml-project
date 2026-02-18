@@ -44,6 +44,7 @@ import {
 import { useServerOnline } from "@/hooks/useServerOnline"
 import type { AnswerValue, QuestionPublic, Quiz, QuizAnswer, QuizAttempt } from "@/services/quizzes"
 import type { TakeTabNavigationSource } from "../navigation"
+import { TAKE_QUIZ_LIST_PREFS_KEY } from "../stateKeys"
 
 interface TakeQuizTabProps {
   onNavigateToGenerate: () => void
@@ -51,12 +52,14 @@ interface TakeQuizTabProps {
   startQuizId?: number | null
   highlightQuizId?: number | null
   navigationSource?: TakeTabNavigationSource | null
+  externalSearchQuery?: string | null
+  externalSearchToken?: number | null
   onStartHandled?: () => void
   onHighlightHandled?: () => void
+  onExternalSearchHandled?: () => void
 }
 
 const DEFAULT_PASSING_SCORE = 70
-const TAKE_QUIZ_LIST_PREFS_KEY = "quiz-take-list-prefs-v1"
 type QuizSortKey = "name_asc" | "date_desc" | "questions_desc"
 
 export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
@@ -65,8 +68,11 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
   startQuizId,
   highlightQuizId,
   navigationSource,
+  externalSearchQuery,
+  externalSearchToken,
   onStartHandled,
-  onHighlightHandled
+  onHighlightHandled,
+  onExternalSearchHandled
 }) => {
   const { t } = useTranslation(["option", "common"])
   const [messageApi, contextHolder] = message.useMessage()
@@ -132,6 +138,8 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
   const [highlightedQuizId, setHighlightedQuizId] = React.useState<number | null>(null)
   const lastAutoStartId = React.useRef<number | null>(null)
   const lastAutoHighlightId = React.useRef<number | null>(null)
+  const lastExternalSearchToken = React.useRef<number | null>(null)
+  const searchInputRef = React.useRef<any>(null)
   const hasInitializedSearchRef = React.useRef(false)
   const questionRefs = React.useRef<Map<number, HTMLDivElement | null>>(new Map())
   const isOnline = useServerOnline()
@@ -394,6 +402,19 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     setPage(1)
     onHighlightHandled?.()
   }, [highlightQuizId, onHighlightHandled])
+
+  React.useEffect(() => {
+    if (externalSearchToken == null || lastExternalSearchToken.current === externalSearchToken) {
+      return
+    }
+    lastExternalSearchToken.current = externalSearchToken
+    setSearchQuery(externalSearchQuery ?? "")
+    setPage(1)
+    window.setTimeout(() => {
+      searchInputRef.current?.focus?.()
+    }, 0)
+    onExternalSearchHandled?.()
+  }, [externalSearchQuery, externalSearchToken, onExternalSearchHandled])
 
   React.useEffect(() => {
     if (highlightedQuizId == null) return
@@ -1192,6 +1213,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
 
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <Input.Search
+          ref={searchInputRef}
           allowClear
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}

@@ -6,6 +6,7 @@ import {
   Card,
   Form,
   Input,
+  Modal,
   Select,
   Space,
   Switch,
@@ -20,6 +21,7 @@ import {
   useImportFlashcardsMutation,
   useImportLimitsQuery
 } from "../hooks"
+import { getUtf8ByteLength } from "../utils/field-byte-limit"
 import { FileDropZone } from "../components"
 import {
   deleteFlashcard,
@@ -39,8 +41,12 @@ interface ImportedCardReference {
   uuid: string
 }
 
+type SupportedDelimiter = "\t" | "," | ";" | "|"
+
 const IMPORT_UNDO_SECONDS = 30
 const IMPORT_UNDO_CHUNK_SIZE = 50
+const LARGE_IMPORT_CONFIRM_THRESHOLD_ROWS = 300
+const SUPPORTED_DELIMITERS: SupportedDelimiter[] = ["\t", ",", ";", "|"]
 
 const normalizeImportErrors = (value: unknown): FlashcardsImportError[] => {
   if (!Array.isArray(value)) return []
@@ -78,6 +84,56 @@ const normalizeImportedItems = (value: unknown): ImportedCardReference[] => {
     .filter((item): item is ImportedCardReference => item !== null)
 }
 
+const countDelimiterOccurrences = (line: string, delimiter: string): number =>
+  Math.max(0, line.split(delimiter).length - 1)
+
+const normalizeHeaderToken = (value: string): string =>
+  value.trim().toLowerCase().replace(/\s+/g, "").replace(/_/g, "")
+
+const getImportErrorGuidance = (
+  error: string,
+  t: (key: string, options?: Record<string, unknown>) => string
+): string | null => {
+  const normalized = error.toLowerCase()
+  if (normalized.includes("missing required field: front")) {
+    return t("option:flashcards.importGuidanceMissingFront", {
+      defaultValue:
+        "Add a non-empty Front value on that row, or map your header to the Front column."
+    })
+  }
+  if (normalized.includes("missing required field: deck")) {
+    return t("option:flashcards.importGuidanceMissingDeck", {
+      defaultValue:
+        "Add a Deck value, or remove/rename the Deck header if your file uses a different column."
+    })
+  }
+  if (normalized.includes("invalid cloze")) {
+    return t("option:flashcards.importGuidanceInvalidCloze", {
+      defaultValue:
+        "For cloze rows, include at least one deletion in Front like {{c1::answer}}."
+    })
+  }
+  if (normalized.includes("field too long")) {
+    return t("option:flashcards.importGuidanceFieldTooLong", {
+      defaultValue:
+        "Shorten the referenced field so its UTF-8 size fits your configured field byte limit."
+    })
+  }
+  if (normalized.includes("line too long")) {
+    return t("option:flashcards.importGuidanceLineTooLong", {
+      defaultValue:
+        "Check delimiter choice and line breaks; malformed rows can produce oversized lines."
+    })
+  }
+  if (normalized.includes("maximum import")) {
+    return t("option:flashcards.importGuidanceMaxLimit", {
+      defaultValue:
+        "Split this file into smaller batches, then import each batch separately."
+    })
+  }
+  return null
+}
+
 /**
  * Import panel for CSV/TSV flashcard import.
  */
@@ -93,6 +149,79 @@ const ImportPanel: React.FC = () => {
   const [delimiter, setDelimiter] = React.useState<string>("\t")
   const [hasHeader, setHasHeader] = React.useState<boolean>(true)
   const [lastResult, setLastResult] = React.useState<ImportResultSummary | null>(null)
+  const [confirmLargeImportOpen, setConfirmLargeImportOpen] = React.useState(false)
+
+  const selectedDelimiterLabel = React.useMemo(() => {
+    if (delimiter === "\t") {
+      return t("option:flashcards.tab", { defaultValue: "Tab" })
+    }
+    if (delimiter === ",") {
+      return t("option:flashcards.commaShort", { defaultValue: "Comma" })
+    }
+    if (delimiter === ";") {
+      return t("option:flashcards.semicolonShort", { defaultValue: "Semicolon" })
+    }
+    return t("option:flashcards.pipeShort", { defaultValue: "Pipe" })
+  }, [delimiter, t])
+
+  const importPreflightWarning = React.useMemo(() => {
+    const sampleLine = content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0)
+    if (!sampleLine) return null
+
+    const selectedCount = countDelimiterOccurrences(sampleLine, delimiter)
+    const bestAlternative = SUPPORTED_DELIMITERS
+      .filter((candidate) => candidate !== delimiter)
+      .map((candidate) => ({
+        delimiter: candidate,
+        count: countDelimiterOccurrences(sampleLine, candidate)
+      }))
+      .sort((a, b) => b.count - a.count)[0]
+
+    if (selectedCount === 0 && bestAlternative && bestAlternative.count > 0) {
+      const suggested =
+        bestAlternative.delimiter === "\t"
+          ? t("option:flashcards.tab", { defaultValue: "Tab" })
+          : bestAlternative.delimiter === ","
+            ? t("option:flashcards.commaShort", { defaultValue: "Comma" })
+            : bestAlternative.delimiter === ";"
+              ? t("option:flashcards.semicolonShort", { defaultValue: "Semicolon" })
+              : t("option:flashcards.pipeShort", { defaultValue: "Pipe" })
+      return t("option:flashcards.importPreflightDelimiterMismatch", {
+        defaultValue:
+          "Selected delimiter ({{selected}}) may be incorrect. This sample looks {{suggested}}-delimited.",
+        selected: selectedDelimiterLabel,
+        suggested
+      })
+    }
+
+    if (hasHeader && selectedCount > 0) {
+      const tokens = sampleLine.split(delimiter).map(normalizeHeaderToken)
+      const hasFront = tokens.some((token) => token === "front" || token === "question")
+      const hasBack = tokens.some((token) => token === "back" || token === "answer")
+      if (!hasFront || !hasBack) {
+        return t("option:flashcards.importPreflightHeaderColumns", {
+          defaultValue:
+            "Header is missing Front/Back columns. Accepted names include Deck, Front, Back, Tags, Notes, Extra, Model_Type, Reverse, Is_Cloze.",
+        })
+      }
+    }
+
+    return null
+  }, [content, delimiter, hasHeader, selectedDelimiterLabel, t])
+
+  const nonEmptyLineCount = React.useMemo(
+    () =>
+      content
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0).length,
+    [content]
+  )
+  const estimatedImportRows = Math.max(0, nonEmptyLineCount - (hasHeader ? 1 : 0))
+  const importPayloadBytes = getUtf8ByteLength(content)
 
   const invalidateFlashcardQueries = React.useCallback(async () => {
     await qc.invalidateQueries({
@@ -103,7 +232,7 @@ const ImportPanel: React.FC = () => {
     })
   }, [qc])
 
-  const handleImport = async () => {
+  const performImport = React.useCallback(async () => {
     try {
       const result = await importMutation.mutateAsync({
         content,
@@ -186,7 +315,20 @@ const ImportPanel: React.FC = () => {
       const errorMessage = e instanceof Error ? e.message : "Import failed"
       message.error(errorMessage)
     }
-  }
+  }, [content, delimiter, hasHeader, importMutation, invalidateFlashcardQueries, message, showUndoNotification, t])
+
+  const handleImport = React.useCallback(() => {
+    if (estimatedImportRows >= LARGE_IMPORT_CONFIRM_THRESHOLD_ROWS) {
+      setConfirmLargeImportOpen(true)
+      return
+    }
+    void performImport()
+  }, [estimatedImportRows, performImport])
+
+  const handleConfirmLargeImport = React.useCallback(() => {
+    setConfirmLargeImportOpen(false)
+    void performImport()
+  }, [performImport])
 
   return (
     <div className="flex flex-col gap-3">
@@ -200,6 +342,18 @@ const ImportPanel: React.FC = () => {
           Deck	Front	Back	Tags	Notes
           My deck	What is a closure?	A function with preserved outer scope.	javascript; fundamentals	Lecture 3
         </pre>
+        <Text type="secondary" className="mt-2 block text-xs">
+          {t("option:flashcards.importColumnsHelp", {
+            defaultValue:
+              "Accepted headers: Deck, Front, Back, Tags, Notes, Extra, Model_Type, Reverse, Is_Cloze, Deck_Description."
+          })}
+        </Text>
+        <Text type="secondary" className="block text-xs">
+          {t("option:flashcards.importTagsHelp", {
+            defaultValue:
+              "Tags can be comma- or space-delimited. Without headers, default order is Deck, Front, Back, Tags, Notes."
+          })}
+        </Text>
       </div>
 
       {/* File drop zone */}
@@ -270,6 +424,17 @@ const ImportPanel: React.FC = () => {
           })}
         </Text>
       )}
+      {importPreflightWarning && (
+        <Alert
+          type="warning"
+          showIcon
+          data-testid="flashcards-import-preflight-warning"
+          title={t("option:flashcards.importPreflightTitle", {
+            defaultValue: "Check import format before continuing"
+          })}
+          description={importPreflightWarning}
+        />
+      )}
       <Button
         type="primary"
         onClick={handleImport}
@@ -279,6 +444,55 @@ const ImportPanel: React.FC = () => {
       >
         {t("option:flashcards.importButton", { defaultValue: "Import" })}
       </Button>
+      <Modal
+        open={confirmLargeImportOpen}
+        onCancel={() => setConfirmLargeImportOpen(false)}
+        title={t("option:flashcards.largeImportConfirmTitle", {
+          defaultValue: "Confirm large import"
+        })}
+        footer={[
+          <Button key="cancel" onClick={() => setConfirmLargeImportOpen(false)}>
+            {t("common:cancel", { defaultValue: "Cancel" })}
+          </Button>,
+          <Button
+            key="confirm"
+            type="primary"
+            onClick={handleConfirmLargeImport}
+            data-testid="flashcards-import-confirm-large"
+          >
+            {t("option:flashcards.largeImportConfirmAction", {
+              defaultValue: "Import now"
+            })}
+          </Button>
+        ]}
+      >
+        <div className="space-y-1 text-sm">
+          <Text>
+            {t("option:flashcards.largeImportConfirmRows", {
+              defaultValue: "You are about to import approximately {{count}} rows.",
+              count: estimatedImportRows
+            })}
+          </Text>
+          <Text type="secondary" className="block">
+            {t("option:flashcards.largeImportConfirmImpact", {
+              defaultValue:
+                "This may create many cards at once. Review delimiter/header settings before confirming."
+            })}
+          </Text>
+          <Text type="secondary" className="block">
+            {t("option:flashcards.largeImportConfirmSummary", {
+              defaultValue:
+                "Summary: {{rows}} non-empty lines, delimiter {{delimiter}}, header {{header}}, payload {{bytes}} bytes.",
+              rows: nonEmptyLineCount,
+              delimiter: selectedDelimiterLabel,
+              header: hasHeader
+                ? t("common:yes", { defaultValue: "Yes" })
+                : t("common:no", { defaultValue: "No" }),
+              bytes: importPayloadBytes
+            })}
+          </Text>
+        </div>
+      </Modal>
 
       {lastResult && (
         <Alert
@@ -314,10 +528,18 @@ const ImportPanel: React.FC = () => {
                         : t("option:flashcards.importErrorRowUnknown", {
                             defaultValue: "Unknown row"
                           })
+                  const guidance = getImportErrorGuidance(err.error, t)
                   return (
-                    <div key={`${location}-${idx}`}>
-                      <Text code>{location}</Text>
-                      <Text className="ml-2">{err.error}</Text>
+                    <div key={`${location}-${idx}`} className="space-y-1">
+                      <div>
+                        <Text code>{location}</Text>
+                        <Text className="ml-2">{err.error}</Text>
+                      </div>
+                      {guidance && (
+                        <Text type="secondary" className="block pl-1">
+                          {guidance}
+                        </Text>
+                      )}
                     </div>
                   )
                 })}

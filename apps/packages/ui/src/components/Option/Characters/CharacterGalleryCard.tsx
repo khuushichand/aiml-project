@@ -1,4 +1,4 @@
-import { MessageCircle } from "lucide-react"
+import { MessageCircle, Star, StarOff } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useMemo, useState, useEffect } from "react"
 import { Tooltip } from "antd"
@@ -45,13 +45,17 @@ interface CharacterGalleryCardProps {
   onClick: () => void
   conversationCount?: number
   density?: GalleryCardDensity
+  isFavorite?: boolean
+  onToggleFavorite?: () => void
 }
 
 export function CharacterGalleryCard({
   character,
   onClick,
   conversationCount,
-  density = "rich"
+  density = "rich",
+  isFavorite = false,
+  onToggleFavorite
 }: CharacterGalleryCardProps) {
   const { t } = useTranslation(["settings"])
   const [avatarImgError, setAvatarImgError] = useState(false)
@@ -80,12 +84,19 @@ export function CharacterGalleryCard({
   )
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       className={`group flex w-full flex-col items-center gap-2 rounded-lg border border-border bg-surface p-3 transition-all motion-reduce:transition-none hover:border-primary/30 hover:bg-surface2 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-bg ${
         isCompact ? "min-h-[168px]" : "min-h-[220px]"
       }`}
       onClick={onClick}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault()
+          onClick()
+        }
+      }}
       aria-label={t("settings:manageCharacters.gallery.clickToPreview", {
         defaultValue: "Click to preview {{name}}",
         name: displayName
@@ -96,6 +107,49 @@ export function CharacterGalleryCard({
         className={`relative aspect-square w-full ${
           isCompact ? "max-w-[102px]" : "max-w-[120px]"
         }`}>
+        {onToggleFavorite && (
+          <Tooltip
+            title={
+              isFavorite
+                ? t("settings:manageCharacters.actions.removeFavorite", {
+                    defaultValue: "Remove favorite"
+                  })
+                : t("settings:manageCharacters.actions.addFavorite", {
+                    defaultValue: "Add favorite"
+                  })
+            }
+          >
+            <button
+              type="button"
+              className={`absolute -right-1 -top-1 z-10 inline-flex items-center justify-center rounded-full border bg-surface p-1 shadow-sm transition ${
+                isFavorite
+                  ? "border-primary/40 text-primary"
+                  : "border-border text-text-muted hover:text-primary"
+              }`}
+              aria-label={t(
+                isFavorite
+                  ? "settings:manageCharacters.aria.removeFavorite"
+                  : "settings:manageCharacters.aria.addFavorite",
+                {
+                  defaultValue: isFavorite
+                    ? "Remove {{name}} from favorites"
+                    : "Add {{name}} to favorites",
+                  name: displayName
+                }
+              )}
+              onClick={(event) => {
+                event.stopPropagation()
+                onToggleFavorite()
+              }}
+            >
+              {isFavorite ? (
+                <Star className="h-3.5 w-3.5 fill-current" />
+              ) : (
+                <StarOff className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </Tooltip>
+        )}
         {avatarSrc && !avatarImgError ? (
           <img
             src={avatarSrc}
@@ -160,6 +214,6 @@ export function CharacterGalleryCard({
           ))}
         </div>
       )}
-    </button>
+    </div>
   )
 }

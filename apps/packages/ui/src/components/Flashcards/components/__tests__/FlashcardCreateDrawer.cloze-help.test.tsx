@@ -153,5 +153,63 @@ describe("FlashcardCreateDrawer cloze helper and validation", () => {
       ).toBeInTheDocument()
     })
     expect(mutateAsync).not.toHaveBeenCalled()
-  })
+  }, 15000)
+
+  it("shows byte-limit guidance and blocks over-limit front content", async () => {
+    render(
+      <FlashcardCreateDrawer
+        open
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+      />
+    )
+
+    fireEvent.change(screen.getByPlaceholderText("Question or prompt..."), {
+      target: { value: "a".repeat(8192) }
+    })
+    fireEvent.change(screen.getByPlaceholderText("Answer..."), {
+      target: { value: "Back content" }
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText("Front: 8192 / 8192 bytes. Approaching the 8192-byte limit.")).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByPlaceholderText("Question or prompt..."), {
+      target: { value: "a".repeat(8193) }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create" }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Front must be 8192 bytes or fewer.")).toBeInTheDocument()
+    })
+    expect(mutateAsync).not.toHaveBeenCalled()
+  }, 15000)
+
+  it("does not require cloze syntax for basic cards", async () => {
+    mutateAsync.mockResolvedValueOnce({
+      uuid: "card-1"
+    })
+
+    render(
+      <FlashcardCreateDrawer
+        open
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+      />
+    )
+
+    fireEvent.change(screen.getByPlaceholderText("Question or prompt..."), {
+      target: { value: "Plain front content without cloze syntax" }
+    })
+    fireEvent.change(screen.getByPlaceholderText("Answer..."), {
+      target: { value: "Plain back content" }
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }))
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledTimes(1)
+    })
+  }, 15000)
 })

@@ -23,7 +23,7 @@ Finding IDs: `1.1` through `1.11`
 - Component tests for summary rendering across empty, query-only, keyword-only, and combined states.
 - Accessibility test validating summary announcement and control labeling.
 - Integration test ensuring filter summary reflects server response counts.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Sorting, Preview, and Pagination Controls
 **Goal**: Improve note triage speed in medium and large collections.
@@ -77,3 +77,14 @@ Finding IDs: `1.1` through `1.11`
 
 - Sorting and list counts should align with search/filter API semantics in Plan 04.
 - Bulk operations should reuse export and delete safeguards from Plans 07 and 13.
+
+## Progress Notes (2026-02-18)
+
+- Completed Stage 1 in `/apps/packages/ui/src/components/Notes/NotesManagerPage.tsx`:
+  - Preserved explicit full-text search copy (`Search titles & content...`) and helper semantics.
+  - Added an active-filter summary live region showing `Showing X of Y notes` plus current query/keyword criteria.
+  - Preserved and accessibility-labeled the existing clear-filters action.
+- Added Stage 1 verification in `/apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage13.navigation-filter-summary.test.tsx`:
+  - Covers query-only, keyword-only, and combined filter summary rendering.
+  - Verifies live-region semantics (`role="status"`, `aria-live="polite"`).
+  - Verifies clear-filter control labeling and count consistency from search API totals.

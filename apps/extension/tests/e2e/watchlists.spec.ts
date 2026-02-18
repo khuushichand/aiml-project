@@ -3,15 +3,26 @@ import path from 'path'
 
 import { launchWithExtension } from './utils/extension'
 
+const serverUrl = process.env.TLDW_E2E_SERVER_URL || 'http://127.0.0.1:8000'
+const apiKey = process.env.TLDW_E2E_API_KEY || ''
+const seededWatchlistsConfig = {
+  __tldw_first_run_complete: true,
+  __tldw_allow_offline: true,
+  tldwConfig: {
+    serverUrl,
+    authMode: 'single-user',
+    ...(apiKey ? { apiKey } : {})
+  }
+}
+
 test.describe('Watchlists playground smoke', () => {
+  test.describe.configure({ mode: 'serial' })
+
   test('loads tabs and key flows', async () => {
     test.setTimeout(120_000)
     const extPath = path.resolve('build/chrome-mv3')
     const { context, page: basePage, optionsUrl } = await launchWithExtension(extPath, {
-      seedConfig: {
-        __tldw_first_run_complete: true,
-        __tldw_allow_offline: true
-      }
+      seedConfig: seededWatchlistsConfig
     })
 
     await context.addInitScript(() => {
@@ -424,17 +435,36 @@ test.describe('Watchlists playground smoke', () => {
     await page.getByRole('tab', { name: 'Feeds' }).click()
     await expect(page.getByText('Tech Daily')).toBeVisible()
 
-    await page.locator('.ant-table-tbody .ant-checkbox-wrapper').first().click()
-    await expect(page.getByText('1 selected')).toBeVisible()
+    const firstRowCheckbox = page
+      .locator('.ant-table input.ant-checkbox-input:not([aria-label="Select all"])')
+      .first()
+    await firstRowCheckbox.check({ force: true })
+    await expect(firstRowCheckbox).toBeChecked()
+    const selectionBar = page
+      .locator('div')
+      .filter({ has: page.getByRole('button', { name: 'Disable' }) })
+      .filter({ hasText: '1 selected' })
+      .first()
+    await expect(selectionBar).toBeVisible()
 
-    await page.getByRole('button', { name: 'Disable' }).click()
-    await expect(page.getByText('Disable selected feeds?')).toBeVisible()
-    await expect(page.getByText('1 selected (1 active, 0 inactive). 1 will change state.')).toBeVisible()
+    await selectionBar.getByRole('button', { name: 'Disable' }).click()
+    const disableConfirm = page.locator('.ant-modal-confirm').filter({
+      hasText: 'Disable selected feeds?'
+    })
+    await expect(disableConfirm).toBeVisible()
+    await expect(disableConfirm).toContainText(
+      '1 selected (1 active, 0 inactive). 1 will change state.'
+    )
     await page.getByRole('button', { name: 'Cancel' }).click()
 
-    await page.getByRole('button', { name: 'Delete' }).first().click()
-    await expect(page.getByText('Delete 1 selected feeds?')).toBeVisible()
-    await expect(page.getByText('This will delete 1 feeds (1 active, 0 inactive).')).toBeVisible()
+    await selectionBar.getByRole('button', { name: 'Delete' }).click()
+    const deleteConfirm = page.locator('.ant-modal-confirm').filter({
+      hasText: 'Delete 1 selected feeds?'
+    })
+    await expect(deleteConfirm).toBeVisible()
+    await expect(deleteConfirm).toContainText(
+      'This will delete 1 feeds (1 active, 0 inactive).'
+    )
     await page.getByRole('button', { name: 'Cancel' }).click()
 
     await page.getByRole('button', { name: 'Clear' }).click()
@@ -448,12 +478,10 @@ test.describe('Watchlists playground smoke', () => {
   })
 
   test('overview health and failed-run notification click-through', async () => {
+    test.setTimeout(120_000)
     const extPath = path.resolve('build/chrome-mv3')
     const { context, page: basePage, optionsUrl } = await launchWithExtension(extPath, {
-      seedConfig: {
-        __tldw_first_run_complete: true,
-        __tldw_allow_offline: true
-      }
+      seedConfig: seededWatchlistsConfig
     })
 
     await context.addInitScript(() => {
@@ -667,12 +695,10 @@ test.describe('Watchlists playground smoke', () => {
   })
 
   test('overview quick setup callout drives first tab transition', async () => {
+    test.setTimeout(120_000)
     const extPath = path.resolve('build/chrome-mv3')
     const { context, page: basePage, optionsUrl } = await launchWithExtension(extPath, {
-      seedConfig: {
-        __tldw_first_run_complete: true,
-        __tldw_allow_offline: true
-      }
+      seedConfig: seededWatchlistsConfig
     })
 
     await context.addInitScript(() => {

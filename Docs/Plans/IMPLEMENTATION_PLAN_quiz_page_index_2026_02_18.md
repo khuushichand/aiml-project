@@ -55,4 +55,6 @@ This index maps all 13 quiz-page category plans into one execution order to redu
 - Rank 2 (`Error Handling & Edge Cases`): complete.
 - Rank 3 (`Results & Analytics Tab`): complete.
 - Rank 4 (`Accessibility`): complete (Stages 1 through 4 complete).
-- Rank 5 (`Cross-Tab Interaction & Information Flow`): next.
+- Rank 5 (`Cross-Tab Interaction & Information Flow`): complete (Stages 1 through 3 complete).
+- Rank 6 (`Create Quiz Tab`): complete (Stages 1 through 4 complete).
+- Rank 7 (`Manage Quiz Tab`): Stage 1 and Stage 2 complete; Stage 3 next.

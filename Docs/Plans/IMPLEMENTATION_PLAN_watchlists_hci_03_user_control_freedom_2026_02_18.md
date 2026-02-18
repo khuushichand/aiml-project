@@ -34,7 +34,7 @@ Finding IDs: `H3.1` through `H3.5`
 - Integration tests for OPML dry-run result states and commit path.
 - Component tests for dependency warning dialogs.
 - E2E test for safe bulk action confirmation UX.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 3: Active Run Cancellation
 **Goal**: Let users stop mistaken or runaway runs from the UI.
@@ -58,3 +58,7 @@ Finding IDs: `H3.1` through `H3.5`
 - 2026-02-18: Implemented source delete and bulk-delete undo notifications in `SourcesTab` using a 10-second restore window and recreate-on-undo flow.
 - 2026-02-18: Implemented monitor delete undo notification in `JobsTab` using the same 10-second restore window.
 - 2026-02-18: Added bulk enable/disable undo in `SourcesTab` to restore prior active states when needed.
+- 2026-02-18: Added OPML import preflight preview (dry-run style) with duplicate/invalid counts before commit in `SourcesBulkImport`.
+- 2026-02-18: Added template delete safety check to warn when active monitors reference the template before confirming delete.
+- 2026-02-18: Added bulk action preflight confirmations (enable/disable/delete) with impact summaries in `SourcesTab`.
+- 2026-02-18: Added targeted unit tests for OPML preflight parsing, template usage detection, and bulk-action summaries.

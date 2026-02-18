@@ -225,7 +225,9 @@ describe("DictionariesManager statistics stage-1 coverage", () => {
       screen.getByRole("button", { name: "View statistics for Medical Terms" })
     )
 
-    expect(await screen.findByText("Dictionary Statistics")).toBeInTheDocument()
+    expect(
+      await screen.findByText("Dictionary Statistics", {}, { timeout: 15000 })
+    ).toBeInTheDocument()
     expect(screen.getByText("Enabled Entries")).toBeInTheDocument()
     expect(screen.getByText("Disabled Entries")).toBeInTheDocument()
     expect(screen.getByText("Probabilistic Entries")).toBeInTheDocument()

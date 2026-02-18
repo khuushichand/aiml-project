@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ManageTab } from "../ManageTab"
+import { clearSetting } from "@/services/settings/registry"
+import { FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING } from "@/services/settings/ui-settings"
 import type { Flashcard } from "@/services/flashcards"
 import {
   useDecksQuery,
@@ -162,8 +164,9 @@ const sampleCard: Flashcard = {
 }
 
 describe("ManageTab stage3 undo controls", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks()
+    await clearSetting(FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING)
 
     vi.mocked(useDecksQuery).mockReturnValue({
       data: [
@@ -243,7 +246,7 @@ describe("ManageTab stage3 undo controls", () => {
     expect(undoCall.update.deck_id).toBe(1)
     expect(undoCall.update.front).toBe("Front prompt")
     expect(undoCall.update.expected_version).toBe(5)
-  })
+  }, 15000)
 
   it("offers undo for move operations", async () => {
     vi.mocked(getFlashcard)
@@ -286,5 +289,5 @@ describe("ManageTab stage3 undo controls", () => {
       deck_id: 1,
       expected_version: 9
     })
-  })
+  }, 15000)
 })

@@ -580,6 +580,26 @@ const CHARACTER_VERSION_DIFF_FIELD_KEYS = [
   "extensions"
 ] as const
 
+const CHARACTER_VERSION_FIELD_LABELS: Record<
+  (typeof CHARACTER_VERSION_DIFF_FIELD_KEYS)[number],
+  string
+> = {
+  name: "Name",
+  description: "Description",
+  system_prompt: "System prompt",
+  first_message: "Greeting",
+  personality: "Personality",
+  scenario: "Scenario",
+  post_history_instructions: "Post-history instructions",
+  message_example: "Message example",
+  creator_notes: "Creator notes",
+  alternate_greetings: "Alternate greetings",
+  tags: "Tags",
+  creator: "Creator",
+  character_version: "Character version",
+  extensions: "Extensions"
+}
+
 const normalizeVersionSnapshotValue = (value: unknown): string => {
   if (value === null || typeof value === "undefined") return ""
   if (typeof value === "string") return value.trim()
@@ -623,6 +643,29 @@ const resolveCharacterNumericId = (record: any): number | null => {
     return null
   }
   return parsed
+}
+
+type CharacterWorldBookLink = {
+  id: number
+  name: string
+}
+
+const normalizeCharacterWorldBookLinks = (
+  value: unknown
+): CharacterWorldBookLink[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((book: any) => {
+      const rawId = Number(book?.world_book_id ?? book?.id)
+      if (!Number.isFinite(rawId) || rawId <= 0) return null
+      const rawName = book?.world_book_name ?? book?.name
+      const name =
+        typeof rawName === "string" && rawName.trim().length > 0
+          ? rawName.trim()
+          : `World Book ${rawId}`
+      return { id: rawId, name }
+    })
+    .filter((book): book is CharacterWorldBookLink => book !== null)
 }
 
 const normalizeAlternateGreetings = (value: any): string[] => {
@@ -730,6 +773,109 @@ const readDefaultAuthorNoteFromRecord = (record: any): string => {
     }
   }
   return readDefaultAuthorNoteFromExtensions(record?.extensions)
+}
+
+const parseFavoriteValue = (value: unknown): boolean => {
+  if (typeof value === "boolean") return value
+  if (typeof value === "number") return value === 1
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    return normalized === "1" || normalized === "true"
+  }
+  return false
+}
+
+const readFavoriteFromExtensions = (extensions: unknown): boolean => {
+  const parsed = parseExtensionsObject(extensions)
+  if (!parsed) return false
+  const tldw = isPlainObject(parsed.tldw) ? parsed.tldw : undefined
+  return parseFavoriteValue(tldw?.favorite ?? parsed.favorite)
+}
+
+const readFavoriteFromRecord = (record: any): boolean =>
+  readFavoriteFromExtensions(record?.extensions)
+
+const applyFavoriteToExtensions = (
+  rawExtensions: unknown,
+  favorite: boolean
+): Record<string, any> | undefined | null => {
+  const parsed = parseExtensionsObject(rawExtensions)
+  const hadRawString =
+    typeof rawExtensions === "string" &&
+    rawExtensions.trim().length > 0 &&
+    parsed === null
+
+  if (hadRawString) {
+    return null
+  }
+
+  const next: Record<string, any> = parsed && parsed !== null ? { ...parsed } : {}
+  const tldw = isPlainObject(next.tldw) ? { ...next.tldw } : {}
+  delete next.favorite
+
+  if (favorite) {
+    tldw.favorite = true
+  } else {
+    delete tldw.favorite
+  }
+
+  if (Object.keys(tldw).length > 0) {
+    next.tldw = tldw
+  } else {
+    delete next.tldw
+  }
+
+  return Object.keys(next).length > 0 ? next : undefined
+}
+
+type CharacterWorldBookOption = {
+  id: number
+  name: string
+  enabled: boolean
+}
+
+const normalizeCharacterWorldBookIds = (value: unknown): number[] => {
+  if (!Array.isArray(value)) return []
+  const parsed = value
+    .map((entry) => {
+      const numeric = Number(entry)
+      return Number.isFinite(numeric) && numeric > 0
+        ? Math.trunc(numeric)
+        : null
+    })
+    .filter((entry): entry is number => entry !== null)
+  return Array.from(new Set(parsed))
+}
+
+const normalizeCharacterWorldBookOption = (
+  raw: any
+): CharacterWorldBookOption | null => {
+  const worldBookId = Number(raw?.id ?? raw?.world_book_id)
+  if (!Number.isFinite(worldBookId) || worldBookId <= 0) return null
+  const rawName =
+    typeof raw?.name === "string"
+      ? raw.name
+      : typeof raw?.world_book_name === "string"
+        ? raw.world_book_name
+        : ""
+  const fallbackName = `World Book ${Math.trunc(worldBookId)}`
+  return {
+    id: Math.trunc(worldBookId),
+    name: rawName.trim().length > 0 ? rawName.trim() : fallbackName,
+    enabled: raw?.enabled !== false
+  }
+}
+
+const extractCharacterWorldBookOptions = (response: any): CharacterWorldBookOption[] => {
+  const worldBooks = Array.isArray(response)
+    ? response
+    : Array.isArray(response?.world_books)
+      ? response.world_books
+      : []
+  return worldBooks
+    .map((book: any) => normalizeCharacterWorldBookOption(book))
+    .filter((book): book is CharacterWorldBookOption => book !== null)
+    .sort((a, b) => a.name.localeCompare(b.name))
 }
 
 type CharacterGenerationSettings = {
@@ -1129,6 +1275,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [editVersion, setEditVersion] = React.useState<number | null>(null)
   const [createForm] = Form.useForm()
   const [editForm] = Form.useForm()
+  const editWorldBooksInitializedRef = React.useRef(false)
   const [, setSelectedCharacter] = useSelectedCharacter<any>(null)
   const [defaultCharacterSelection, setDefaultCharacterSelection] =
     useStorage<any | null>(
@@ -1149,6 +1296,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [matchAllTags, setMatchAllTags] = React.useState(false)
   const [creatorFilter, setCreatorFilter] = React.useState<string | undefined>(undefined)
   const [hasConversationsOnly, setHasConversationsOnly] = React.useState(false)
+  const [favoritesOnly, setFavoritesOnly] = React.useState(false)
   const [showEditAdvanced, setShowEditAdvanced] = React.useState(false)
   const [showCreateAdvanced, setShowCreateAdvanced] = React.useState(false)
   const [createAdvancedSections, setCreateAdvancedSections] = React.useState<AdvancedSectionState>(
@@ -1170,6 +1318,15 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [quickChatSessionId, setQuickChatSessionId] = React.useState<string | null>(null)
   const [quickChatSending, setQuickChatSending] = React.useState(false)
   const [quickChatError, setQuickChatError] = React.useState<string | null>(null)
+  const [selectedWorldBookIdForAttach, setSelectedWorldBookIdForAttach] =
+    React.useState<number | null>(null)
+  const [worldBookAttachmentBusy, setWorldBookAttachmentBusy] =
+    React.useState(false)
+  const [versionHistoryOpen, setVersionHistoryOpen] = React.useState(false)
+  const [versionHistoryCharacter, setVersionHistoryCharacter] = React.useState<any | null>(null)
+  const [versionFrom, setVersionFrom] = React.useState<number | null>(null)
+  const [versionTo, setVersionTo] = React.useState<number | null>(null)
+  const [versionRevertTarget, setVersionRevertTarget] = React.useState<number | null>(null)
   const [createFormDirty, setCreateFormDirty] = React.useState(false)
   const [editFormDirty, setEditFormDirty] = React.useState(false)
   const [showCreateSystemPromptExample, setShowCreateSystemPromptExample] = React.useState(false)
@@ -2489,6 +2646,100 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                     )}>
                     <Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} />
                   </Form.Item>
+                  {mode === "edit" && (
+                    <div className="rounded-md border border-border/70 bg-bg/30 p-3">
+                      <div className="text-sm font-medium text-text">
+                        {t("settings:manageCharacters.worldBooks.editorTitle", {
+                          defaultValue: "World book attachments"
+                        })}
+                      </div>
+                      <p className="mt-1 text-xs text-text-muted">
+                        {t("settings:manageCharacters.worldBooks.editorDescription", {
+                          defaultValue:
+                            "Attach or detach world books used for character context injection."
+                        })}
+                      </p>
+
+                      {editCharacterNumericId == null ? (
+                        <div className="mt-2 text-xs text-text-muted">
+                          {t("settings:manageCharacters.worldBooks.unsyncedCharacter", {
+                            defaultValue:
+                              "Save this character to the server before attaching world books."
+                          })}
+                        </div>
+                      ) : (
+                        <>
+                          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <Select
+                              className="min-w-[14rem] flex-1"
+                              value={selectedWorldBookIdForAttach ?? undefined}
+                              options={attachableWorldBookOptions}
+                              placeholder={t(
+                                "settings:manageCharacters.worldBooks.attachPlaceholder",
+                                {
+                                  defaultValue: "Select world book to attach"
+                                }
+                              )}
+                              onChange={(value) =>
+                                setSelectedWorldBookIdForAttach(
+                                  typeof value === "number" ? value : null
+                                )
+                              }
+                              loading={worldBooksLoading}
+                            />
+                            <Button
+                              type="primary"
+                              size="small"
+                              onClick={() => {
+                                void handleAttachWorldBookToEditingCharacter()
+                              }}
+                              loading={worldBookAttachmentBusy}
+                              disabled={selectedWorldBookIdForAttach == null}
+                            >
+                              {t("settings:manageCharacters.worldBooks.attach", {
+                                defaultValue: "Attach"
+                              })}
+                            </Button>
+                          </div>
+
+                          <div className="mt-3">
+                            {editAttachedWorldBooksLoading ? (
+                              <div className="text-xs text-text-muted">
+                                {t("settings:manageCharacters.worldBooks.loading", {
+                                  defaultValue:
+                                    "Loading attached world books..."
+                                })}
+                              </div>
+                            ) : editAttachedWorldBooks.length === 0 ? (
+                              <div className="text-xs text-text-muted">
+                                {t("settings:manageCharacters.worldBooks.empty", {
+                                  defaultValue:
+                                    "No world books attached to this character."
+                                })}
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap gap-2">
+                                {editAttachedWorldBooks.map((worldBook) => (
+                                  <Tag
+                                    key={worldBook.id}
+                                    closable
+                                    onClose={(event) => {
+                                      event.preventDefault()
+                                      void handleDetachWorldBookFromEditingCharacter(
+                                        worldBook.id
+                                      )
+                                    }}
+                                  >
+                                    {worldBook.name}
+                                  </Tag>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                   <div className="rounded-md border border-dashed border-border px-3 py-2">
                     <p className="text-xs font-medium text-text">
                       {t("settings:manageCharacters.form.moodImages.placeholderTitle", {
@@ -2510,15 +2761,24 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       )
     },
     [
+      attachableWorldBookOptions,
       createAdvancedSections,
+      editAttachedWorldBooks,
+      editAttachedWorldBooksLoading,
+      editCharacterNumericId,
       editAdvancedSections,
       generatingField,
+      handleAttachWorldBookToEditingCharacter,
+      handleDetachWorldBookFromEditingCharacter,
       handleGenerateField,
       isGenerating,
       renderAlternateGreetingsField,
+      selectedWorldBookIdForAttach,
       showCreateAdvanced,
       showEditAdvanced,
-      t
+      t,
+      worldBookAttachmentBusy,
+      worldBooksLoading
     ]
   )
 
@@ -3107,7 +3367,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     searchTerm.trim().length > 0 ||
     (filterTags && filterTags.length > 0) ||
     !!creatorFilter ||
-    hasConversationsOnly
+    hasConversationsOnly ||
+    favoritesOnly
 
   const {
     setHistory,
@@ -3238,6 +3499,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       match_all_tags: filterTags.length > 0 ? matchAllTags : undefined,
       creator: creatorFilter || undefined,
       has_conversations: hasConversationsOnly ? true : undefined,
+      favorite_only: favoritesOnly ? true : undefined,
       include_deleted: characterListScope === "deleted" ? true : undefined,
       deleted_only: characterListScope === "deleted" ? true : undefined,
       sort_by: serverSortBy,
@@ -3250,6 +3512,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       currentPage,
       debouncedSearchTerm,
       filterTags,
+      favoritesOnly,
       hasConversationsOnly,
       matchAllTags,
       pageSize,
@@ -3289,7 +3552,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         const withConversationFilter = hasConversationsOnly
           ? filtered.filter((character) => hasInlineConversationCount(character))
           : filtered
-        const sorted = sortCharactersForWorkspace(withConversationFilter, {
+        const withFavoritesFilter = favoritesOnly
+          ? withConversationFilter.filter((character) =>
+              readFavoriteFromRecord(character)
+            )
+          : withConversationFilter
+        const sorted = sortCharactersForWorkspace(withFavoritesFilter, {
           sortBy: serverSortBy,
           sortOrder: serverSortOrder
         })
@@ -3375,6 +3643,67 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   })
 
   const {
+    data: worldBookOptions = [],
+    isFetching: worldBookOptionsLoading
+  } = useQuery<CharacterWorldBookOption[]>({
+    queryKey: ["tldw:characterFormWorldBooks"],
+    queryFn: async () => {
+      await tldwClient.initialize()
+      const response = await tldwClient.listWorldBooks(true)
+      return extractCharacterWorldBookOptions(response)
+    },
+    enabled: open || openEdit,
+    staleTime: 60 * 1000
+  })
+
+  const worldBookOptionMap = React.useMemo(() => {
+    const entries = worldBookOptions.map((worldBook) => [worldBook.id, worldBook.name] as const)
+    return new Map<number, string>(entries)
+  }, [worldBookOptions])
+
+  const editCharacterNumericId = React.useMemo(() => {
+    if (!editId) return null
+    const parsed = Number(editId)
+    if (!Number.isFinite(parsed) || parsed <= 0) return null
+    return Math.trunc(parsed)
+  }, [editId])
+
+  const {
+    data: editCharacterWorldBookLinks = [],
+    isFetching: editCharacterWorldBooksLoading
+  } = useQuery<CharacterWorldBookOption[]>({
+    queryKey: ["tldw:characterEditWorldBooks", editCharacterNumericId],
+    queryFn: async () => {
+      if (editCharacterNumericId == null) return []
+      await tldwClient.initialize()
+      const response = await tldwClient.listCharacterWorldBooks(editCharacterNumericId)
+      return extractCharacterWorldBookOptions(response)
+    },
+    enabled: openEdit && editCharacterNumericId != null,
+    staleTime: 30 * 1000
+  })
+
+  React.useEffect(() => {
+    if (!openEdit) return
+    if (editWorldBooksInitializedRef.current) return
+    if (editCharacterNumericId == null) return
+    if (editCharacterWorldBooksLoading) return
+    editWorldBooksInitializedRef.current = true
+    editForm.setFieldValue(
+      "world_book_ids",
+      normalizeCharacterWorldBookIds(
+        editCharacterWorldBookLinks.map((worldBook) => worldBook.id)
+      )
+    )
+  }, [
+    editCharacterNumericId,
+    editCharacterWorldBookLinks,
+    editCharacterWorldBooksLoading,
+    editForm,
+    openEdit
+  ])
+
+  const {
     data: previewCharacterWorldBooks = [],
     isFetching: previewCharacterWorldBooksLoading
   } = useQuery<Array<{ id: number; name: string }>>({
@@ -3402,31 +3731,293 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     staleTime: 30 * 1000
   })
 
+  const editCharacterNumericId = React.useMemo(
+    () => resolveCharacterNumericId({ id: editId }),
+    [editId]
+  )
+
+  const { data: availableWorldBooks = [], isFetching: worldBooksLoading } =
+    useQuery<Array<CharacterWorldBookLink>>({
+      queryKey: ["tldw:worldBooksForCharacterEditor"],
+      queryFn: async () => {
+        await tldwClient.initialize()
+        const books = await tldwClient.listWorldBooks()
+        return normalizeCharacterWorldBookLinks(books).sort((a, b) =>
+          a.name.localeCompare(b.name)
+        )
+      },
+      enabled: openEdit && editCharacterNumericId != null,
+      staleTime: 30 * 1000
+    })
+
+  const {
+    data: editAttachedWorldBooks = [],
+    isFetching: editAttachedWorldBooksLoading,
+    refetch: refetchEditAttachedWorldBooks
+  } = useQuery<Array<CharacterWorldBookLink>>({
+    queryKey: ["tldw:characterEditWorldBooks", editCharacterNumericId],
+    queryFn: async () => {
+      if (editCharacterNumericId == null) return []
+      await tldwClient.initialize()
+      const linkedBooks = await tldwClient.listCharacterWorldBooks(
+        editCharacterNumericId
+      )
+      return normalizeCharacterWorldBookLinks(linkedBooks).sort((a, b) =>
+        a.name.localeCompare(b.name)
+      )
+    },
+    enabled: openEdit && editCharacterNumericId != null,
+    staleTime: 15 * 1000
+  })
+
+  const attachableWorldBookOptions = React.useMemo(() => {
+    const attachedIds = new Set(editAttachedWorldBooks.map((book) => book.id))
+    return availableWorldBooks
+      .filter((book) => !attachedIds.has(book.id))
+      .map((book) => ({
+        value: book.id,
+        label: book.name
+      }))
+  }, [availableWorldBooks, editAttachedWorldBooks])
+
+  const handleAttachWorldBookToEditingCharacter = React.useCallback(async () => {
+    if (editCharacterNumericId == null || selectedWorldBookIdForAttach == null) {
+      return
+    }
+    setWorldBookAttachmentBusy(true)
+    try {
+      await tldwClient.attachWorldBookToCharacter(
+        editCharacterNumericId,
+        selectedWorldBookIdForAttach
+      )
+      setSelectedWorldBookIdForAttach(null)
+      await refetchEditAttachedWorldBooks()
+      notification.success({
+        message: t("settings:manageCharacters.worldBooks.attachSuccess", {
+          defaultValue: "World book attached"
+        })
+      })
+    } catch (error: any) {
+      notification.error({
+        message: t("settings:manageCharacters.worldBooks.attachError", {
+          defaultValue: "Couldn't attach world book"
+        }),
+        description:
+          error?.message ||
+          t("settings:manageCharacters.notification.someError", {
+            defaultValue: "Something went wrong. Please try again later"
+          })
+      })
+    } finally {
+      setWorldBookAttachmentBusy(false)
+    }
+  }, [
+    editCharacterNumericId,
+    notification,
+    refetchEditAttachedWorldBooks,
+    selectedWorldBookIdForAttach,
+    t
+  ])
+
+  const handleDetachWorldBookFromEditingCharacter = React.useCallback(
+    async (worldBookId: number) => {
+      if (editCharacterNumericId == null) return
+      setWorldBookAttachmentBusy(true)
+      try {
+        await tldwClient.detachWorldBookFromCharacter(
+          editCharacterNumericId,
+          worldBookId
+        )
+        await refetchEditAttachedWorldBooks()
+        notification.success({
+          message: t("settings:manageCharacters.worldBooks.detachSuccess", {
+            defaultValue: "World book detached"
+          })
+        })
+      } catch (error: any) {
+        notification.error({
+          message: t("settings:manageCharacters.worldBooks.detachError", {
+            defaultValue: "Couldn't detach world book"
+          }),
+          description:
+            error?.message ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+      } finally {
+        setWorldBookAttachmentBusy(false)
+      }
+    },
+    [editCharacterNumericId, notification, refetchEditAttachedWorldBooks, t]
+  )
+
+  React.useEffect(() => {
+    if (!openEdit) {
+      setSelectedWorldBookIdForAttach(null)
+      setWorldBookAttachmentBusy(false)
+    }
+  }, [openEdit])
+
+  const versionHistoryCharacterId = React.useMemo(
+    () => resolveCharacterNumericId(versionHistoryCharacter),
+    [versionHistoryCharacter]
+  )
+  const versionHistoryCharacterName = React.useMemo(
+    () =>
+      versionHistoryCharacter?.name ||
+      versionHistoryCharacter?.title ||
+      versionHistoryCharacter?.slug ||
+      t("settings:manageCharacters.preview.untitled", {
+        defaultValue: "Untitled character"
+      }),
+    [t, versionHistoryCharacter]
+  )
+
+  const {
+    data: versionHistoryResponse,
+    isPending: versionHistoryLoading,
+    isFetching: versionHistoryFetching
+  } = useQuery({
+    queryKey: ["tldw:characterVersions", versionHistoryCharacterId],
+    queryFn: async () => {
+      if (versionHistoryCharacterId == null) {
+        return { items: [], total: 0 }
+      }
+      await tldwClient.initialize()
+      return await tldwClient.listCharacterVersions(versionHistoryCharacterId, {
+        limit: 100
+      })
+    },
+    enabled: versionHistoryOpen && versionHistoryCharacterId != null,
+    staleTime: 15 * 1000
+  })
+
+  const versionHistoryItems = React.useMemo(
+    () =>
+      Array.isArray(versionHistoryResponse?.items)
+        ? versionHistoryResponse.items
+        : ([] as CharacterVersionEntry[]),
+    [versionHistoryResponse?.items]
+  )
+  const versionSelectOptions = React.useMemo(
+    () =>
+      versionHistoryItems.map((entry) => ({
+        value: entry.version,
+        label: `v${entry.version} • ${
+          entry.timestamp
+            ? new Date(entry.timestamp).toLocaleString()
+            : t("settings:manageCharacters.versionHistory.unknownTimestamp", {
+                defaultValue: "Unknown time"
+              })
+        }`
+      })),
+    [t, versionHistoryItems]
+  )
+
+  React.useEffect(() => {
+    if (!versionHistoryOpen) return
+    if (versionHistoryItems.length === 0) {
+      setVersionFrom(null)
+      setVersionTo(null)
+      setVersionRevertTarget(null)
+      return
+    }
+
+    const knownVersions = new Set(versionHistoryItems.map((entry) => entry.version))
+    const latestVersion = versionHistoryItems[0]?.version ?? null
+    const baselineVersion =
+      versionHistoryItems.find((entry) => entry.version !== latestVersion)?.version ??
+      latestVersion
+
+    if (latestVersion != null && (versionTo == null || !knownVersions.has(versionTo))) {
+      setVersionTo(latestVersion)
+    }
+    if (baselineVersion != null && (versionFrom == null || !knownVersions.has(versionFrom))) {
+      setVersionFrom(baselineVersion)
+    }
+    if (
+      baselineVersion != null &&
+      (versionRevertTarget == null || !knownVersions.has(versionRevertTarget))
+    ) {
+      setVersionRevertTarget(baselineVersion)
+    }
+  }, [
+    versionFrom,
+    versionHistoryItems,
+    versionHistoryOpen,
+    versionRevertTarget,
+    versionTo
+  ])
+
+  const {
+    data: versionDiffResponse,
+    isPending: versionDiffLoading,
+    isFetching: versionDiffFetching
+  } = useQuery({
+    queryKey: [
+      "tldw:characterVersionDiff",
+      versionHistoryCharacterId,
+      versionFrom,
+      versionTo
+    ],
+    queryFn: async () => {
+      if (
+        versionHistoryCharacterId == null ||
+        versionFrom == null ||
+        versionTo == null
+      ) {
+        return null
+      }
+      await tldwClient.initialize()
+      return await tldwClient.diffCharacterVersions(
+        versionHistoryCharacterId,
+        versionFrom,
+        versionTo
+      )
+    },
+    enabled:
+      versionHistoryOpen &&
+      versionHistoryCharacterId != null &&
+      versionFrom != null &&
+      versionTo != null &&
+      versionFrom !== versionTo,
+    staleTime: 15 * 1000
+  })
+
   const data = React.useMemo(
     () => {
-      if (!isLegacyCharacterListResponse || !hasConversationsOnly) {
-        return rawData
+      const withConversationFilter =
+        !isLegacyCharacterListResponse || !hasConversationsOnly
+          ? rawData
+          : rawData.filter((record: any) => {
+              const charId = String(record?.id || record?.slug || record?.name || "")
+              const mappedCount =
+                typeof conversationCounts?.[charId] === "number"
+                  ? conversationCounts[charId]
+                  : undefined
+              const inlineCountCandidates = [
+                record?.conversation_count,
+                record?.conversationCount,
+                record?.chat_count,
+                record?.chatCount
+              ]
+              const inlineCount = inlineCountCandidates.find(
+                (value) => typeof value === "number" && Number.isFinite(value)
+              ) as number | undefined
+              return (mappedCount ?? inlineCount ?? 0) > 0
+            })
+
+      if (!favoritesOnly) {
+        return withConversationFilter
       }
-      return rawData.filter((record: any) => {
-        const charId = String(record?.id || record?.slug || record?.name || "")
-        const mappedCount =
-          typeof conversationCounts?.[charId] === "number"
-            ? conversationCounts[charId]
-            : undefined
-        const inlineCountCandidates = [
-          record?.conversation_count,
-          record?.conversationCount,
-          record?.chat_count,
-          record?.chatCount
-        ]
-        const inlineCount = inlineCountCandidates.find(
-          (value) => typeof value === "number" && Number.isFinite(value)
-        ) as number | undefined
-        return (mappedCount ?? inlineCount ?? 0) > 0
-      })
+      return withConversationFilter.filter((record: any) =>
+        readFavoriteFromRecord(record)
+      )
     },
     [
       conversationCounts,
+      favoritesOnly,
       hasConversationsOnly,
       isLegacyCharacterListResponse,
       rawData
@@ -3529,11 +4120,68 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     return creators.map((creator) => ({ label: creator, value: creator }))
   }, [data])
 
+  const syncCharacterWorldBookSelection = React.useCallback(
+    async (characterId: number, nextWorldBookIds: number[]) => {
+      await tldwClient.initialize()
+      const currentLinks = await tldwClient.listCharacterWorldBooks(characterId)
+      const currentIds = normalizeCharacterWorldBookIds(
+        Array.isArray(currentLinks)
+          ? currentLinks.map((book: any) => book?.world_book_id ?? book?.id)
+          : []
+      )
+      const desiredIds = normalizeCharacterWorldBookIds(nextWorldBookIds)
+      const currentSet = new Set(currentIds)
+      const desiredSet = new Set(desiredIds)
+      const toAttach = desiredIds.filter((id) => !currentSet.has(id))
+      const toDetach = currentIds.filter((id) => !desiredSet.has(id))
+
+      if (toAttach.length > 0) {
+        await Promise.all(
+          toAttach.map((worldBookId) =>
+            tldwClient.attachWorldBookToCharacter(characterId, worldBookId)
+          )
+        )
+      }
+
+      if (toDetach.length > 0) {
+        await Promise.all(
+          toDetach.map((worldBookId) =>
+            tldwClient.detachWorldBookFromCharacter(characterId, worldBookId)
+          )
+        )
+      }
+    },
+    []
+  )
+
   const { mutate: createCharacter, isPending: creating } = useMutation({
-    mutationFn: async (values: any) =>
-      tldwClient.createCharacter(buildCharacterPayload(values)),
+    mutationFn: async (values: any) => {
+      const createdCharacter = await tldwClient.createCharacter(
+        buildCharacterPayload(values)
+      )
+      const selectedWorldBookIds = normalizeCharacterWorldBookIds(
+        values?.world_book_ids
+      )
+      if (selectedWorldBookIds.length === 0) {
+        return createdCharacter
+      }
+
+      const characterId = resolveCharacterNumericId(createdCharacter)
+      if (characterId == null) {
+        throw new Error(
+          t("settings:manageCharacters.form.worldBooks.unsupportedCharacter", {
+            defaultValue:
+              "World books can only be attached to saved server characters."
+          })
+        )
+      }
+
+      await syncCharacterWorldBookSelection(characterId, selectedWorldBookIds)
+      return createdCharacter
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+      qc.invalidateQueries({ queryKey: ["tldw:characterPreviewWorldBooks"] })
       setOpen(false)
       createForm.resetFields()
       clearCreateDraft()
@@ -3637,17 +4285,42 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       if (!editId) {
         throw new Error("No character selected for editing")
       }
-      return await tldwClient.updateCharacter(
+      const updatedCharacter = await tldwClient.updateCharacter(
         editId,
         buildCharacterPayload(values),
         editVersion ?? undefined
       )
+      if (typeof values?.world_book_ids !== "undefined") {
+        const selectedWorldBookIds = normalizeCharacterWorldBookIds(
+          values?.world_book_ids
+        )
+        const editCharacterId = Number(editId)
+        if (Number.isFinite(editCharacterId) && editCharacterId > 0) {
+          await syncCharacterWorldBookSelection(
+            Math.trunc(editCharacterId),
+            selectedWorldBookIds
+          )
+        } else if (selectedWorldBookIds.length > 0) {
+          throw new Error(
+            t("settings:manageCharacters.form.worldBooks.unsupportedCharacter", {
+              defaultValue:
+                "World books can only be attached to saved server characters."
+            })
+          )
+        }
+      }
+      return updatedCharacter
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+      qc.invalidateQueries({ queryKey: ["tldw:characterPreviewWorldBooks"] })
+      qc.invalidateQueries({
+        queryKey: ["tldw:characterEditWorldBooks", editCharacterNumericId]
+      })
       setOpenEdit(false)
       editForm.resetFields()
       setEditId(null)
+      editWorldBooksInitializedRef.current = false
       clearEditDraft()
       setShowEditSystemPromptExample(false)
       notification.success({
@@ -3791,6 +4464,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     currentPage,
     debouncedSearchTerm,
     filterTags,
+    favoritesOnly,
     hasConversationsOnly,
     matchAllTags,
     pageSize,
@@ -4321,6 +4995,51 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }
   })
 
+  const { mutate: revertCharacterVersion, isPending: revertingCharacterVersion } = useMutation({
+    mutationFn: async ({
+      characterId,
+      targetVersion
+    }: {
+      characterId: number
+      targetVersion: number
+    }) => tldwClient.revertCharacter(characterId, targetVersion),
+    onSuccess: (updatedCharacter: any, variables) => {
+      qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+      qc.invalidateQueries({
+        queryKey: ["tldw:characterVersions", variables.characterId]
+      })
+      const updatedVersion = Number(updatedCharacter?.version)
+      if (Number.isFinite(updatedVersion) && updatedVersion > 0) {
+        setVersionTo(updatedVersion)
+      }
+      notification.success({
+        message: t("settings:manageCharacters.versionHistory.revertSuccess", {
+          defaultValue: "Character reverted"
+        }),
+        description: t(
+          "settings:manageCharacters.versionHistory.revertSuccessDescription",
+          {
+            defaultValue:
+              "Restored version {{target}} and created a new revision.",
+            target: variables.targetVersion
+          }
+        )
+      })
+    },
+    onError: (error: any) => {
+      notification.error({
+        message: t("settings:manageCharacters.versionHistory.revertError", {
+          defaultValue: "Failed to revert character"
+        }),
+        description:
+          error?.message ||
+          t("settings:manageCharacters.notification.someError", {
+            defaultValue: "Something went wrong. Please try again later"
+          })
+      })
+    }
+  })
+
   const [exporting, setExporting] = React.useState<string | null>(null)
   const handleExport = React.useCallback(async (record: any, format: 'json' | 'png' = 'json') => {
     const id = record.id || record.slug || record.name
@@ -4455,6 +5174,71 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       })
     }
   }, [notification, setDefaultCharacterSelection, t])
+
+  const isCharacterFavoriteRecord = React.useCallback(
+    (record: any) => readFavoriteFromRecord(record),
+    []
+  )
+
+  const handleToggleFavorite = React.useCallback(
+    async (record: any) => {
+      const id = String(record?.id || record?.slug || record?.name || "")
+      if (!id) return
+
+      const nextFavorite = !isCharacterFavoriteRecord(record)
+      const nextExtensions = applyFavoriteToExtensions(
+        record?.extensions,
+        nextFavorite
+      )
+      if (nextExtensions === null) {
+        notification.warning({
+          message: t("settings:manageCharacters.notification.favoriteInvalidExtensions", {
+            defaultValue: "Couldn't update favorite"
+          }),
+          description: t(
+            "settings:manageCharacters.notification.favoriteInvalidExtensionsDesc",
+            {
+              defaultValue:
+                "This character has invalid extensions JSON. Fix the extensions field before toggling favorite."
+            }
+          )
+        })
+        return
+      }
+
+      try {
+        await tldwClient.updateCharacter(
+          id,
+          { extensions: nextExtensions ?? {} },
+          record?.version
+        )
+        qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+        setPreviewCharacter((current) => {
+          if (!current) return current
+          const currentId = String(
+            current?.id || current?.slug || current?.name || ""
+          )
+          if (currentId !== id) return current
+          return {
+            ...current,
+            extensions: nextExtensions ?? {}
+          }
+        })
+      } catch (error: any) {
+        notification.error({
+          message: t("settings:manageCharacters.notification.error", {
+            defaultValue: "Error"
+          }),
+          description:
+            error?.message ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+      }
+    },
+    [isCharacterFavoriteRecord, notification, qc, t]
+  )
 
   const openQuickChat = React.useCallback((record: any) => {
     const characterSelection = buildCharacterSelectionPayload(record)
@@ -4674,6 +5458,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     const promptPreset = readPromptPresetFromExtensions(record.extensions)
     const defaultAuthorNote = readDefaultAuthorNoteFromRecord(record)
     const generationSettings = readGenerationSettingsFromRecord(record)
+    editWorldBooksInitializedRef.current = false
     editForm.setFieldsValue({
       name: record.name,
       description: record.description,
@@ -4701,7 +5486,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       generation_top_p: generationSettings.top_p,
       generation_repetition_penalty: generationSettings.repetition_penalty,
       generation_stop_strings: generationSettings.stop?.join("\n") || "",
-      extensions: extensionsValue
+      extensions: extensionsValue,
+      world_book_ids: []
     })
     setShowEditAdvanced(hasAdvancedData(record, extensionsValue))
     setOpenEdit(true)
@@ -4745,7 +5531,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       generation_top_p: generationSettings.top_p,
       generation_repetition_penalty: generationSettings.repetition_penalty,
       generation_stop_strings: generationSettings.stop?.join("\n") || "",
-      extensions: extensionsValue
+      extensions: extensionsValue,
+      world_book_ids: []
     })
     setShowCreateAdvanced(hasAdvancedData(record, extensionsValue))
     setOpen(true)
@@ -4824,6 +5611,33 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       }
     })
   }, [deleteCharacter, notification, t, qc, pendingDelete, restoreCharacter])
+
+  const openVersionHistory = React.useCallback(
+    (record: any) => {
+      const numericId = resolveCharacterNumericId(record)
+      if (numericId == null) {
+        notification.warning({
+          message: t("settings:manageCharacters.versionHistory.unavailable", {
+            defaultValue: "Version history unavailable"
+          }),
+          description: t(
+            "settings:manageCharacters.versionHistory.unavailableDescription",
+            {
+              defaultValue:
+                "Version history is available only for saved server characters."
+            }
+          )
+        })
+        return
+      }
+      setVersionHistoryCharacter(record)
+      setVersionFrom(null)
+      setVersionTo(null)
+      setVersionRevertTarget(null)
+      setVersionHistoryOpen(true)
+    },
+    [notification, t]
+  )
 
   const handleViewConversations = React.useCallback((record: any) => {
     setConversationCharacter(record)
@@ -4999,6 +5813,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 defaultValue: "Has conversations"
               })}
             </Checkbox>
+            <Checkbox
+              checked={favoritesOnly}
+              onChange={(e) => setFavoritesOnly(e.target.checked)}>
+              {t("settings:manageCharacters.filter.favoritesOnly", {
+                defaultValue: "Favorites only"
+              })}
+            </Checkbox>
             {hasFilters && (
               <Button
                 size="small"
@@ -5008,6 +5829,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   setMatchAllTags(false)
                   setCreatorFilter(undefined)
                   setHasConversationsOnly(false)
+                  setFavoritesOnly(false)
                 }}>
                 {t("settings:manageCharacters.filter.clear", {
                   defaultValue: "Clear filters"
@@ -5283,6 +6105,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                     setMatchAllTags(false)
                     setCreatorFilter(undefined)
                     setHasConversationsOnly(false)
+                    setFavoritesOnly(false)
                     refetch()
                   }}>
                   {t("settings:manageCharacters.filter.clear", {
@@ -5324,6 +6147,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   <span className="inline-flex items-center gap-1 rounded bg-surface2 px-2 py-0.5">
                     {t("settings:manageCharacters.filter.activeHasConversations", {
                       defaultValue: "Has conversations"
+                    })}
+                  </span>
+                )}
+                {favoritesOnly && (
+                  <span className="inline-flex items-center gap-1 rounded bg-surface2 px-2 py-0.5">
+                    {t("settings:manageCharacters.filter.activeFavoritesOnly", {
+                      defaultValue: "Favorites only"
                     })}
                   </span>
                 )}
@@ -5814,6 +6644,18 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                     defaultValue: "Export"
                   }
                 )
+                const addFavoriteLabel = t(
+                  "settings:manageCharacters.actions.addFavorite",
+                  {
+                    defaultValue: "Add favorite"
+                  }
+                )
+                const removeFavoriteLabel = t(
+                  "settings:manageCharacters.actions.removeFavorite",
+                  {
+                    defaultValue: "Remove favorite"
+                  }
+                )
                 const restoreLabel = t(
                   "settings:manageCharacters.actions.restore",
                   {
@@ -5822,6 +6664,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 )
                 const name = record?.name || record?.title || record?.slug || ""
                 const isDefaultCharacter = isDefaultCharacterRecord(record)
+                const isFavorite = isCharacterFavoriteRecord(record)
 
                 if (characterListScope === "deleted") {
                   return (
@@ -5920,6 +6763,39 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         </span>
                       </button>
                     </Tooltip>
+                    <Tooltip
+                      title={isFavorite ? removeFavoriteLabel : addFavoriteLabel}>
+                      <button
+                        type="button"
+                        className={`inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 transition motion-reduce:transition-none focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg ${
+                          isFavorite
+                            ? "text-primary hover:border-primary/30 hover:bg-primary/10"
+                            : "text-text-muted hover:border-border hover:bg-surface2"
+                        }`}
+                        aria-label={t(
+                          isFavorite
+                            ? "settings:manageCharacters.aria.removeFavorite"
+                            : "settings:manageCharacters.aria.addFavorite",
+                          {
+                            defaultValue: isFavorite
+                              ? "Remove {{name}} from favorites"
+                              : "Add {{name}} to favorites",
+                            name
+                          }
+                        )}
+                        onClick={() => {
+                          void handleToggleFavorite(record)
+                        }}>
+                        {isFavorite ? (
+                          <Star className="w-4 h-4 fill-current" />
+                        ) : (
+                          <StarOff className="w-4 h-4" />
+                        )}
+                        <span className="hidden sm:inline text-xs font-medium">
+                          {isFavorite ? removeFavoriteLabel : addFavoriteLabel}
+                        </span>
+                      </button>
+                    </Tooltip>
                     {/* Overflow: View Conversations, Duplicate, Export */}
                     <Dropdown
                       menu={{
@@ -5954,6 +6830,17 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                               setChatsError(null)
                               setConversationsOpen(true)
                             }
+                          },
+                          {
+                            key: "version-history",
+                            icon: <Clock3 className="w-4 h-4" />,
+                            label: t(
+                              "settings:manageCharacters.actions.versionHistory",
+                              {
+                                defaultValue: "Version history"
+                              }
+                            ),
+                            onClick: () => openVersionHistory(record)
                           },
                           {
                             key: 'duplicate',
@@ -6039,6 +6926,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   character={character}
                   onClick={() => setPreviewCharacter(character)}
                   conversationCount={conversationCounts?.[charId]}
+                  isFavorite={isCharacterFavoriteRecord(character)}
+                  onToggleFavorite={() => {
+                    void handleToggleFavorite(character)
+                  }}
                   density={galleryDensity}
                 />
               )
@@ -6120,6 +7011,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         onViewConversations={() => {
           if (previewCharacter) {
             handleViewConversations(previewCharacter)
+            setPreviewCharacter(null)
+          }
+        }}
+        onViewVersionHistory={() => {
+          if (previewCharacter) {
+            openVersionHistory(previewCharacter)
             setPreviewCharacter(null)
           }
         }}
@@ -6841,6 +7738,36 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             defaultValue: "Update the character's name, behavior, and other settings."
           })}
         </p>
+        {!!editId && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface2/40 px-3 py-2">
+            <span className="text-xs text-text-muted">
+              {t("settings:manageCharacters.versionHistory.inlineHint", {
+                defaultValue:
+                  "Inspect revision metadata, compare fields, or restore an earlier version."
+              })}
+            </span>
+            <Button
+              size="small"
+              icon={<Clock3 className="w-4 h-4" />}
+              onClick={() => {
+                const existingRecord =
+                  (Array.isArray(data) ? data : []).find((character: any) => {
+                    const candidate = String(
+                      character?.id || character?.slug || character?.name || ""
+                    )
+                    return candidate === String(editId)
+                  }) ?? {
+                    id: editId,
+                    name: editForm.getFieldValue("name")
+                  }
+                openVersionHistory(existingRecord)
+              }}>
+              {t("settings:manageCharacters.actions.versionHistory", {
+                defaultValue: "Version history"
+              })}
+            </Button>
+          </div>
+        )}
 
         {/* Draft Recovery Banner for Edit Form (H4) */}
         {hasEditDraft && editDraftData && (
@@ -6922,6 +7849,356 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           setGenerationPreviewField(null)
         }}
       />
+
+      <Modal
+        title={t("settings:manageCharacters.versionHistory.title", {
+          defaultValue: "Version history: {{name}}",
+          name: versionHistoryCharacterName
+        })}
+        open={versionHistoryOpen}
+        onCancel={() => {
+          setVersionHistoryOpen(false)
+          setVersionHistoryCharacter(null)
+          setVersionFrom(null)
+          setVersionTo(null)
+          setVersionRevertTarget(null)
+        }}
+        footer={null}
+        width={920}
+        destroyOnHidden
+        rootClassName="characters-motion-modal">
+        <div className="space-y-4">
+          <p className="text-sm text-text-muted">
+            {t("settings:manageCharacters.versionHistory.description", {
+              defaultValue:
+                "Review revision metadata, compare field-level changes, and restore earlier versions safely."
+            })}
+          </p>
+
+          {(versionHistoryLoading || versionHistoryFetching) && (
+            <Skeleton active paragraph={{ rows: 6 }} />
+          )}
+
+          {!versionHistoryLoading &&
+            !versionHistoryFetching &&
+            versionHistoryItems.length === 0 && (
+              <Alert
+                type="info"
+                showIcon
+                message={t("settings:manageCharacters.versionHistory.empty", {
+                  defaultValue: "No version snapshots available yet."
+                })}
+              />
+            )}
+
+          {!versionHistoryLoading &&
+            !versionHistoryFetching &&
+            versionHistoryItems.length > 0 && (
+              <div className="grid gap-4 md:grid-cols-[280px_minmax(0,1fr)]">
+                <div className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-wide text-text-subtle">
+                    {t("settings:manageCharacters.versionHistory.timeline", {
+                      defaultValue: "Timeline"
+                    })}
+                  </div>
+                  <div className="max-h-[26rem] overflow-y-auto rounded-md border border-border bg-surface2/40 p-2">
+                    <div className="space-y-2">
+                      {versionHistoryItems.map((entry) => {
+                        const isFrom = entry.version === versionFrom
+                        const isTo = entry.version === versionTo
+                        const timestampLabel = entry.timestamp
+                          ? new Date(entry.timestamp).toLocaleString()
+                          : t(
+                              "settings:manageCharacters.versionHistory.unknownTimestamp",
+                              { defaultValue: "Unknown time" }
+                            )
+                        return (
+                          <button
+                            key={`${entry.change_id}-${entry.version}`}
+                            type="button"
+                            className={`w-full rounded-md border px-3 py-2 text-left transition motion-reduce:transition-none ${
+                              isTo
+                                ? "border-primary bg-primary/10"
+                                : isFrom
+                                  ? "border-warning/40 bg-warning/10"
+                                  : "border-border bg-surface hover:border-primary/40"
+                            }`}
+                            onClick={() => {
+                              setVersionTo(entry.version)
+                            }}>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-sm font-medium text-text">
+                                {`v${entry.version}`}
+                              </span>
+                              <span className="text-xs uppercase text-text-subtle">
+                                {entry.operation}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-xs text-text-muted">
+                              {timestampLabel}
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {isFrom && (
+                                <Tag color="gold">
+                                  {t(
+                                    "settings:manageCharacters.versionHistory.baseBadge",
+                                    {
+                                      defaultValue: "Base"
+                                    }
+                                  )}
+                                </Tag>
+                              )}
+                              {isTo && (
+                                <Tag color="blue">
+                                  {t(
+                                    "settings:manageCharacters.versionHistory.compareBadge",
+                                    {
+                                      defaultValue: "Compare"
+                                    }
+                                  )}
+                                </Tag>
+                              )}
+                            </div>
+                            {entry.client_id && (
+                              <div className="mt-1 text-[11px] text-text-subtle">
+                                {t(
+                                  "settings:manageCharacters.versionHistory.clientId",
+                                  {
+                                    defaultValue: "Client: {{clientId}}",
+                                    clientId: entry.client_id
+                                  }
+                                )}
+                              </div>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div>
+                      <div className="mb-1 text-xs text-text-subtle">
+                        {t("settings:manageCharacters.versionHistory.baseVersion", {
+                          defaultValue: "Base version"
+                        })}
+                      </div>
+                      <Select
+                        className="w-full"
+                        value={versionFrom ?? undefined}
+                        options={versionSelectOptions}
+                        onChange={(value) => setVersionFrom(Number(value))}
+                      />
+                    </div>
+                    <div>
+                      <div className="mb-1 text-xs text-text-subtle">
+                        {t(
+                          "settings:manageCharacters.versionHistory.compareVersion",
+                          {
+                            defaultValue: "Compare version"
+                          }
+                        )}
+                      </div>
+                      <Select
+                        className="w-full"
+                        value={versionTo ?? undefined}
+                        options={versionSelectOptions}
+                        onChange={(value) => setVersionTo(Number(value))}
+                      />
+                    </div>
+                  </div>
+
+                  {versionFrom === versionTo && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message={t("settings:manageCharacters.versionHistory.sameVersion", {
+                        defaultValue: "Select two different versions to view a diff."
+                      })}
+                    />
+                  )}
+
+                  {versionFrom !== versionTo &&
+                    (versionDiffLoading || versionDiffFetching) && (
+                      <Skeleton active paragraph={{ rows: 5 }} />
+                    )}
+
+                  {versionFrom !== versionTo &&
+                    !versionDiffLoading &&
+                    !versionDiffFetching &&
+                    !versionDiffResponse && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message={t(
+                          "settings:manageCharacters.versionHistory.diffUnavailable",
+                          {
+                            defaultValue:
+                              "Unable to load version diff. Try selecting different revisions."
+                          }
+                        )}
+                      />
+                    )}
+
+                  {versionFrom !== versionTo &&
+                    !versionDiffLoading &&
+                    !versionDiffFetching &&
+                    versionDiffResponse && (
+                      <div className="space-y-2 rounded-md border border-border bg-surface2/40 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-medium text-text">
+                            {t("settings:manageCharacters.versionHistory.diffTitle", {
+                              defaultValue: "Differences: v{{from}} -> v{{to}}",
+                              from: versionFrom,
+                              to: versionTo
+                            })}
+                          </span>
+                          <span className="text-xs text-text-subtle">
+                            {t("settings:manageCharacters.versionHistory.diffCount", {
+                              defaultValue: "{{count}} fields changed",
+                              count: versionDiffResponse.changed_count
+                            })}
+                          </span>
+                        </div>
+                        {versionDiffResponse.changed_fields.length === 0 ? (
+                          <div className="text-sm text-text-muted">
+                            {t(
+                              "settings:manageCharacters.versionHistory.noFieldChanges",
+                              {
+                                defaultValue:
+                                  "No tracked field changes were found between these versions."
+                              }
+                            )}
+                          </div>
+                        ) : (
+                          <div className="max-h-[16rem] space-y-2 overflow-y-auto pr-1">
+                            {versionDiffResponse.changed_fields.map((diffField) => {
+                              const fieldKey =
+                                diffField.field as (typeof CHARACTER_VERSION_DIFF_FIELD_KEYS)[number]
+                              const fieldLabel =
+                                CHARACTER_VERSION_FIELD_LABELS[fieldKey] || diffField.field
+                              const hasValueChange =
+                                normalizeVersionSnapshotValue(diffField.old_value) !==
+                                normalizeVersionSnapshotValue(diffField.new_value)
+                              if (!hasValueChange) return null
+                              return (
+                                <div
+                                  key={`${diffField.field}-${versionFrom}-${versionTo}`}
+                                  className="rounded-md border border-border bg-surface p-2">
+                                  <div className="mb-2 text-sm font-medium text-text">
+                                    {fieldLabel}
+                                  </div>
+                                  <div className="grid gap-2 sm:grid-cols-2">
+                                    <div>
+                                      <div className="mb-1 text-xs uppercase text-text-subtle">
+                                        {t(
+                                          "settings:manageCharacters.versionHistory.beforeLabel",
+                                          { defaultValue: "Before" }
+                                        )}
+                                      </div>
+                                      <pre className="max-h-24 overflow-auto whitespace-pre-wrap rounded bg-surface2 px-2 py-1 text-xs text-text-muted">
+                                        {formatVersionSnapshotValue(diffField.old_value)}
+                                      </pre>
+                                    </div>
+                                    <div>
+                                      <div className="mb-1 text-xs uppercase text-text-subtle">
+                                        {t(
+                                          "settings:manageCharacters.versionHistory.afterLabel",
+                                          { defaultValue: "After" }
+                                        )}
+                                      </div>
+                                      <pre className="max-h-24 overflow-auto whitespace-pre-wrap rounded bg-surface2 px-2 py-1 text-xs text-text-muted">
+                                        {formatVersionSnapshotValue(diffField.new_value)}
+                                      </pre>
+                                    </div>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                  <div className="space-y-2 rounded-md border border-border bg-surface2/40 p-3">
+                    <div className="text-sm font-medium text-text">
+                      {t("settings:manageCharacters.versionHistory.restoreTitle", {
+                        defaultValue: "Restore a previous version"
+                      })}
+                    </div>
+                    <div className="flex flex-wrap items-end gap-2">
+                      <div className="min-w-[180px] flex-1">
+                        <div className="mb-1 text-xs text-text-subtle">
+                          {t(
+                            "settings:manageCharacters.versionHistory.restoreVersion",
+                            { defaultValue: "Version to restore" }
+                          )}
+                        </div>
+                        <Select
+                          className="w-full"
+                          value={versionRevertTarget ?? undefined}
+                          options={versionSelectOptions}
+                          onChange={(value) =>
+                            setVersionRevertTarget(Number(value))
+                          }
+                        />
+                      </div>
+                      <Button
+                        danger
+                        type="primary"
+                        loading={revertingCharacterVersion}
+                        disabled={
+                          versionHistoryCharacterId == null ||
+                          versionRevertTarget == null
+                        }
+                        onClick={async () => {
+                          if (
+                            versionHistoryCharacterId == null ||
+                            versionRevertTarget == null
+                          ) {
+                            return
+                          }
+                          const ok = await confirmDanger({
+                            title: t("common:confirmTitle", {
+                              defaultValue: "Please confirm"
+                            }),
+                            content: t(
+                              "settings:manageCharacters.versionHistory.revertConfirm",
+                              {
+                                defaultValue:
+                                  "Restore version {{version}}? This creates a new latest version.",
+                                version: versionRevertTarget
+                              }
+                            ),
+                            okText: t(
+                              "settings:manageCharacters.versionHistory.revertAction",
+                              {
+                                defaultValue: "Revert to selected version"
+                              }
+                            ),
+                            cancelText: t("common:cancel", {
+                              defaultValue: "Cancel"
+                            })
+                          })
+                          if (!ok) return
+                          revertCharacterVersion({
+                            characterId: versionHistoryCharacterId,
+                            targetVersion: versionRevertTarget
+                          })
+                        }}>
+                        {t("settings:manageCharacters.versionHistory.revertAction", {
+                          defaultValue: "Revert to selected version"
+                        })}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+        </div>
+      </Modal>
 
       <Modal
         title={t("settings:manageCharacters.tags.manageTitle", {

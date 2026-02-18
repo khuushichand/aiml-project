@@ -18,6 +18,12 @@ import { useTranslation } from "react-i18next"
 import { useDebouncedFormField } from "../hooks"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
+import {
+  FLASHCARD_FIELD_MAX_BYTES,
+  getFlashcardFieldLimitState,
+  getUtf8ByteLength
+} from "../utils/field-byte-limit"
+import { getFlashcardSourceMeta } from "../utils/source-reference"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import type { Flashcard, FlashcardUpdate, Deck } from "@/services/flashcards"
 
@@ -64,12 +70,22 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
   const backPreview = useDebouncedFormField(form, "back")
   const extraPreview = useDebouncedFormField(form, "extra")
   const notesPreview = useDebouncedFormField(form, "notes")
+  const frontValue = Form.useWatch("front", form) as string | undefined
+  const backValue = Form.useWatch("back", form) as string | undefined
+  const frontByteLength = getUtf8ByteLength(frontValue)
+  const backByteLength = getUtf8ByteLength(backValue)
+  const frontLimitState = getFlashcardFieldLimitState(frontByteLength)
+  const backLimitState = getFlashcardFieldLimitState(backByteLength)
 
   const previewLabel = t("option:flashcards.preview", { defaultValue: "Preview" })
   const markdownSupportHint = t("option:flashcards.markdownSupportHint", {
     defaultValue: "Supports Markdown and LaTeX."
   })
   const isClozeTemplate = selectedModelType === "cloze"
+  const sourceMeta = React.useMemo(
+    () => (card ? getFlashcardSourceMeta(card) : null),
+    [card]
+  )
 
   const templateHelperText = React.useMemo(() => {
     if (selectedModelType === "basic_reverse") {
@@ -89,6 +105,36 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
         "Choose Basic for direct question and answer cards (facts, definitions, short prompts)."
     })
   }, [selectedModelType, t])
+
+  const renderByteUsageHint = React.useCallback(
+    (field: "front" | "back", byteLength: number, state: "normal" | "warning" | "over") => {
+      const fieldLabel = t(`option:flashcards.${field}`, {
+        defaultValue: field === "front" ? "Front" : "Back"
+      })
+      const usageText = t("option:flashcards.fieldByteUsage", {
+        defaultValue: "{{field}}: {{used}} / {{max}} bytes",
+        field: fieldLabel,
+        used: byteLength,
+        max: FLASHCARD_FIELD_MAX_BYTES
+      })
+      if (state === "over") {
+        return t("option:flashcards.fieldByteOverLimit", {
+          defaultValue: "{{usage}}. Exceeds limit by {{over}} bytes.",
+          usage: usageText,
+          over: byteLength - FLASHCARD_FIELD_MAX_BYTES
+        })
+      }
+      if (state === "warning") {
+        return t("option:flashcards.fieldByteNearLimit", {
+          defaultValue: "{{usage}}. Approaching the {{max}}-byte limit.",
+          usage: usageText,
+          max: FLASHCARD_FIELD_MAX_BYTES
+        })
+      }
+      return usageText
+    },
+    [t]
+  )
 
   // Count how many additional fields have values for the badge indicator
   const additionalFieldCount = React.useMemo(() => {
@@ -276,6 +322,20 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
               })}
             />
           </Form.Item>
+          {sourceMeta && (
+            <div className="-mt-2 mb-2">
+              <Text type="secondary" className="block text-[11px]">
+                {t("option:flashcards.source", { defaultValue: "Source" })}
+              </Text>
+              {sourceMeta.href ? (
+                <a href={sourceMeta.href} className="text-sm text-primary hover:underline">
+                  {sourceMeta.label}
+                </a>
+              ) : (
+                <Text className="text-sm">{sourceMeta.label}</Text>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Section: Scheduling (read-only metadata) */}
@@ -459,12 +519,35 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
                     )
                   )
                 }
-              })
+              }),
+              {
+                validator(_, value) {
+                  const byteLength = getUtf8ByteLength(String(value ?? ""))
+                  if (byteLength <= FLASHCARD_FIELD_MAX_BYTES) {
+                    return Promise.resolve()
+                  }
+                  return Promise.reject(
+                    new Error(
+                      t("option:flashcards.fieldByteValidation", {
+                        defaultValue: "{{field}} must be {{max}} bytes or fewer.",
+                        field: t("option:flashcards.front", { defaultValue: "Front" }),
+                        max: FLASHCARD_FIELD_MAX_BYTES
+                      })
+                    )
+                  )
+                }
+              }
             ]}
           >
             <Input.TextArea rows={3} />
           </Form.Item>
-          <Text type="secondary" className="block text-[11px] -mt-4 mb-3">
+          <Text
+            type={frontLimitState === "over" ? "danger" : frontLimitState === "warning" ? "warning" : "secondary"}
+            className="block text-[11px] -mt-4 mb-2"
+          >
+            {renderByteUsageHint("front", frontByteLength, frontLimitState)}
+          </Text>
+          <Text type="secondary" className="block text-[11px] mb-3">
             {markdownSupportHint}
           </Text>
           {showPreview && frontPreview && (
@@ -479,11 +562,41 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
           <Form.Item
             name="back"
             label={t("option:flashcards.back", { defaultValue: "Back" })}
-            rules={[{ required: true }]}
+            rules={[
+              {
+                required: true,
+                message: t("option:flashcards.backRequired", {
+                  defaultValue: "Back is required."
+                })
+              },
+              {
+                validator(_, value) {
+                  const byteLength = getUtf8ByteLength(String(value ?? ""))
+                  if (byteLength <= FLASHCARD_FIELD_MAX_BYTES) {
+                    return Promise.resolve()
+                  }
+                  return Promise.reject(
+                    new Error(
+                      t("option:flashcards.fieldByteValidation", {
+                        defaultValue: "{{field}} must be {{max}} bytes or fewer.",
+                        field: t("option:flashcards.back", { defaultValue: "Back" }),
+                        max: FLASHCARD_FIELD_MAX_BYTES
+                      })
+                    )
+                  )
+                }
+              }
+            ]}
           >
             <Input.TextArea rows={5} />
           </Form.Item>
-          <Text type="secondary" className="block text-[11px] -mt-4 mb-3">
+          <Text
+            type={backLimitState === "over" ? "danger" : backLimitState === "warning" ? "warning" : "secondary"}
+            className="block text-[11px] -mt-4 mb-2"
+          >
+            {renderByteUsageHint("back", backByteLength, backLimitState)}
+          </Text>
+          <Text type="secondary" className="block text-[11px] mb-3">
             {markdownSupportHint}
           </Text>
           {showPreview && backPreview && (
@@ -601,12 +714,47 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
         </Button>
       ]}
     >
-      <p>
-        {t("option:flashcards.resetSchedulingConfirmDescription", {
-          defaultValue:
-            "This will reset memory strength, next review gap, recall runs, and relearns to new-card defaults. Card content and tags will not change."
-        })}
-      </p>
+      <div className="space-y-2">
+        {card && (
+          <div className="space-y-1 text-xs">
+            <Text type="secondary" className="block">
+              {t("option:flashcards.resetSchedulingCurrentSummary", {
+                defaultValue: "Current scheduling state:"
+              })}
+            </Text>
+            <Text className="block">
+              {t("option:flashcards.resetSchedulingCurrentEf", {
+                defaultValue: "Memory strength: {{value}}",
+                value: card.ef.toFixed(2)
+              })}
+            </Text>
+            <Text className="block">
+              {t("option:flashcards.resetSchedulingCurrentInterval", {
+                defaultValue: "Next review gap: {{count}} day(s)",
+                count: Math.max(0, card.interval_days)
+              })}
+            </Text>
+            <Text className="block">
+              {t("option:flashcards.resetSchedulingCurrentRepetitions", {
+                defaultValue: "Recall runs: {{count}}",
+                count: Math.max(0, card.repetitions)
+              })}
+            </Text>
+            <Text className="block">
+              {t("option:flashcards.resetSchedulingCurrentLapses", {
+                defaultValue: "Relearns: {{count}}",
+                count: Math.max(0, card.lapses)
+              })}
+            </Text>
+          </div>
+        )}
+        <p>
+          {t("option:flashcards.resetSchedulingConfirmDescription", {
+            defaultValue:
+              "This will reset memory strength, next review gap, recall runs, and relearns to new-card defaults. Card content and tags will not change."
+          })}
+        </p>
+      </div>
     </Modal>
     </>
   )
