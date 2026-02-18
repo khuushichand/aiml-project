@@ -162,6 +162,9 @@ export const ChatPane: React.FC = () => {
   const getSelectedSources = useWorkspaceStore((s) => s.getSelectedSources)
   const getSelectedMediaIds = useWorkspaceStore((s) => s.getSelectedMediaIds)
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
+  const workspaceChatReferenceId = useWorkspaceStore(
+    (s) => s.workspaceChatReferenceId
+  )
 
   // Message option hook
   const {
@@ -205,7 +208,8 @@ export const ChatPane: React.FC = () => {
   }
 
   // Conversation instance ID (use workspace ID or fallback)
-  const conversationInstanceId = workspaceId || WORKSPACE_CONVERSATION_ID
+  const conversationInstanceId =
+    workspaceChatReferenceId || workspaceId || WORKSPACE_CONVERSATION_ID
 
   return (
     <div className="flex h-full flex-col">

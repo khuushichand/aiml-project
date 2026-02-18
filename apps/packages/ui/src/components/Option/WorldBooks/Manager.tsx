@@ -10,13 +10,21 @@ import { useTranslation } from "react-i18next"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { parseBulkEntries } from "./entryParsers"
+import {
+  WORLD_BOOK_FORM_DEFAULTS,
+  buildWorldBookFormPayload,
+  buildWorldBookMutationErrorMessage,
+  hasDuplicateWorldBookName,
+  normalizeWorldBookName,
+  toWorldBookFormValues
+} from "./worldBookFormUtils"
 
 // Helper component for form field labels with tooltips
 const LabelWithHelp: React.FC<{ label: string; help: string }> = ({ label, help }) => (
   <span className="inline-flex items-center gap-1">
     {label}
     <Tooltip title={help}>
-      <HelpCircle className="w-3.5 h-3.5 text-text-muted cursor-help" />
+      <HelpCircle className="w-4 h-4 text-text-muted cursor-help" />
     </Tooltip>
   </span>
 )
@@ -52,6 +60,90 @@ const buildMatchPreview = (keywordsValue: any, opts: { caseSensitive?: boolean; 
   const caseExample = opts.caseSensitive ? `'${keyword}' only` : `'${lower}', '${upper}'`
   const wordExample = opts.wholeWord ? "whole-word matches" : "partial matches"
   return `Preview: ${caseExample}; ${wordExample}.`
+}
+
+type WorldBookFormMode = "create" | "edit"
+
+type WorldBookFormProps = {
+  mode: WorldBookFormMode
+  form: any
+  worldBooks: Array<{ id?: number; name?: string }>
+  submitting: boolean
+  currentWorldBookId?: number | null
+  onSubmit: (values: Record<string, any>) => void
+}
+
+export const WorldBookForm: React.FC<WorldBookFormProps> = ({
+  mode,
+  form,
+  worldBooks,
+  submitting,
+  currentWorldBookId,
+  onSubmit
+}) => {
+  const submitLabel = mode === "create" ? "Create" : "Save"
+
+  return (
+    <Form
+      layout="vertical"
+      form={form}
+      initialValues={WORLD_BOOK_FORM_DEFAULTS}
+      onFinish={(values) => onSubmit(buildWorldBookFormPayload(values, mode))}
+    >
+      <Form.Item
+        name="name"
+        label="Name"
+        rules={[
+          { required: true, whitespace: true, message: "Name is required" },
+          {
+            validator: (_: any, value: string) => {
+              const candidate = normalizeWorldBookName(value)
+              if (!candidate) return Promise.resolve()
+              if (hasDuplicateWorldBookName(candidate, worldBooks, { excludeId: currentWorldBookId })) {
+                return Promise.reject(new Error(`A world book named "${candidate}" already exists.`))
+              }
+              return Promise.resolve()
+            }
+          }
+        ]}
+      >
+        <Input />
+      </Form.Item>
+      <Form.Item name="description" label="Description (optional)">
+        <Input />
+      </Form.Item>
+      <Form.Item name="enabled" label="Enabled" valuePropName="checked">
+        <Switch />
+      </Form.Item>
+      <details className="mb-4">
+        <summary className="cursor-pointer text-sm text-text-muted hover:text-text">Advanced Settings</summary>
+        <div className="mt-3 pl-2 border-l-2 border-border space-y-0">
+          <Form.Item
+            name="scan_depth"
+            label={<LabelWithHelp label="Scan Depth" help="How many recent messages to search for keywords (1-20). Higher values find more matches but use more processing." />}
+          >
+            <InputNumber style={{ width: "100%" }} min={1} max={20} />
+          </Form.Item>
+          <Form.Item
+            name="token_budget"
+            label={<LabelWithHelp label="Token Budget" help="Maximum characters of world info to inject into context (~4 characters = 1 token). This is the most impactful setting for context usage." />}
+          >
+            <InputNumber style={{ width: "100%" }} min={50} max={5000} />
+          </Form.Item>
+          <Form.Item
+            name="recursive_scanning"
+            label={<LabelWithHelp label="Recursive Scanning" help="Also search matched content for additional keyword matches. Useful for interconnected lore but may increase context usage." />}
+            valuePropName="checked"
+          >
+            <Switch />
+          </Form.Item>
+        </div>
+      </details>
+      <Button type="primary" htmlType="submit" loading={submitting} className="w-full">
+        {submitLabel}
+      </Button>
+    </Form>
+  )
 }
 
 export const WorldBooksManager: React.FC = () => {
@@ -147,12 +239,26 @@ export const WorldBooksManager: React.FC = () => {
   const { mutate: createWB, isPending: creating } = useMutation({
     mutationFn: (values: any) => tldwClient.createWorldBook(values),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['tldw:listWorldBooks'] }); setOpen(false); createForm.resetFields() },
-    onError: (e: any) => notification.error({ message: 'Error', description: e?.message || 'Failed to create world book' })
+    onError: (e: any, values: any) =>
+      notification.error({
+        message: "Error",
+        description: buildWorldBookMutationErrorMessage(e, {
+          attemptedName: values?.name,
+          fallback: "Failed to create world book"
+        })
+      })
   })
   const { mutate: updateWB, isPending: updating } = useMutation({
     mutationFn: (values: any) => editId != null ? tldwClient.updateWorldBook(editId, values) : Promise.resolve(null),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['tldw:listWorldBooks'] }); setOpenEdit(false); editForm.resetFields(); setEditId(null) },
-    onError: (e: any) => notification.error({ message: 'Error', description: e?.message || 'Failed to update world book' })
+    onError: (e: any, values: any) =>
+      notification.error({
+        message: "Error",
+        description: buildWorldBookMutationErrorMessage(e, {
+          attemptedName: values?.name,
+          fallback: "Failed to update world book"
+        })
+      })
   })
   const { mutate: deleteWB, isPending: deleting } = useMutation({
     mutationFn: (id: number) => tldwClient.deleteWorldBook(id),
@@ -339,7 +445,11 @@ export const WorldBooksManager: React.FC = () => {
             size="small"
             aria-label="Edit world book"
             icon={<Pen className="w-4 h-4" />}
-            onClick={() => { setEditId(record.id); editForm.setFieldsValue(record); setOpenEdit(true) }}
+            onClick={() => {
+              setEditId(record.id)
+              editForm.setFieldsValue(toWorldBookFormValues(record))
+              setOpenEdit(true)
+            }}
           />
         </Tooltip>
         <Tooltip title="Manage Entries">
@@ -485,36 +595,13 @@ export const WorldBooksManager: React.FC = () => {
       {status === 'success' && <Table rowKey={(r: any) => r.id} dataSource={data} columns={columns as any} />}
 
       <Modal title="Create World Book" open={open} onCancel={handleCloseCreate} footer={null}>
-        <Form layout="vertical" form={createForm} onFinish={(v) => createWB(v)}>
-          <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="description" label="Description"><Input /></Form.Item>
-          <Form.Item name="enabled" label="Enabled" valuePropName="checked"><Switch defaultChecked /></Form.Item>
-          <details className="mb-4">
-            <summary className="cursor-pointer text-sm text-text-muted hover:text-text">Advanced Settings</summary>
-            <div className="mt-3 pl-2 border-l-2 border-border space-y-0">
-              <Form.Item
-                name="scan_depth"
-                label={<LabelWithHelp label="Scan Depth" help="How many recent messages to search for keywords (1-20). Higher values find more matches but use more processing." />}
-              >
-                <InputNumber style={{ width: '100%' }} min={1} max={20} placeholder="Default: 5" />
-              </Form.Item>
-              <Form.Item
-                name="token_budget"
-                label={<LabelWithHelp label="Token Budget" help="Maximum characters of world info to inject into context (~4 characters = 1 token). This is the most impactful setting for context usage." />}
-              >
-                <InputNumber style={{ width: '100%' }} min={0} placeholder="Default: 2048" />
-              </Form.Item>
-              <Form.Item
-                name="recursive_scanning"
-                label={<LabelWithHelp label="Recursive Scanning" help="Also search matched content for additional keyword matches. Useful for interconnected lore but may increase context usage." />}
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-            </div>
-          </details>
-          <Button type="primary" htmlType="submit" loading={creating} className="w-full">Create</Button>
-        </Form>
+        <WorldBookForm
+          mode="create"
+          form={createForm}
+          worldBooks={(data || []) as any[]}
+          submitting={creating}
+          onSubmit={createWB}
+        />
       </Modal>
 
       <Modal
@@ -600,36 +687,14 @@ export const WorldBooksManager: React.FC = () => {
       </Modal>
 
       <Modal title="Edit World Book" open={openEdit} onCancel={handleCloseEdit} footer={null}>
-        <Form layout="vertical" form={editForm} onFinish={(v) => updateWB(v)}>
-          <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="description" label="Description"><Input /></Form.Item>
-          <Form.Item name="enabled" label="Enabled" valuePropName="checked"><Switch /></Form.Item>
-          <details className="mb-4">
-            <summary className="cursor-pointer text-sm text-text-muted hover:text-text">Advanced Settings</summary>
-            <div className="mt-3 pl-2 border-l-2 border-border space-y-0">
-              <Form.Item
-                name="scan_depth"
-                label={<LabelWithHelp label="Scan Depth" help="How many recent messages to search for keywords (1-20). Higher values find more matches but use more processing." />}
-              >
-                <InputNumber style={{ width: '100%' }} min={1} max={20} placeholder="Default: 5" />
-              </Form.Item>
-              <Form.Item
-                name="token_budget"
-                label={<LabelWithHelp label="Token Budget" help="Maximum characters of world info to inject into context (~4 characters = 1 token). This is the most impactful setting for context usage." />}
-              >
-                <InputNumber style={{ width: '100%' }} min={0} placeholder="Default: 2048" />
-              </Form.Item>
-              <Form.Item
-                name="recursive_scanning"
-                label={<LabelWithHelp label="Recursive Scanning" help="Also search matched content for additional keyword matches. Useful for interconnected lore but may increase context usage." />}
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-            </div>
-          </details>
-          <Button type="primary" htmlType="submit" loading={updating} className="w-full">Save</Button>
-        </Form>
+        <WorldBookForm
+          mode="edit"
+          form={editForm}
+          worldBooks={(data || []) as any[]}
+          submitting={updating}
+          currentWorldBookId={editId}
+          onSubmit={updateWB}
+        />
       </Modal>
 
       <Drawer

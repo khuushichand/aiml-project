@@ -3,13 +3,21 @@ import { Button, Collapse, Divider, Form, Input, Modal, Skeleton, Switch, Table,
 import { useTranslation } from "react-i18next"
 import React from "react"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { Pen, Trash2, Book, Play, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react"
+import { Pen, Trash2, Book, Play, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, AlertTriangle, Loader2, Copy, Plus } from "lucide-react"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { LabelWithHelp } from "@/components/Common/LabelWithHelp"
+import {
+  buildDuplicateDictionaryName,
+  compareDictionaryActive,
+  compareDictionaryEntryCount,
+  compareDictionaryName,
+  filterDictionariesBySearch,
+  formatRelativeTimestamp
+} from "./listUtils"
 
 export const DictionariesManager: React.FC = () => {
   const { t } = useTranslation(["common", "option"])
@@ -26,6 +34,8 @@ export const DictionariesManager: React.FC = () => {
   const [openImport, setOpenImport] = React.useState(false)
   const [activateOnImport, setActivateOnImport] = React.useState(false)
   const [statsFor, setStatsFor] = React.useState<any | null>(null)
+  const [dictionarySearch, setDictionarySearch] = React.useState("")
+  const [activeUpdateMap, setActiveUpdateMap] = React.useState<Record<number, boolean>>({})
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const confirmDanger = useConfirmDanger()
 
@@ -80,7 +90,7 @@ export const DictionariesManager: React.FC = () => {
     queryKey: ['tldw:listDictionaries'],
     queryFn: async () => {
       await tldwClient.initialize()
-      const res = await tldwClient.listDictionaries(false)
+      const res = await tldwClient.listDictionaries(true)
       return res?.dictionaries || []
     },
     enabled: isOnline
@@ -106,15 +116,134 @@ export const DictionariesManager: React.FC = () => {
     onError: (e: any) => notification.error({ message: 'Import failed', description: e?.message })
   })
 
+  const { mutate: updateDictionaryActive } = useMutation({
+    mutationFn: async ({ dictionaryId, isActive }: { dictionaryId: number; isActive: boolean }) => {
+      setActiveUpdateMap((prev) => ({ ...prev, [dictionaryId]: true }))
+      return await tldwClient.updateDictionary(dictionaryId, { is_active: isActive })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tldw:listDictionaries'] })
+    },
+    onError: (e: any) => {
+      notification.error({ message: "Update failed", description: e?.message || "Failed to update dictionary status" })
+    },
+    onSettled: (_result, _error, variables) => {
+      setActiveUpdateMap((prev) => {
+        const next = { ...prev }
+        delete next[variables.dictionaryId]
+        return next
+      })
+    }
+  })
+
+  const duplicateDictionary = React.useCallback(
+    async (dictionary: any) => {
+      try {
+        const exported = await tldwClient.exportDictionaryJSON(dictionary.id)
+        const existingNames = Array.isArray(data) ? data.map((d: any) => d?.name) : []
+        const duplicateName = buildDuplicateDictionaryName(
+          exported?.name || dictionary?.name || "Dictionary",
+          existingNames
+        )
+        const duplicatePayload = {
+          ...exported,
+          name: duplicateName,
+          description: exported?.description ?? dictionary?.description
+        }
+        await tldwClient.importDictionaryJSON(duplicatePayload, Boolean(dictionary?.is_active))
+        notification.success({ message: "Dictionary duplicated", description: `"${duplicateName}" created.` })
+        qc.invalidateQueries({ queryKey: ['tldw:listDictionaries'] })
+      } catch (e: any) {
+        notification.error({ message: "Duplicate failed", description: e?.message || "Unable to duplicate dictionary" })
+      }
+    },
+    [data, notification, qc]
+  )
+
+  const filteredDictionaries = React.useMemo(
+    () => filterDictionariesBySearch(Array.isArray(data) ? data : [], dictionarySearch),
+    [data, dictionarySearch]
+  )
+
   const dictionariesUnsupported =
     !capsLoading && capabilities && !capabilities.hasChatDictionaries
 
   const columns = [
-    { title: '', key: 'icon', width: 48, render: () => <Book className="w-5 h-5 text-text-muted" aria-hidden="true" /> },
-    { title: 'Name', dataIndex: 'name', key: 'name' },
-    { title: 'Description', dataIndex: 'description', key: 'description', render: (v: string) => <span className="line-clamp-1">{v}</span> },
-    { title: 'Active', dataIndex: 'is_active', key: 'is_active', render: (v: boolean) => v ? <Tag color="green">Active</Tag> : <Tag>Inactive</Tag> },
-    { title: 'Entries', dataIndex: 'entry_count', key: 'entry_count' },
+    {
+      title: '',
+      key: 'icon',
+      width: 48,
+      render: () => <Book className="w-5 h-5 text-text-muted" aria-hidden="true" />
+    },
+    {
+      title: 'Name',
+      dataIndex: 'name',
+      key: 'name',
+      sorter: (a: any, b: any) => compareDictionaryName(a, b)
+    },
+    {
+      title: 'Description',
+      dataIndex: 'description',
+      key: 'description',
+      render: (v: string) => <span className="line-clamp-1">{v}</span>
+    },
+    {
+      title: 'Active',
+      dataIndex: 'is_active',
+      key: 'is_active',
+      sorter: (a: any, b: any) => compareDictionaryActive(a, b),
+      filters: [
+        { text: 'Active', value: true },
+        { text: 'Inactive', value: false }
+      ],
+      onFilter: (value: any, record: any) => {
+        const activeFilter = value === true || value === 'true'
+        return Boolean(record.is_active) === activeFilter
+      },
+      render: (v: boolean, record: any) => (
+        <Switch
+          checked={Boolean(v)}
+          loading={Boolean(activeUpdateMap[record.id])}
+          onChange={(checked) =>
+            updateDictionaryActive({ dictionaryId: Number(record.id), isActive: checked })
+          }
+          aria-label={`Set dictionary ${record.name} ${v ? "inactive" : "active"}`}
+        />
+      )
+    },
+    {
+      title: 'Entries',
+      dataIndex: 'entry_count',
+      key: 'entry_count',
+      sorter: (a: any, b: any) => compareDictionaryEntryCount(a, b),
+      render: (_value: number, record: any) => {
+        const entryCount = Number(record?.entry_count || 0)
+        const regexCount = Number(record?.regex_entry_count ?? record?.regex_entries ?? 0)
+        if (regexCount > 0) {
+          return `${entryCount} entries (${regexCount} regex)`
+        }
+        return `${entryCount} entries`
+      }
+    },
+    {
+      title: 'Updated',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      sorter: (a: any, b: any) => {
+        const valueA = new Date(a?.updated_at || 0).getTime()
+        const valueB = new Date(b?.updated_at || 0).getTime()
+        return valueA - valueB
+      },
+      render: (value: string | null | undefined) => {
+        const relative = formatRelativeTimestamp(value)
+        const absolute = value ? new Date(value).toLocaleString() : 'No updates yet'
+        return (
+          <Tooltip title={absolute}>
+            <span className="text-xs text-text-muted">{relative}</span>
+          </Tooltip>
+        )
+      }
+    },
     {
       title: 'Status',
       key: 'validation_status',
@@ -261,6 +390,15 @@ export const DictionariesManager: React.FC = () => {
             Stats
           </button>
         </Tooltip>
+        <Tooltip title="Duplicate dictionary">
+          <button
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+            onClick={() => duplicateDictionary(record)}
+            aria-label={`Duplicate dictionary ${record.name}`}
+          >
+            <Copy className="w-5 h-5" />
+          </button>
+        </Tooltip>
         <Tooltip title="Delete dictionary">
           <button
             className="min-w-[44px] min-h-[44px] flex items-center justify-center text-danger hover:bg-danger/10 rounded-md transition-colors"
@@ -284,9 +422,21 @@ export const DictionariesManager: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end gap-2">
-        <Button onClick={() => setOpenImport(true)}>Import</Button>
-        <Button type="primary" onClick={() => setOpen(true)}>New Dictionary</Button>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <Input
+          value={dictionarySearch}
+          onChange={(e) => setDictionarySearch(e.target.value)}
+          allowClear
+          className="sm:max-w-md"
+          placeholder="Search dictionaries by name or description"
+          aria-label="Search dictionaries"
+        />
+        <div className="flex justify-end gap-2">
+          <Button onClick={() => setOpenImport(true)}>Import</Button>
+          <Button type="primary" icon={<Plus className="w-4 h-4" />} onClick={() => setOpen(true)}>
+            New Dictionary
+          </Button>
+        </div>
       </div>
       {status === 'pending' && <Skeleton active paragraph={{ rows: 6 }} />}
       {status === 'success' && dictionariesUnsupported && (
@@ -309,7 +459,17 @@ export const DictionariesManager: React.FC = () => {
         />
       )}
       {status === 'success' && !dictionariesUnsupported && (
-        <Table rowKey={(r: any) => r.id} dataSource={data} columns={columns as any} />
+        <Table
+          rowKey={(r: any) => r.id}
+          dataSource={filteredDictionaries}
+          columns={columns as any}
+          pagination={{
+            pageSize: 20,
+            showSizeChanger: true,
+            pageSizeOptions: [10, 20, 50, 100],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`
+          }}
+        />
       )}
 
       <Modal title="Create Dictionary" open={open} onCancel={() => setOpen(false)} footer={null}>

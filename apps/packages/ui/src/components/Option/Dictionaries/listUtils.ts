@@ -1,0 +1,110 @@
+export type DictionaryListItem = {
+  id?: number
+  name?: string | null
+  description?: string | null
+  is_active?: boolean | null
+  entry_count?: number | null
+  regex_entries?: number | null
+  regex_entry_count?: number | null
+  updated_at?: string | Date | null
+}
+
+function safeText(value: unknown): string {
+  if (typeof value !== "string") return ""
+  return value.trim().toLowerCase()
+}
+
+export function compareDictionaryName(a: DictionaryListItem, b: DictionaryListItem): number {
+  const nameA = String(a.name || "").toLocaleLowerCase()
+  const nameB = String(b.name || "").toLocaleLowerCase()
+  return nameA.localeCompare(nameB)
+}
+
+export function compareDictionaryEntryCount(a: DictionaryListItem, b: DictionaryListItem): number {
+  const countA = Number(a.entry_count || 0)
+  const countB = Number(b.entry_count || 0)
+  return countA - countB
+}
+
+export function compareDictionaryActive(a: DictionaryListItem, b: DictionaryListItem): number {
+  const activeA = Boolean(a.is_active)
+  const activeB = Boolean(b.is_active)
+  if (activeA === activeB) return 0
+  return activeA ? 1 : -1
+}
+
+export function filterDictionariesBySearch(
+  dictionaries: DictionaryListItem[],
+  query: string
+): DictionaryListItem[] {
+  const normalized = safeText(query)
+  if (!normalized) return dictionaries
+  return dictionaries.filter((item) => {
+    const name = safeText(item.name)
+    const description = safeText(item.description)
+    return name.includes(normalized) || description.includes(normalized)
+  })
+}
+
+function formatQuantity(value: number, unit: string): string {
+  return value === 1 ? `1 ${unit} ago` : `${value} ${unit}s ago`
+}
+
+export function formatRelativeTimestamp(
+  input: string | Date | null | undefined,
+  now: Date = new Date()
+): string {
+  if (!input) return "—"
+  const value = input instanceof Date ? input : new Date(input)
+  if (Number.isNaN(value.getTime())) return "—"
+
+  const diffMs = now.getTime() - value.getTime()
+  const absMs = Math.abs(diffMs)
+  const seconds = Math.floor(absMs / 1000)
+
+  if (seconds < 30) return "just now"
+  if (seconds < 60) return formatQuantity(seconds, "second")
+
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return formatQuantity(minutes, "minute")
+
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return formatQuantity(hours, "hour")
+
+  const days = Math.floor(hours / 24)
+  if (days < 30) return formatQuantity(days, "day")
+
+  return value.toLocaleDateString()
+}
+
+function normalizeExistingNames(existingNames: Array<string | null | undefined>): Set<string> {
+  const normalized = new Set<string>()
+  for (const name of existingNames) {
+    const value = safeText(name)
+    if (value) normalized.add(value)
+  }
+  return normalized
+}
+
+export function buildDuplicateDictionaryName(
+  baseName: string,
+  existingNames: Array<string | null | undefined>
+): string {
+  const cleanBase = baseName.trim() || "Dictionary"
+  const normalizedExisting = normalizeExistingNames(existingNames)
+  const copyBase = `${cleanBase} (copy)`
+  if (!normalizedExisting.has(copyBase.toLowerCase())) {
+    return copyBase
+  }
+
+  let suffix = 2
+  while (suffix < 10_000) {
+    const candidate = `${cleanBase} (copy ${suffix})`
+    if (!normalizedExisting.has(candidate.toLowerCase())) {
+      return candidate
+    }
+    suffix += 1
+  }
+  return `${cleanBase} (copy ${Date.now()})`
+}
+

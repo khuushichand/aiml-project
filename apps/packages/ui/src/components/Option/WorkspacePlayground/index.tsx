@@ -1,12 +1,7 @@
 import React, { useEffect } from "react"
 import { useTranslation } from "react-i18next"
-import { useStorage } from "@plasmohq/storage/hook"
 import { Drawer, Tabs } from "antd"
 import { FileText, MessageSquare, Sparkles } from "lucide-react"
-import {
-  WORKSPACE_LEFT_PANE_KEY,
-  WORKSPACE_RIGHT_PANE_KEY
-} from "@/utils/storage-migrations"
 import { useWorkspaceStore } from "@/store/workspace"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { WorkspaceHeader } from "./WorkspaceHeader"
@@ -31,10 +26,6 @@ export const WorkspacePlayground: React.FC = () => {
   const { t } = useTranslation(["playground", "option", "common"])
   const isMobile = useMobile()
 
-  // Pane state with persistence
-  const [leftPaneOpen, setLeftPaneOpen] = useStorage(WORKSPACE_LEFT_PANE_KEY, true)
-  const [rightPaneOpen, setRightPaneOpen] = useStorage(WORKSPACE_RIGHT_PANE_KEY, true)
-
   // Mobile drawer state
   const [leftDrawerOpen, setLeftDrawerOpen] = React.useState(false)
   const [rightDrawerOpen, setRightDrawerOpen] = React.useState(false)
@@ -47,6 +38,13 @@ export const WorkspacePlayground: React.FC = () => {
   const initializeWorkspace = useWorkspaceStore((s) => s.initializeWorkspace)
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
+  const leftPaneCollapsed = useWorkspaceStore((s) => s.leftPaneCollapsed)
+  const rightPaneCollapsed = useWorkspaceStore((s) => s.rightPaneCollapsed)
+  const setLeftPaneCollapsed = useWorkspaceStore((s) => s.setLeftPaneCollapsed)
+  const setRightPaneCollapsed = useWorkspaceStore((s) => s.setRightPaneCollapsed)
+
+  const leftPaneOpen = !leftPaneCollapsed
+  const rightPaneOpen = !rightPaneCollapsed
 
   // Initialize workspace on mount if not already initialized — use ref to keep dep stable
   const initRef = React.useRef(initializeWorkspace)
@@ -61,7 +59,7 @@ export const WorkspacePlayground: React.FC = () => {
     if (isMobile) {
       setLeftDrawerOpen(!leftDrawerOpen)
     } else {
-      setLeftPaneOpen(!leftPaneOpen)
+      setLeftPaneCollapsed(leftPaneOpen)
     }
   }
 
@@ -69,7 +67,7 @@ export const WorkspacePlayground: React.FC = () => {
     if (isMobile) {
       setRightDrawerOpen(!rightDrawerOpen)
     } else {
-      setRightPaneOpen(!rightPaneOpen)
+      setRightPaneCollapsed(rightPaneOpen)
     }
   }
 
@@ -159,7 +157,7 @@ export const WorkspacePlayground: React.FC = () => {
         {/* Left pane - Sources (desktop) */}
         {leftPaneOpen && (
           <aside className="hidden w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col">
-            <SourcesPane onHide={() => setLeftPaneOpen(false)} />
+            <SourcesPane onHide={() => setLeftPaneCollapsed(true)} />
           </aside>
         )}
 
@@ -188,7 +186,7 @@ export const WorkspacePlayground: React.FC = () => {
         {/* Right pane - Studio (desktop) */}
         {rightPaneOpen && (
           <aside className="hidden w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col">
-            <StudioPane onHide={() => setRightPaneOpen(false)} />
+            <StudioPane onHide={() => setRightPaneCollapsed(true)} />
           </aside>
         )}
 

@@ -4,10 +4,12 @@ import { WorkspacePlayground } from "../index"
 
 const testState = {
   isMobile: false,
-  leftPaneOpen: true,
-  rightPaneOpen: true,
+  leftPaneCollapsed: false,
+  rightPaneCollapsed: false,
   workspaceId: "workspace-1",
   initializeWorkspace: vi.fn(),
+  setLeftPaneCollapsed: vi.fn(),
+  setRightPaneCollapsed: vi.fn(),
   selectedSourceIds: [] as string[],
   generatedArtifacts: [] as Array<{ id: string }>
 }
@@ -33,23 +35,15 @@ vi.mock("@/hooks/useMediaQuery", () => ({
   useMobile: () => testState.isMobile
 }))
 
-vi.mock("@plasmohq/storage/hook", () => ({
-  useStorage: (key: string, defaultValue: boolean) => {
-    if (key === "workspaceLeftPaneOpen") {
-      return [testState.leftPaneOpen, vi.fn()]
-    }
-    if (key === "workspaceRightPaneOpen") {
-      return [testState.rightPaneOpen, vi.fn()]
-    }
-    return [defaultValue, vi.fn()]
-  }
-}))
-
 vi.mock("@/store/workspace", () => ({
   useWorkspaceStore: (
     selector: (state: {
       workspaceId: string | null
       initializeWorkspace: () => void
+      leftPaneCollapsed: boolean
+      rightPaneCollapsed: boolean
+      setLeftPaneCollapsed: (collapsed: boolean) => void
+      setRightPaneCollapsed: (collapsed: boolean) => void
       selectedSourceIds: string[]
       generatedArtifacts: Array<{ id: string }>
     }) => unknown
@@ -57,6 +51,10 @@ vi.mock("@/store/workspace", () => ({
     selector({
       workspaceId: testState.workspaceId,
       initializeWorkspace: testState.initializeWorkspace,
+      leftPaneCollapsed: testState.leftPaneCollapsed,
+      rightPaneCollapsed: testState.rightPaneCollapsed,
+      setLeftPaneCollapsed: testState.setLeftPaneCollapsed,
+      setRightPaneCollapsed: testState.setRightPaneCollapsed,
       selectedSourceIds: testState.selectedSourceIds,
       generatedArtifacts: testState.generatedArtifacts
     })
@@ -117,8 +115,8 @@ describe("WorkspacePlayground desktop layout guardrails", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     testState.isMobile = false
-    testState.leftPaneOpen = true
-    testState.rightPaneOpen = true
+    testState.leftPaneCollapsed = false
+    testState.rightPaneCollapsed = false
     testState.workspaceId = "workspace-1"
     testState.selectedSourceIds = []
     testState.generatedArtifacts = []
