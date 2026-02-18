@@ -20,7 +20,7 @@ Finding IDs: `8.1` through `8.3`
 **Tests**:
 - Responsive component tests at mobile/tablet/desktop widths.
 - Visual regression snapshots for wrapped toolbar states.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Table Overflow Affordance and Column Strategy
 **Goal**: Improve discoverability of horizontally scrollable data and reduce clutter.
@@ -32,7 +32,7 @@ Finding IDs: `8.1` through `8.3`
 - Component tests for overflow indicator visibility.
 - Responsive tests verifying column visibility rules by breakpoint.
 - Interaction test for row actions under collapsed-column mode.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Touch Target Compliance
 **Goal**: Raise touch ergonomics for bulk operations.
@@ -43,7 +43,7 @@ Finding IDs: `8.1` through `8.3`
 **Tests**:
 - CSS/class tests for mobile target-size constraints.
 - Accessibility checks for pointer target sizing and keyboard focus styles.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

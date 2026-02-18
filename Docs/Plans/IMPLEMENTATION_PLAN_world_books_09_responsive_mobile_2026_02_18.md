@@ -22,7 +22,7 @@ Finding IDs: `9.1` through `9.5`
 - Responsive component tests for column visibility rules by breakpoint.
 - Integration tests for overflow menu actions parity with desktop buttons.
 - Manual viewport QA checklist for 320px, 375px, 414px widths.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Optimize Entries Drawer for Touch Workflows
 **Goal**: Keep entry editing and browsing comfortable on phones.
@@ -34,7 +34,7 @@ Finding IDs: `9.1` through `9.5`
 - Responsive tests for drawer table column adaptation.
 - Component tests for touch-target sizing class/application.
 - Accessibility tests for focus ring visibility and target hit area.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Provide Mobile Alternative to Character Matrix
 **Goal**: Replace unusable dense grid interaction on small screens.
@@ -46,7 +46,7 @@ Finding IDs: `9.1` through `9.5`
 - Responsive integration tests for matrix-to-list fallback activation.
 - Interaction tests for attach/detach parity in fallback mode.
 - Usability smoke tests on common mobile viewport presets.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Harden Modal Scrolling on Short Viewports
 **Goal**: Prevent clipped or inaccessible controls in short-height contexts.
@@ -58,7 +58,7 @@ Finding IDs: `9.1` through `9.5`
 - Component tests for modal max-height/overflow style application.
 - End-to-end viewport tests for landscape mobile completion of create/edit flows.
 - Accessibility test for focus retention while scrolling modal content.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

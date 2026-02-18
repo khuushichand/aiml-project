@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   buildRegenerateOutputRequest,
   getDeliveryStatusColor,
+  getDeliveryStatusLabel,
   getOutputDeliveryStatuses,
   getOutputTemplateName,
   getOutputTemplateVersion
@@ -88,5 +89,12 @@ describe("outputMetadata helpers", () => {
     expect(getDeliveryStatusColor("pending")).toBe("blue")
     expect(getDeliveryStatusColor("failed")).toBe("red")
     expect(getDeliveryStatusColor("mystery")).toBe("default")
+  })
+
+  it("normalizes delivery status labels", () => {
+    expect(getDeliveryStatusLabel("sent")).toBe("Sent")
+    expect(getDeliveryStatusLabel("in_progress")).toBe("In progress")
+    expect(getDeliveryStatusLabel("failed")).toBe("Failed")
+    expect(getDeliveryStatusLabel("mystery")).toBe("mystery")
   })
 })

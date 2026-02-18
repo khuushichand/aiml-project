@@ -59,6 +59,9 @@
     "bulkDeleted": "{{count}} sources deleted",
     "bulkDeleteError": "Bulk delete failed",
     "bulkError": "Bulk update failed",
+    "staleCount": "Stale x{{count}}",
+    "backoffUntil": "Backoff {{time}}",
+    "seenInfo": "Source Health & Dedup Stats",
     "columns": {
       "name": "Name",
       "url": "URL",
@@ -131,12 +134,15 @@
     "deleteConfirm": "Delete this job?",
     "runNow": "Run Now",
     "never": "Never",
+    "pending": "Pending",
+    "notScheduled": "Not scheduled",
     "columns": {
       "name": "Name",
       "schedule": "Schedule",
       "scope": "Scope",
       "filters": "Filters",
       "lastRun": "Last Run",
+      "nextRun": "Next Run",
       "active": "Active",
       "actions": "Actions"
     },
@@ -213,6 +219,8 @@
     "viewDetails": "View Details",
     "filterByJob": "Filter by job",
     "filterByStatus": "Filter by status",
+    "autoRefreshing": "Auto-refreshing",
+    "lastRefreshed": "Last refreshed {{time}}",
     "columns": {
       "job": "Job",
       "status": "Status",

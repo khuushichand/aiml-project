@@ -10,7 +10,8 @@ const {
   notificationMock,
   undoNotificationMock,
   confirmDangerMock,
-  tldwClientMock
+  tldwClientMock,
+  mockBreakpoints
 } = vi.hoisted(() => ({
   useQueryMock: vi.fn(),
   useMutationMock: vi.fn(),
@@ -29,7 +30,8 @@ const {
   confirmDangerMock: vi.fn(async () => true),
   tldwClientMock: {
     initialize: vi.fn(async () => undefined)
-  }
+  },
+  mockBreakpoints: { md: true }
 }))
 
 vi.mock("@tanstack/react-query", () => ({
@@ -37,6 +39,17 @@ vi.mock("@tanstack/react-query", () => ({
   useMutation: useMutationMock,
   useQueryClient: useQueryClientMock
 }))
+
+vi.mock("antd", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("antd")>()
+  return {
+    ...actual,
+    Grid: {
+      ...actual.Grid,
+      useBreakpoint: () => mockBreakpoints
+    }
+  }
+})
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -93,6 +106,7 @@ const makeUseMutationResult = () => ({
 describe("WorldBooksManager stage-3 action affordances", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockBreakpoints.md = true
     useQueryClientMock.mockReturnValue({
       invalidateQueries: vi.fn()
     })

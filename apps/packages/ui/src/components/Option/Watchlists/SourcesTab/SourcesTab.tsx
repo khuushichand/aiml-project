@@ -22,12 +22,13 @@ import {
   createWatchlistSource,
   deleteWatchlistSource,
   exportOpml,
+  getSourceSeenStats,
   fetchWatchlistSources,
   fetchWatchlistGroups,
   fetchWatchlistTags,
   updateWatchlistSource
 } from "@/services/watchlists"
-import type { WatchlistSource, SourceType } from "@/types/watchlists"
+import type { SourceSeenStats, WatchlistSource, SourceType } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { SourceFormModal } from "./SourceFormModal"
 import { GroupsTree } from "./GroupsTree"
@@ -42,6 +43,7 @@ import {
   resolveCheckNowTargets,
   shouldConfirmMultiSourceCheck
 } from "./check-now-utils"
+import { getSourceStatusVisual } from "./sourceStatus"
 
 const { Search } = Input
 
@@ -50,6 +52,7 @@ const SOURCE_TYPE_COLORS: Record<SourceType, string> = {
   site: "green",
   forum: "purple"
 }
+type SourceHealthSnapshot = Pick<SourceSeenStats, "defer_until" | "consec_not_modified">
 const CLIENT_FILTER_PAGE_SIZE = 200
 const CLIENT_FILTER_MAX_ITEMS = 1000
 
@@ -98,6 +101,7 @@ export const SourcesTab: React.FC = () => {
   const [checkingSourceIds, setCheckingSourceIds] = useState<number[]>([])
   const [importOpen, setImportOpen] = useState(false)
   const [seenDrawerSourceId, setSeenDrawerSourceId] = useState<number | null>(null)
+  const [sourceHealthById, setSourceHealthById] = useState<Record<number, SourceHealthSnapshot>>({})
 
   const selectedSources = useMemo(
     () => sources.filter((source) => selectedRowKeys.includes(source.id)),
@@ -125,6 +129,28 @@ export const SourcesTab: React.FC = () => {
     sourcesLoading
   })
   const tableEmptyDescription = getSourcesTableEmptyDescription(hasActiveFilters)
+
+  const loadSourceHealth = useCallback(async (items: WatchlistSource[]) => {
+    if (!Array.isArray(items) || items.length === 0) {
+      setSourceHealthById({})
+      return
+    }
+
+    const results = await Promise.allSettled(
+      items.map((source) => getSourceSeenStats(source.id, { keys_limit: 1 }))
+    )
+
+    const next: Record<number, SourceHealthSnapshot> = {}
+    results.forEach((result, index) => {
+      if (result.status !== "fulfilled") return
+      next[items[index].id] = {
+        defer_until: result.value.defer_until,
+        consec_not_modified: result.value.consec_not_modified
+      }
+    })
+
+    setSourceHealthById(next)
+  }, [])
 
   // Fetch sources
   const loadSources = useCallback(async () => {
@@ -190,6 +216,7 @@ export const SourcesTab: React.FC = () => {
         : items
 
       setSources(pagedItems, total)
+      void loadSourceHealth(pagedItems)
     } catch (err) {
       console.error("Failed to fetch sources:", err)
       message.error(t("watchlists:sources.fetchError", "Failed to load sources"))
@@ -205,6 +232,7 @@ export const SourcesTab: React.FC = () => {
     sourcesPageSize,
     setSources,
     setSourcesLoading,
+    loadSourceHealth,
     t
   ])
 
@@ -518,6 +546,40 @@ export const SourcesTab: React.FC = () => {
       )
     },
     {
+      title: t("watchlists:sources.columns.status", "Status"),
+      key: "status",
+      width: 300,
+      render: (_, record) => {
+        const statusVisual = getSourceStatusVisual(record.status, record.active)
+        const health = sourceHealthById[record.id]
+        const deferUntil = health?.defer_until
+        const consecutiveNotModified = health?.consec_not_modified ?? 0
+        const hasBackoff = typeof deferUntil === "string" && deferUntil.length > 0
+
+        return (
+          <div className="flex flex-wrap items-center gap-1">
+            <Tag color={statusVisual.color}>{statusVisual.label}</Tag>
+            {consecutiveNotModified > 0 && (
+              <Tag color={consecutiveNotModified >= 5 ? "red" : "gold"}>
+                {t("watchlists:sources.staleCount", "Stale x{{count}}", {
+                  count: consecutiveNotModified
+                })}
+              </Tag>
+            )}
+            {hasBackoff && (
+              <Tooltip title={new Date(deferUntil).toLocaleString()}>
+                <Tag color="gold">
+                  {t("watchlists:sources.backoffUntil", "Backoff {{time}}", {
+                    time: formatRelativeTime(deferUntil, t, { compact: true })
+                  })}
+                </Tag>
+              </Tooltip>
+            )}
+          </div>
+        )
+      }
+    },
+    {
       title: t("watchlists:sources.columns.tags", "Tags"),
       dataIndex: "tags",
       key: "tags",
@@ -609,7 +671,7 @@ export const SourcesTab: React.FC = () => {
               onClick={() => openSourceForm(record.id)}
             />
           </Tooltip>
-          <Tooltip title={t("watchlists:sources.seenInfo", "Dedup / Seen")}>
+          <Tooltip title={t("watchlists:sources.seenInfo", "Source Health & Dedup Stats")}>
             <Button
               type="text"
               size="small"

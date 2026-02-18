@@ -22,7 +22,7 @@ Finding IDs: `C-27` through `C-30`
 - Component tests for keyboard trigger and commit/cancel behavior.
 - Integration tests for tab order and focus return after inline edit.
 - Accessibility tests for role/name/state on edit controls.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Reduced-Motion Compliance
 **Goal**: Respect user motion preferences for characters interactions.

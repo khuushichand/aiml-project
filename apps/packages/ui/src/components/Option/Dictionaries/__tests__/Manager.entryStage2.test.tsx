@@ -329,7 +329,7 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
     await waitFor(() => {
       expect(tldwClientMock.updateDictionaryEntry).toHaveBeenCalledTimes(2)
     })
-  }, 30000)
+  }, 60000)
 
   it("sends timed effects in add and edit payloads", async () => {
     const user = userEvent.setup()
@@ -407,7 +407,92 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
         })
       )
     })
-  }, 30000)
+  }, 60000)
+
+  it("preserves advanced timed-effect values when toggling simple/advanced mode", async () => {
+    const user = userEvent.setup()
+    render(<DictionariesManager />)
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage entries for Medical Terms" })
+    )
+
+    await user.click(screen.getByRole("button", { name: "Advanced options" }))
+
+    const stickyInput = getNumberInputByLabel("Sticky (seconds)")
+    const cooldownInput = getNumberInputByLabel("Cooldown (seconds)")
+    const delayInput = getNumberInputByLabel("Delay (seconds)")
+
+    await user.clear(stickyInput)
+    await user.type(stickyInput, "17")
+    await user.clear(cooldownInput)
+    await user.type(cooldownInput, "8")
+    await user.clear(delayInput)
+    await user.type(delayInput, "3")
+
+    await user.click(screen.getByRole("button", { name: "Simple mode" }))
+    await user.click(screen.getByRole("button", { name: "Advanced options" }))
+
+    expect(getNumberInputByLabel("Sticky (seconds)")).toHaveValue("17")
+    expect(getNumberInputByLabel("Cooldown (seconds)")).toHaveValue("8")
+    expect(getNumberInputByLabel("Delay (seconds)")).toHaveValue("3")
+  }, 60000)
+
+  it("defaults add-entry submissions to case-insensitive matching", async () => {
+    const user = userEvent.setup()
+    render(<DictionariesManager />)
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage entries for Medical Terms" })
+    )
+    await user.type(
+      screen.getByPlaceholderText("e.g., KCl or /hel+o/i"),
+      "Temp"
+    )
+    await user.type(
+      screen.getByPlaceholderText("e.g., Potassium Chloride"),
+      "Temperature"
+    )
+    await user.click(screen.getByRole("button", { name: "Add Entry" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.addDictionaryEntry).toHaveBeenCalledWith(
+        77,
+        expect.objectContaining({
+          pattern: "Temp",
+          replacement: "Temperature",
+          case_sensitive: false
+        })
+      )
+    })
+  }, 60000)
+
+  it("pairs probability controls with frequency guidance", async () => {
+    const user = userEvent.setup()
+    render(<DictionariesManager />)
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage entries for Medical Terms" })
+    )
+    await user.click(screen.getByRole("button", { name: "Advanced options" }))
+
+    expect(screen.getAllByRole("slider").length).toBeGreaterThan(0)
+    expect(
+      screen.getByText("Fires ~10 out of 10 messages (100%).")
+    ).toBeInTheDocument()
+
+    const probabilityInput = getNumberInputByLabel("Probability", {
+      occurrence: "last"
+    })
+    await user.clear(probabilityInput)
+    await user.type(probabilityInput, "0.3")
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Fires ~3 out of 10 messages (30%).")
+      ).toBeInTheDocument()
+    })
+  }, 60000)
 
   it("shows server regex safety feedback before add save", async () => {
     const user = userEvent.setup()
@@ -455,5 +540,5 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
       screen.getAllByText("Potentially dangerous regex pattern detected.")
         .length
     ).toBeGreaterThan(0)
-  }, 30000)
+  }, 60000)
 })

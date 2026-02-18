@@ -316,6 +316,15 @@ const renderPromptBody = (initialEntries: string[] = ["/prompts"]) => {
 }
 
 describe("PromptBody server search and pagination", () => {
+  const setViewportWidth = (width: number) => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: width
+    })
+    window.dispatchEvent(new Event("resize"))
+  }
+
   const getVisibleRowNames = () =>
     screen
       .getAllByTestId("table-row-name")
@@ -329,6 +338,7 @@ describe("PromptBody server search and pagination", () => {
     mocks.setSelectedSystemPrompt.mockReset()
     state.privateMode = false
     state.isOnline = true
+    setViewportWidth(1280)
     state.prompts = [
       {
         id: "local-1",
@@ -394,6 +404,7 @@ describe("PromptBody server search and pagination", () => {
   })
 
   afterEach(() => {
+    setViewportWidth(1280)
     vi.clearAllMocks()
   })
 
@@ -419,6 +430,49 @@ describe("PromptBody server search and pagination", () => {
     await waitFor(() => {
       expect(screen.getByTestId("mock-prompt-drawer")).toHaveTextContent("Alpha One")
     })
+  })
+
+  it("uses full-width responsive controls on compact viewports", async () => {
+    setViewportWidth(480)
+    renderPromptBody()
+
+    const searchInput = await screen.findByTestId("prompts-search")
+    const searchWrapper = searchInput.closest(".ant-input-affix-wrapper")
+    expect(searchWrapper).not.toBeNull()
+    expect((searchWrapper as HTMLElement).style.width).toBe("100%")
+
+    const typeFilter = screen.getByTestId("prompts-type-filter")
+    const tagFilter = screen.getByTestId("prompts-tag-filter")
+    const tagMode = screen.getByTestId("prompts-tag-match-mode")
+
+    expect(typeFilter.style.width).toBe("100%")
+    expect(tagFilter.style.width).toBe("100%")
+    expect(tagMode.style.width).toBe("100%")
+  })
+
+  it("shows mobile overflow affordance and collapses lower-priority columns", async () => {
+    setViewportWidth(480)
+    renderPromptBody()
+
+    await screen.findByTestId("prompts-table")
+    expect(
+      screen.getByTestId("prompts-table-overflow-indicator")
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId("table-cell-keywords")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("table-cell-type")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("table-cell-modifiedAt")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("table-cell-syncStatus")).not.toBeInTheDocument()
+  })
+
+  it("applies touch-friendly bulk action target sizes on compact viewports", async () => {
+    setViewportWidth(480)
+    renderPromptBody()
+
+    await screen.findByTestId("prompts-table")
+    fireEvent.click(screen.getByTestId("table-select-all"))
+
+    const bulkExportButton = await screen.findByTestId("prompts-bulk-export")
+    expect(bulkExportButton.className).toContain("min-h-[44px]")
   })
 
   it("debounces online server search and requests next page", async () => {

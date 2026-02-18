@@ -1,18 +1,21 @@
 import React from "react"
 import { Input, Button, Spin, Tag, Tooltip, Radio, Pagination, Empty, Select, Checkbox, Typography, Skeleton, Switch, Alert, Collapse, Dropdown, Modal } from "antd"
 import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 import { bgRequest } from "@/services/background-proxy"
 import { useQuery, keepPreviousData } from "@tanstack/react-query"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { getNoteKeywords, searchNoteKeywords } from "@/services/note-keywords"
-import { CopyIcon, HelpCircle, Settings2, ChevronLeft, ChevronRight, Layers, LayoutGrid, Focus, Rows3, Check } from "lucide-react"
+import { CopyIcon, HelpCircle, Settings2, ChevronLeft, ChevronRight, Layers, LayoutGrid, Focus, Rows3, Check, MessageSquare } from "lucide-react"
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual"
 import { ChevronDown, ChevronUp } from "lucide-react"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useSetting } from "@/hooks/useSetting"
+import { useMessageOption } from "@/hooks/useMessageOption"
 import { DiffViewModal } from "@/components/Media/DiffViewModal"
 import {
+  DISCUSS_MEDIA_PROMPT_SETTING,
   LAST_MEDIA_ID_SETTING,
   MEDIA_REVIEW_ORIENTATION_SETTING,
   MEDIA_REVIEW_VIEW_MODE_SETTING,
@@ -54,7 +57,9 @@ const UNDO_DURATION_SECONDS = 15
 
 export const MediaReviewPage: React.FC = () => {
   const { t } = useTranslation(['review'])
+  const navigate = useNavigate()
   const message = useAntdMessage()
+  const { setChatMode, setSelectedKnowledge, setRagMediaIds } = useMessageOption()
   const [helpDismissed, setHelpDismissed, { isLoading: helpDismissedLoading }] = useStorage<boolean>('mediaReviewHelpDismissed', false)
   const [query, setQuery] = React.useState("")
   const [page, setPage] = React.useState(1)
@@ -559,6 +564,71 @@ export const MediaReviewPage: React.FC = () => {
     setCompareRightLabel(rightDetail.title || `${t('mediaPage.media', 'Media')} ${rightId}`)
     setCompareDiffOpen(true)
   }, [message, resolveDetailForCompare, selectedIds, t])
+
+  const handleChatAboutSelection = React.useCallback(() => {
+    if (selectedIds.length === 0) return
+
+    const numericIds = Array.from(
+      new Set(
+        selectedIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+          .map((id) => Math.trunc(id))
+      )
+    )
+
+    if (numericIds.length === 0) {
+      message.warning(
+        t(
+          'mediaPage.chatSelectionInvalid',
+          'Selected items are unavailable for media-scoped chat.'
+        )
+      )
+      return
+    }
+
+    const primaryId = String(numericIds[0])
+    setSelectedKnowledge(null as any)
+    setRagMediaIds(numericIds)
+    setChatMode('rag')
+
+    const payload = {
+      mediaId: primaryId,
+      mode: 'rag_media' as const
+    }
+
+    try {
+      void setSetting(DISCUSS_MEDIA_PROMPT_SETTING, payload)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('tldw:discuss-media', {
+            detail: {
+              ...payload,
+              mediaIds: numericIds
+            }
+          })
+        )
+      }
+    } catch {
+      // ignore storage/event errors
+    }
+
+    navigate('/')
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('tldw:focus-composer'))
+      }
+    } catch {
+      // ignore
+    }
+
+    message.success(
+      t('mediaPage.chatSelectionOpened', {
+        defaultValue: 'Opened media-scoped RAG chat for {{count}} selected items.',
+        count: numericIds.length
+      })
+    )
+  }, [message, navigate, selectedIds, setChatMode, setRagMediaIds, setSelectedKnowledge, t])
 
   const expandAllContent = React.useCallback(() => {
     setContentExpandedIds(new Set(visibleIds.map((id) => String(id))))
@@ -1428,6 +1498,24 @@ export const MediaReviewPage: React.FC = () => {
                   >
                     {t('mediaPage.compareContent', 'Compare content')}
                   </Button>
+                )}
+                {selectedIds.length > 0 && (
+                  <Tooltip
+                    title={t('mediaPage.chatSelectionTooltip', {
+                      defaultValue: 'Start a media-scoped RAG chat using the selected items.'
+                    })}
+                  >
+                    <Button
+                      size="small"
+                      icon={<MessageSquare className="w-3.5 h-3.5" />}
+                      onClick={handleChatAboutSelection}
+                    >
+                      {t('mediaPage.chatSelectionAction', {
+                        defaultValue: 'Chat about selection ({{count}})',
+                        count: selectedIds.length
+                      })}
+                    </Button>
+                  </Tooltip>
                 )}
                 <Button
                   size="small"

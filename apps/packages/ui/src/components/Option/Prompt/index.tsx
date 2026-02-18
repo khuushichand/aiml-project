@@ -137,6 +137,7 @@ type PromptSortState = {
 }
 
 const PROMPTS_CUSTOM_SORT_STORAGE_KEY = "tldw-prompts-custom-sort-v1"
+const PROMPTS_MOBILE_BREAKPOINT_PX = 768
 
 const readPromptSortState = (): PromptSortState => {
   if (typeof window === "undefined") {
@@ -218,6 +219,11 @@ export const PromptBody = () => {
   const [bulkKeywordModalOpen, setBulkKeywordModalOpen] = useState(false)
   const [bulkKeywordValue, setBulkKeywordValue] = useState("")
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [isCompactViewport, setIsCompactViewport] = useState(() =>
+    typeof window !== "undefined"
+      ? window.innerWidth < PROMPTS_MOBILE_BREAKPOINT_PX
+      : false
+  )
   const [trashSearchText, setTrashSearchText] = useState("")
   const [trashSelectedRowKeys, setTrashSelectedRowKeys] = useState<React.Key[]>([])
   const [insertPrompt, setInsertPrompt] = useState<{
@@ -310,6 +316,17 @@ export const PromptBody = () => {
       // Ignore session storage failures in restricted browser modes.
     }
   }, [promptSort])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const handleResize = () => {
+      setIsCompactViewport(window.innerWidth < PROMPTS_MOBILE_BREAKPOINT_PX)
+    }
+    window.addEventListener("resize", handleResize)
+    return () => {
+      window.removeEventListener("resize", handleResize)
+    }
+  }, [])
 
   useEffect(() => {
     if (!shouldUseServerSearch || serverSearchStatus !== "error") return
@@ -2141,6 +2158,10 @@ export const PromptBody = () => {
   }, [batchSyncState.failed, batchSyncState.running, cancelBatchSync, runBatchSync])
 
   function customPrompts() {
+    const bulkActionTouchClass = isCompactViewport
+      ? "min-h-[44px] px-3 py-2"
+      : "px-2 py-1"
+
     return (
       <div data-testid="prompts-custom">
         {/* Project filter banner - shown when filtering by project */}
@@ -2170,7 +2191,7 @@ export const PromptBody = () => {
         <div className="mb-6 space-y-3">
           {/* Bulk action bar - shown when rows are selected */}
           {selectedRowKeys.length > 0 && (
-            <div className="flex items-center gap-3 p-2 bg-primary/10 rounded-md border border-primary/30">
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/10 p-2">
               <span className="text-sm text-primary">
                 {t("managePrompts.bulk.selected", {
                   defaultValue: "{{count}} selected",
@@ -2180,14 +2201,14 @@ export const PromptBody = () => {
               <button
                 onClick={() => triggerBulkExport()}
                 data-testid="prompts-bulk-export"
-                className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-primary/30 text-primary hover:bg-primary/10">
+                className={`inline-flex items-center gap-1 rounded border border-primary/30 text-sm text-primary hover:bg-primary/10 ${bulkActionTouchClass}`}>
                 <Download className="size-3" /> {t("managePrompts.bulk.export", { defaultValue: "Export selected" })}
               </button>
               <button
                 onClick={() => setBulkKeywordModalOpen(true)}
                 disabled={isBulkAddingKeyword}
                 data-testid="prompts-bulk-add-keyword"
-                className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-primary/30 text-primary hover:bg-primary/10 disabled:opacity-50">
+                className={`inline-flex items-center gap-1 rounded border border-primary/30 text-sm text-primary hover:bg-primary/10 disabled:opacity-50 ${bulkActionTouchClass}`}>
                 {t("managePrompts.bulk.addKeyword", { defaultValue: "Add keyword" })}
               </button>
               <button
@@ -2199,7 +2220,7 @@ export const PromptBody = () => {
                 }
                 disabled={isBulkFavoriting}
                 data-testid="prompts-bulk-toggle-favorite"
-                className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-primary/30 text-primary hover:bg-primary/10 disabled:opacity-50">
+                className={`inline-flex items-center gap-1 rounded border border-primary/30 text-sm text-primary hover:bg-primary/10 disabled:opacity-50 ${bulkActionTouchClass}`}>
                 {allSelectedAreFavorite ? (
                   <StarOff className="size-3" />
                 ) : (
@@ -2220,7 +2241,7 @@ export const PromptBody = () => {
                   }
                   disabled={isBulkPushing}
                   data-testid="prompts-bulk-push-server"
-                  className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-primary/30 text-primary hover:bg-primary/10 disabled:opacity-50">
+                  className={`inline-flex items-center gap-1 rounded border border-primary/30 text-sm text-primary hover:bg-primary/10 disabled:opacity-50 ${bulkActionTouchClass}`}>
                   <Cloud className="size-3" />
                   {t("managePrompts.bulk.pushToServer", {
                     defaultValue: "Push to server"
@@ -2244,13 +2265,13 @@ export const PromptBody = () => {
                 }}
                 disabled={isBulkDeleting}
                 data-testid="prompts-bulk-delete"
-                className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-danger/30 text-danger hover:bg-danger/10 disabled:opacity-50">
+                className={`inline-flex items-center gap-1 rounded border border-danger/30 text-sm text-danger hover:bg-danger/10 disabled:opacity-50 ${bulkActionTouchClass}`}>
                 <Trash2 className="size-3" /> {t("managePrompts.bulk.delete", { defaultValue: "Delete selected" })}
               </button>
               <button
                 onClick={() => setSelectedRowKeys([])}
                 data-testid="prompts-clear-selection"
-                className="ml-auto text-sm text-text-muted hover:text-text">
+                className={`ml-auto inline-flex items-center rounded text-sm text-text-muted hover:text-text ${isCompactViewport ? "min-h-[44px] px-2" : ""}`}>
                 {t("common:clearSelection", { defaultValue: "Clear selection" })}
               </button>
             </div>
@@ -2279,7 +2300,7 @@ export const PromptBody = () => {
               )}
             </div>
           )}
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3 sm:items-center">
             {/* Left: Action buttons */}
             <div className="flex flex-wrap items-center gap-2">
               <Tooltip title={t("managePrompts.newPromptHint", { defaultValue: "New prompt (N)" })}>
@@ -2408,8 +2429,12 @@ export const PromptBody = () => {
               />
             </div>
             {/* Right: Filters */}
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
+            <div className="flex w-full flex-wrap items-stretch gap-2 sm:w-auto sm:items-center sm:justify-end">
+              <div
+                data-testid="prompts-search-control"
+                className="w-full sm:w-auto"
+              >
+                <Input
                   ref={searchInputRef}
                   allowClear
                   placeholder={t("managePrompts.searchWithScope", { defaultValue: "Search name, content, keywords..." })}
@@ -2418,51 +2443,68 @@ export const PromptBody = () => {
                   data-testid="prompts-search"
                   aria-label={t("managePrompts.search", { defaultValue: "Search prompts..." })}
                   suffix={<kbd className="rounded border border-border px-1 text-xs text-text-subtle">/</kbd>}
-                  style={{ width: 260 }}
+                  style={{ width: isCompactViewport ? "100%" : 260 }}
                 />
-              <Select
-                value={typeFilter}
-                onChange={(v) => setTypeFilter(v as any)}
-                data-testid="prompts-type-filter"
-                aria-label={t("managePrompts.filter.typeLabel", { defaultValue: "Filter by type" })}
-                style={{ width: 130 }}
-                options={[
-                  { label: t("managePrompts.filter.all", { defaultValue: "All types" }), value: "all" },
-                  { label: t("managePrompts.filter.system", { defaultValue: "System" }), value: "system" },
-                  { label: t("managePrompts.filter.quick", { defaultValue: "Quick" }), value: "quick" }
-                ]}
-              />
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder={t("managePrompts.tags.placeholder", { defaultValue: "Filter keywords" })}
-                style={{ minWidth: 180 }}
-                value={tagFilter}
-                onChange={(v) => setTagFilter(v)}
-                data-testid="prompts-tag-filter"
-                aria-label={t("managePrompts.tags.filterLabel", { defaultValue: "Filter by keywords" })}
-                options={allTags.map((t) => ({ label: t, value: t }))}
-              />
-              <Segmented
-                value={tagMatchMode}
-                onChange={(value) => setTagMatchMode(value as TagMatchMode)}
-                size="small"
-                data-testid="prompts-tag-match-mode"
-                options={[
-                  {
-                    value: "any",
-                    label: t("managePrompts.tags.matchAny", {
-                      defaultValue: "Match any"
-                    })
-                  },
-                  {
-                    value: "all",
-                    label: t("managePrompts.tags.matchAll", {
-                      defaultValue: "Match all"
-                    })
-                  }
-                ]}
-              />
+              </div>
+              <div
+                data-testid="prompts-type-filter-control"
+                className="w-full sm:w-auto"
+              >
+                <Select
+                  value={typeFilter}
+                  onChange={(v) => setTypeFilter(v as any)}
+                  data-testid="prompts-type-filter"
+                  aria-label={t("managePrompts.filter.typeLabel", { defaultValue: "Filter by type" })}
+                  style={{ width: isCompactViewport ? "100%" : 130 }}
+                  options={[
+                    { label: t("managePrompts.filter.all", { defaultValue: "All types" }), value: "all" },
+                    { label: t("managePrompts.filter.system", { defaultValue: "System" }), value: "system" },
+                    { label: t("managePrompts.filter.quick", { defaultValue: "Quick" }), value: "quick" }
+                  ]}
+                />
+              </div>
+              <div
+                data-testid="prompts-tag-filter-control"
+                className="w-full sm:w-auto"
+              >
+                <Select
+                  mode="multiple"
+                  allowClear
+                  placeholder={t("managePrompts.tags.placeholder", { defaultValue: "Filter keywords" })}
+                  style={{ width: isCompactViewport ? "100%" : 220 }}
+                  value={tagFilter}
+                  onChange={(v) => setTagFilter(v)}
+                  data-testid="prompts-tag-filter"
+                  aria-label={t("managePrompts.tags.filterLabel", { defaultValue: "Filter by keywords" })}
+                  options={allTags.map((t) => ({ label: t, value: t }))}
+                />
+              </div>
+              <div
+                data-testid="prompts-tag-match-mode-control"
+                className="w-full sm:w-auto"
+              >
+                <Segmented
+                  value={tagMatchMode}
+                  onChange={(value) => setTagMatchMode(value as TagMatchMode)}
+                  size="small"
+                  data-testid="prompts-tag-match-mode"
+                  style={{ width: isCompactViewport ? "100%" : undefined }}
+                  options={[
+                    {
+                      value: "any",
+                      label: t("managePrompts.tags.matchAny", {
+                        defaultValue: "Match any"
+                      })
+                    },
+                    {
+                      value: "all",
+                      label: t("managePrompts.tags.matchAll", {
+                        defaultValue: "Match all"
+                      })
+                    }
+                  ]}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -2512,9 +2554,14 @@ export const PromptBody = () => {
         )}
 
         {status === "success" && Array.isArray(data) && data.length > 0 && (
-          <Table
-            data-testid="prompts-table"
-            columns={[
+          <div className="relative" data-testid="prompts-table-shell">
+            <div
+              className="overflow-x-auto pb-1"
+              data-testid="prompts-table-scroll-container"
+            >
+              <Table
+                data-testid="prompts-table"
+                columns={[
               {
                 title: "",
                 dataIndex: "favorite",
@@ -2551,7 +2598,7 @@ export const PromptBody = () => {
                 sortOrder:
                   promptSort.key === "title" ? promptSort.order : undefined,
                 render: (_: any, record: any) => (
-                  <div className="flex max-w-64 flex-col">
+                  <div className="flex max-w-56 flex-col sm:max-w-64">
                     <span className="line-clamp-1 font-medium">
                       {record?.name || record?.title}
                     </span>
@@ -2568,6 +2615,38 @@ export const PromptBody = () => {
                         {record.details}
                       </span>
                     )}
+                    {isCompactViewport && (
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] text-text-muted">
+                          {formatRelativePromptTime(getPromptModifiedAt(record))}
+                        </span>
+                        <Tooltip
+                          title={
+                            !isOnline
+                              ? t("managePrompts.sync.offlineTooltip", {
+                                  defaultValue:
+                                    "Sync unavailable (offline). Showing last known status."
+                                })
+                              : undefined
+                          }
+                        >
+                          <span className={!isOnline ? "opacity-60" : undefined}>
+                            <SyncStatusBadge
+                              syncStatus={record.syncStatus || "local"}
+                              sourceSystem={record.sourceSystem || "workspace"}
+                              serverId={record.serverId}
+                              lastSyncedAt={record.lastSyncedAt}
+                              compact
+                              onClick={
+                                isOnline && record.syncStatus === "conflict"
+                                  ? () => openConflictResolution(record.id)
+                                  : undefined
+                              }
+                            />
+                          </span>
+                        </Tooltip>
+                      </div>
+                    )}
                   </div>
                 )
               },
@@ -2582,7 +2661,9 @@ export const PromptBody = () => {
                       typeof value === "string" && value.trim().length > 180
                   )
                   return (
-                    <div className="flex max-w-[26rem] flex-col gap-1">
+                    <div
+                      className={`flex flex-col gap-1 ${isCompactViewport ? "max-w-[14rem]" : "max-w-[26rem]"}`}
+                    >
                       {systemText && (
                         <div className="flex items-start gap-2">
                           <Tag color="volcano">
@@ -2594,7 +2675,9 @@ export const PromptBody = () => {
                             className={
                               isExpanded
                                 ? "whitespace-pre-wrap break-words"
-                                : "line-clamp-2"
+                                : isCompactViewport
+                                  ? "line-clamp-1"
+                                  : "line-clamp-2"
                             }
                           >
                             {systemText}
@@ -2612,7 +2695,9 @@ export const PromptBody = () => {
                             className={
                               isExpanded
                                 ? "whitespace-pre-wrap break-words"
-                                : "line-clamp-2"
+                                : isCompactViewport
+                                  ? "line-clamp-1"
+                                  : "line-clamp-2"
                             }
                           >
                             {userText}
@@ -2639,140 +2724,165 @@ export const PromptBody = () => {
                   )
                 }
               },
-              {
-                title: t("managePrompts.tags.label", { defaultValue: "Keywords" }),
-                dataIndex: "keywords",
-                key: "keywords",
-                render: (_: any, record: any) => {
-                  const tags = getPromptKeywords(record)
-                  return (
-                    <div className="flex max-w-64 flex-wrap gap-1">
-                      {(tags || []).map((tag: string) => (
-                        <Tag key={tag}>{tag}</Tag>
-                      ))}
-                    </div>
-                  )
-                }
-              },
-              {
-                title: t("managePrompts.columns.type"),
-                key: "type",
-                width: 80,
-                sorter: true,
-                sortOrder: promptSort.key === "type" ? promptSort.order : undefined,
-                render: (_: any, record: any) => {
-                  const promptType = getPromptType(record)
-                  const hasSystem = promptType === "system" || promptType === "mixed"
-                  const hasQuick = promptType === "quick" || promptType === "mixed"
-                  const typeDescription = hasSystem && hasQuick
-                    ? t("managePrompts.type.mixed", { defaultValue: "System and quick prompt" })
-                    : hasSystem
-                    ? t("managePrompts.type.system", { defaultValue: "System prompt" })
-                    : t("managePrompts.type.quick", { defaultValue: "Quick prompt" })
-                  return (
-                    <div
-                      className="flex items-center gap-1"
-                      role="group"
-                      aria-label={t("managePrompts.type.ariaLabel", { defaultValue: "Prompt type: {{type}}", type: typeDescription })}
-                    >
-                      <Tooltip title={systemPromptLabel}>
-                        <span>
-                          <Computer
-                            className={`size-4 ${hasSystem ? "text-warn" : "text-text-muted/30"}`}
-                            aria-hidden="true"
-                          />
-                        </span>
-                      </Tooltip>
-                      <Tooltip title={quickPromptLabel}>
-                        <span>
-                          <Zap
-                            className={`size-4 ${hasQuick ? "text-primary" : "text-text-muted/30"}`}
-                            aria-hidden="true"
-                          />
-                        </span>
-                      </Tooltip>
-                    </div>
-                  )
-                }
-              },
-              {
-                title: t("managePrompts.columns.modified", {
-                  defaultValue: "Modified"
-                }),
-                key: "modifiedAt",
-                width: 120,
-                sorter: true,
-                sortOrder:
-                  promptSort.key === "modifiedAt" ? promptSort.order : undefined,
-                render: (_: any, record: any) => {
-                  const modifiedAt = getPromptModifiedAt(record)
-                  const createdAt = record?.createdAt
-                  return (
-                    <Tooltip
-                      title={
-                        <div className="text-xs">
-                          <div>
-                            {t("managePrompts.columns.modified", {
-                              defaultValue: "Modified"
-                            })}
-                            :{" "}
-                            {modifiedAt
-                              ? new Date(modifiedAt).toLocaleString()
-                              : t("common:unknown", { defaultValue: "Unknown" })}
+              ...(!isCompactViewport
+                ? [
+                    {
+                      title: t("managePrompts.tags.label", {
+                        defaultValue: "Keywords"
+                      }),
+                      dataIndex: "keywords",
+                      key: "keywords",
+                      render: (_: any, record: any) => {
+                        const tags = getPromptKeywords(record)
+                        return (
+                          <div className="flex max-w-64 flex-wrap gap-1">
+                            {(tags || []).map((tag: string) => (
+                              <Tag key={tag}>{tag}</Tag>
+                            ))}
                           </div>
-                          {createdAt ? (
-                            <div>
-                              {t("managePrompts.columns.created", {
-                                defaultValue: "Created"
-                              })}
-                              : {new Date(createdAt).toLocaleString()}
-                            </div>
-                          ) : null}
-                        </div>
+                        )
                       }
-                    >
-                      <span className="text-xs text-text-muted">
-                        {formatRelativePromptTime(modifiedAt)}
-                      </span>
-                    </Tooltip>
-                  )
-                }
-              },
-              {
-                title: t("managePrompts.columns.sync", { defaultValue: "Sync" }),
-                key: "syncStatus",
-                width: 110,
-                render: (_: any, record: any) => (
-                  <Tooltip
-                    title={
-                      !isOnline
-                        ? t("managePrompts.sync.offlineTooltip", {
-                            defaultValue:
-                              "Sync unavailable (offline). Showing last known status."
-                          })
-                        : undefined
+                    },
+                    {
+                      title: t("managePrompts.columns.type"),
+                      key: "type",
+                      width: 80,
+                      sorter: true,
+                      sortOrder:
+                        promptSort.key === "type" ? promptSort.order : undefined,
+                      render: (_: any, record: any) => {
+                        const promptType = getPromptType(record)
+                        const hasSystem =
+                          promptType === "system" || promptType === "mixed"
+                        const hasQuick =
+                          promptType === "quick" || promptType === "mixed"
+                        const typeDescription =
+                          hasSystem && hasQuick
+                            ? t("managePrompts.type.mixed", {
+                                defaultValue: "System and quick prompt"
+                              })
+                            : hasSystem
+                              ? t("managePrompts.type.system", {
+                                  defaultValue: "System prompt"
+                                })
+                              : t("managePrompts.type.quick", {
+                                  defaultValue: "Quick prompt"
+                                })
+                        return (
+                          <div
+                            className="flex items-center gap-1"
+                            role="group"
+                            aria-label={t("managePrompts.type.ariaLabel", {
+                              defaultValue: "Prompt type: {{type}}",
+                              type: typeDescription
+                            })}
+                          >
+                            <Tooltip title={systemPromptLabel}>
+                              <span>
+                                <Computer
+                                  className={`size-4 ${hasSystem ? "text-warn" : "text-text-muted/30"}`}
+                                  aria-hidden="true"
+                                />
+                              </span>
+                            </Tooltip>
+                            <Tooltip title={quickPromptLabel}>
+                              <span>
+                                <Zap
+                                  className={`size-4 ${hasQuick ? "text-primary" : "text-text-muted/30"}`}
+                                  aria-hidden="true"
+                                />
+                              </span>
+                            </Tooltip>
+                          </div>
+                        )
+                      }
+                    },
+                    {
+                      title: t("managePrompts.columns.modified", {
+                        defaultValue: "Modified"
+                      }),
+                      key: "modifiedAt",
+                      width: 120,
+                      sorter: true,
+                      sortOrder:
+                        promptSort.key === "modifiedAt"
+                          ? promptSort.order
+                          : undefined,
+                      render: (_: any, record: any) => {
+                        const modifiedAt = getPromptModifiedAt(record)
+                        const createdAt = record?.createdAt
+                        return (
+                          <Tooltip
+                            title={
+                              <div className="text-xs">
+                                <div>
+                                  {t("managePrompts.columns.modified", {
+                                    defaultValue: "Modified"
+                                  })}
+                                  :{" "}
+                                  {modifiedAt
+                                    ? new Date(modifiedAt).toLocaleString()
+                                    : t("common:unknown", {
+                                        defaultValue: "Unknown"
+                                      })}
+                                </div>
+                                {createdAt ? (
+                                  <div>
+                                    {t("managePrompts.columns.created", {
+                                      defaultValue: "Created"
+                                    })}
+                                    : {new Date(createdAt).toLocaleString()}
+                                  </div>
+                                ) : null}
+                              </div>
+                            }
+                          >
+                            <span className="text-xs text-text-muted">
+                              {formatRelativePromptTime(modifiedAt)}
+                            </span>
+                          </Tooltip>
+                        )
+                      }
+                    },
+                    {
+                      title: t("managePrompts.columns.sync", {
+                        defaultValue: "Sync"
+                      }),
+                      key: "syncStatus",
+                      width: 110,
+                      render: (_: any, record: any) => (
+                        <Tooltip
+                          title={
+                            !isOnline
+                              ? t("managePrompts.sync.offlineTooltip", {
+                                  defaultValue:
+                                    "Sync unavailable (offline). Showing last known status."
+                                })
+                              : undefined
+                          }
+                        >
+                          <div className={!isOnline ? "opacity-60" : undefined}>
+                            <SyncStatusBadge
+                              syncStatus={record.syncStatus || "local"}
+                              sourceSystem={record.sourceSystem || "workspace"}
+                              serverId={record.serverId}
+                              lastSyncedAt={record.lastSyncedAt}
+                              compact
+                              onClick={
+                                isOnline && record.syncStatus === "conflict"
+                                  ? () => openConflictResolution(record.id)
+                                  : undefined
+                              }
+                            />
+                          </div>
+                        </Tooltip>
+                      )
                     }
-                  >
-                    <div className={!isOnline ? "opacity-60" : undefined}>
-                      <SyncStatusBadge
-                        syncStatus={record.syncStatus || "local"}
-                        sourceSystem={record.sourceSystem || "workspace"}
-                        serverId={record.serverId}
-                        lastSyncedAt={record.lastSyncedAt}
-                        compact
-                        onClick={
-                          isOnline && record.syncStatus === "conflict"
-                            ? () => openConflictResolution(record.id)
-                            : undefined
-                        }
-                      />
-                    </div>
-                  </Tooltip>
-                )
-              },
+                  ]
+                : []),
               {
                 title: t("managePrompts.columns.actions"),
-                width: 140,
+                width: isCompactViewport ? 108 : 140,
                 render: (_, record) => (
                   <PromptActionsMenu
                     promptId={record.id}
@@ -2848,10 +2958,11 @@ export const PromptBody = () => {
                 )
               }
             ]}
-            bordered
-            dataSource={paginatedData}
-            rowKey={(record) => record.id}
-            pagination={{
+                bordered
+                dataSource={paginatedData}
+                rowKey={(record) => record.id}
+                scroll={isCompactViewport ? { x: 980 } : undefined}
+                pagination={{
               current: currentPage,
               pageSize: resultsPerPage,
               total: tableTotal,
@@ -2865,7 +2976,7 @@ export const PromptBody = () => {
                   total
                 })
             }}
-            onChange={(pagination, _filters, sorter) => {
+                onChange={(pagination, _filters, sorter) => {
               const nextPage = pagination.current || 1
               const nextPageSize = pagination.pageSize || resultsPerPage
               if (nextPageSize !== resultsPerPage) {
@@ -2883,29 +2994,38 @@ export const PromptBody = () => {
                 order: nextOrder
               })
             }}
-            onRow={(record) =>
-              ({
-                "data-testid": `prompt-row-${record.id}`,
-                tabIndex: 0,
-                role: "row",
-                onKeyDown: (e: React.KeyboardEvent) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault()
-                    openEditDrawer(record)
-                  }
-                },
-                onDoubleClick: () => openEditDrawer(record),
-                className: "cursor-pointer focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary"
-              } as React.HTMLAttributes<HTMLTableRowElement>)
-            }
-            rowSelection={{
-              selectedRowKeys,
-              onChange: (keys) => setSelectedRowKeys(keys),
-              getCheckboxProps: () => ({
-                disabled: isFireFoxPrivateMode
-              })
-            }}
-          />
+                onRow={(record) =>
+                  ({
+                    "data-testid": `prompt-row-${record.id}`,
+                    tabIndex: 0,
+                    role: "row",
+                    onKeyDown: (e: React.KeyboardEvent) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        openEditDrawer(record)
+                      }
+                    },
+                    onDoubleClick: () => openEditDrawer(record),
+                    className: "cursor-pointer focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary"
+                  } as React.HTMLAttributes<HTMLTableRowElement>)
+                }
+                rowSelection={{
+                  selectedRowKeys,
+                  onChange: (keys) => setSelectedRowKeys(keys),
+                  getCheckboxProps: () => ({
+                    disabled: isFireFoxPrivateMode
+                  })
+                }}
+              />
+            </div>
+            {isCompactViewport && (
+              <div
+                data-testid="prompts-table-overflow-indicator"
+                className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-bg to-transparent sm:hidden"
+                aria-hidden="true"
+              />
+            )}
+          </div>
         )}
       </div>
     )

@@ -1,0 +1,106 @@
+import { render, screen } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { WorkspacePlayground } from "../index"
+
+const testState = {
+  isMobile: false,
+  storeHydrated: true,
+  leftPaneCollapsed: false,
+  rightPaneCollapsed: false,
+  workspaceId: "workspace-1",
+  initializeWorkspace: vi.fn(),
+  addSources: vi.fn(),
+  setSelectedSourceIds: vi.fn(),
+  captureToCurrentNote: vi.fn(),
+  selectedSourceIds: [] as string[],
+  generatedArtifacts: [] as Array<{ id: string }>,
+  setLeftPaneCollapsed: vi.fn(),
+  setRightPaneCollapsed: vi.fn(),
+  focusSourceById: vi.fn(() => true),
+  focusChatMessageById: vi.fn(() => true),
+  focusWorkspaceNote: vi.fn(),
+  setSourceStatusByMediaId: vi.fn(),
+  sources: [] as Array<{
+    id: string
+    mediaId: number
+    title: string
+    type: "pdf" | "video" | "audio" | "website" | "document" | "text"
+    addedAt: Date
+  }>,
+  workspaceChatSessions: {} as Record<string, { messages: any[] }>,
+  currentNote: {
+    id: 7,
+    title: "",
+    content: "",
+    keywords: [] as string[],
+    isDirty: false
+  }
+}
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (
+      key: string,
+      defaultValueOrOptions?:
+        | string
+        | {
+            defaultValue?: string
+          }
+    ) => {
+      if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
+      if (defaultValueOrOptions?.defaultValue) return defaultValueOrOptions.defaultValue
+      return key
+    }
+  })
+}))
+
+vi.mock("@/hooks/useMediaQuery", () => ({
+  useMobile: () => testState.isMobile
+}))
+
+vi.mock("@/store/workspace", () => ({
+  useWorkspaceStore: (selector: (state: typeof testState) => unknown) =>
+    selector(testState)
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    getMediaDetails: vi.fn().mockResolvedValue({})
+  }
+}))
+
+vi.mock("@/utils/workspace-playground-prefill", () => ({
+  consumeWorkspacePlaygroundPrefill: vi.fn().mockResolvedValue(null),
+  buildKnowledgeQaSeedNote: vi.fn().mockReturnValue("")
+}))
+
+vi.mock("../WorkspaceHeader", () => ({
+  WorkspaceHeader: () => <div data-testid="workspace-header" />
+}))
+
+vi.mock("../SourcesPane", () => ({
+  SourcesPane: () => <div data-testid="workspace-sources-pane">Sources</div>
+}))
+
+vi.mock("../ChatPane", () => ({
+  ChatPane: () => {
+    throw new Error("chat pane crash")
+  }
+}))
+
+vi.mock("../StudioPane", () => ({
+  StudioPane: () => <div data-testid="workspace-studio-pane">Studio</div>
+}))
+
+describe("WorkspacePlayground error boundary", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("shows recoverable fallback and reload action on render crash", () => {
+    render(<WorkspacePlayground />)
+
+    expect(screen.getByText("Something went wrong")).toBeInTheDocument()
+    expect(screen.getByTestId("workspace-reload-button")).toBeInTheDocument()
+  })
+})

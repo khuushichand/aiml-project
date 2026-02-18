@@ -21,7 +21,7 @@ Finding IDs: `9.1` through `9.3`
 - Component tests for tooltip content and accessibility attributes.
 - Regression tests ensuring both callbacks still dispatch correctly.
 - UX copy snapshot test to avoid accidental wording drift.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Multi-Item "Chat About Selection"
 **Goal**: Let users launch RAG chat across selected items in `/media-multi`.
@@ -33,7 +33,7 @@ Finding IDs: `9.1` through `9.3`
 - Integration tests for selection -> chat launch payload.
 - Component tests for action enable/disable states.
 - Regression tests for single-item chat entry points.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Stability and Backward Compatibility
 **Goal**: Ensure new chat entry paths do not regress existing chat behavior.
@@ -45,7 +45,7 @@ Finding IDs: `9.1` through `9.3`
 - Event contract tests for media chat events.
 - Integration tests for both single-item and multi-item launch paths.
 - Error-state tests for chat target initialization failure.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

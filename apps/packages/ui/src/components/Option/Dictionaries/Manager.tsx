@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AutoComplete, Button, Collapse, Divider, Form, Input, Modal, Skeleton, Switch, Table, Tooltip, Tag, InputNumber, Select, Descriptions, Popover } from "antd"
+import { AutoComplete, Button, Collapse, Divider, Drawer, Form, Input, Modal, Skeleton, Switch, Table, Tooltip, Tag, InputNumber, Select, Descriptions, Popover, Slider } from "antd"
 import { useTranslation } from "react-i18next"
 import React from "react"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
@@ -197,6 +197,18 @@ export const DictionariesManager: React.FC = () => {
     () => filterDictionariesBySearch(Array.isArray(data) ? data : [], dictionarySearch),
     [data, dictionarySearch]
   )
+  const activeEntriesDictionary = React.useMemo(() => {
+    if (openEntries == null) return null
+    return (
+      (Array.isArray(data) ? data : []).find(
+        (dictionary: any) => Number(dictionary?.id) === Number(openEntries)
+      ) || null
+    )
+  }, [data, openEntries])
+  const useMobileEntriesDrawer =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(max-width: 767px)").matches
 
   const dictionariesById = React.useMemo(() => {
     const map = new Map<number, any>()
@@ -722,9 +734,20 @@ export const DictionariesManager: React.FC = () => {
         </Form>
       </Modal>
 
-      <Modal title="Manage Entries" open={!!openEntries} onCancel={() => setOpenEntries(null)} footer={null}>
+      <Drawer
+        title={
+          activeEntriesDictionary?.name
+            ? `Manage Entries: ${activeEntriesDictionary.name}`
+            : "Manage Entries"
+        }
+        open={!!openEntries}
+        onClose={() => setOpenEntries(null)}
+        placement="right"
+        destroyOnClose
+        size={useMobileEntriesDrawer ? "100vw" : 1040}
+      >
         {openEntries && <DictionaryEntryManager dictionaryId={openEntries} form={entryForm} />}
-      </Modal>
+      </Drawer>
       <Modal title="Import Dictionary (JSON)" open={openImport} onCancel={handleCloseImportModal} footer={null}>
         <div className="space-y-3">
           <input type="file" accept="application/json" onChange={async (e) => {
@@ -858,6 +881,20 @@ function buildTimedEffectsPayload(
     cooldown,
     delay
   }
+}
+
+function normalizeProbabilityValue(value: unknown, fallback = 1): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback
+  }
+  return Math.min(1, Math.max(0, value))
+}
+
+function formatProbabilityFrequencyHint(value: unknown): string {
+  const normalizedValue = normalizeProbabilityValue(value, 1)
+  const percent = Math.round(normalizedValue * 100)
+  const outOfTen = Math.round(normalizedValue * 10)
+  return `Fires ~${outOfTen} out of 10 messages (${percent}%).`
 }
 
 function extractRegexSafetyMessage(validationReport: any): string | null {
@@ -2575,8 +2612,48 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
           <Form.Item name="enabled" label="Enabled" valuePropName="checked" initialValue={true}>
             <Switch />
           </Form.Item>
-          <Form.Item name="probability" label="Probability" initialValue={1}>
+          <Form.Item
+            name="probability"
+            label="Probability"
+            initialValue={1}
+            rules={[
+              {
+                type: "number",
+                min: 0,
+                max: 1,
+                message: "Probability must be between 0 and 1."
+              }
+            ]}
+          >
             <InputNumber min={0} max={1} step={0.01} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, current) => prev.probability !== current.probability}>
+            {() => {
+              const probabilityValue = Number(
+                normalizeProbabilityValue(editEntryForm.getFieldValue("probability"), 1).toFixed(2)
+              )
+              return (
+                <div className="mt-[-8px] mb-3">
+                  <Slider
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={probabilityValue}
+                    onChange={(value) => {
+                      const nextValue = Array.isArray(value) ? value[0] : value
+                      editEntryForm.setFieldValue(
+                        "probability",
+                        Number(normalizeProbabilityValue(nextValue, 1).toFixed(2))
+                      )
+                    }}
+                    aria-label="Probability slider"
+                  />
+                  <div className="text-xs text-text-muted">
+                    {formatProbabilityFrequencyHint(probabilityValue)}
+                  </div>
+                </div>
+              )
+            }}
           </Form.Item>
           <Form.Item name="group" label="Group">
             <AutoComplete
@@ -2589,7 +2666,15 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
               }
             />
           </Form.Item>
-          <Form.Item name="max_replacements" label="Max Replacements">
+          <Form.Item
+            name="max_replacements"
+            label={
+              <LabelWithHelp
+                label="Max Replacements"
+                help="Probability controls whether this entry fires. Max replacements caps how many times it can apply per message."
+              />
+            }
+          >
             <InputNumber min={0} style={{ width: "100%" }} />
           </Form.Item>
           <div className="grid gap-3 sm:grid-cols-3">
@@ -2690,6 +2775,8 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
             }
 
             const payload: Record<string, any> = { ...v }
+            payload.case_sensitive =
+              typeof v?.case_sensitive === "boolean" ? v.case_sensitive : false
             const timedEffectsPayload = buildTimedEffectsPayload(v?.timed_effects)
             if (timedEffectsPayload) {
               payload.timed_effects = timedEffectsPayload
@@ -2814,8 +2901,44 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                   />
                 }
                 initialValue={1}
+                rules={[
+                  {
+                    type: "number",
+                    min: 0,
+                    max: 1,
+                    message: "Probability must be between 0 and 1."
+                  }
+                ]}
               >
                 <InputNumber min={0} max={1} step={0.01} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item noStyle shouldUpdate={(prev, current) => prev.probability !== current.probability}>
+                {() => {
+                  const probabilityValue = Number(
+                    normalizeProbabilityValue(form.getFieldValue("probability"), 1).toFixed(2)
+                  )
+                  return (
+                    <div className="-mt-2 mb-3">
+                      <Slider
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={probabilityValue}
+                        onChange={(value) => {
+                          const nextValue = Array.isArray(value) ? value[0] : value
+                          form.setFieldValue(
+                            "probability",
+                            Number(normalizeProbabilityValue(nextValue, 1).toFixed(2))
+                          )
+                        }}
+                        aria-label="Probability slider"
+                      />
+                      <div className="text-xs text-text-muted">
+                        {formatProbabilityFrequencyHint(probabilityValue)}
+                      </div>
+                    </div>
+                  )
+                }}
               </Form.Item>
               <Form.Item
                 name="group"
@@ -2842,14 +2965,14 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
               <Form.Item
                 name="max_replacements"
                 label={
-                  <LabelWithHelp
-                    label={t("option:dictionaries.maxReplacementsLabel", "Max replacements")}
-                    help={t(
-                      "option:dictionaries.maxReplacementsHelp",
-                      "Limit how many times this pattern is replaced per message. Leave empty for unlimited."
-                    )}
-                  />
-                }
+                    <LabelWithHelp
+                      label={t("option:dictionaries.maxReplacementsLabel", "Max replacements")}
+                      help={t(
+                        "option:dictionaries.maxReplacementsHelp",
+                        "Probability controls whether this entry fires. Max replacements limits how many replacements happen when it does."
+                      )}
+                    />
+                  }
               >
                 <InputNumber min={0} style={{ width: "100%" }} placeholder="Unlimited" />
               </Form.Item>
@@ -2910,6 +3033,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                     />
                   }
                   valuePropName="checked"
+                  initialValue={false}
                 >
                   <Switch />
                 </Form.Item>

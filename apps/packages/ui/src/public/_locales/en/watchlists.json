@@ -119,6 +119,15 @@
   "sources_never": {
     "message": "Never"
   },
+  "sources_staleCount": {
+    "message": "Stale x{{count}}"
+  },
+  "sources_backoffUntil": {
+    "message": "Backoff {{time}}"
+  },
+  "sources_seenInfo": {
+    "message": "Source Health & Dedup Stats"
+  },
   "sources_columns_name": {
     "message": "Name"
   },
@@ -133,6 +142,9 @@
   },
   "sources_columns_active": {
     "message": "Active"
+  },
+  "sources_columns_status": {
+    "message": "Status"
   },
   "sources_columns_actions": {
     "message": "Actions"
@@ -242,6 +254,12 @@
   "jobs_never": {
     "message": "Never"
   },
+  "jobs_pending": {
+    "message": "Pending"
+  },
+  "jobs_notScheduled": {
+    "message": "Not scheduled"
+  },
   "jobs_columns_name": {
     "message": "Name"
   },
@@ -256,6 +274,9 @@
   },
   "jobs_columns_lastRun": {
     "message": "Last Run"
+  },
+  "jobs_columns_nextRun": {
+    "message": "Next Run"
   },
   "jobs_columns_active": {
     "message": "Active"
@@ -415,6 +436,12 @@
   },
   "runs_filterByStatus": {
     "message": "Filter by status"
+  },
+  "runs_autoRefreshing": {
+    "message": "Auto-refreshing"
+  },
+  "runs_lastRefreshed": {
+    "message": "Last refreshed {{time}}"
   },
   "runs_columns_job": {
     "message": "Job"

@@ -168,6 +168,18 @@ vi.mock("../source-location-copy", () => ({
     "Select sources from the Sources pane, then ask questions."
 }))
 
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    getChatLorebookDiagnostics: vi.fn(async () => ({
+      chat_id: "chat",
+      total_turns_with_diagnostics: 0,
+      turns: [],
+      page: 1,
+      size: 8
+    }))
+  }
+}))
+
 describe("ChatPane Stage 1 reliability and controls", () => {
   beforeEach(() => {
     vi.clearAllMocks()

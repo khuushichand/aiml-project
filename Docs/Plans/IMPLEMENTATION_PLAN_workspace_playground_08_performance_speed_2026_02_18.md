@@ -33,7 +33,7 @@ Finding IDs: `8.1` through `8.6`
 **Tests**:
 - Integration test for optimistic add then async status update.
 - Unit tests for status polling reducer and timeout handling.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Data Fetch and Rendering Scalability
 **Goal**: Reduce repeated requests and maintain smooth scrolling at scale.
@@ -45,7 +45,7 @@ Finding IDs: `8.1` through `8.6`
 - Integration test proving cached reopen avoids redundant fetch.
 - Component perf test for large-list virtualization threshold.
 - Regression tests for chat scroll and live-region behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
@@ -67,3 +67,37 @@ Finding IDs: `8.1` through `8.6`
 - Validation:
   - `cd apps/packages/ui && bunx vitest run src/store/__tests__/workspace.test.ts src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.desktop-layout.test.tsx --reporter=verbose`
   - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage2.responsive.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage3.test.tsx --reporter=verbose`
+
+- Stage 2 completed:
+  - Added source processing state modeling (`processing`/`ready`/`error`) and persisted it in workspace source records.
+  - Updated Add Source ingestion flows (upload/url/paste/search) to add sources in `processing` state immediately; library selection adds `ready` sources.
+  - Added source row processing/error indicators in `SourcesPane` and disabled selection/drag for non-ready sources.
+  - Added background source status polling in `WorkspacePlayground` using `getMediaDetails`; processing sources auto-transition to `ready` when content becomes available and to `error` after repeated non-transient failures.
+  - Updated workspace selection logic so RAG context includes only `ready` sources (`selectAll`, `setSelectedSourceIds`, `getSelectedMediaIds`, and status transitions all enforce this).
+- Files updated:
+  - `apps/packages/ui/src/types/workspace.ts`
+  - `apps/packages/ui/src/store/workspace.ts`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/index.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/SourcesPane/index.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/SourcesPane/AddSourceModal.tsx`
+  - `apps/packages/ui/src/store/__tests__/workspace.test.ts`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/SourcesPane.stage2.test.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage2.responsive.test.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.desktop-layout.test.tsx`
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage1.mobile.test.tsx src/components/Option/WorkspacePlayground/__tests__/SourcesPane.stage2.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.desktop-layout.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage2.responsive.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx src/store/__tests__/workspace.test.ts --reporter=verbose`
+
+- Stage 3 completed:
+  - Added cache-first behavior for Existing/Library media in `AddSourceModal` with TTL-based reuse across modal reopen events.
+  - Added threshold-based source list virtualization in `SourcesPane` for large source counts, including focused-source scroll alignment when virtualized.
+  - Kept chat smart-scroll/live-region behavior untouched while validating WorkspacePlayground integration tests.
+- Files updated:
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/SourcesPane/AddSourceModal.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/SourcesPane/index.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage3.performance.test.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/SourcesPane.stage2.test.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx`
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage3.performance.test.tsx src/components/Option/WorkspacePlayground/__tests__/SourcesPane.stage2.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx src/store/__tests__/workspace.test.ts --reporter=verbose`
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage1.mobile.test.tsx src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage3.performance.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.desktop-layout.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage2.responsive.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx src/components/Option/WorkspacePlayground/__tests__/SourcesPane.stage2.test.tsx src/store/__tests__/workspace.test.ts --reporter=dot`

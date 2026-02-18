@@ -75,6 +75,7 @@ export const RunsTab: React.FC = () => {
   const [jobs, setJobs] = useState<WatchlistJob[]>([])
   const [exportingRunsCsv, setExportingRunsCsv] = useState(false)
   const [runsCsvTalliesMode, setRunsCsvTalliesMode] = useState<RunsCsvTalliesMode>("none")
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null)
 
   // Store actions
   const setRuns = useWatchlistsStore((s) => s.setRuns)
@@ -124,6 +125,7 @@ export const RunsTab: React.FC = () => {
       // Check if any runs are still running
       const hasRunning = items.some((r) => r.status === "running" || r.status === "pending")
       setPollingActive(hasRunning)
+      setLastRefreshedAt(new Date().toISOString())
     } catch (err) {
       console.error("Failed to fetch runs:", err)
       if (showLoading) {
@@ -533,13 +535,22 @@ export const RunsTab: React.FC = () => {
           />
         </div>
         <div className="flex items-center gap-2">
+          {lastRefreshedAt && (
+            <Tooltip title={new Date(lastRefreshedAt).toLocaleString()}>
+              <span className="text-sm text-text-muted">
+                {t("watchlists:runs.lastRefreshed", "Last refreshed {{time}}", {
+                  time: formatRelativeTime(lastRefreshedAt, t, { compact: true })
+                })}
+              </span>
+            </Tooltip>
+          )}
           {pollingActive && (
             <span className="text-sm text-primary flex items-center gap-1">
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
               </span>
-              Auto-refreshing
+              {t("watchlists:runs.autoRefreshing", "Auto-refreshing")}
             </span>
           )}
           <Button

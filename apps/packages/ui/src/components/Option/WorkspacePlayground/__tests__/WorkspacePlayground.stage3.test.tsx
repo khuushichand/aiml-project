@@ -2,8 +2,13 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { WorkspacePlayground } from "../index"
 
+const { mockGetMediaDetails } = vi.hoisted(() => ({
+  mockGetMediaDetails: vi.fn()
+}))
+
 const testState = {
   isMobile: false,
+  storeHydrated: true,
   leftPaneCollapsed: false,
   rightPaneCollapsed: false,
   workspaceId: "workspace-1",
@@ -18,12 +23,14 @@ const testState = {
   focusSourceById: vi.fn(() => true),
   focusChatMessageById: vi.fn(() => true),
   focusWorkspaceNote: vi.fn(),
+  setSourceStatusByMediaId: vi.fn(),
   sources: [] as Array<{
     id: string
     mediaId: number
     title: string
     type: "pdf" | "video" | "audio" | "website" | "document" | "text"
     addedAt: Date
+    status?: "processing" | "ready" | "error"
     url?: string
   }>,
   workspaceChatSessions: {} as Record<string, { messages: any[] }>,
@@ -60,6 +67,12 @@ vi.mock("@/hooks/useMediaQuery", () => ({
 vi.mock("@/store/workspace", () => ({
   useWorkspaceStore: (selector: (state: typeof testState) => unknown) =>
     selector(testState)
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    getMediaDetails: mockGetMediaDetails
+  }
 }))
 
 vi.mock("@/utils/workspace-playground-prefill", () => ({
@@ -120,12 +133,14 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     testState.isMobile = false
+    testState.storeHydrated = true
     testState.leftPaneCollapsed = false
     testState.rightPaneCollapsed = false
     testState.workspaceId = "workspace-1"
     testState.selectedSourceIds = []
     testState.generatedArtifacts = []
     testState.sources = []
+    testState.setSourceStatusByMediaId = vi.fn()
     testState.workspaceChatSessions = {}
     testState.currentNote = {
       id: 7,
@@ -134,6 +149,7 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
       keywords: [],
       isDirty: false
     }
+    mockGetMediaDetails.mockResolvedValue({})
   })
 
   it("opens and closes workspace search with keyboard shortcuts", async () => {
@@ -253,6 +269,79 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
     expect(
       screen.queryByTestId("workspace-switch-transition")
     ).not.toBeInTheDocument()
+
+    vi.useRealTimers()
+  })
+
+  it("promotes processing sources to ready when polling detects completed content", async () => {
+    testState.sources = [
+      {
+        id: "source-processing",
+        mediaId: 808,
+        title: "Queued Source",
+        type: "pdf",
+        status: "processing",
+        addedAt: new Date("2026-02-18T12:00:00.000Z")
+      }
+    ]
+    mockGetMediaDetails.mockResolvedValue({
+      content: {
+        text: "Processed transcript text"
+      }
+    })
+
+    render(<WorkspacePlayground />)
+
+    await waitFor(() => {
+      expect(mockGetMediaDetails).toHaveBeenCalledWith(
+        808,
+        expect.objectContaining({
+          include_content: true
+        })
+      )
+      expect(testState.setSourceStatusByMediaId).toHaveBeenCalledWith(
+        808,
+        "ready"
+      )
+    })
+  })
+
+  it("marks processing sources as error after repeated non-transient polling failures", async () => {
+    vi.useFakeTimers()
+    testState.sources = [
+      {
+        id: "source-processing-error",
+        mediaId: 909,
+        title: "Broken Source",
+        type: "video",
+        status: "processing",
+        addedAt: new Date("2026-02-18T12:30:00.000Z")
+      }
+    ]
+
+    const error = new Error("Malformed metadata") as Error & { status?: number }
+    error.status = 400
+    mockGetMediaDetails.mockRejectedValue(error)
+
+    render(<WorkspacePlayground />)
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(mockGetMediaDetails).toHaveBeenCalledTimes(1)
+    expect(testState.setSourceStatusByMediaId).not.toHaveBeenCalled()
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(testState.setSourceStatusByMediaId).toHaveBeenCalledWith(
+      909,
+      "error",
+      "Malformed metadata"
+    )
 
     vi.useRealTimers()
   })

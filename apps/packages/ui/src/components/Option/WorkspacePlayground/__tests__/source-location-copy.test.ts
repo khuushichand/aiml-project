@@ -9,6 +9,9 @@ describe("workspace source location copy", () => {
   it("uses tab wording on mobile", () => {
     expect(getWorkspaceSourcesLocationLabel(true)).toBe("Sources tab")
     expect(getWorkspaceChatNoSourcesHint(true)).toContain("Sources tab")
+    expect(getWorkspaceChatNoSourcesHint(true).toLowerCase()).toContain(
+      "general chat"
+    )
     expect(getWorkspaceStudioNoSourcesHint(true)).toContain("Sources tab")
   })
 

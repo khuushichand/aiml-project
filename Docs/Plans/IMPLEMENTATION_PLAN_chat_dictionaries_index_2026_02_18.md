@@ -78,8 +78,8 @@ This index coordinates execution and reporting across all 11 category plans crea
 | ID | Plan | Priority | Status | Stage Progress | Owner | Blocked By | Last Update |
 |---|---|---|---|---|---|---|---|
 | 01 | Dictionary List & Overview | P0 | Complete | 4/4 (All stages complete) | Unassigned | None | 2026-02-18 |
-| 02 | Entry Management | P0 | In Progress | 3/4 (Stages 1-3 complete) | Unassigned | 01, 08 | 2026-02-18 |
-| 03 | Probability & Timed Effects | P1 | Not Started | 0/3 | Unassigned | 02, 04 | 2026-02-18 |
+| 02 | Entry Management | P0 | Complete | 4/4 (All stages complete) | Unassigned | None | 2026-02-18 |
+| 03 | Probability & Timed Effects | P1 | Complete | 3/3 (All stages complete) | Unassigned | None | 2026-02-18 |
 | 04 | Validation & Testing | P1 | Not Started | 0/3 | Unassigned | 02 | 2026-02-18 |
 | 05 | Import / Export | P1 | Not Started | 0/3 | Unassigned | 01, 08 | 2026-02-18 |
 | 06 | Statistics & Usage Insights | P2 | Not Started | 0/3 | Unassigned | 07 | 2026-02-18 |

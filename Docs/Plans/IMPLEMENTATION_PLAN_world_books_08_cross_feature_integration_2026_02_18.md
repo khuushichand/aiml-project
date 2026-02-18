@@ -57,7 +57,7 @@ Finding IDs: `8.1` through `8.4`
 - Integration tests for turn-level activity rendering from diagnostics data.
 - Authorization tests for diagnostic visibility in multi-user mode.
 - Performance test for long chat sessions with many turns.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
@@ -120,3 +120,23 @@ Finding IDs: `8.1` through `8.4`
 - Validation run:
   - `bunx vitest run src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage3.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage2.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage1.test.tsx src/components/Option/Characters/__tests__/Manager.crossFeatureStage1.test.tsx`
   - result: **4 passed / 4 files**, **6 passed / 6 tests**.
+- Implemented Stage 4 per-turn lorebook activity surface in chat session UI:
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorkspacePlayground/ChatPane/index.tsx`
+    - added `Lorebook Activity` panel in chat pane for active server-backed chats.
+    - fetches recent per-turn lorebook diagnostics from `getChatLorebookDiagnostics`.
+    - renders turn cards (`Turn N: X entries fired`) with assistant preview snippets.
+    - includes refresh and export actions plus a `View Full Diagnostics` handoff link.
+    - adds authorization-safe fallback message when diagnostics endpoint is forbidden.
+    - caps rendered activity cards to page-size for long-session performance safety.
+  - updated existing ChatPane test suites to mock diagnostics client calls:
+    - `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/ChatPane.stage1.test.tsx`
+    - `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/ChatPane.stage2.test.tsx`
+    - `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/ChatPane.stage3.test.tsx`
+- Added Stage 4 tests:
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/ChatPane.stage4.lorebook-activity.test.tsx`
+    - turn-level activity rendering coverage
+    - forbidden/authorization visibility coverage
+    - long-session rendering cap/performance guard coverage
+- Validation run:
+  - `bunx vitest run src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage1.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage2.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage3.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.attachmentStage1.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.attachmentStage4.test.tsx src/components/Option/Characters/__tests__/Manager.crossFeatureStage1.test.tsx src/components/Option/WorkspacePlayground/__tests__/ChatPane.stage1.test.tsx src/components/Option/WorkspacePlayground/__tests__/ChatPane.stage2.test.tsx src/components/Option/WorkspacePlayground/__tests__/ChatPane.stage3.test.tsx src/components/Option/WorkspacePlayground/__tests__/ChatPane.stage4.lorebook-activity.test.tsx`
+  - result: **10 passed / 10 files**, **32 passed / 32 tests**.

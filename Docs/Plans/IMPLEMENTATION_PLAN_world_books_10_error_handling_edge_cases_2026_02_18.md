@@ -23,7 +23,7 @@ Finding IDs: `10.1` through `10.6`
 - Performance tests for 500-entry dataset interactions.
 - Integration tests for filtering and selection behavior with windowed rendering.
 - Regression tests for total-count accuracy.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Improve Import Error Diagnostics
 **Goal**: Replace opaque parser output with actionable user guidance.
@@ -35,7 +35,7 @@ Finding IDs: `10.1` through `10.6`
 - Unit tests for error classifier mapping.
 - Integration tests for malformed JSON, missing fields, and zero-entry imports.
 - UX tests for fallback message behavior when error shape is unknown.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 3: Add Optimistic Concurrency Handling
 **Goal**: Prevent silent overwrites in concurrent edit scenarios.

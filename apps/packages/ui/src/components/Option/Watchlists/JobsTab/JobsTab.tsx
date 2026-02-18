@@ -206,6 +206,31 @@ export const JobsTab: React.FC = () => {
         )
     },
     {
+      title: t("watchlists:jobs.columns.nextRun", "Next Run"),
+      dataIndex: "next_run_at",
+      key: "next_run_at",
+      width: 150,
+      render: (date: string | null, record) => {
+        if (!date) {
+          return (
+            <span className="text-sm text-text-subtle">
+              {record.schedule_expr
+                ? t("watchlists:jobs.pending", "Pending")
+                : t("watchlists:jobs.notScheduled", "Not scheduled")}
+            </span>
+          )
+        }
+
+        return (
+          <Tooltip title={new Date(date).toLocaleString()}>
+            <span className="text-sm text-text-muted">
+              {formatRelativeTime(date, t)}
+            </span>
+          </Tooltip>
+        )
+      }
+    },
+    {
       title: t("watchlists:jobs.columns.active", "Active"),
       dataIndex: "active",
       key: "active",

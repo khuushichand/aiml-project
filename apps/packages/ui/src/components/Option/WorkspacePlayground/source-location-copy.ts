@@ -5,7 +5,7 @@ export const getWorkspaceSourcesLocationLabel = (
 export const getWorkspaceChatNoSourcesHint = (
   isMobile: boolean
 ): string =>
-  `Select sources from the ${getWorkspaceSourcesLocationLabel(isMobile)}, then ask questions`
+  `Select sources from the ${getWorkspaceSourcesLocationLabel(isMobile)} for grounded answers, or type a message for general chat without sources`
 
 export const getWorkspaceStudioNoSourcesHint = (
   isMobile: boolean

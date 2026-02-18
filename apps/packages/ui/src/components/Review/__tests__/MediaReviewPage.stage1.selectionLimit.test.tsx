@@ -23,7 +23,11 @@ const mocks = vi.hoisted(() => ({
   setSetting: vi.fn(),
   clearSetting: vi.fn(),
   setHelpDismissed: vi.fn(),
-  setSettingHook: vi.fn()
+  setSettingHook: vi.fn(),
+  setChatMode: vi.fn(),
+  setSelectedKnowledge: vi.fn(),
+  setRagMediaIds: vi.fn(),
+  navigate: vi.fn()
 }))
 
 const interpolate = (template: string, values?: Record<string, unknown>) =>
@@ -44,6 +48,18 @@ vi.mock('react-i18next', () => ({
       const template = fallbackOrOptions?.defaultValue || key
       return interpolate(template, fallbackOrOptions as Record<string, unknown> | undefined)
     }
+  })
+}))
+
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => mocks.navigate
+}))
+
+vi.mock('@/hooks/useMessageOption', () => ({
+  useMessageOption: () => ({
+    setChatMode: mocks.setChatMode,
+    setSelectedKnowledge: mocks.setSelectedKnowledge,
+    setRagMediaIds: mocks.setRagMediaIds
   })
 }))
 
@@ -332,6 +348,10 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     mocks.setSetting.mockReset()
     mocks.clearSetting.mockReset()
     mocks.setHelpDismissed.mockReset()
+    mocks.setChatMode.mockReset()
+    mocks.setSelectedKnowledge.mockReset()
+    mocks.setRagMediaIds.mockReset()
+    mocks.navigate.mockReset()
 
     mocks.getSetting.mockResolvedValue(null)
     mocks.setSetting.mockResolvedValue(undefined)
@@ -534,6 +554,64 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(mocks.messageError).toHaveBeenCalledWith('One or both selected items have no content to compare.')
     })
     expect(screen.queryByTestId('compare-diff-modal')).not.toBeInTheDocument()
+  })
+
+  it('shows chat-about-selection action only when at least one item is selected', async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+    expect(
+      screen.queryByRole('button', { name: 'Chat about selection (1)' })
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: 'Chat about selection (1)' })
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('launches media-scoped chat with selected ids and backward-compatible discuss payload', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    fireEvent.click(getResultRowByTitle('Item 1'))
+    fireEvent.click(getResultRowByTitle('Item 2'))
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: 'Chat about selection (2)' })
+      ).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chat about selection (2)' }))
+
+    await waitFor(() => {
+      expect(mocks.setChatMode).toHaveBeenCalledWith('rag')
+      expect(mocks.setRagMediaIds).toHaveBeenCalledWith([1, 2])
+      expect(mocks.navigate).toHaveBeenCalledWith('/')
+    })
+
+    const discussEvent = dispatchSpy.mock.calls
+      .map((call) => call[0])
+      .find((event) => event.type === 'tldw:discuss-media') as CustomEvent | undefined
+    expect(discussEvent).toBeDefined()
+    expect(discussEvent?.detail).toEqual(
+      expect.objectContaining({
+        mediaId: '1',
+        mode: 'rag_media',
+        mediaIds: [1, 2]
+      })
+    )
+    dispatchSpy.mockRestore()
   })
 
   it('preserves auto view-mode thresholds for 1, 2-4, and 5+ selections', async () => {

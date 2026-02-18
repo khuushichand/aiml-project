@@ -10,7 +10,8 @@ import {
   Spin,
   List,
   Checkbox,
-  Empty
+  Empty,
+  message
 } from "antd"
 import type { UploadFile, UploadProps } from "antd"
 import {
@@ -32,6 +33,9 @@ import type {
 
 const { TextArea } = Input
 const { Dragger } = Upload
+const EXISTING_MEDIA_CACHE_TTL_MS = 60_000
+
+let existingMediaCache: { items: any[]; cachedAt: number } | null = null
 
 type AddSourceCandidate = {
   mediaId: number
@@ -417,26 +421,73 @@ const SearchTab: React.FC<{
     setProcessing(true)
     const selectedUrls = results.filter((_, idx) => selectedResults.has(idx))
     const addedSources: AddSourceCandidate[] = []
+    const failures: Array<{ url: string; reason: string }> = []
 
     for (const result of selectedUrls) {
+      const resultUrl = (result.url || result.link || "unknown url") as string
       try {
-        const response = await tldwClient.addMedia(result.url || result.link)
+        const response = await tldwClient.addMedia(resultUrl)
         const added = extractMediaFromAddResponse(response)
         if (added.mediaId != null) {
           addedSources.push({
             mediaId: added.mediaId,
-            title: added.title || result.title || result.url,
+            title: added.title || result.title || resultUrl,
             type: "website",
             status: "processing"
           })
+        } else {
+          failures.push({
+            url: resultUrl,
+            reason: t(
+              "playground:sources.batchResultInvalid",
+              "No media ID returned"
+            )
+          })
         }
-      } catch {
-        // Continue with other URLs
+      } catch (error) {
+        failures.push({
+          url: resultUrl,
+          reason:
+            error instanceof Error
+              ? error.message
+              : t("playground:sources.batchResultFailed", "Request failed")
+        })
       }
     }
 
     if (addedSources.length > 0) {
       onAddSources(addedSources)
+    }
+
+    if (failures.length > 0) {
+      const totalCount = selectedUrls.length
+      const addedCount = addedSources.length
+      const details = failures
+        .slice(0, 2)
+        .map((failure) => `${failure.url}: ${failure.reason}`)
+        .join("; ")
+      const overflowCount = failures.length - 2
+      const detailSuffix =
+        overflowCount > 0
+          ? `${details}; +${overflowCount} more`
+          : details
+
+      const summary = t(
+        "playground:sources.batchResultSummary",
+        "Added {{added}} of {{total}} sources. {{failed}} failed: {{details}}",
+        {
+          added: addedCount,
+          total: totalCount,
+          failed: failures.length,
+          details: detailSuffix
+        }
+      )
+
+      if (addedCount > 0) {
+        message.warning(summary)
+      } else {
+        setError(summary)
+      }
     }
     setProcessing(false)
   }
@@ -549,34 +600,67 @@ const ExistingTab: React.FC<{
     [sources]
   )
 
-  const loadMedia = React.useCallback(async (query?: string) => {
-    setIsLoading(true)
-    setError(null)
+  const fetchMediaFromServer = React.useCallback(
+    async (query?: string, options?: { silent?: boolean }) => {
+      const shouldShowLoading = !options?.silent
+      if (shouldShowLoading) {
+        setIsLoading(true)
+      }
+      setError(null)
 
-    try {
-      let response
-      if (query?.trim()) {
-        response = await tldwClient.searchMedia(
-          { query: query.trim() },
-          { page: 1, results_per_page: 50 }
-        )
-      } else {
-        response = await tldwClient.listMedia({
-          page: 1,
-          results_per_page: 50,
-          include_keywords: true
-        })
+      try {
+        const trimmedQuery = query?.trim()
+        let response
+        if (trimmedQuery) {
+          response = await tldwClient.searchMedia(
+            { query: trimmedQuery },
+            { page: 1, results_per_page: 50 }
+          )
+        } else {
+          response = await tldwClient.listMedia({
+            page: 1,
+            results_per_page: 50,
+            include_keywords: true
+          })
+        }
+
+        if (response?.media || response?.results) {
+          const items = response.media || response.results || []
+          setMedia(items)
+          if (!trimmedQuery) {
+            existingMediaCache = {
+              items,
+              cachedAt: Date.now()
+            }
+          }
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load media")
+      } finally {
+        if (shouldShowLoading) {
+          setIsLoading(false)
+        }
+      }
+    },
+    [setError]
+  )
+
+  const loadMedia = React.useCallback(
+    async (query?: string) => {
+      const trimmedQuery = query?.trim()
+      if (!trimmedQuery && existingMediaCache) {
+        const cacheIsFresh =
+          Date.now() - existingMediaCache.cachedAt < EXISTING_MEDIA_CACHE_TTL_MS
+        if (cacheIsFresh) {
+          setMedia(existingMediaCache.items)
+          return
+        }
       }
 
-      if (response?.media || response?.results) {
-        setMedia(response.media || response.results || [])
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load media")
-    } finally {
-      setIsLoading(false)
-    }
-  }, [setError])
+      await fetchMediaFromServer(trimmedQuery)
+    },
+    [fetchMediaFromServer]
+  )
 
   React.useEffect(() => {
     loadMedia()

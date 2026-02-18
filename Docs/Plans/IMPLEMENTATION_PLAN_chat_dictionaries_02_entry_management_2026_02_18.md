@@ -67,7 +67,12 @@ Finding IDs: `2.1` through `2.9`
 **Tests**:
 - Accessibility tests for focus trap and focus return behavior.
 - E2E tests for entry management flow on desktop and mobile breakpoints.
-**Status**: Not Started
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Replaced the parent "Manage Entries" modal shell with a right-side `Drawer`, keeping the entry manager mounted as a single primary container.
+- Preserved the entry edit modal flow while removing the previous modal-within-modal parent layering.
+- Added Stage 4 component tests to verify drawer mounting and edit-modal behavior while the drawer remains open.
+- Updated drawer sizing to use Ant Design `size` prop (replacing deprecated `width`) to keep test output clean and avoid deprecation warnings.
 
 ## Dependencies
 

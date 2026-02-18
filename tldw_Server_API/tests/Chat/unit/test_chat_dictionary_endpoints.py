@@ -50,6 +50,84 @@ async def test_add_dictionary_entry_returns_persisted_fields(chacha_db: Characte
 
 
 @pytest.mark.asyncio
+async def test_timed_effects_round_trip_through_entry_endpoints(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Timed Effects Dictionary", "Description")
+
+    response = await chat_endpoints.add_dictionary_entry(
+        dictionary_id,
+        DictionaryEntryCreate(
+            pattern="pulse",
+            replacement="heart-rate",
+            timed_effects={"sticky": 17, "cooldown": 8, "delay": 3},
+        ),
+        db=chacha_db,
+    )
+
+    assert response.timed_effects is not None
+    assert response.timed_effects.sticky == 17
+    assert response.timed_effects.cooldown == 8
+    assert response.timed_effects.delay == 3
+
+    entries_response = await chat_endpoints.list_dictionary_entries(
+        dictionary_id,
+        group=None,
+        db=chacha_db,
+    )
+    assert entries_response.total == 1
+    assert entries_response.entries[0].timed_effects is not None
+    assert entries_response.entries[0].timed_effects.sticky == 17
+    assert entries_response.entries[0].timed_effects.cooldown == 8
+    assert entries_response.entries[0].timed_effects.delay == 3
+
+    dictionary_response = await chat_endpoints.get_chat_dictionary(dictionary_id, db=chacha_db)
+    assert len(dictionary_response.entries) == 1
+    assert dictionary_response.entries[0].timed_effects is not None
+    assert dictionary_response.entries[0].timed_effects.sticky == 17
+    assert dictionary_response.entries[0].timed_effects.cooldown == 8
+    assert dictionary_response.entries[0].timed_effects.delay == 3
+
+
+@pytest.mark.asyncio
+async def test_case_sensitive_defaults_and_explicit_override_compatibility(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Case Sensitivity Dictionary", "Description")
+
+    default_entry = await chat_endpoints.add_dictionary_entry(
+        dictionary_id,
+        DictionaryEntryCreate(pattern="default-case", replacement="DEFAULT"),
+        db=chacha_db,
+    )
+    explicit_entry = await chat_endpoints.add_dictionary_entry(
+        dictionary_id,
+        DictionaryEntryCreate(
+            pattern="explicit-case",
+            replacement="EXPLICIT",
+            case_sensitive=False,
+        ),
+        db=chacha_db,
+    )
+
+    assert default_entry.case_sensitive is True
+    assert explicit_entry.case_sensitive is False
+
+    entries_response = await chat_endpoints.list_dictionary_entries(
+        dictionary_id,
+        group=None,
+        db=chacha_db,
+    )
+    cases_by_pattern = {
+        entry.pattern: entry.case_sensitive for entry in entries_response.entries
+    }
+    assert cases_by_pattern["default-case"] is True
+    assert cases_by_pattern["explicit-case"] is False
+
+
+@pytest.mark.asyncio
 async def test_get_chat_dictionary_includes_entry_metadata(chacha_db: CharactersRAGDB):
     service = ChatDictionaryService(chacha_db)
     dictionary_id = service.create_dictionary("Metadata Dictionary", "desc")

@@ -32,6 +32,10 @@ const SOURCE_TYPE_ICONS: Record<WorkspaceSourceType, React.ElementType> = {
   text: Type
 }
 
+const SOURCE_VIRTUALIZATION_THRESHOLD = 60
+const SOURCE_VIRTUAL_ROW_HEIGHT = 80
+const SOURCE_VIRTUAL_OVERSCAN = 5
+
 interface SourcesPaneProps {
   /** Callback to hide/collapse the pane */
   onHide?: () => void
@@ -60,9 +64,13 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
   const openAddSourceModal = useWorkspaceStore((s) => s.openAddSourceModal)
   const removeSource = useWorkspaceStore((s) => s.removeSource)
   const sourceItemRefs = React.useRef<Record<string, HTMLDivElement | null>>({})
+  const sourceListContainerRef = React.useRef<HTMLDivElement | null>(null)
   const [highlightedSourceId, setHighlightedSourceId] = React.useState<
     string | null
   >(null)
+  const [sourceListScrollTop, setSourceListScrollTop] = React.useState(0)
+  const [sourceListViewportHeight, setSourceListViewportHeight] =
+    React.useState(420)
 
   // Filter sources based on search query
   const filteredSources = React.useMemo(() => {
@@ -72,6 +80,28 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
       source.title.toLowerCase().includes(query)
     )
   }, [sources, sourceSearchQuery])
+
+  const useVirtualizedSources =
+    filteredSources.length > SOURCE_VIRTUALIZATION_THRESHOLD
+  const virtualStartIndex = useVirtualizedSources
+    ? Math.max(
+        0,
+        Math.floor(sourceListScrollTop / SOURCE_VIRTUAL_ROW_HEIGHT) -
+          SOURCE_VIRTUAL_OVERSCAN
+      )
+    : 0
+  const virtualEndIndex = useVirtualizedSources
+    ? Math.min(
+        filteredSources.length,
+        Math.ceil(
+          (sourceListScrollTop + sourceListViewportHeight) /
+            SOURCE_VIRTUAL_ROW_HEIGHT
+        ) + SOURCE_VIRTUAL_OVERSCAN
+      )
+    : filteredSources.length
+  const visibleSources = useVirtualizedSources
+    ? filteredSources.slice(virtualStartIndex, virtualEndIndex)
+    : filteredSources
 
   const allSelected =
     sources.length > 0 && selectedSourceIds.length === sources.length
@@ -84,6 +114,29 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
       selectAllSources()
     }
   }
+
+  React.useEffect(() => {
+    const container = sourceListContainerRef.current
+    if (!container) return
+
+    const syncViewportHeight = () => {
+      setSourceListViewportHeight(container.clientHeight || 420)
+    }
+
+    syncViewportHeight()
+
+    if (typeof ResizeObserver === "undefined") {
+      return
+    }
+
+    const observer = new ResizeObserver(() => {
+      syncViewportHeight()
+    })
+    observer.observe(container)
+    return () => {
+      observer.disconnect()
+    }
+  }, [filteredSources.length])
 
   React.useEffect(() => {
     const targetSourceId = sourceFocusTarget?.sourceId
@@ -100,6 +153,17 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
     )
     if (!isTargetVisible && sourceSearchQuery.trim()) {
       setSourceSearchQuery("")
+    }
+
+    if (useVirtualizedSources && sourceListContainerRef.current) {
+      const targetIndex = filteredSources.findIndex(
+        (source) => source.id === targetSourceId
+      )
+      if (targetIndex >= 0) {
+        const targetScrollTop = targetIndex * SOURCE_VIRTUAL_ROW_HEIGHT
+        sourceListContainerRef.current.scrollTop = targetScrollTop
+        setSourceListScrollTop(targetScrollTop)
+      }
     }
 
     const revealTimer = window.setTimeout(() => {
@@ -128,8 +192,126 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
     sourceFocusTarget,
     sourceSearchQuery,
     sources,
-    setSourceSearchQuery
+    setSourceSearchQuery,
+    useVirtualizedSources
   ])
+
+  const renderSourceRow = (source: (typeof filteredSources)[number]) => {
+    const Icon = SOURCE_TYPE_ICONS[source.type] || File
+    const isSelected = selectedSourceIds.includes(source.id)
+    const isHighlighted = highlightedSourceId === source.id
+    const sourceStatus = source.status || "ready"
+    const isReady = sourceStatus === "ready"
+    const isProcessing = sourceStatus === "processing"
+    const isError = sourceStatus === "error"
+
+    return (
+      <div
+        key={source.id}
+        data-source-id={source.id}
+        data-source-draggable="true"
+        data-highlighted={isHighlighted ? "true" : "false"}
+        ref={(element) => {
+          sourceItemRefs.current[source.id] = element
+        }}
+        draggable={isReady}
+        onDragStart={(event) => {
+          if (!isReady) {
+            event.preventDefault()
+            return
+          }
+          event.dataTransfer.effectAllowed = "copyMove"
+          event.dataTransfer.setData(
+            WORKSPACE_SOURCE_DRAG_TYPE,
+            serializeWorkspaceSourceDragPayload({
+              sourceId: source.id,
+              mediaId: source.mediaId,
+              title: source.title,
+              type: source.type
+            })
+          )
+          event.dataTransfer.setData("text/plain", source.title)
+        }}
+        className={`group flex items-start gap-2 rounded-lg p-2 transition-colors ${
+          isSelected
+            ? "bg-primary/10 border border-primary/30"
+            : "hover:bg-surface2 border border-transparent"
+        } ${
+          isHighlighted
+            ? "ring-2 ring-primary/40 border-primary/40 bg-primary/15"
+            : ""
+        } ${isReady ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
+      >
+        <div
+          data-testid={`source-checkbox-hitarea-${source.id}`}
+          className="mt-0.5 flex items-center justify-center [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11"
+        >
+          <Checkbox
+            checked={isSelected}
+            disabled={!isReady}
+            onChange={() => toggleSourceSelection(source.id)}
+          />
+        </div>
+        <div className="flex min-w-0 flex-1 items-start gap-2">
+          <div
+            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded ${
+              isSelected ? "bg-primary/20 text-primary" : "bg-surface2 text-text-muted"
+            }`}
+          >
+            <Icon className="h-4 w-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-text">
+              {source.title}
+            </p>
+            <p className="truncate text-xs text-text-muted capitalize">
+              {source.type}
+            </p>
+            {isProcessing && (
+              <p className="mt-0.5 flex items-center gap-1 text-[11px] text-primary">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {t("playground:sources.statusProcessing", "Processing")}
+              </p>
+            )}
+            {isError && (
+              <p
+                className="mt-0.5 flex items-center gap-1 text-[11px] text-error"
+                title={source.statusMessage || undefined}
+              >
+                <AlertTriangle className="h-3 w-3" />
+                {source.statusMessage ||
+                  t(
+                    "playground:sources.statusError",
+                    "Source processing failed"
+                  )}
+              </p>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => removeSource(source.id)}
+          data-testid={`remove-source-${source.id}`}
+          className="shrink-0 rounded p-1 text-text-muted opacity-0 transition hover:bg-error/10 hover:text-error group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11 [@media(hover:none)]:opacity-100"
+          aria-label={t("common:remove", "Remove")}
+        >
+          <svg
+            className="h-3.5 w-3.5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M6 18L18 6M6 6l12 12"
+            />
+          </svg>
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -202,7 +384,13 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
       )}
 
       {/* Source list */}
-      <div className="custom-scrollbar flex-1 overflow-y-auto">
+      <div
+        ref={sourceListContainerRef}
+        onScroll={(event) =>
+          setSourceListScrollTop(event.currentTarget.scrollTop)
+        }
+        className="custom-scrollbar flex-1 overflow-y-auto"
+      >
         {filteredSources.length === 0 ? (
           <div className="flex h-full items-center justify-center p-4">
             <Empty
@@ -239,124 +427,26 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
               )}
             </Empty>
           </div>
+        ) : useVirtualizedSources ? (
+          <div
+            data-testid="sources-virtualized-list"
+            style={{
+              height: filteredSources.length * SOURCE_VIRTUAL_ROW_HEIGHT,
+              position: "relative"
+            }}
+          >
+            <div
+              className="space-y-1 p-2"
+              style={{
+                transform: `translateY(${virtualStartIndex * SOURCE_VIRTUAL_ROW_HEIGHT}px)`
+              }}
+            >
+              {visibleSources.map((source) => renderSourceRow(source))}
+            </div>
+          </div>
         ) : (
           <div className="space-y-1 p-2">
-            {filteredSources.map((source) => {
-              const Icon = SOURCE_TYPE_ICONS[source.type] || File
-              const isSelected = selectedSourceIds.includes(source.id)
-              const isHighlighted = highlightedSourceId === source.id
-              const sourceStatus = source.status || "ready"
-              const isReady = sourceStatus === "ready"
-              const isProcessing = sourceStatus === "processing"
-              const isError = sourceStatus === "error"
-
-              return (
-                <div
-                  key={source.id}
-                  data-source-id={source.id}
-                  data-source-draggable="true"
-                  data-highlighted={isHighlighted ? "true" : "false"}
-                  ref={(element) => {
-                    sourceItemRefs.current[source.id] = element
-                  }}
-                  draggable={isReady}
-                  onDragStart={(event) => {
-                    if (!isReady) {
-                      event.preventDefault()
-                      return
-                    }
-                    event.dataTransfer.effectAllowed = "copyMove"
-                    event.dataTransfer.setData(
-                      WORKSPACE_SOURCE_DRAG_TYPE,
-                      serializeWorkspaceSourceDragPayload({
-                        sourceId: source.id,
-                        mediaId: source.mediaId,
-                        title: source.title,
-                        type: source.type
-                      })
-                    )
-                    event.dataTransfer.setData("text/plain", source.title)
-                  }}
-                  className={`group flex items-start gap-2 rounded-lg p-2 transition-colors ${
-                    isSelected
-                      ? "bg-primary/10 border border-primary/30"
-                      : "hover:bg-surface2 border border-transparent"
-                  } ${
-                    isHighlighted
-                      ? "ring-2 ring-primary/40 border-primary/40 bg-primary/15"
-                      : ""
-                  } ${isReady ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
-                >
-                  <div
-                    data-testid={`source-checkbox-hitarea-${source.id}`}
-                    className="mt-0.5 flex items-center justify-center [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11"
-                  >
-                    <Checkbox
-                      checked={isSelected}
-                      disabled={!isReady}
-                      onChange={() => toggleSourceSelection(source.id)}
-                    />
-                  </div>
-                  <div className="flex min-w-0 flex-1 items-start gap-2">
-                    <div
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded ${
-                        isSelected ? "bg-primary/20 text-primary" : "bg-surface2 text-text-muted"
-                      }`}
-                    >
-                      <Icon className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-text">
-                        {source.title}
-                      </p>
-                      <p className="truncate text-xs text-text-muted capitalize">
-                        {source.type}
-                      </p>
-                      {isProcessing && (
-                        <p className="mt-0.5 flex items-center gap-1 text-[11px] text-primary">
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          {t("playground:sources.statusProcessing", "Processing")}
-                        </p>
-                      )}
-                      {isError && (
-                        <p
-                          className="mt-0.5 flex items-center gap-1 text-[11px] text-error"
-                          title={source.statusMessage || undefined}
-                        >
-                          <AlertTriangle className="h-3 w-3" />
-                          {source.statusMessage ||
-                            t(
-                              "playground:sources.statusError",
-                              "Source processing failed"
-                            )}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => removeSource(source.id)}
-                    data-testid={`remove-source-${source.id}`}
-                    className="shrink-0 rounded p-1 text-text-muted opacity-0 transition hover:bg-error/10 hover:text-error group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11 [@media(hover:none)]:opacity-100"
-                    aria-label={t("common:remove", "Remove")}
-                  >
-                    <svg
-                      className="h-3.5 w-3.5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
-                  </button>
-                </div>
-              )
-            })}
+            {visibleSources.map((source) => renderSourceRow(source))}
           </div>
         )}
       </div>

@@ -118,6 +118,59 @@ const WorkspacePlaygroundSkeleton: React.FC<{ isMobile: boolean }> = ({
   </div>
 )
 
+type WorkspacePlaygroundErrorBoundaryState = {
+  hasError: boolean
+}
+
+class WorkspacePlaygroundErrorBoundary extends React.Component<
+  React.PropsWithChildren,
+  WorkspacePlaygroundErrorBoundaryState
+> {
+  state: WorkspacePlaygroundErrorBoundaryState = { hasError: false }
+
+  static getDerivedStateFromError(): WorkspacePlaygroundErrorBoundaryState {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: unknown): void {
+    // Surface in console for debugging while showing a recoverable fallback UI.
+    console.error("WorkspacePlayground render error", error)
+  }
+
+  handleReload = () => {
+    if (typeof window !== "undefined") {
+      window.location.reload()
+    }
+  }
+
+  render() {
+    if (!this.state.hasError) {
+      return this.props.children
+    }
+
+    return (
+      <div className="flex h-full items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-lg border border-border bg-surface p-5 text-center shadow-card">
+          <h2 className="text-base font-semibold text-text">
+            Something went wrong
+          </h2>
+          <p className="mt-2 text-sm text-text-muted">
+            The workspace hit an unexpected error. Reload to recover.
+          </p>
+          <button
+            type="button"
+            onClick={this.handleReload}
+            className="mt-4 rounded bg-primary px-3 py-1.5 text-sm font-medium text-white transition hover:opacity-90"
+            data-testid="workspace-reload-button"
+          >
+            Reload workspace
+          </button>
+        </div>
+      </div>
+    )
+  }
+}
+
 /**
  * WorkspacePlayground - NotebookLM-style three-pane research interface
  *
@@ -131,7 +184,7 @@ const WorkspacePlaygroundSkeleton: React.FC<{ isMobile: boolean }> = ({
  * - Chat Pane (middle): RAG-powered conversation with selected sources
  * - Studio Pane (right): Generate outputs (summaries, quizzes, flashcards, etc.)
  */
-export const WorkspacePlayground: React.FC = () => {
+const WorkspacePlaygroundBody: React.FC = () => {
   const { t } = useTranslation(["playground", "option", "common"])
   const isMobile = useMobile()
 
@@ -740,5 +793,11 @@ export const WorkspacePlayground: React.FC = () => {
     </div>
   )
 }
+
+export const WorkspacePlayground: React.FC = () => (
+  <WorkspacePlaygroundErrorBoundary>
+    <WorkspacePlaygroundBody />
+  </WorkspacePlaygroundErrorBoundary>
+)
 
 export default WorkspacePlayground

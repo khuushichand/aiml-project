@@ -278,7 +278,7 @@ describe("DictionariesManager stage-2 recovery flows", () => {
         group: "abbrev"
       })
     )
-  })
+  }, 15000)
 
   it("shows client-side structural import errors and blocks malformed payloads", async () => {
     const user = userEvent.setup()

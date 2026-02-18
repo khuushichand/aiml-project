@@ -15,7 +15,10 @@ const mocks = vi.hoisted(() => ({
   messageSuccess: vi.fn(),
   messageError: vi.fn(),
   messageWarning: vi.fn(),
-  showUndoNotification: vi.fn()
+  showUndoNotification: vi.fn(),
+  setChatMode: vi.fn(),
+  setSelectedKnowledge: vi.fn(),
+  setRagMediaIds: vi.fn()
 }))
 
 vi.mock('react-i18next', () => ({
@@ -99,9 +102,9 @@ vi.mock('@/hooks/useConnectionState', () => ({
 
 vi.mock('@/hooks/useMessageOption', () => ({
   useMessageOption: () => ({
-    setChatMode: vi.fn(),
-    setSelectedKnowledge: vi.fn(),
-    setRagMediaIds: vi.fn()
+    setChatMode: mocks.setChatMode,
+    setSelectedKnowledge: mocks.setSelectedKnowledge,
+    setRagMediaIds: mocks.setRagMediaIds
   })
 }))
 
@@ -192,7 +195,16 @@ vi.mock('@/components/Media/ResultsList', () => ({
 }))
 
 vi.mock('@/components/Media/ContentViewer', () => ({
-  ContentViewer: ({ selectedMedia, onNext, onPrevious, hasNext, hasPrevious }: any) => (
+  ContentViewer: ({
+    selectedMedia,
+    onNext,
+    onPrevious,
+    hasNext,
+    hasPrevious,
+    onDeleteItem,
+    onChatWithMedia,
+    onChatAboutMedia
+  }: any) => (
     <div data-testid="mock-content-viewer">
       <div data-testid="selected-media-id">
         {selectedMedia?.id != null ? String(selectedMedia.id) : 'none'}
@@ -213,6 +225,34 @@ vi.mock('@/components/Media/ContentViewer', () => ({
       >
         Next item
       </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (selectedMedia && onDeleteItem) {
+            void onDeleteItem(selectedMedia, null)
+          }
+        }}
+        disabled={!selectedMedia || !onDeleteItem}
+        aria-label="Delete selected item"
+      >
+        Delete selected item
+      </button>
+      <button
+        type="button"
+        onClick={() => onChatWithMedia?.()}
+        disabled={!selectedMedia || !onChatWithMedia}
+        aria-label="Chat with media action"
+      >
+        Chat with media action
+      </button>
+      <button
+        type="button"
+        onClick={() => onChatAboutMedia?.()}
+        disabled={!selectedMedia || !onChatAboutMedia}
+        aria-label="Chat about media action"
+      >
+        Chat about media action
+      </button>
     </div>
   )
 }))
@@ -226,6 +266,7 @@ const renderMediaPage = (initialEntry: string) => {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
+        <Route path="/" element={<div data-testid="root-route" />} />
         <Route
           path="/media"
           element={
@@ -250,6 +291,10 @@ describe('ViewMediaPage Stage 3 permalinks', () => {
     mocks.getSetting.mockResolvedValue(undefined)
     mocks.setSetting.mockReset()
     mocks.clearSetting.mockReset()
+    mocks.showUndoNotification.mockReset()
+    mocks.setChatMode.mockReset()
+    mocks.setSelectedKnowledge.mockReset()
+    mocks.setRagMediaIds.mockReset()
     mocks.bgRequest.mockReset()
 
     mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
@@ -386,5 +431,278 @@ describe('ViewMediaPage Stage 3 permalinks', () => {
       expect(screen.getByTestId('selected-media-id')).toHaveTextContent('100')
     })
     expect(screen.getByTestId('location-search')).toHaveTextContent('?id=100')
+  })
+})
+
+describe('ViewMediaPage Stage 1 trash undo flow', () => {
+  beforeEach(() => {
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 1,
+        title: 'Item 1',
+        snippet: 'one',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      },
+      {
+        kind: 'media',
+        id: 2,
+        title: 'Item 2',
+        snippet: 'two',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      }
+    ]
+    mocks.detailById = {
+      '1': {
+        id: 1,
+        title: 'Item 1',
+        type: 'document',
+        content: { text: 'Content 1' }
+      },
+      '2': {
+        id: 2,
+        title: 'Item 2',
+        type: 'document',
+        content: { text: 'Content 2' }
+      }
+    }
+    mocks.refetch.mockReset()
+    mocks.refetch.mockResolvedValue({ data: mocks.queryData })
+    mocks.getSetting.mockReset()
+    mocks.getSetting.mockResolvedValue(undefined)
+    mocks.setSetting.mockReset()
+    mocks.clearSetting.mockReset()
+    mocks.showUndoNotification.mockReset()
+    mocks.bgRequest.mockReset()
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      if (path.startsWith('/api/v1/media/?page=')) {
+        return { items: [], pagination: { total_pages: 1, total_items: 0 } }
+      }
+      if (path.startsWith('/api/v1/media/keywords')) {
+        return { keywords: [] }
+      }
+      if (path.startsWith('/api/v1/media/')) {
+        const id = path.replace('/api/v1/media/', '').split('?')[0]
+        return (
+          mocks.detailById[id] || {
+            id,
+            title: `Media ${id}`,
+            type: 'document',
+            content: { text: `Content for ${id}` }
+          }
+        )
+      }
+      if (path.startsWith('/api/v1/notes')) {
+        return { items: [], pagination: { total_items: 0 } }
+      }
+      return {}
+    })
+  })
+
+  it('shows undo notification after soft-delete from /media', async () => {
+    renderMediaPage('/media?id=1')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-media-id')).toHaveTextContent('1')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete selected item' }))
+
+    await waitFor(() => {
+      expect(mocks.showUndoNotification).toHaveBeenCalledTimes(1)
+    })
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/api/v1/media/1',
+        method: 'DELETE'
+      })
+    )
+  })
+
+  it('restores deleted media when undo action is invoked from toast', async () => {
+    renderMediaPage('/media?id=1')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-media-id')).toHaveTextContent('1')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete selected item' }))
+
+    await waitFor(() => {
+      expect(mocks.showUndoNotification).toHaveBeenCalledTimes(1)
+    })
+
+    const undoPayload = mocks.showUndoNotification.mock.calls[0]?.[0]
+    expect(undoPayload).toBeTruthy()
+    expect(typeof undoPayload.onUndo).toBe('function')
+
+    await undoPayload.onUndo()
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/api/v1/media/1/restore',
+        method: 'POST'
+      })
+    )
+    expect(mocks.refetch).toHaveBeenCalled()
+  })
+
+  it('does not call restore API unless undo action is triggered', async () => {
+    renderMediaPage('/media?id=1')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-media-id')).toHaveTextContent('1')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete selected item' }))
+
+    await waitFor(() => {
+      expect(mocks.showUndoNotification).toHaveBeenCalledTimes(1)
+    })
+
+    expect(mocks.bgRequest).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/api/v1/media/1/restore',
+        method: 'POST'
+      })
+    )
+  })
+})
+
+describe('ViewMediaPage Stage 1 chat action semantics', () => {
+  beforeEach(() => {
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 100,
+        title: 'Chat target',
+        snippet: 'snippet',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      }
+    ]
+    mocks.detailById = {
+      '100': {
+        id: 100,
+        title: 'Chat target',
+        type: 'document',
+        content: { text: 'Full content for chat handoff' }
+      }
+    }
+    mocks.refetch.mockReset()
+    mocks.refetch.mockResolvedValue({ data: mocks.queryData })
+    mocks.getSetting.mockReset()
+    mocks.getSetting.mockResolvedValue(undefined)
+    mocks.setSetting.mockReset()
+    mocks.clearSetting.mockReset()
+    mocks.showUndoNotification.mockReset()
+    mocks.setChatMode.mockReset()
+    mocks.setSelectedKnowledge.mockReset()
+    mocks.setRagMediaIds.mockReset()
+    mocks.bgRequest.mockReset()
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      if (path.startsWith('/api/v1/media/?page=')) {
+        return { items: [], pagination: { total_pages: 1, total_items: 0 } }
+      }
+      if (path.startsWith('/api/v1/media/keywords')) {
+        return { keywords: [] }
+      }
+      if (path.startsWith('/api/v1/media/')) {
+        const id = path.replace('/api/v1/media/', '').split('?')[0]
+        return (
+          mocks.detailById[id] || {
+            id,
+            title: `Media ${id}`,
+            type: 'document',
+            content: { text: `Content for ${id}` }
+          }
+        )
+      }
+      if (path.startsWith('/api/v1/notes')) {
+        return { items: [], pagination: { total_items: 0 } }
+      }
+      return {}
+    })
+  })
+
+  it('keeps "chat with media" flow on normal mode with discuss-media payload', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+    renderMediaPage('/media?id=100')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-media-id')).toHaveTextContent('100')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chat with media action' }))
+
+    await waitFor(() => {
+      expect(mocks.setChatMode).toHaveBeenCalledWith('normal')
+      expect(mocks.setRagMediaIds).toHaveBeenCalledWith(null)
+    })
+
+    const discussEvent = dispatchSpy.mock.calls
+      .map((call) => call[0])
+      .find((event) => event.type === 'tldw:discuss-media') as CustomEvent | undefined
+    expect(discussEvent).toBeDefined()
+    expect(discussEvent?.detail).toEqual(
+      expect.objectContaining({
+        mediaId: '100',
+        mode: 'normal'
+      })
+    )
+    expect(
+      mocks.setSetting.mock.calls.some(
+        (call) =>
+          typeof call?.[1] === 'object' &&
+          call?.[1] !== null &&
+          (call[1] as Record<string, unknown>).mode === 'normal' &&
+          (call[1] as Record<string, unknown>).mediaId === '100'
+      )
+    ).toBe(true)
+    dispatchSpy.mockRestore()
+  })
+
+  it('keeps "chat about media" flow on rag mode with media-scoped payload', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+    renderMediaPage('/media?id=100')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-media-id')).toHaveTextContent('100')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chat about media action' }))
+
+    await waitFor(() => {
+      expect(mocks.setChatMode).toHaveBeenCalledWith('rag')
+      expect(mocks.setRagMediaIds).toHaveBeenCalledWith([100])
+    })
+
+    const discussEvent = dispatchSpy.mock.calls
+      .map((call) => call[0])
+      .find((event) => event.type === 'tldw:discuss-media') as CustomEvent | undefined
+    expect(discussEvent).toBeDefined()
+    expect(discussEvent?.detail).toEqual(
+      expect.objectContaining({
+        mediaId: '100',
+        mode: 'rag_media'
+      })
+    )
+    expect(
+      mocks.setSetting.mock.calls.some(
+        (call) =>
+          typeof call?.[1] === 'object' &&
+          call?.[1] !== null &&
+          (call[1] as Record<string, unknown>).mode === 'rag_media' &&
+          (call[1] as Record<string, unknown>).mediaId === '100'
+      )
+    ).toBe(true)
+    dispatchSpy.mockRestore()
   })
 })

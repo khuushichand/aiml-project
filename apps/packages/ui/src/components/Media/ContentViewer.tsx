@@ -1375,6 +1375,15 @@ export function ContentViewer({
 
   // Check if viewing a note vs media
   const isNote = selectedMedia?.kind === 'note'
+  const chatWithLabel = t('review:reviewPage.chatWithMedia', {
+    defaultValue: 'Chat with this media'
+  })
+  const chatWithClarifiedLabel = t('review:reviewPage.chatWithMediaClarified', {
+    defaultValue: 'Chat with this media (full content)'
+  })
+  const chatAboutClarifiedLabel = t('review:reviewPage.chatAboutMediaClarified', {
+    defaultValue: 'Chat about this media (RAG context)'
+  })
 
   // Actions dropdown menu items — grouped by purpose
   const actionMenuItems: MenuProps['items'] = [
@@ -1386,17 +1395,13 @@ export function ContentViewer({
       children: [
         ...(onChatWithMedia ? [{
           key: 'chat-with',
-          label: t('review:reviewPage.chatWithMedia', {
-            defaultValue: 'Chat with this media'
-          }),
+          label: chatWithClarifiedLabel,
           icon: <Send className="w-4 h-4" />,
           onClick: onChatWithMedia
         }] : []),
         ...(onChatAboutMedia ? [{
           key: 'chat-about',
-          label: t('review:reviewPage.chatAboutMedia', {
-            defaultValue: 'Chat about this media'
-          }),
+          label: chatAboutClarifiedLabel,
           icon: <MessageSquare className="w-4 h-4" />,
           onClick: onChatAboutMedia
         }] : [])
@@ -1753,12 +1758,17 @@ export function ContentViewer({
           {/* Right: Chat Button + Actions Dropdown */}
           <div className="flex items-center gap-1">
             {!isNote && onChatWithMedia && (
-              <Tooltip title={t('review:reviewPage.chatWithMedia', { defaultValue: 'Chat with this media' })}>
+              <Tooltip
+                title={t('review:reviewPage.chatWithMediaTooltipClarified', {
+                  defaultValue:
+                    'Chat with this media by sending its full content to the composer.'
+                })}
+              >
                 <button
                   onClick={onChatWithMedia}
                   className="p-1.5 text-text-muted hover:bg-surface2 rounded"
-                  aria-label={t('review:reviewPage.chatWithMedia', { defaultValue: 'Chat with this media' })}
-                  title={t('review:reviewPage.chatWithMedia', { defaultValue: 'Chat with this media' })}
+                  aria-label={chatWithLabel}
+                  title={chatWithLabel}
                 >
                   <MessageSquare className="w-4 h-4" />
                 </button>

@@ -21,7 +21,7 @@ Finding IDs: `8.1` through `8.7`
 - Integration tests for delete -> undo restore flow.
 - Unit tests for toast lifecycle and callback behavior.
 - Regression tests for delete behavior when toast expires.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Trash Item Context Enrichment
 **Goal**: Improve decision quality when restoring or permanently deleting items.
@@ -33,7 +33,7 @@ Finding IDs: `8.1` through `8.7`
 - Component tests for deletion date rendering and fallback copy.
 - Integration tests for retention policy display toggles.
 - Snapshot tests for trash row layout with added metadata.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Trash Search and Bulk-Flow Regression Safety
 **Goal**: Improve trash navigation while preserving robust bulk operations.
@@ -45,7 +45,7 @@ Finding IDs: `8.1` through `8.7`
 - Integration tests for trash search query + pagination behavior.
 - Regression tests for bulk restore/delete with mixed outcomes.
 - Abort-flow tests for canceling batched operations.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

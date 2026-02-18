@@ -748,6 +748,24 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     originalValue: string
   } | null>(null)
   const inlineEditInputRef = React.useRef<InputRef>(null)
+  const inlineEditTriggerRef = React.useRef<HTMLElement | null>(null)
+  const inlineEditFocusKeyRef = React.useRef<string | null>(null)
+
+  const restoreInlineEditFocus = React.useCallback(() => {
+    setTimeout(() => {
+      const focusKey = inlineEditFocusKeyRef.current
+      if (focusKey) {
+        const target = document.querySelector<HTMLElement>(
+          `[data-inline-edit-key=\"${focusKey}\"]`
+        )
+        if (target) {
+          target.focus()
+          return
+        }
+      }
+      inlineEditTriggerRef.current?.focus()
+    }, 0)
+  }, [])
 
   // Bulk operations state (M5)
   const [selectedCharacterIds, setSelectedCharacterIds] = React.useState<Set<string>>(new Set())
@@ -2732,6 +2750,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
       setInlineEdit(null)
+      restoreInlineEditFocus()
     },
     onError: (e: any) => {
       notification.error({
@@ -2742,9 +2761,17 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   })
 
   // Inline edit handlers (M1)
-  const startInlineEdit = React.useCallback((record: any, field: 'name' | 'description') => {
+  const startInlineEdit = React.useCallback((
+    record: any,
+    field: 'name' | 'description',
+    trigger?: HTMLElement | null
+  ) => {
     const id = String(record.id || record.slug || record.name)
     const value = record[field] || ''
+    if (trigger) {
+      inlineEditTriggerRef.current = trigger
+    }
+    inlineEditFocusKeyRef.current = `${id}:${field}`
     setInlineEdit({ id, field, value, originalValue: value })
     setTimeout(() => inlineEditInputRef.current?.focus(), 0)
   }, [])
@@ -2782,7 +2809,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
   const cancelInlineEdit = React.useCallback(() => {
     setInlineEdit(null)
-  }, [])
+    restoreInlineEditFocus()
+  }, [restoreInlineEditFocus])
 
   // Bulk selection helpers (M5)
   const toggleCharacterSelection = React.useCallback((id: string) => {
@@ -4074,7 +4102,22 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                     <span
                       className="line-clamp-1 cursor-text hover:bg-surface-hover rounded px-1 -mx-1"
                       title={v || undefined}
-                      onDoubleClick={() => startInlineEdit(record, 'name')}
+                      data-inline-edit-key={`${recordId}:name`}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={t("settings:manageCharacters.table.inlineEditName", {
+                        defaultValue: "Edit name inline for {{name}}",
+                        name: v || record?.name || record?.slug || "character"
+                      })}
+                      onDoubleClick={(event) =>
+                        startInlineEdit(record, 'name', event.currentTarget)
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === 'F2') {
+                          event.preventDefault()
+                          startInlineEdit(record, 'name', event.currentTarget)
+                        }
+                      }}
                     >
                       {truncateText(v, MAX_NAME_LENGTH)}
                     </span>
@@ -4119,7 +4162,22 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                     <span
                       className="line-clamp-1 cursor-text hover:bg-surface-hover rounded px-1 -mx-1"
                       title={v || undefined}
-                      onDoubleClick={() => startInlineEdit(record, 'description')}
+                      data-inline-edit-key={`${recordId}:description`}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={t("settings:manageCharacters.table.inlineEditDescription", {
+                        defaultValue: "Edit description inline for {{name}}",
+                        name: record?.name || record?.slug || "character"
+                      })}
+                      onDoubleClick={(event) =>
+                        startInlineEdit(record, 'description', event.currentTarget)
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === 'F2') {
+                          event.preventDefault()
+                          startInlineEdit(record, 'description', event.currentTarget)
+                        }
+                      }}
                     >
                       {v ? (
                         truncateText(v, MAX_DESCRIPTION_LENGTH)

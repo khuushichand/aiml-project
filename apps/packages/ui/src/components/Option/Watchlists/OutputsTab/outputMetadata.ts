@@ -99,6 +99,21 @@ export const getDeliveryStatusColor = (status: string): string => {
   return "default"
 }
 
+export const getDeliveryStatusLabel = (status: string): string => {
+  const normalized = status.trim().toLowerCase()
+  if (normalized === "sent") return "Sent"
+  if (normalized === "stored") return "Stored"
+  if (normalized === "success") return "Success"
+  if (normalized === "partial") return "Partial"
+  if (normalized === "warning") return "Warning"
+  if (normalized === "queued") return "Queued"
+  if (normalized === "pending") return "Pending"
+  if (normalized === "in_progress") return "In progress"
+  if (normalized === "failed") return "Failed"
+  if (normalized === "error") return "Error"
+  return status
+}
+
 interface BuildRegenerateOptions {
   title?: string | null
   templateName?: string | null

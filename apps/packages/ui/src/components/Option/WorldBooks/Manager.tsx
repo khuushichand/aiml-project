@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Button, Form, Input, InputNumber, Modal, Skeleton, Switch, Table, Tooltip, Tag, Select, Descriptions, Empty, Popover, Divider, Drawer, Checkbox, Grid, Progress, Upload } from "antd"
+import { Button, Form, Input, InputNumber, Modal, Skeleton, Switch, Table, Tooltip, Tag, Select, Descriptions, Empty, Popover, Divider, Drawer, Checkbox, Grid, Progress, Upload, Dropdown } from "antd"
 import React from "react"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import {
@@ -7,7 +7,7 @@ import {
   type WorldBookProcessDiagnostic,
   type WorldBookProcessResponse
 } from "@/services/tldw/TldwApiClient"
-import { Pen, Trash2, BookOpen, HelpCircle, Link2, Download, BarChart3, Copy, List, Upload as UploadIcon } from "lucide-react"
+import { Pen, Trash2, BookOpen, HelpCircle, Link2, Download, BarChart3, Copy, List, MoreHorizontal, Upload as UploadIcon } from "lucide-react"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useTranslation } from "react-i18next"
@@ -124,6 +124,10 @@ const ATTACHMENT_MATRIX_CHARACTER_THRESHOLD = 10
 const ATTACHMENT_LIST_PAGE_SIZE = 8
 const ATTACHMENT_FEEDBACK_DURATION_MS = 2400
 const ATTACHMENT_PULSE_DURATION_MS = 1200
+const MODAL_BODY_SCROLL_STYLE: React.CSSProperties = {
+  maxHeight: "80vh",
+  overflowY: "auto"
+}
 const LOREBOOK_DEBUG_ENTRYPOINT_HREF = "/playground?from=world-books&focus=lorebook-debug"
 const LOREBOOK_METRIC_LABELS = {
   entriesMatched: "Entries matched",
@@ -410,6 +414,7 @@ const WorldBookTestMatchingModal: React.FC<WorldBookTestMatchingModalProps> = ({
       onCancel={onClose}
       footer={null}
       width={760}
+      styles={{ body: MODAL_BODY_SCROLL_STYLE }}
       destroyOnHidden
     >
       <div className="space-y-3">
@@ -604,6 +609,7 @@ export const WorldBooksManager: React.FC = () => {
   } | null>(null)
   const [importPayload, setImportPayload] = React.useState<any | null>(null)
   const [importError, setImportError] = React.useState<string | null>(null)
+  const [importErrorDetails, setImportErrorDetails] = React.useState<string | null>(null)
   const [importFileName, setImportFileName] = React.useState<string | null>(null)
   const [statsFor, setStatsFor] = React.useState<any | null>(null)
   const [exportingId, setExportingId] = React.useState<number | null>(null)
@@ -813,6 +819,7 @@ export const WorldBooksManager: React.FC = () => {
       setImportPreview(null)
       setImportPayload(null)
       setImportError(null)
+      setImportErrorDetails(null)
       setImportFileName(null)
     },
     onError: (e: any) => notification.error({ message: 'Error', description: e?.message || 'Failed to import world book' })
@@ -1024,6 +1031,9 @@ export const WorldBooksManager: React.FC = () => {
       setImportFileName(file.name)
       if (!isJsonFile) {
         setImportError("Please select a .json file.")
+        setImportErrorDetails(
+          `Selected file "${file.name}" does not look like JSON (MIME: ${file.type || "unknown"}).`
+        )
         setImportPreview(null)
         setImportPayload(null)
         return false
@@ -1033,11 +1043,24 @@ export const WorldBooksManager: React.FC = () => {
         const parsed = JSON.parse(text)
         const conversion = convertWorldBookImport(parsed)
         const validationError = validateWorldBookImportConversion(parsed, conversion)
+        const conversionDetail = [
+          `Detected format: ${getWorldBookImportFormatLabel(conversion.format)}`,
+          conversion.error ? `Conversion detail: ${conversion.error}` : "",
+          (conversion.warnings || []).length > 0
+            ? `Warnings:\n- ${(conversion.warnings || []).join("\n- ")}`
+            : ""
+        ]
+          .filter(Boolean)
+          .join("\n")
 
         if (!conversion.payload) {
           setImportError(validationError || conversion.error || "Unsupported import format")
+          setImportErrorDetails(conversionDetail || null)
           setImportPreview(null)
           setImportPayload(null)
+          if (conversionDetail) {
+            console.debug("[WorldBooks] Import conversion failed", conversionDetail)
+          }
           return false
         }
 
@@ -1081,15 +1104,25 @@ export const WorldBooksManager: React.FC = () => {
         })
         if (validationError) {
           setImportError(validationError)
+          setImportErrorDetails(conversionDetail || null)
           setImportPayload(null)
+          if (conversionDetail) {
+            console.debug("[WorldBooks] Import validation failed", conversionDetail)
+          }
         } else {
           setImportError(null)
+          setImportErrorDetails(null)
           setImportPayload(payload)
         }
       } catch (err: any) {
+        const rawErrorDetails = String(err?.message || err || "").trim()
         setImportError(getWorldBookImportJsonErrorMessage(err))
+        setImportErrorDetails(rawErrorDetails || null)
         setImportPreview(null)
         setImportPayload(null)
+        if (rawErrorDetails) {
+          console.debug("[WorldBooks] Import parse failed", rawErrorDetails)
+        }
       }
       return false
     },
@@ -1692,172 +1725,266 @@ export const WorldBooksManager: React.FC = () => {
     }
   }
 
+  const openEditWorldBook = (record: any) => {
+    setEditId(record.id)
+    editForm.setFieldsValue(toWorldBookFormValues(record))
+    setOpenEdit(true)
+  }
+
+  const openWorldBookStatistics = async (record: any) => {
+    setStatsLoadingId(record.id)
+    try {
+      const stats = await tldwClient.worldBookStatistics(record.id)
+      setStatsFor(stats)
+    } catch (error: any) {
+      notification.error({ message: "Stats failed", description: error?.message })
+    } finally {
+      setStatsLoadingId(null)
+    }
+  }
+
+  const requestDeleteWorldBook = async (record: any) => {
+    const entryCount = record.entry_count || 0
+    const attached = attachmentsLoading ? null : getAttachedCharacters(record.id)
+    const attachedNames = attached ? attached.map((c: any) => c.name || `Character ${c.id}`) : []
+    const attachedSummary = attachmentsLoading
+      ? "Attachment info loading"
+      : attachedNames.length === 0
+        ? "No character attachments"
+        : `${attachedNames.length} attached (${attachedNames.slice(0, 3).join(", ")}${attachedNames.length > 3 ? ` +${attachedNames.length - 3} more` : ""})`
+    const ok = await confirmDanger({
+      title: `Delete "${record.name}"?`,
+      content: (
+        <div className="space-y-2">
+          <p>This will permanently remove:</p>
+          <ul className="list-disc list-inside text-sm">
+            <li>{entryCount} {entryCount === 1 ? "entry" : "entries"}</li>
+            <li>{attachedSummary}</li>
+          </ul>
+          <p className="text-danger text-sm mt-2">Deletion will run after 10 seconds unless you undo.</p>
+        </div>
+      ),
+      okText: "Delete",
+      cancelText: "Cancel",
+      autoFocusButton: "ok"
+    })
+    if (!ok) return
+
+    if (deleteTimersRef.current[record.id]) return
+    setPendingDeleteIds((prev) => [...prev, record.id])
+    deleteTimersRef.current[record.id] = setTimeout(() => {
+      deleteWB(record.id)
+      setPendingDeleteIds((prev) => prev.filter((id) => id !== record.id))
+      delete deleteTimersRef.current[record.id]
+    }, 10000)
+
+    showUndoNotification({
+      title: "World book deletion scheduled",
+      description: `“${record.name}” will be deleted in 10 seconds.`,
+      duration: 10,
+      onUndo: () => {
+        if (deleteTimersRef.current[record.id]) {
+          clearTimeout(deleteTimersRef.current[record.id])
+          delete deleteTimersRef.current[record.id]
+        }
+        setPendingDeleteIds((prev) => prev.filter((id) => id !== record.id))
+      }
+    })
+  }
+
+  const renderDesktopWorldBookActions = (record: any) => (
+    <div className="flex gap-2">
+      <Tooltip title="Edit">
+        <Button
+          type="text"
+          size="small"
+          aria-label="Edit world book"
+          icon={<Pen className="w-4 h-4" />}
+          onClick={() => openEditWorldBook(record)}
+        />
+      </Tooltip>
+      <Tooltip title="Manage Entries">
+        <Button
+          type="text"
+          size="small"
+          aria-label="Manage entries"
+          icon={<List className="w-4 h-4" />}
+          onClick={() =>
+            openEntriesWithPreset(
+              { id: record.id, name: record.name, entryCount: record.entry_count },
+              DEFAULT_ENTRY_FILTER_PRESET
+            )
+          }
+        />
+      </Tooltip>
+      <Tooltip title="Duplicate World Book">
+        <Button
+          type="text"
+          size="small"
+          aria-label="Duplicate world book"
+          icon={<Copy className="w-4 h-4" />}
+          loading={duplicatingId === record.id}
+          onClick={() => void duplicateWorldBook(record)}
+        />
+      </Tooltip>
+      <Tooltip title="Quick Attach Characters">
+        <Button
+          type="text"
+          size="small"
+          aria-label="Quick attach characters"
+          icon={<Link2 className="w-4 h-4" />}
+          onClick={() => setOpenAttach(record.id)}
+        />
+      </Tooltip>
+      <Tooltip title="Export JSON">
+        <Button
+          type="text"
+          size="small"
+          aria-label="Export world book"
+          icon={<Download className="w-4 h-4" />}
+          loading={exportingId === record.id}
+          onClick={() => void exportSingleWorldBook(record)}
+        />
+      </Tooltip>
+      <Tooltip title="Statistics">
+        <Button
+          type="text"
+          size="small"
+          aria-label="View world book statistics"
+          icon={<BarChart3 className="w-4 h-4" />}
+          loading={statsLoadingId === record.id}
+          onClick={() => void openWorldBookStatistics(record)}
+        />
+      </Tooltip>
+      <Tooltip title="Delete">
+        <Button
+          type="text"
+          size="small"
+          danger
+          aria-label="Delete world book"
+          icon={<Trash2 className="w-4 h-4" />}
+          disabled={deleting || pendingDeleteIds.includes(record.id)}
+          onClick={() => void requestDeleteWorldBook(record)}
+        />
+      </Tooltip>
+    </div>
+  )
+
+  const renderMobileWorldBookActions = (record: any) => {
+    const menuItems = [
+      {
+        key: "entries",
+        label: "Manage Entries",
+        onClick: () =>
+          openEntriesWithPreset(
+            { id: record.id, name: record.name, entryCount: record.entry_count },
+            DEFAULT_ENTRY_FILTER_PRESET
+          )
+      },
+      {
+        key: "edit",
+        label: "Edit",
+        onClick: () => openEditWorldBook(record)
+      },
+      {
+        key: "duplicate",
+        label: "Duplicate",
+        onClick: () => void duplicateWorldBook(record)
+      },
+      {
+        key: "attach",
+        label: "Quick Attach Characters",
+        onClick: () => setOpenAttach(record.id)
+      },
+      {
+        key: "export",
+        label: "Export JSON",
+        onClick: () => void exportSingleWorldBook(record)
+      },
+      {
+        key: "stats",
+        label: "Statistics",
+        onClick: () => void openWorldBookStatistics(record)
+      },
+      {
+        key: "delete",
+        label: "Delete",
+        danger: true,
+        onClick: () => void requestDeleteWorldBook(record)
+      }
+    ]
+
+    return (
+      <Dropdown menu={{ items: menuItems }} trigger={["click"]} placement="bottomRight">
+        <Button
+          size="middle"
+          type="default"
+          aria-label={`More actions for ${record?.name || "world book"}`}
+          icon={<MoreHorizontal className="w-4 h-4" />}
+        />
+      </Dropdown>
+    )
+  }
+
   const columns = [
-    { title: '', key: 'icon', width: 40, render: () => <BookOpen className="w-4 h-4" /> },
+    { title: "", key: "icon", width: 40, render: () => <BookOpen className="w-4 h-4" /> },
     {
-      title: 'Name',
-      dataIndex: 'name',
-      key: 'name',
-      sorter: (a: any, b: any) => String(a?.name || '').localeCompare(String(b?.name || '')),
+      title: "Name",
+      dataIndex: "name",
+      key: "name",
+      sorter: (a: any, b: any) => String(a?.name || "").localeCompare(String(b?.name || "")),
       sortOrder: tableSort.field === "name" ? tableSort.order : null
     },
-    { title: 'Description', dataIndex: 'description', key: 'description', render: (v: string) => <span className="line-clamp-1">{v}</span> },
-    { title: 'Last Modified', dataIndex: 'last_modified', key: 'last_modified', render: (v: unknown) => renderLastModifiedCell(v) },
-    { title: 'Attached To', key: 'attached_to', render: (_: any, record: any) => renderAttachedCell(record) },
-    { title: 'Budget', dataIndex: 'token_budget', key: 'token_budget', render: (v: unknown) => renderBudgetCell(v) },
+    ...(screens.md
+      ? [
+          {
+            title: "Description",
+            dataIndex: "description",
+            key: "description",
+            render: (v: string) => <span className="line-clamp-1">{v}</span>
+          },
+          {
+            title: "Attached To",
+            key: "attached_to",
+            render: (_: any, record: any) => renderAttachedCell(record)
+          },
+          {
+            title: "Budget",
+            dataIndex: "token_budget",
+            key: "token_budget",
+            render: (v: unknown) => renderBudgetCell(v)
+          }
+        ]
+      : []),
     {
-      title: 'Enabled',
-      dataIndex: 'enabled',
-      key: 'enabled',
-      sorter: (a: any, b: any) => Number(Boolean(a?.enabled)) - Number(Boolean(b?.enabled)),
-      sortOrder: tableSort.field === "enabled" ? tableSort.order : null,
-      render: (v: boolean) => v ? <Tag color="green">Enabled</Tag> : <Tag color="volcano">Disabled</Tag>
+      title: "Last Modified",
+      dataIndex: "last_modified",
+      key: "last_modified",
+      render: (v: unknown) => renderLastModifiedCell(v)
     },
     {
-      title: 'Entries',
-      dataIndex: 'entry_count',
-      key: 'entry_count',
+      title: "Enabled",
+      dataIndex: "enabled",
+      key: "enabled",
+      sorter: (a: any, b: any) => Number(Boolean(a?.enabled)) - Number(Boolean(b?.enabled)),
+      sortOrder: tableSort.field === "enabled" ? tableSort.order : null,
+      render: (v: boolean) => (v ? <Tag color="green">Enabled</Tag> : <Tag color="volcano">Disabled</Tag>)
+    },
+    {
+      title: "Entries",
+      dataIndex: "entry_count",
+      key: "entry_count",
       sorter: (a: any, b: any) => Number(a?.entry_count || 0) - Number(b?.entry_count || 0),
       sortOrder: tableSort.field === "entry_count" ? tableSort.order : null
     },
-    { title: 'Actions', key: 'actions', render: (_: any, record: any) => (
-      <div className="flex gap-2">
-        <Tooltip title="Edit">
-          <Button
-            type="text"
-            size="small"
-            aria-label="Edit world book"
-            icon={<Pen className="w-4 h-4" />}
-            onClick={() => {
-              setEditId(record.id)
-              editForm.setFieldsValue(toWorldBookFormValues(record))
-              setOpenEdit(true)
-            }}
-          />
-        </Tooltip>
-        <Tooltip title="Manage Entries">
-          <Button
-            type="text"
-            size="small"
-            aria-label="Manage entries"
-            icon={<List className="w-4 h-4" />}
-            onClick={() =>
-              openEntriesWithPreset(
-                { id: record.id, name: record.name, entryCount: record.entry_count },
-                DEFAULT_ENTRY_FILTER_PRESET
-              )
-            }
-          />
-        </Tooltip>
-        <Tooltip title="Duplicate World Book">
-          <Button
-            type="text"
-            size="small"
-            aria-label="Duplicate world book"
-            icon={<Copy className="w-4 h-4" />}
-            loading={duplicatingId === record.id}
-            onClick={() => void duplicateWorldBook(record)}
-          />
-        </Tooltip>
-        <Tooltip title="Quick Attach Characters">
-          <Button
-            type="text"
-            size="small"
-            aria-label="Quick attach characters"
-            icon={<Link2 className="w-4 h-4" />}
-            onClick={() => setOpenAttach(record.id)}
-          />
-        </Tooltip>
-        <Tooltip title="Export JSON">
-          <Button
-            type="text"
-            size="small"
-            aria-label="Export world book"
-            icon={<Download className="w-4 h-4" />}
-            loading={exportingId === record.id}
-            onClick={() => void exportSingleWorldBook(record)}
-          />
-        </Tooltip>
-        <Tooltip title="Statistics">
-          <Button
-            type="text"
-            size="small"
-            aria-label="View world book statistics"
-            icon={<BarChart3 className="w-4 h-4" />}
-            loading={statsLoadingId === record.id}
-            onClick={async () => {
-              setStatsLoadingId(record.id)
-              try {
-                const s = await tldwClient.worldBookStatistics(record.id)
-                setStatsFor(s)
-              } catch (e: any) {
-                notification.error({ message: 'Stats failed', description: e?.message })
-              } finally {
-                setStatsLoadingId(null)
-              }
-            }}
-          />
-        </Tooltip>
-        <Tooltip title="Delete">
-          <Button
-            type="text"
-            size="small"
-            danger
-            aria-label="Delete world book"
-            icon={<Trash2 className="w-4 h-4" />}
-            disabled={deleting || pendingDeleteIds.includes(record.id)}
-            onClick={async () => {
-              const entryCount = record.entry_count || 0
-              const attached = attachmentsLoading ? null : getAttachedCharacters(record.id)
-              const attachedNames = attached ? attached.map((c: any) => c.name || `Character ${c.id}`) : []
-              const attachedSummary = attachmentsLoading
-                ? 'Attachment info loading'
-                : attachedNames.length === 0
-                  ? 'No character attachments'
-                  : `${attachedNames.length} attached (${attachedNames.slice(0, 3).join(', ')}${attachedNames.length > 3 ? ` +${attachedNames.length - 3} more` : ''})`
-              const ok = await confirmDanger({
-                title: `Delete "${record.name}"?`,
-                content: (
-                  <div className="space-y-2">
-                    <p>This will permanently remove:</p>
-                    <ul className="list-disc list-inside text-sm">
-                      <li>{entryCount} {entryCount === 1 ? 'entry' : 'entries'}</li>
-                      <li>{attachedSummary}</li>
-                    </ul>
-                    <p className="text-danger text-sm mt-2">Deletion will run after 10 seconds unless you undo.</p>
-                  </div>
-                ),
-                okText: "Delete",
-                cancelText: "Cancel",
-                autoFocusButton: "ok"
-              })
-              if (ok) {
-                if (deleteTimersRef.current[record.id]) return
-                setPendingDeleteIds((prev) => [...prev, record.id])
-                deleteTimersRef.current[record.id] = setTimeout(() => {
-                  deleteWB(record.id)
-                  setPendingDeleteIds((prev) => prev.filter((id) => id !== record.id))
-                  delete deleteTimersRef.current[record.id]
-                }, 10000)
-
-                showUndoNotification({
-                  title: "World book deletion scheduled",
-                  description: `“${record.name}” will be deleted in 10 seconds.`,
-                  duration: 10,
-                  onUndo: () => {
-                    if (deleteTimersRef.current[record.id]) {
-                      clearTimeout(deleteTimersRef.current[record.id])
-                      delete deleteTimersRef.current[record.id]
-                    }
-                    setPendingDeleteIds((prev) => prev.filter((id) => id !== record.id))
-                  }
-                })
-              }
-            }}
-          />
-        </Tooltip>
-      </div>
-    )}
+    {
+      title: "Actions",
+      key: "actions",
+      render: (_: any, record: any) =>
+        screens.md
+          ? renderDesktopWorldBookActions(record)
+          : renderMobileWorldBookActions(record)
+    }
   ]
 
   if (!isOnline) {
@@ -2057,7 +2184,13 @@ export const WorldBooksManager: React.FC = () => {
         />
       )}
 
-      <Modal title="Create World Book" open={open} onCancel={handleCloseCreate} footer={null}>
+      <Modal
+        title="Create World Book"
+        open={open}
+        onCancel={handleCloseCreate}
+        footer={null}
+        styles={{ body: MODAL_BODY_SCROLL_STYLE }}
+      >
         <WorldBookForm
           mode="create"
           form={createForm}
@@ -2075,9 +2208,11 @@ export const WorldBooksManager: React.FC = () => {
           setImportPreview(null)
           setImportPayload(null)
           setImportError(null)
+          setImportErrorDetails(null)
           setImportFileName(null)
         }}
         footer={null}
+        styles={{ body: MODAL_BODY_SCROLL_STYLE }}
       >
         <div className="space-y-3">
           <details className="rounded border border-border px-3 py-2">
@@ -2131,6 +2266,17 @@ export const WorldBooksManager: React.FC = () => {
           </label>
           {importFileName && <p className="text-xs text-text-muted">Selected: {importFileName}</p>}
           {importError && <p className="text-sm text-danger">{importError}</p>}
+          {importError && importErrorDetails && (
+            <details
+              className="rounded border border-border px-3 py-2 text-xs text-text-muted"
+              data-testid="import-error-details"
+            >
+              <summary className="cursor-pointer font-medium">More details</summary>
+              <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-text-muted">
+                {importErrorDetails}
+              </pre>
+            </details>
+          )}
           {importPreview && !importError && (
             <div className="p-3 rounded bg-surface-secondary text-sm space-y-1">
               <p><strong>Will import:</strong> {importPreview.name}</p>
@@ -2218,7 +2364,13 @@ export const WorldBooksManager: React.FC = () => {
         </div>
       </Modal>
 
-      <Modal title="World Book Statistics" open={!!statsFor} onCancel={() => setStatsFor(null)} footer={null}>
+      <Modal
+        title="World Book Statistics"
+        open={!!statsFor}
+        onCancel={() => setStatsFor(null)}
+        footer={null}
+        styles={{ body: MODAL_BODY_SCROLL_STYLE }}
+      >
         {statsFor && (
           <div className="space-y-2">
             {(() => {
@@ -2359,6 +2511,7 @@ export const WorldBooksManager: React.FC = () => {
         onCancel={() => setOpenGlobalStats(false)}
         footer={null}
         width={780}
+        styles={{ body: MODAL_BODY_SCROLL_STYLE }}
       >
         {globalStatsStatus === "pending" && (
           <Skeleton active paragraph={{ rows: 8 }} />
@@ -2473,7 +2626,13 @@ export const WorldBooksManager: React.FC = () => {
         initialWorldBookId={testMatchingWorldBookId}
       />
 
-      <Modal title="Edit World Book" open={openEdit} onCancel={handleCloseEdit} footer={null}>
+      <Modal
+        title="Edit World Book"
+        open={openEdit}
+        onCancel={handleCloseEdit}
+        footer={null}
+        styles={{ body: MODAL_BODY_SCROLL_STYLE }}
+      >
         <WorldBookForm
           mode="edit"
           form={editForm}
@@ -2528,6 +2687,7 @@ export const WorldBooksManager: React.FC = () => {
         onCancel={handleCloseMatrix}
         footer={null}
         width="90vw"
+        styles={{ body: MODAL_BODY_SCROLL_STYLE }}
       >
         <div className="text-sm text-text-muted mb-3">
           Toggle checkboxes to attach or detach world books from characters.
@@ -2840,6 +3000,7 @@ export const WorldBooksManager: React.FC = () => {
         open={!!openAttach}
         onCancel={() => setOpenAttach(null)}
         footer={null}
+        styles={{ body: MODAL_BODY_SCROLL_STYLE }}
       >
         <div className="space-y-4">
           <div className="rounded border border-border bg-background-subtle px-3 py-2">
@@ -3005,8 +3166,14 @@ const EntryManager: React.FC<{
   }, [])
 
   const qc = useQueryClient()
+  const screens = Grid.useBreakpoint()
   const notification = useAntdNotification()
   const confirmDanger = useConfirmDanger()
+  const isEntryManagerMobile = !screens.md
+  const entryActionButtonSize = isEntryManagerMobile ? "middle" : "small"
+  const entryActionButtonClassName = isEntryManagerMobile
+    ? "min-h-11 min-w-11 px-2 inline-flex items-center justify-center"
+    : undefined
   const [editingEntry, setEditingEntry] = React.useState<any | null>(null)
   const [editForm] = Form.useForm()
   const [bulkMode, setBulkMode] = React.useState(false)
@@ -3058,14 +3225,35 @@ const EntryManager: React.FC<{
     worldBookId
   ])
 
-  const { data, status } = useQuery({
+  const { data: entryQueryData, status } = useQuery({
     queryKey: ['tldw:listWorldBookEntries', worldBookId],
     queryFn: async () => {
       await tldwClient.initialize()
       const res = await tldwClient.listWorldBookEntries(worldBookId, false)
-      return res?.entries || []
+      return {
+        entries: Array.isArray(res?.entries) ? res.entries : [],
+        total: Number.isFinite(Number(res?.total))
+          ? Number(res.total)
+          : Array.isArray(res?.entries)
+            ? res.entries.length
+            : 0
+      }
     }
   })
+  const { entries, totalEntryCount } = React.useMemo(() => {
+    if (Array.isArray(entryQueryData)) {
+      return { entries: entryQueryData, totalEntryCount: entryQueryData.length }
+    }
+    const normalizedEntries = Array.isArray((entryQueryData as any)?.entries)
+      ? (entryQueryData as any).entries
+      : []
+    const parsedTotal = Number((entryQueryData as any)?.total)
+    const normalizedTotal =
+      Number.isFinite(parsedTotal) && parsedTotal >= normalizedEntries.length
+        ? parsedTotal
+        : normalizedEntries.length
+    return { entries: normalizedEntries, totalEntryCount: normalizedTotal }
+  }, [entryQueryData])
   const { mutate: addEntry, isPending: adding } = useMutation({
     mutationFn: (v: any) => tldwClient.addWorldBookEntry(worldBookId, { ...v, keywords: normalizeKeywords(v.keywords) }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['tldw:listWorldBookEntries', worldBookId] }); form.resetFields() },
@@ -3110,7 +3298,7 @@ const EntryManager: React.FC<{
 
   const keywordIndex = React.useMemo(() => {
     const map = new Map<string, { count: number; contentVariants: Set<string> }>()
-    ;(data || []).forEach((entry: any) => {
+    ;(entries || []).forEach((entry: any) => {
       ;(entry.keywords || []).forEach((kw: string) => {
         const key = String(kw).trim()
         if (!key) return
@@ -3128,14 +3316,14 @@ const EntryManager: React.FC<{
         variantCount: info.contentVariants.size
       }))
       .sort((a, b) => b.count - a.count)
-  }, [data])
+  }, [entries])
   const keywordConflictCount = React.useMemo(
     () => keywordIndex.filter((item) => item.conflict).length,
     [keywordIndex]
   )
 
   const filteredEntryData = React.useMemo(() => {
-    const source = Array.isArray(data) ? data : []
+    const source = Array.isArray(entries) ? entries : []
     const query = entrySearch.trim().toLowerCase()
     let next = source
 
@@ -3158,12 +3346,13 @@ const EntryManager: React.FC<{
     }
 
     return next
-  }, [data, entryEnabledFilter, entryMatchFilter, entrySearch])
+  }, [entries, entryEnabledFilter, entryMatchFilter, entrySearch])
 
   const filteredEntryIds = React.useMemo(
     () => normalizeBulkEntryIds(filteredEntryData.map((entry: any) => entry?.entry_id)),
     [filteredEntryData]
   )
+  const visibleEntryCount = filteredEntryData.length
   const selectedEntryIds = React.useMemo(
     () => normalizeBulkEntryIds(selectedRowKeys),
     [selectedRowKeys]
@@ -3185,10 +3374,10 @@ const EntryManager: React.FC<{
   const bulkParse = React.useMemo(() => parseBulkEntries(bulkText), [bulkText])
 
   const getSelectedEntriesForMove = React.useCallback(() => {
-    const sourceEntries = Array.isArray(data) ? data : []
+    const sourceEntries = Array.isArray(entries) ? entries : []
     const selectedSet = new Set(selectedEntryIds)
     return sourceEntries.filter((entry: any) => selectedSet.has(Number(entry?.entry_id)))
-  }, [data, selectedEntryIds])
+  }, [entries, selectedEntryIds])
 
   const handleBulkAction = async (operation: "enable" | "disable" | "delete") => {
     if (!hasSelectedEntries) return
@@ -3398,7 +3587,7 @@ const EntryManager: React.FC<{
   return (
     <div className="space-y-3">
       {status === 'pending' && <Skeleton active paragraph={{ rows: 4 }} />}
-      {status === 'success' && data.length === 0 && (
+      {status === 'success' && entries.length === 0 && (
         <Empty
           description={
             <div className="text-center space-y-2">
@@ -3416,7 +3605,7 @@ const EntryManager: React.FC<{
           }
         />
       )}
-      {status === 'success' && data.length > 0 && (
+      {status === 'success' && entries.length > 0 && (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <Input
@@ -3573,13 +3762,16 @@ const EntryManager: React.FC<{
             </div>
           )}
           <p className="text-xs text-text-muted">
+            Showing {visibleEntryCount} of {totalEntryCount} entries.
+          </p>
+          <p className="text-xs text-text-muted">
             Entry order is controlled by priority (0-100). Higher-priority entries are evaluated first.
           </p>
           <Table
             size="small"
             virtual
             pagination={false}
-            scroll={{ y: 420, x: 900 }}
+            scroll={{ y: 420, x: isEntryManagerMobile ? 680 : 900 }}
             rowKey={(r: any) => r.entry_id}
             rowSelection={{
               selectedRowKeys,
@@ -3592,23 +3784,34 @@ const EntryManager: React.FC<{
             columns={[
               { title: 'Keywords', dataIndex: 'keywords', key: 'keywords', width: 200, render: (arr: string[]) => <div className="flex flex-wrap gap-1">{(arr||[]).map((k) => <Tag key={k}>{k}</Tag>)}</div> },
               { title: 'Content', dataIndex: 'content', key: 'content', render: (v: string) => <span className="line-clamp-2">{v}</span> },
-              {
-                title: 'Priority',
-                dataIndex: 'priority',
-                key: 'priority',
-                width: 110,
-                render: (value: number) => {
-                  const band = getPriorityBand(value)
-                  return <Tag color={getPriorityTagColor(band)}>{Number(value || 0)}/100</Tag>
-                }
-              },
-              { title: 'Enabled', dataIndex: 'enabled', key: 'enabled', width: 70, render: (v: boolean) => v ? <Tag color="green">Yes</Tag> : <Tag>No</Tag> },
+              ...(screens.md
+                ? [
+                    {
+                      title: 'Priority',
+                      dataIndex: 'priority',
+                      key: 'priority',
+                      width: 110,
+                      render: (value: number) => {
+                        const band = getPriorityBand(value)
+                        return <Tag color={getPriorityTagColor(band)}>{Number(value || 0)}/100</Tag>
+                      }
+                    },
+                    {
+                      title: 'Enabled',
+                      dataIndex: 'enabled',
+                      key: 'enabled',
+                      width: 70,
+                      render: (v: boolean) => (v ? <Tag color="green">Yes</Tag> : <Tag>No</Tag>)
+                    }
+                  ]
+                : []),
               { title: 'Actions', key: 'actions', width: 80, render: (_: any, r: any) => (
                 <div className="flex gap-2">
                   <Tooltip title="Edit">
                     <Button
                       type="text"
-                      size="small"
+                      size={entryActionButtonSize}
+                      className={entryActionButtonClassName}
                       aria-label="Edit entry"
                       icon={<Pen className="w-4 h-4" />}
                       onClick={() => openEditModal(r)}
@@ -3617,7 +3820,8 @@ const EntryManager: React.FC<{
                   <Tooltip title="Delete">
                     <Button
                       type="text"
-                      size="small"
+                      size={entryActionButtonSize}
+                      className={entryActionButtonClassName}
                       danger
                       aria-label="Delete entry"
                       icon={<Trash2 className="w-4 h-4" />}
@@ -3673,6 +3877,7 @@ const EntryManager: React.FC<{
           editForm.resetFields()
         }}
         footer={null}
+        styles={{ body: MODAL_BODY_SCROLL_STYLE }}
       >
         <Form layout="vertical" form={editForm} onFinish={(v) => updateEntry(v)}>
           <Form.Item

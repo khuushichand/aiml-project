@@ -12,7 +12,16 @@ import {
   message
 } from "antd"
 import type { ColumnsType } from "antd/es/table"
-import { Download, Eye, RefreshCw, RotateCcw } from "lucide-react"
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock3,
+  Download,
+  Eye,
+  RefreshCw,
+  RotateCcw,
+  XCircle
+} from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
@@ -28,6 +37,7 @@ import { OutputPreviewDrawer } from "./OutputPreviewDrawer"
 import {
   buildRegenerateOutputRequest,
   getDeliveryStatusColor,
+  getDeliveryStatusLabel,
   getOutputDeliveryStatuses,
   getOutputTemplateName,
   getOutputTemplateVersion
@@ -187,6 +197,23 @@ export const OutputsTab: React.FC = () => {
     }
   }
 
+  const renderDeliveryStatusIcon = (status: string) => {
+    const normalized = status.trim().toLowerCase()
+    if (normalized === "sent" || normalized === "stored" || normalized === "success") {
+      return <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+    }
+    if (normalized === "partial" || normalized === "warning") {
+      return <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+    }
+    if (normalized === "queued" || normalized === "pending" || normalized === "in_progress") {
+      return <Clock3 className="h-3.5 w-3.5" aria-hidden />
+    }
+    if (normalized === "failed" || normalized === "error") {
+      return <XCircle className="h-3.5 w-3.5" aria-hidden />
+    }
+    return <Clock3 className="h-3.5 w-3.5" aria-hidden />
+  }
+
   // Get selected output for preview
   const selectedOutput = selectedOutputId
     ? outputs.find((o) => o.id === selectedOutputId)
@@ -261,7 +288,12 @@ export const OutputsTab: React.FC = () => {
             {deliveries.map((delivery, index) => (
               <Tooltip key={`${delivery.channel}-${delivery.status}-${index}`} title={delivery.detail}>
                 <Tag color={getDeliveryStatusColor(delivery.status)}>
-                  {delivery.channel}: {delivery.status}
+                  <span className="inline-flex items-center gap-1">
+                    {renderDeliveryStatusIcon(delivery.status)}
+                    <span>
+                      {delivery.channel} {getDeliveryStatusLabel(delivery.status)}
+                    </span>
+                  </span>
                 </Tag>
               </Tooltip>
             ))}

@@ -22,7 +22,7 @@ Finding IDs: `9.1` through `9.7`
 - Integration test for mixed-result batch URL add summary output.
 - Component test for error boundary fallback and retry.
 - Copy regression test for empty state messaging.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Persistence Failure and Cross-Tab Resilience
 **Goal**: Prevent silent persistence failures and stale-tab overwrite surprises.
@@ -51,3 +51,23 @@ Finding IDs: `9.1` through `9.7`
 ## Dependencies
 
 - Undo manager should be consumed by Categories 1, 3, and 5.
+
+## Progress Notes (2026-02-18)
+
+- Stage 1 completed:
+  - Added mixed-result batch ingestion feedback for Search tab URL adds:
+    - tracks per-URL failures with reasons,
+    - shows actionable summary (`Added X of Y; failed URLs + reasons`),
+    - keeps full failure summary in modal error state when no URL succeeded.
+  - Added a workspace-level render error boundary with recoverable fallback UI and explicit reload action.
+  - Updated empty-state no-source guidance to explicitly mention general chat without sources.
+- Files updated:
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/SourcesPane/AddSourceModal.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/index.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/source-location-copy.ts`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage9.error.test.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.error-boundary.test.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/source-location-copy.test.ts`
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.error-boundary.test.tsx src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage9.error.test.tsx src/components/Option/WorkspacePlayground/__tests__/source-location-copy.test.ts --reporter=verbose`
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage1.mobile.test.tsx src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage3.performance.test.tsx src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage9.error.test.tsx src/components/Option/WorkspacePlayground/__tests__/SourcesPane.stage2.test.tsx src/components/Option/WorkspacePlayground/__tests__/source-location-copy.test.ts src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.desktop-layout.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.error-boundary.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage2.responsive.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx src/store/__tests__/workspace.test.ts --reporter=dot`

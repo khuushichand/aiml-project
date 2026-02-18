@@ -12,6 +12,7 @@ import {
   SlidersHorizontal
 } from "lucide-react"
 import { Modal, Tag, Tooltip, Input, Slider, Switch, message } from "antd"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useWorkspaceStore } from "@/store/workspace"
 import { useStoreMessageOption } from "@/store/option"
 import { useMessageOption } from "@/hooks/useMessageOption"
@@ -40,6 +41,15 @@ type RetrievalDiagnostics = {
 }
 
 type ChatModePreference = "normal" | "rag"
+type LorebookActivityTurn = {
+  turnNumber: number
+  assistantPreview: string
+  entryCount: number
+}
+
+const LOREBOOK_ACTIVITY_PAGE_SIZE = 8
+const LOREBOOK_ACTIVITY_EXPORT_PAGE_SIZE = 200
+const LOREBOOK_DEBUG_ENTRYPOINT_HREF = "/playground?focus=lorebook-debug"
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null
@@ -699,6 +709,19 @@ export const ChatPane: React.FC = () => {
     false
   )
   const [submitError, setSubmitError] = React.useState<string | null>(null)
+  const [lorebookActivityTurns, setLorebookActivityTurns] = React.useState<
+    LorebookActivityTurn[]
+  >([])
+  const [lorebookActivityTotal, setLorebookActivityTotal] = React.useState(0)
+  const [lorebookActivityLoading, setLorebookActivityLoading] =
+    React.useState(false)
+  const [lorebookActivityError, setLorebookActivityError] = React.useState<
+    string | null
+  >(null)
+  const [lorebookActivityForbidden, setLorebookActivityForbidden] =
+    React.useState(false)
+  const [exportingLorebookActivity, setExportingLorebookActivity] =
+    React.useState(false)
   const workspaceSessionRef = React.useRef<string | null>(null)
   const chatMessageItemRefs = React.useRef<Record<string, HTMLDivElement | null>>(
     {}
@@ -1078,6 +1101,99 @@ export const ChatPane: React.FC = () => {
     [focusSourceById, focusSourceByMediaId, sources]
   )
 
+  const loadLorebookActivity = React.useCallback(async () => {
+    if (!serverChatId) {
+      setLorebookActivityTurns([])
+      setLorebookActivityTotal(0)
+      setLorebookActivityLoading(false)
+      setLorebookActivityError(null)
+      setLorebookActivityForbidden(false)
+      return
+    }
+
+    setLorebookActivityLoading(true)
+    setLorebookActivityError(null)
+    setLorebookActivityForbidden(false)
+    try {
+      const response = await tldwClient.getChatLorebookDiagnostics(serverChatId, {
+        page: 1,
+        size: LOREBOOK_ACTIVITY_PAGE_SIZE,
+        order: "desc"
+      })
+      const turns = Array.isArray(response?.turns) ? response.turns : []
+      const normalizedTurns: LorebookActivityTurn[] = turns
+        .slice(0, LOREBOOK_ACTIVITY_PAGE_SIZE)
+        .map((turn: any) => ({
+        turnNumber:
+          typeof turn?.turn_number === "number"
+            ? turn.turn_number
+            : Number(turn?.turn_number || 0),
+        assistantPreview: String(turn?.message_preview || ""),
+        entryCount: Array.isArray(turn?.diagnostics) ? turn.diagnostics.length : 0
+      }))
+      setLorebookActivityTurns(normalizedTurns)
+      setLorebookActivityTotal(
+        typeof response?.total_turns_with_diagnostics === "number"
+          ? response.total_turns_with_diagnostics
+          : normalizedTurns.length
+      )
+    } catch (error: any) {
+      const messageText = String(error?.message || "Failed to load lorebook activity.")
+      const forbidden = /(403|forbidden|not authorized|permission)/i.test(messageText)
+      setLorebookActivityForbidden(forbidden)
+      setLorebookActivityError(messageText)
+      setLorebookActivityTurns([])
+      setLorebookActivityTotal(0)
+    } finally {
+      setLorebookActivityLoading(false)
+    }
+  }, [serverChatId])
+
+  const handleExportLorebookActivity = React.useCallback(async () => {
+    if (!serverChatId || exportingLorebookActivity) return
+    setExportingLorebookActivity(true)
+    try {
+      const response = await tldwClient.getChatLorebookDiagnostics(serverChatId, {
+        page: 1,
+        size: LOREBOOK_ACTIVITY_EXPORT_PAGE_SIZE,
+        order: "asc"
+      })
+      const payload = {
+        exported_at: new Date().toISOString(),
+        chat_id: String(serverChatId),
+        total_turns_with_diagnostics: response?.total_turns_with_diagnostics || 0,
+        turns: Array.isArray(response?.turns) ? response.turns : []
+      }
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json;charset=utf-8"
+      })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement("a")
+      anchor.href = url
+      anchor.download = `lorebook-activity-${String(serverChatId)}.json`
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (error: any) {
+      messageApi.error(
+        error?.message || "Failed to export lorebook activity diagnostics."
+      )
+    } finally {
+      setExportingLorebookActivity(false)
+    }
+  }, [exportingLorebookActivity, messageApi, serverChatId])
+
+  React.useEffect(() => {
+    if (!hasMessages || !serverChatId) {
+      setLorebookActivityTurns([])
+      setLorebookActivityTotal(0)
+      setLorebookActivityLoading(false)
+      setLorebookActivityError(null)
+      setLorebookActivityForbidden(false)
+      return
+    }
+    void loadLorebookActivity()
+  }, [hasMessages, loadLorebookActivity, serverChatId])
+
   const handleSaveMessageToNotes = React.useCallback(
     (msg: {
       isBot: boolean
@@ -1162,6 +1278,95 @@ export const ChatPane: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {hasMessages && (
+        <div className="border-b border-border bg-surface px-4 py-2">
+          <div className="mx-auto max-w-3xl space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-medium text-text">Lorebook Activity</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void loadLorebookActivity()}
+                  className="rounded border border-border px-2 py-1 text-xs text-text-muted transition hover:border-primary/40 hover:text-text"
+                >
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleExportLorebookActivity()}
+                  disabled={!serverChatId || exportingLorebookActivity}
+                  className="rounded border border-border px-2 py-1 text-xs text-text-muted transition hover:border-primary/40 hover:text-text disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {exportingLorebookActivity ? "Exporting…" : "Export"}
+                </button>
+                <a
+                  href={LOREBOOK_DEBUG_ENTRYPOINT_HREF}
+                  className="text-xs text-primary hover:underline"
+                  aria-label="Open full lorebook diagnostics"
+                >
+                  View Full Diagnostics
+                </a>
+              </div>
+            </div>
+
+            {!serverChatId && (
+              <p className="text-xs text-text-muted">
+                Lorebook activity appears once this chat is saved to server.
+              </p>
+            )}
+
+            {serverChatId && lorebookActivityLoading && (
+              <p className="text-xs text-text-muted">Loading lorebook activity…</p>
+            )}
+
+            {serverChatId && lorebookActivityError && (
+              <p className="text-xs text-danger">
+                {lorebookActivityForbidden
+                  ? "Lorebook activity is unavailable for this account."
+                  : lorebookActivityError}
+              </p>
+            )}
+
+            {serverChatId &&
+              !lorebookActivityLoading &&
+              !lorebookActivityError &&
+              lorebookActivityTurns.length === 0 && (
+                <p className="text-xs text-text-muted">
+                  No lorebook entries have fired yet for this chat.
+                </p>
+              )}
+
+            {serverChatId &&
+              !lorebookActivityLoading &&
+              !lorebookActivityError &&
+              lorebookActivityTurns.length > 0 && (
+                <div className="space-y-1">
+                  {lorebookActivityTurns.map((turn) => (
+                    <div
+                      key={`lorebook-turn-${turn.turnNumber}`}
+                      className="rounded border border-border px-2 py-1"
+                    >
+                      <p className="text-xs font-medium text-text">
+                        Turn {turn.turnNumber}: {turn.entryCount} entries fired
+                      </p>
+                      {turn.assistantPreview && (
+                        <p className="line-clamp-2 text-xs text-text-muted">
+                          {turn.assistantPreview}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                  {lorebookActivityTotal > lorebookActivityTurns.length && (
+                    <p className="text-[11px] text-text-muted">
+                      Showing {lorebookActivityTurns.length} of {lorebookActivityTotal} turns with diagnostics.
+                    </p>
+                  )}
+                </div>
+              )}
+          </div>
+        </div>
+      )}
 
       {/* Chat messages area */}
       <div className="relative flex min-h-0 flex-1 flex-col">

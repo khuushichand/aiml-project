@@ -674,6 +674,116 @@ describe("CharactersManager first-use onboarding", () => {
     expect(await screen.findByText("No Chats")).toBeInTheDocument()
   }, 30000)
 
+  it("supports keyboard Enter to trigger and commit inline name editing", async () => {
+    const records = [
+      {
+        id: "inline-1",
+        name: "Inline Name",
+        description: "Original description",
+        system_prompt: "Prompt text",
+        version: 7
+      }
+    ]
+
+    useMutationMock.mockImplementation((opts: any) => ({
+      mutate: async (variables: any) => {
+        const result = await opts?.mutationFn?.(variables)
+        await opts?.onSuccess?.(result, variables, undefined)
+        return result
+      },
+      mutateAsync: async (variables: any) => {
+        const result = await opts?.mutationFn?.(variables)
+        await opts?.onSuccess?.(result, variables, undefined)
+        return result
+      },
+      isPending: false
+    }))
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    const nameInlineButton = await screen.findByRole("button", {
+      name: /Edit name inline/i
+    })
+    nameInlineButton.focus()
+    fireEvent.keyDown(nameInlineButton, { key: "Enter" })
+
+    const inlineInput = await screen.findByDisplayValue("Inline Name")
+    fireEvent.change(inlineInput, { target: { value: "Inline Name Updated" } })
+    fireEvent.keyDown(inlineInput, { key: "Enter" })
+
+    await waitFor(() => {
+      expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
+        "inline-1",
+        { name: "Inline Name Updated" },
+        7
+      )
+    })
+  }, 30000)
+
+  it("supports F2 and Escape for inline description edit with focus return", async () => {
+    const records = [
+      {
+        id: "inline-2",
+        name: "Inline Description Character",
+        description: "Inline description text",
+        system_prompt: "Prompt text",
+        version: 5
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    const descriptionInlineButton = await screen.findByRole("button", {
+      name: /Edit description inline/i
+    })
+    descriptionInlineButton.focus()
+    fireEvent.keyDown(descriptionInlineButton, { key: "F2" })
+
+    const inlineInput = await screen.findByDisplayValue("Inline description text")
+    fireEvent.keyDown(inlineInput, { key: "Escape" })
+
+    await waitFor(() => {
+      expect(
+        screen.queryByDisplayValue("Inline description text")
+      ).not.toBeInTheDocument()
+    })
+    expect(tldwClientMock.updateCharacter).not.toHaveBeenCalled()
+  }, 30000)
+
   it("renames tags across affected characters from the manage tags modal", async () => {
     const user = userEvent.setup()
     const records = [
@@ -1089,6 +1199,20 @@ describe("CharactersManager first-use onboarding", () => {
       version: 3
     }
 
+    useMutationMock.mockImplementation((opts: any) => ({
+      mutate: async (variables: any) => {
+        const result = await opts?.mutationFn?.(variables)
+        await opts?.onSuccess?.(result, variables, undefined)
+        return result
+      },
+      mutateAsync: async (variables: any) => {
+        const result = await opts?.mutationFn?.(variables)
+        await opts?.onSuccess?.(result, variables, undefined)
+        return result
+      },
+      isPending: false
+    }))
+
     useQueryMock.mockImplementation((opts: any) => {
       const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
       if (key === "tldw:listCharacters") {
@@ -1121,11 +1245,11 @@ describe("CharactersManager first-use onboarding", () => {
     const editScope = within(editFormElement as HTMLElement)
 
     fireEvent.change(
-      editScope.getByPlaceholderText("Write a one-line summary to help identify this character quickly."),
+      editScope.getByPlaceholderText("Short description"),
       { target: { value: "Updated description from edit flow test." } }
     )
 
-    await user.click(editScope.getByRole("button", { name: "Save changes" }))
+    fireEvent.submit(editFormElement as HTMLFormElement)
 
     await waitFor(() => {
       expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
@@ -1230,7 +1354,7 @@ describe("CharactersManager first-use onboarding", () => {
     expect(shortcutOptions?.enabled).toBe(true)
     expect(typeof shortcutOptions?.onNewCharacter).toBe("function")
     expect(typeof shortcutOptions?.onFocusSearch).toBe("function")
-    expect(typeof shortcutOptions?.onEscape).toBe("function")
+    expect(typeof shortcutOptions?.onCloseModal).toBe("function")
   })
 
   it("imports a character file through the upload control", async () => {

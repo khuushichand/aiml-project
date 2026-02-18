@@ -11,25 +11,27 @@ const mockOpenAddSourceModal = vi.fn()
 const mockRemoveSource = vi.fn()
 const mockClearSourceFocusTarget = vi.fn()
 
+const defaultSources = [
+  {
+    id: "s1",
+    mediaId: 1,
+    title: "Source One",
+    type: "pdf" as const,
+    status: "ready" as const,
+    addedAt: new Date("2026-02-18T00:00:00.000Z")
+  },
+  {
+    id: "s2",
+    mediaId: 2,
+    title: "Source Two",
+    type: "video" as const,
+    status: "processing" as const,
+    addedAt: new Date("2026-02-18T00:00:00.000Z")
+  }
+]
+
 const workspaceStoreState = {
-  sources: [
-    {
-      id: "s1",
-      mediaId: 1,
-      title: "Source One",
-      type: "pdf" as const,
-      status: "ready" as const,
-      addedAt: new Date("2026-02-18T00:00:00.000Z")
-    },
-    {
-      id: "s2",
-      mediaId: 2,
-      title: "Source Two",
-      type: "video" as const,
-      status: "processing" as const,
-      addedAt: new Date("2026-02-18T00:00:00.000Z")
-    }
-  ],
+  sources: [...defaultSources],
   selectedSourceIds: [] as string[],
   sourceSearchQuery: "",
   sourceFocusTarget: null as { sourceId: string; token: number } | null,
@@ -72,6 +74,7 @@ vi.mock("../SourcesPane/AddSourceModal", () => ({
 describe("SourcesPane Stage 2 source highlighting", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    workspaceStoreState.sources = [...defaultSources]
     workspaceStoreState.sourceSearchQuery = ""
     workspaceStoreState.sourceFocusTarget = null
 
@@ -175,5 +178,20 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     ) as HTMLInputElement | null
     expect(checkboxInput).toBeTruthy()
     expect(checkboxInput?.disabled).toBe(true)
+  })
+
+  it("enables virtualized rendering when source volume crosses threshold", () => {
+    workspaceStoreState.sources = Array.from({ length: 70 }, (_, index) => ({
+      id: `source-${index + 1}`,
+      mediaId: index + 1,
+      title: `Source ${index + 1}`,
+      type: "pdf" as const,
+      status: "ready" as const,
+      addedAt: new Date("2026-02-18T00:00:00.000Z")
+    }))
+
+    render(<SourcesPane />)
+
+    expect(screen.getByTestId("sources-virtualized-list")).toBeInTheDocument()
   })
 })
