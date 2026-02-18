@@ -14,9 +14,11 @@ const testState = {
   rightPaneCollapsed: false,
   workspaceId: "workspace-1",
   initializeWorkspace: vi.fn(),
+  createNewWorkspace: vi.fn(),
   addSources: vi.fn(),
   setSelectedSourceIds: vi.fn(),
   captureToCurrentNote: vi.fn(),
+  clearCurrentNote: vi.fn(),
   selectedSourceIds: [] as string[],
   generatedArtifacts: [] as Array<{ id: string }>,
   setLeftPaneCollapsed: vi.fn(),
@@ -36,7 +38,7 @@ const testState = {
   }>,
   workspaceChatSessions: {} as Record<string, { messages: any[] }>,
   currentNote: {
-    id: 7,
+    id: 7 as number | undefined,
     title: "",
     content: "",
     keywords: [] as string[],
@@ -171,6 +173,38 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
         return
       }
       expect(dialog).toHaveClass("ant-zoom-leave")
+    })
+  })
+
+  it("routes pane focus shortcuts and workspace creation shortcuts", () => {
+    render(<WorkspacePlayground />)
+
+    fireEvent.keyDown(window, { key: "1", metaKey: true })
+    expect(testState.setLeftPaneCollapsed).toHaveBeenCalledWith(false)
+
+    fireEvent.keyDown(window, { key: "3", metaKey: true })
+    expect(testState.setRightPaneCollapsed).toHaveBeenCalledWith(false)
+
+    fireEvent.keyDown(window, { key: "N", metaKey: true, shiftKey: true })
+    expect(testState.createNewWorkspace).toHaveBeenCalledTimes(1)
+  })
+
+  it("starts a new note draft with Cmd/Ctrl+N", () => {
+    testState.currentNote = {
+      id: undefined,
+      title: "",
+      content: "",
+      keywords: [],
+      isDirty: false
+    }
+
+    render(<WorkspacePlayground />)
+
+    fireEvent.keyDown(window, { key: "n", ctrlKey: true })
+
+    expect(testState.clearCurrentNote).toHaveBeenCalledTimes(1)
+    return waitFor(() => {
+      expect(testState.focusWorkspaceNote).toHaveBeenCalledWith("title")
     })
   })
 

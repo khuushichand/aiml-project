@@ -18,10 +18,11 @@ import {
   Minimize2,
   Loader2,
   Trash2,
-  UploadCloud
+  UploadCloud,
+  Download
 } from 'lucide-react'
 import React, { useState, useEffect, Suspense, useMemo, useRef, useCallback } from 'react'
-import { Select, Dropdown, Tooltip, message, Spin } from 'antd'
+import { Select, Dropdown, Tooltip, message, Spin, Modal } from 'antd'
 import { useTranslation } from 'react-i18next'
 import type { MenuProps } from 'antd'
 import { AnalysisModal } from './AnalysisModal'
@@ -49,6 +50,7 @@ import {
 import { applyMediaNavigationTarget } from '@/utils/media-navigation-target-actions'
 import { useSetting } from '@/hooks/useSetting'
 import { useMediaReadingProgress } from '@/hooks/useMediaReadingProgress'
+import { downloadBlob } from '@/utils/download-blob'
 import {
   MEDIA_COLLAPSED_SECTIONS_SETTING,
   MEDIA_TEXT_SIZE_PRESET_SETTING,
@@ -195,6 +197,73 @@ const SAFE_METADATA_LABELS: Record<string, string> = {
   arxiv_id: 'arXiv',
   journal: 'Journal',
   license: 'License'
+}
+
+type DocumentIntelligenceTab =
+  | 'outline'
+  | 'insights'
+  | 'references'
+  | 'figures'
+  | 'annotations'
+
+type MediaExportFormat = 'json' | 'markdown' | 'text'
+
+interface DocumentIntelligencePanelState<T = any> {
+  loading: boolean
+  error: string | null
+  data: T[]
+}
+
+type DocumentIntelligencePanelsState = Record<
+  DocumentIntelligenceTab,
+  DocumentIntelligencePanelState
+>
+
+const DOCUMENT_INTELLIGENCE_TABS: Array<{
+  key: DocumentIntelligenceTab
+  label: string
+}> = [
+  { key: 'outline', label: 'Outline' },
+  { key: 'insights', label: 'Insights' },
+  { key: 'references', label: 'References' },
+  { key: 'figures', label: 'Figures' },
+  { key: 'annotations', label: 'Annotations' }
+]
+
+const createDefaultDocumentIntelligencePanels =
+  (): DocumentIntelligencePanelsState => ({
+    outline: { loading: false, error: null, data: [] },
+    insights: { loading: false, error: null, data: [] },
+    references: { loading: false, error: null, data: [] },
+    figures: { loading: false, error: null, data: [] },
+    annotations: { loading: false, error: null, data: [] }
+  })
+
+const createLoadingDocumentIntelligencePanels =
+  (): DocumentIntelligencePanelsState => ({
+    outline: { loading: true, error: null, data: [] },
+    insights: { loading: true, error: null, data: [] },
+    references: { loading: true, error: null, data: [] },
+    figures: { loading: true, error: null, data: [] },
+    annotations: { loading: true, error: null, data: [] }
+  })
+
+const getErrorStatusCode = (error: unknown): number | null => {
+  if (!error || typeof error !== 'object') return null
+  const candidate = (error as any).status ?? (error as any).statusCode
+  return typeof candidate === 'number' && Number.isFinite(candidate)
+    ? candidate
+    : null
+}
+
+const toExportFileStem = (selectedMedia: MediaResultItem): string => {
+  const fromTitle = String(selectedMedia.title || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '')
+  const safeTitle = fromTitle.length > 0 ? fromTitle : `media-${selectedMedia.id}`
+  return `${safeTitle}-${selectedMedia.id}`
 }
 
 const toDisplayMetadataLabel = (key: string): string => {
@@ -605,7 +674,17 @@ export function ContentViewer({
   } | null>(null)
   const [contentEditModalOpen, setContentEditModalOpen] = useState(false)
   const [editingContentText, setEditingContentText] = useState('')
+  const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [exportFormat, setExportFormat] = useState<MediaExportFormat>('json')
   const [metadataDetailsExpanded, setMetadataDetailsExpanded] = useState(false)
+  const [activeIntelligenceTab, setActiveIntelligenceTab] =
+    useState<DocumentIntelligenceTab>('outline')
+  const [documentIntelligencePanels, setDocumentIntelligencePanels] =
+    useState<DocumentIntelligencePanelsState>(() =>
+      createDefaultDocumentIntelligencePanels()
+    )
+  const [loadedDocumentIntelligenceMediaId, setLoadedDocumentIntelligenceMediaId] =
+    useState<string | null>(null)
   const [showBackToTop, setShowBackToTop] = useState(false)
   const [visiblePlainContentChars, setVisiblePlainContentChars] = useState(
     () => content.length
@@ -685,7 +764,7 @@ export function ContentViewer({
     }
   }, [])
 
-  useMediaReadingProgress({
+  const mediaReadingProgress = useMediaReadingProgress({
     mediaId: selectedMedia?.id ?? null,
     mediaKind: selectedMedia?.kind ?? null,
     mediaDetail,
@@ -693,6 +772,7 @@ export function ContentViewer({
     scrollContainerRef: contentScrollContainerRef,
     hasNavigationTarget: Boolean(navigationTarget)
   })
+  const progressPercent = mediaReadingProgress?.progressPercent
 
   useEffect(() => {
     const container = contentScrollContainerRef.current
@@ -1658,6 +1738,132 @@ export function ContentViewer({
     )
   }
 
+  const handleExportMedia = () => {
+    if (isNote || !selectedMedia) return
+    setExportModalOpen(true)
+  }
+
+  const confirmExportMedia = () => {
+    if (isNote || !selectedMedia) return
+
+    const exportPayload = {
+      id: selectedMedia.id,
+      title: selectedMedia.title || '',
+      type: selectedMedia.meta?.type || '',
+      source: selectedMedia.meta?.source || '',
+      keywords: editingKeywords,
+      content,
+      analysis: selectedAnalysis?.text || '',
+      exported_at: new Date().toISOString()
+    }
+
+    let output = ''
+    let extension = 'txt'
+    let mimeType = 'text/plain;charset=utf-8'
+
+    if (exportFormat === 'json') {
+      output = JSON.stringify(exportPayload, null, 2)
+      extension = 'json'
+      mimeType = 'application/json;charset=utf-8'
+    } else if (exportFormat === 'markdown') {
+      output = [
+        `# ${exportPayload.title || `Media ${exportPayload.id}`}`,
+        '',
+        `- ID: ${exportPayload.id}`,
+        `- Type: ${exportPayload.type || 'N/A'}`,
+        `- Source: ${exportPayload.source || 'N/A'}`,
+        `- Keywords: ${
+          Array.isArray(exportPayload.keywords) && exportPayload.keywords.length > 0
+            ? exportPayload.keywords.join(', ')
+            : 'None'
+        }`,
+        `- Exported At: ${exportPayload.exported_at}`,
+        '',
+        '## Content',
+        '',
+        exportPayload.content || '',
+        '',
+        '## Analysis',
+        '',
+        exportPayload.analysis || ''
+      ].join('\n')
+      extension = 'md'
+      mimeType = 'text/markdown;charset=utf-8'
+    } else {
+      output = [
+        `Title: ${exportPayload.title || `Media ${exportPayload.id}`}`,
+        `ID: ${exportPayload.id}`,
+        `Type: ${exportPayload.type || 'N/A'}`,
+        `Source: ${exportPayload.source || 'N/A'}`,
+        `Keywords: ${
+          Array.isArray(exportPayload.keywords) && exportPayload.keywords.length > 0
+            ? exportPayload.keywords.join(', ')
+            : 'None'
+        }`,
+        `Exported At: ${exportPayload.exported_at}`,
+        '',
+        'Content:',
+        exportPayload.content || '',
+        '',
+        'Analysis:',
+        exportPayload.analysis || ''
+      ].join('\n')
+      extension = 'txt'
+      mimeType = 'text/plain;charset=utf-8'
+    }
+
+    try {
+      const blob = new Blob([output], { type: mimeType })
+      downloadBlob(blob, `${toExportFileStem(selectedMedia)}.${extension}`)
+      message.success(
+        t('review:mediaPage.exportSuccess', {
+          defaultValue: 'Export ready.'
+        })
+      )
+      setExportModalOpen(false)
+    } catch (error) {
+      console.error('Failed to export media:', error)
+      message.error(
+        t('review:mediaPage.exportFailed', {
+          defaultValue: 'Unable to export this item.'
+        })
+      )
+    }
+  }
+
+  const handleReprocessMedia = async () => {
+    if (isNote || !selectedMediaId) return
+
+    try {
+      await bgRequest({
+        path: `/api/v1/media/${selectedMediaId}/reprocess` as any,
+        method: 'POST' as any,
+        headers: { 'Content-Type': 'application/json' },
+        body: {
+          perform_chunking: true,
+          generate_embeddings: true,
+          force_regenerate_embeddings: true
+        }
+      })
+      message.success(
+        t('review:mediaPage.reprocessQueued', {
+          defaultValue: 'Reprocessing started.'
+        })
+      )
+      if (onRefreshMedia) {
+        onRefreshMedia()
+      }
+    } catch (error) {
+      console.error('Failed to start reprocess:', error)
+      message.error(
+        t('review:mediaPage.reprocessFailed', {
+          defaultValue:
+            'Unable to start reprocessing. Please try again.'
+        })
+      )
+    }
+  }
+
   // Get the first/selected analysis for creating note with analysis
   const activeAnalysis =
     existingAnalyses.length > 0
@@ -1676,6 +1882,7 @@ export function ContentViewer({
 
   // Check if viewing a note vs media
   const isNote = selectedMedia?.kind === 'note'
+  const intelligenceSectionCollapsed = collapsedSections.intelligence ?? true
   const chatWithLabel = t('review:reviewPage.chatWithMedia', {
     defaultValue: 'Chat with this media'
   })
@@ -1685,6 +1892,146 @@ export function ContentViewer({
   const chatAboutClarifiedLabel = t('review:reviewPage.chatAboutMediaClarified', {
     defaultValue: 'Chat about this media (RAG context)'
   })
+
+  const fetchDocumentIntelligence = useCallback(async () => {
+    if (!selectedMediaId || isNote) return
+    const encodedMediaId = encodeURIComponent(selectedMediaId)
+    setDocumentIntelligencePanels(createLoadingDocumentIntelligencePanels())
+
+    const results = await Promise.allSettled([
+      bgRequest<any>({
+        path: `/api/v1/media/${encodedMediaId}/outline` as any,
+        method: 'GET' as any
+      }),
+      bgRequest<any>({
+        path: `/api/v1/media/${encodedMediaId}/insights` as any,
+        method: 'POST' as any,
+        body: {}
+      }),
+      bgRequest<any>({
+        path: `/api/v1/media/${encodedMediaId}/references?enrich=true&limit=25` as any,
+        method: 'GET' as any
+      }),
+      bgRequest<any>({
+        path: `/api/v1/media/${encodedMediaId}/figures?min_size=50` as any,
+        method: 'GET' as any
+      }),
+      bgRequest<any>({
+        path: `/api/v1/media/${encodedMediaId}/annotations` as any,
+        method: 'GET' as any
+      })
+    ])
+
+    const nextPanels = createDefaultDocumentIntelligencePanels()
+    const assignError = (tab: DocumentIntelligenceTab, error: unknown) => {
+      const statusCode = getErrorStatusCode(error)
+      if (statusCode === 404 || statusCode === 410 || statusCode === 422) {
+        nextPanels[tab] = { loading: false, error: null, data: [] }
+        return
+      }
+      nextPanels[tab] = {
+        loading: false,
+        error: t('review:mediaPage.intelligenceLoadError', {
+          defaultValue: 'Unable to load this panel. Try again.'
+        }),
+        data: []
+      }
+    }
+
+    const [
+      outlineResult,
+      insightsResult,
+      referencesResult,
+      figuresResult,
+      annotationsResult
+    ] = results
+
+    if (outlineResult.status === 'fulfilled') {
+      nextPanels.outline = {
+        loading: false,
+        error: null,
+        data: Array.isArray(outlineResult.value?.entries)
+          ? outlineResult.value.entries
+          : []
+      }
+    } else {
+      assignError('outline', outlineResult.reason)
+    }
+
+    if (insightsResult.status === 'fulfilled') {
+      nextPanels.insights = {
+        loading: false,
+        error: null,
+        data: Array.isArray(insightsResult.value?.insights)
+          ? insightsResult.value.insights
+          : []
+      }
+    } else {
+      assignError('insights', insightsResult.reason)
+    }
+
+    if (referencesResult.status === 'fulfilled') {
+      nextPanels.references = {
+        loading: false,
+        error: null,
+        data: Array.isArray(referencesResult.value?.references)
+          ? referencesResult.value.references
+          : []
+      }
+    } else {
+      assignError('references', referencesResult.reason)
+    }
+
+    if (figuresResult.status === 'fulfilled') {
+      nextPanels.figures = {
+        loading: false,
+        error: null,
+        data: Array.isArray(figuresResult.value?.figures)
+          ? figuresResult.value.figures
+          : []
+      }
+    } else {
+      assignError('figures', figuresResult.reason)
+    }
+
+    if (annotationsResult.status === 'fulfilled') {
+      nextPanels.annotations = {
+        loading: false,
+        error: null,
+        data: Array.isArray(annotationsResult.value?.annotations)
+          ? annotationsResult.value.annotations
+          : []
+      }
+    } else {
+      assignError('annotations', annotationsResult.reason)
+    }
+
+    setDocumentIntelligencePanels(nextPanels)
+    setLoadedDocumentIntelligenceMediaId(selectedMediaId)
+  }, [isNote, selectedMediaId, t])
+  const fetchDocumentIntelligenceRef = useRef(fetchDocumentIntelligence)
+
+  useEffect(() => {
+    fetchDocumentIntelligenceRef.current = fetchDocumentIntelligence
+  }, [fetchDocumentIntelligence])
+
+  useEffect(() => {
+    setActiveIntelligenceTab('outline')
+    setDocumentIntelligencePanels(createDefaultDocumentIntelligencePanels())
+    setLoadedDocumentIntelligenceMediaId(null)
+  }, [selectedMediaId, selectedMedia?.kind])
+
+  useEffect(() => {
+    if (intelligenceSectionCollapsed) return
+    if (!selectedMediaId || isNote) return
+    if (loadedDocumentIntelligenceMediaId === selectedMediaId) return
+    void fetchDocumentIntelligenceRef.current()
+  }, [
+    intelligenceSectionCollapsed,
+    isNote,
+    loadedDocumentIntelligenceMediaId,
+    selectedMediaId
+  ])
 
   // Actions dropdown menu items — grouped by purpose
   const actionMenuItems: MenuProps['items'] = [
@@ -1766,14 +2113,36 @@ export function ContentViewer({
       ]
     },
     // Advanced group
-    ...(!isNote && onOpenInMultiReview ? [
+    ...(!isNote ? [
       { type: 'divider' as const },
       {
-        key: 'open-multi-review',
-        label: t('review:reviewPage.openInMulti', 'Open in Multi-Item Review'),
-        icon: <ExternalLink className="w-4 h-4" />,
-        onClick: onOpenInMultiReview
-      }
+        key: 'export-media',
+        label: t('review:mediaPage.exportMedia', {
+          defaultValue: 'Export content'
+        }),
+        icon: <Download className="w-4 h-4" />,
+        onClick: handleExportMedia
+      },
+      {
+        key: 'reprocess-media',
+        label: t('review:mediaPage.reprocessMedia', {
+          defaultValue: 'Reprocess content'
+        }),
+        icon: <UploadCloud className="w-4 h-4" />,
+        onClick: () => {
+          void handleReprocessMedia()
+        }
+      },
+      ...(onOpenInMultiReview
+        ? [
+            {
+              key: 'open-multi-review',
+              label: t('review:reviewPage.openInMulti', 'Open in Multi-Item Review'),
+              icon: <ExternalLink className="w-4 h-4" />,
+              onClick: onOpenInMultiReview
+            }
+          ]
+        : [])
     ] : [])
   ]
 
@@ -1956,6 +2325,148 @@ export function ContentViewer({
   }, [chunkingStatus, t, vectorProcessingStatus])
   const hasDetailedMetadata =
     processingStatusBadges.length > 0 || safeMetadataEntries.length > 0
+  const activeDocumentIntelligencePanel =
+    documentIntelligencePanels[activeIntelligenceTab]
+
+  const renderDocumentIntelligencePanel = () => {
+    if (!activeDocumentIntelligencePanel) {
+      return null
+    }
+
+    if (activeDocumentIntelligencePanel.loading) {
+      return (
+        <div
+          className="text-xs text-text-muted"
+          data-testid="media-intelligence-loading"
+        >
+          {t('review:mediaPage.intelligenceLoading', {
+            defaultValue: 'Loading intelligence data...'
+          })}
+        </div>
+      )
+    }
+
+    if (activeDocumentIntelligencePanel.error) {
+      return (
+        <div className="space-y-2" data-testid="media-intelligence-error">
+          <p className="text-xs text-danger">{activeDocumentIntelligencePanel.error}</p>
+          <button
+            type="button"
+            onClick={() => {
+              void fetchDocumentIntelligence()
+            }}
+            className="rounded border border-border bg-surface2 px-2 py-1 text-xs text-text hover:bg-surface"
+            data-testid="media-intelligence-retry"
+          >
+            {t('common:retry', { defaultValue: 'Retry' })}
+          </button>
+        </div>
+      )
+    }
+
+    if (!Array.isArray(activeDocumentIntelligencePanel.data) || activeDocumentIntelligencePanel.data.length === 0) {
+      return (
+        <div
+          className="text-xs text-text-muted"
+          data-testid="media-intelligence-empty"
+        >
+          {t(`review:mediaPage.intelligenceEmpty.${activeIntelligenceTab}`, {
+            defaultValue: `No ${activeIntelligenceTab} available for this item.`
+          })}
+        </div>
+      )
+    }
+
+    if (activeIntelligenceTab === 'outline') {
+      return (
+        <ul className="space-y-1 text-xs" data-testid="media-intelligence-outline-list">
+          {activeDocumentIntelligencePanel.data.map((entry: any, index: number) => (
+            <li
+              key={`${entry?.title || 'entry'}-${entry?.page || index}-${index}`}
+              className="flex items-start justify-between gap-2 rounded bg-surface2 px-2 py-1 text-text"
+              data-testid="media-intelligence-outline-item"
+            >
+              <span className="truncate">{entry?.title || `Section ${index + 1}`}</span>
+              <span className="shrink-0 text-text-muted">{entry?.page ?? '—'}</span>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+
+    if (activeIntelligenceTab === 'insights') {
+      return (
+        <ul className="space-y-2 text-xs" data-testid="media-intelligence-insights-list">
+          {activeDocumentIntelligencePanel.data.map((entry: any, index: number) => (
+            <li
+              key={`${entry?.category || 'insight'}-${index}`}
+              className="rounded bg-surface2 px-2 py-1.5"
+              data-testid="media-intelligence-insight-item"
+            >
+              <p className="font-medium text-text">{entry?.title || `Insight ${index + 1}`}</p>
+              <p className="mt-1 whitespace-pre-wrap text-text-muted">
+                {entry?.content || ''}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+
+    if (activeIntelligenceTab === 'references') {
+      return (
+        <ul className="space-y-1 text-xs" data-testid="media-intelligence-references-list">
+          {activeDocumentIntelligencePanel.data.map((entry: any, index: number) => {
+            const label =
+              entry?.title ||
+              entry?.raw_text ||
+              t('review:mediaPage.referenceLabel', {
+                defaultValue: `Reference ${index + 1}`
+              })
+            return (
+              <li
+                key={`${entry?.doi || entry?.url || 'reference'}-${index}`}
+                className="rounded bg-surface2 px-2 py-1 text-text"
+                data-testid="media-intelligence-reference-item"
+              >
+                {label}
+              </li>
+            )
+          })}
+        </ul>
+      )
+    }
+
+    if (activeIntelligenceTab === 'figures') {
+      return (
+        <ul className="space-y-1 text-xs" data-testid="media-intelligence-figures-list">
+          {activeDocumentIntelligencePanel.data.map((entry: any, index: number) => (
+            <li
+              key={`${entry?.id || 'figure'}-${index}`}
+              className="rounded bg-surface2 px-2 py-1 text-text"
+              data-testid="media-intelligence-figure-item"
+            >
+              {entry?.caption || `Figure ${index + 1}`} (p.{entry?.page ?? '—'})
+            </li>
+          ))}
+        </ul>
+      )
+    }
+
+    return (
+      <ul className="space-y-1 text-xs" data-testid="media-intelligence-annotations-list">
+        {activeDocumentIntelligencePanel.data.map((entry: any, index: number) => (
+          <li
+            key={`${entry?.id || 'annotation'}-${index}`}
+            className="rounded bg-surface2 px-2 py-1 text-text"
+            data-testid="media-intelligence-annotation-item"
+          >
+            {entry?.text || entry?.note || `Annotation ${index + 1}`}
+          </li>
+        ))}
+      </ul>
+    )
+  }
 
   if (!selectedMedia || isAwaitingSelectionUpdate) {
     return (
@@ -2181,6 +2692,20 @@ export function ContentViewer({
                 data-testid="media-reading-time"
               >
                 {readingTimeLabel}
+              </span>
+            )}
+            {typeof progressPercent === 'number' && Number.isFinite(progressPercent) && (
+              <span
+                className="inline-flex items-center gap-1 rounded bg-surface2 px-1.5 py-0.5"
+                data-testid="media-reading-progress"
+                title={t('review:mediaPage.readingProgressTooltip', {
+                  defaultValue: 'Reading progress'
+                })}
+              >
+                {t('review:mediaPage.readingProgressLabel', {
+                  defaultValue: '{{percent}}% read',
+                  percent: Math.round(progressPercent)
+                })}
               </span>
             )}
             {processingStatusBadges.map((badge) => (
@@ -2988,6 +3513,67 @@ export function ContentViewer({
               </div>
             )}
           </div>
+
+          {/* Document Intelligence */}
+          {!isNote && (
+            <div
+              className="bg-surface border border-border rounded-lg mb-2 overflow-hidden"
+              data-testid="media-intelligence-section"
+            >
+              <button
+                onClick={() => toggleSection('intelligence')}
+                className="w-full flex items-center justify-between px-3 py-2 bg-surface2 hover:bg-surface transition-colors"
+                title={t('review:mediaPage.documentIntelligence', {
+                  defaultValue: 'Document Intelligence'
+                })}
+                data-testid="media-intelligence-toggle"
+              >
+                <span className="text-sm font-medium text-text">
+                  {t('review:mediaPage.documentIntelligence', {
+                    defaultValue: 'Document Intelligence'
+                  })}
+                </span>
+                {intelligenceSectionCollapsed ? (
+                  <ChevronDown className="w-4 h-4 text-text-subtle" />
+                ) : (
+                  <ChevronUp className="w-4 h-4 text-text-subtle" />
+                )}
+              </button>
+              {!intelligenceSectionCollapsed && (
+                <div
+                  className="space-y-2 p-3 bg-surface animate-in fade-in slide-in-from-top-1 duration-150"
+                  data-testid="media-intelligence-panel"
+                >
+                  <div className="flex flex-wrap gap-1">
+                    {DOCUMENT_INTELLIGENCE_TABS.map((tab) => {
+                      const isActive = tab.key === activeIntelligenceTab
+                      return (
+                        <button
+                          key={tab.key}
+                          type="button"
+                          onClick={() => setActiveIntelligenceTab(tab.key)}
+                          className={`rounded border px-2 py-1 text-xs transition-colors ${
+                            isActive
+                              ? 'border-primary bg-primary text-white'
+                              : 'border-border bg-surface2 text-text hover:bg-surface'
+                          }`}
+                          aria-pressed={isActive}
+                          data-testid={`media-intelligence-tab-${tab.key}`}
+                        >
+                          {t(`review:mediaPage.documentIntelligenceTab.${tab.key}`, {
+                            defaultValue: tab.label
+                          })}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div data-testid="media-intelligence-content">
+                    {renderDocumentIntelligencePanel()}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Version History - only for media */}
           {!isNote && (

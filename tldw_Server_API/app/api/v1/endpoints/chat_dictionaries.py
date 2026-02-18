@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 import time
 import warnings
 from typing import Any
@@ -134,6 +135,249 @@ def _entry_has_timed_effects(entry_data: dict[str, Any]) -> bool:
         int(getattr(timed_effects, key, 0) or 0) > 0
         for key in ("sticky", "cooldown", "delay")
     )
+
+
+def _entry_pattern(entry_data: dict[str, Any]) -> str:
+    return str(entry_data.get("pattern") or entry_data.get("key") or "")
+
+
+def _entry_type(entry_data: dict[str, Any]) -> str:
+    entry_type = str(entry_data.get("type") or "").strip().lower()
+    if entry_type in {"literal", "regex"}:
+        return entry_type
+    pattern = _entry_pattern(entry_data)
+    if pattern.startswith("/") and pattern.rfind("/") > 0:
+        return "regex"
+    return "literal"
+
+
+def _parse_regex_pattern(raw_pattern: str) -> tuple[str, int]:
+    """Parse /pattern/flags syntax into pattern body + Python flags."""
+    if not raw_pattern:
+        return "", 0
+    pattern_body = raw_pattern
+    flag_string = ""
+
+    if raw_pattern.startswith("/") and raw_pattern.rfind("/") > 0:
+        last_slash = raw_pattern.rfind("/")
+        pattern_body = raw_pattern[1:last_slash]
+        flag_string = raw_pattern[last_slash + 1 :]
+
+    flags = 0
+    if "i" in flag_string:
+        flags |= re.IGNORECASE
+    if "m" in flag_string:
+        flags |= re.MULTILINE
+    if "s" in flag_string:
+        flags |= re.DOTALL
+    if "x" in flag_string:
+        flags |= re.VERBOSE
+
+    return pattern_body, flags
+
+
+def _compile_entry_regex(entry_data: dict[str, Any]) -> re.Pattern[str] | None:
+    pattern_body, flags = _parse_regex_pattern(_entry_pattern(entry_data))
+    if not pattern_body:
+        return None
+    try:
+        return re.compile(pattern_body, flags)
+    except re.error:
+        return None
+
+
+def _regex_literal_prefix(raw_pattern: str) -> str:
+    """Extract a simple literal prefix from a regex body when possible."""
+    pattern_body, _ = _parse_regex_pattern(raw_pattern)
+    if not pattern_body:
+        return ""
+
+    prefix_chars: list[str] = []
+    escaped = False
+    for char in pattern_body:
+        if escaped:
+            prefix_chars.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char.isalnum() or char in {" ", "-", "_"}:
+            prefix_chars.append(char)
+            continue
+        break
+    return "".join(prefix_chars).strip()
+
+
+def _regex_seed_samples(raw_pattern: str) -> list[str]:
+    """Generate lightweight sample strings for overlap heuristics."""
+    pattern_body, _ = _parse_regex_pattern(raw_pattern)
+    tokens = re.findall(r"[A-Za-z0-9]{2,}", pattern_body)
+    seeds: list[str] = ["sample", "test", "kcl", "kc123", "doctor"]
+    for token in tokens[:4]:
+        seeds.extend([token, token.lower(), token.upper(), f"x{token}y"])
+    # Preserve insertion order while deduplicating
+    return list(dict.fromkeys(seeds))
+
+
+def _build_conflict(
+    entry_a: dict[str, Any],
+    entry_b: dict[str, Any],
+    *,
+    conflict_type: str,
+    severity: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "entry_id_a": int(entry_a.get("id")),
+        "entry_id_b": int(entry_b.get("id")),
+        "pattern_a": _entry_pattern(entry_a),
+        "pattern_b": _entry_pattern(entry_b),
+        "type_a": _entry_type(entry_a),
+        "type_b": _entry_type(entry_b),
+        "conflict_type": conflict_type,
+        "severity": severity,
+        "reason": reason,
+    }
+
+
+def _detect_pair_conflict(entry_a: dict[str, Any], entry_b: dict[str, Any]) -> dict[str, Any] | None:
+    type_a = _entry_type(entry_a)
+    type_b = _entry_type(entry_b)
+    pattern_a = _entry_pattern(entry_a)
+    pattern_b = _entry_pattern(entry_b)
+
+    if not pattern_a or not pattern_b:
+        return None
+
+    # literal-literal overlap
+    if type_a == "literal" and type_b == "literal":
+        normalized_a = pattern_a.casefold()
+        normalized_b = pattern_b.casefold()
+        if normalized_a == normalized_b:
+            return _build_conflict(
+                entry_a,
+                entry_b,
+                conflict_type="literal-literal",
+                severity="high",
+                reason="Both literal entries match the same text and may shadow one another.",
+            )
+        if normalized_a in normalized_b or normalized_b in normalized_a:
+            return _build_conflict(
+                entry_a,
+                entry_b,
+                conflict_type="literal-literal",
+                severity="medium",
+                reason="One literal is contained in the other, so processing order can change output.",
+            )
+        return None
+
+    # literal-regex overlap
+    if {type_a, type_b} == {"literal", "regex"}:
+        literal_entry = entry_a if type_a == "literal" else entry_b
+        regex_entry = entry_a if type_a == "regex" else entry_b
+        literal_pattern = _entry_pattern(literal_entry)
+        compiled_regex = _compile_entry_regex(regex_entry)
+        if not compiled_regex:
+            return None
+        try:
+            if compiled_regex.search(literal_pattern):
+                full_match = compiled_regex.fullmatch(literal_pattern) is not None
+                return _build_conflict(
+                    entry_a,
+                    entry_b,
+                    conflict_type="literal-regex",
+                    severity="high" if full_match else "medium",
+                    reason=(
+                        "Regex pattern fully matches a literal pattern."
+                        if full_match
+                        else "Regex pattern overlaps with a literal pattern and may trigger on the same input."
+                    ),
+                )
+        except re.error:
+            return None
+        return None
+
+    # regex-regex overlap
+    if type_a == "regex" and type_b == "regex":
+        body_a, flags_a = _parse_regex_pattern(pattern_a)
+        body_b, flags_b = _parse_regex_pattern(pattern_b)
+        if body_a == body_b and flags_a == flags_b:
+            return _build_conflict(
+                entry_a,
+                entry_b,
+                conflict_type="regex-regex",
+                severity="high",
+                reason="Regex entries are identical and likely redundant.",
+            )
+
+        prefix_a = _regex_literal_prefix(pattern_a)
+        prefix_b = _regex_literal_prefix(pattern_b)
+        if prefix_a and prefix_b:
+            normalized_prefix_a = prefix_a.casefold()
+            normalized_prefix_b = prefix_b.casefold()
+            if (
+                normalized_prefix_a.startswith(normalized_prefix_b)
+                or normalized_prefix_b.startswith(normalized_prefix_a)
+            ):
+                return _build_conflict(
+                    entry_a,
+                    entry_b,
+                    conflict_type="regex-regex",
+                    severity="low",
+                    reason="Regex entries share a literal prefix and may overlap on similar text.",
+                )
+
+        regex_a = _compile_entry_regex(entry_a)
+        regex_b = _compile_entry_regex(entry_b)
+        if not regex_a or not regex_b:
+            return None
+        samples = _regex_seed_samples(pattern_a) + _regex_seed_samples(pattern_b)
+        for sample in samples[:16]:
+            try:
+                if regex_a.search(sample) and regex_b.search(sample):
+                    return _build_conflict(
+                        entry_a,
+                        entry_b,
+                        conflict_type="regex-regex",
+                        severity="low",
+                        reason=f"Both regex entries match representative sample '{sample}'.",
+                    )
+            except re.error:
+                return None
+        return None
+
+    return None
+
+
+def _analyze_pattern_conflicts(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    conflicts: list[dict[str, Any]] = []
+    severity_weight = {"high": 3, "medium": 2, "low": 1}
+
+    indexed_entries = [entry for entry in entries if entry.get("id") is not None]
+    max_pairs = 2400
+    inspected_pairs = 0
+
+    for idx, entry_a in enumerate(indexed_entries):
+        for entry_b in indexed_entries[idx + 1 :]:
+            inspected_pairs += 1
+            if inspected_pairs > max_pairs:
+                break
+            conflict = _detect_pair_conflict(entry_a, entry_b)
+            if conflict:
+                conflicts.append(conflict)
+        if inspected_pairs > max_pairs:
+            break
+
+    conflicts.sort(
+        key=lambda item: (
+            severity_weight.get(str(item.get("severity")), 0),
+            int(item.get("entry_id_a", 0)),
+            int(item.get("entry_id_b", 0)),
+        ),
+        reverse=True,
+    )
+    return conflicts[:50]
 
 
 @router.post(
@@ -919,6 +1163,7 @@ async def get_dictionary_statistics(
         reverse=True,
     )
     zero_usage_entries = sum(1 for item in entry_usage if int(item.get("usage_count", 0) or 0) == 0)
+    pattern_conflicts = _analyze_pattern_conflicts(entries)
 
     return DictionaryStatistics(
         dictionary_id=dictionary_id,
@@ -936,6 +1181,8 @@ async def get_dictionary_statistics(
         updated_at=coerce_datetime(dict_data.get("updated_at")),
         zero_usage_entries=zero_usage_entries,
         entry_usage=entry_usage,
+        pattern_conflict_count=len(pattern_conflicts),
+        pattern_conflicts=pattern_conflicts,
         total_usage_count=int(usage_stats.get("times_used", 0) or 0),
         last_used=_coerce_optional_datetime(usage_stats.get("last_used_at")),
     )

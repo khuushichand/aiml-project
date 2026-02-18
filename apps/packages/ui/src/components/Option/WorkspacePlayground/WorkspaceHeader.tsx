@@ -16,10 +16,16 @@ import {
   FolderOpen,
   Copy,
   Archive,
-  RotateCcw
+  RotateCcw,
+  Download,
+  Upload
 } from "lucide-react"
 import type { SavedWorkspace } from "@/types/workspace"
 import { useWorkspaceStore } from "@/store/workspace"
+import {
+  createWorkspaceExportFilename,
+  isWorkspaceExportBundle
+} from "@/store/workspace-bundle"
 import {
   filterSavedWorkspaces,
   formatWorkspaceLastAccessed
@@ -53,6 +59,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   const [editName, setEditName] = React.useState("")
   const [workspaceBrowserOpen, setWorkspaceBrowserOpen] = React.useState(false)
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = React.useState("")
+  const importFileInputRef = React.useRef<HTMLInputElement | null>(null)
 
   const workspaceName = useWorkspaceStore((s) => s.workspaceName)
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
@@ -60,6 +67,8 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   const savedWorkspaces = useWorkspaceStore((s) => s.savedWorkspaces)
   const archivedWorkspaces = useWorkspaceStore((s) => s.archivedWorkspaces)
   const createNewWorkspace = useWorkspaceStore((s) => s.createNewWorkspace)
+  const exportWorkspaceBundle = useWorkspaceStore((s) => s.exportWorkspaceBundle)
+  const importWorkspaceBundle = useWorkspaceStore((s) => s.importWorkspaceBundle)
   const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace)
   const duplicateWorkspace = useWorkspaceStore((s) => s.duplicateWorkspace)
   const archiveWorkspace = useWorkspaceStore((s) => s.archiveWorkspace)
@@ -218,6 +227,74 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     switchWorkspace(id)
   }
 
+  const handleExportCurrentWorkspace = () => {
+    if (!workspaceId) return
+    const bundle = exportWorkspaceBundle(workspaceId)
+    if (!bundle) {
+      messageApi.error(
+        t(
+          "playground:workspace.exportFailed",
+          "Unable to export this workspace."
+        )
+      )
+      return
+    }
+
+    const filename = createWorkspaceExportFilename(
+      bundle.workspace.name,
+      bundle.exportedAt
+    )
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], {
+      type: "application/json;charset=utf-8"
+    })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = filename
+    anchor.click()
+    URL.revokeObjectURL(url)
+
+    messageApi.success(
+      t("playground:workspace.exportSuccess", "Workspace exported")
+    )
+  }
+
+  const handleOpenImportWorkspace = () => {
+    importFileInputRef.current?.click()
+  }
+
+  const handleImportWorkspaceFile = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0]
+    event.target.value = ""
+    if (!file) return
+
+    try {
+      const raw = await file.text()
+      const parsed: unknown = JSON.parse(raw)
+      if (!isWorkspaceExportBundle(parsed)) {
+        throw new Error("invalid-bundle-format")
+      }
+
+      const importedWorkspaceId = importWorkspaceBundle(parsed)
+      if (!importedWorkspaceId) {
+        throw new Error("import-failed")
+      }
+
+      messageApi.success(
+        t("playground:workspace.importSuccess", "Workspace imported")
+      )
+    } catch {
+      messageApi.error(
+        t(
+          "playground:workspace.importFailed",
+          "Unable to import this workspace file."
+        )
+      )
+    }
+  }
+
   const savedCountLabel = (workspace: SavedWorkspace) =>
     `${workspace.sourceCount} ${
       workspace.sourceCount === 1 ? "source" : "sources"
@@ -328,6 +405,26 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           { type: "divider" as const, key: "divider-view-all" }
         ]
       : []),
+    ...(workspaceId
+      ? [
+          {
+            key: "export-workspace",
+            icon: <Download className="h-4 w-4" />,
+            label: t(
+              "playground:workspace.exportWorkspace",
+              "Export Workspace"
+            ),
+            onClick: handleExportCurrentWorkspace
+          }
+        ]
+      : []),
+    {
+      key: "import-workspace",
+      icon: <Upload className="h-4 w-4" />,
+      label: t("playground:workspace.importWorkspace", "Import Workspace"),
+      onClick: handleOpenImportWorkspace
+    },
+    { type: "divider" as const, key: "divider-import-export" },
     // New workspace option
     {
       key: "new",
@@ -446,6 +543,17 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           </button>
         </Dropdown>
       </div>
+
+      <input
+        ref={importFileInputRef}
+        type="file"
+        accept=".json,.workspace.json"
+        className="hidden"
+        data-testid="workspace-import-input"
+        onChange={(event) => {
+          void handleImportWorkspaceFile(event)
+        }}
+      />
 
       <Modal
         title={t("playground:workspace.allWorkspaces", "All Workspaces")}

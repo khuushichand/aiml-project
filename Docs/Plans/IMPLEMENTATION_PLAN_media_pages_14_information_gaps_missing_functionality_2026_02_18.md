@@ -21,7 +21,7 @@ Finding IDs: `14.1` through `14.12`
 - Integration tests for progress persistence and restoration.
 - Component tests for player rendering and seek behavior.
 - Regression tests for content rendering when no original file exists.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Document Intelligence Panel Suite
 **Goal**: Expose the platform's built backend intelligence endpoints in UI.
@@ -33,7 +33,7 @@ Finding IDs: `14.1` through `14.12`
 - Integration tests for each document intelligence endpoint binding.
 - Component tests for panel tabs/sections and fallback states.
 - Regression tests for detail page performance with intelligence panels present.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Library-Scale Operations and Job Visibility
 **Goal**: Enable efficient management of many media items.
@@ -46,7 +46,7 @@ Finding IDs: `14.1` through `14.12`
 - Integration tests for bulk selection and action execution.
 - Component tests for export format selection and payload generation.
 - Integration tests for reprocess action and job status updates.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 4: Research Workflow Organization and Annotation
 **Goal**: Support researcher organization and annotation-first reading workflows.

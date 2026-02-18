@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { SourcesPane } from "../SourcesPane"
 import { WORKSPACE_SOURCE_DRAG_TYPE } from "../drag-source"
@@ -10,6 +10,7 @@ const mockSetSourceSearchQuery = vi.fn()
 const mockOpenAddSourceModal = vi.fn()
 const mockRemoveSource = vi.fn()
 const mockRestoreSource = vi.fn()
+const mockReorderSource = vi.fn()
 const mockClearSourceFocusTarget = vi.fn()
 
 const defaultSources = [
@@ -43,7 +44,8 @@ const workspaceStoreState = {
   clearSourceFocusTarget: mockClearSourceFocusTarget,
   openAddSourceModal: mockOpenAddSourceModal,
   removeSource: mockRemoveSource,
-  restoreSource: mockRestoreSource
+  restoreSource: mockRestoreSource,
+  reorderSource: mockReorderSource,
 }
 
 vi.mock("react-i18next", () => ({
@@ -85,6 +87,14 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     })
     mockClearSourceFocusTarget.mockImplementation(() => {
       workspaceStoreState.sourceFocusTarget = null
+    })
+    mockReorderSource.mockImplementation((sourceId: string, targetIndex: number) => {
+      const currentIndex = workspaceStoreState.sources.findIndex((source) => source.id === sourceId)
+      if (currentIndex < 0) return
+      const next = [...workspaceStoreState.sources]
+      const [moved] = next.splice(currentIndex, 1)
+      next.splice(targetIndex, 0, moved)
+      workspaceStoreState.sources = next
     })
   })
 
@@ -153,6 +163,47 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     expect(setData).toHaveBeenCalledWith("text/plain", "Source One")
   })
 
+  it("reorders sources by drag-and-drop within the source list", () => {
+    workspaceStoreState.sources = [
+      {
+        ...defaultSources[0],
+        status: "ready" as const
+      },
+      {
+        ...defaultSources[1],
+        status: "ready" as const
+      }
+    ]
+
+    render(<SourcesPane />)
+
+    const firstRow = screen
+      .getByText("Source One")
+      .closest('[data-source-id="s1"]') as HTMLElement
+    const secondRow = screen
+      .getByText("Source Two")
+      .closest('[data-source-id="s2"]') as HTMLElement
+
+    fireEvent.dragStart(firstRow, {
+      dataTransfer: {
+        effectAllowed: "copyMove",
+        setData: vi.fn()
+      }
+    })
+    fireEvent.dragOver(secondRow, {
+      dataTransfer: {
+        dropEffect: "move"
+      }
+    })
+    fireEvent.drop(secondRow, {
+      dataTransfer: {
+        dropEffect: "move"
+      }
+    })
+
+    expect(mockReorderSource).toHaveBeenCalledWith("s1", 1)
+  })
+
   it("applies touch-friendly hit areas for source selection controls", () => {
     render(<SourcesPane />)
 
@@ -167,6 +218,40 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     const removeButton = screen.getByTestId("remove-source-s1")
     expect(removeButton.className).toContain("focus-visible:opacity-100")
     expect(removeButton.className).toContain("[@media(hover:none)]:opacity-100")
+  })
+
+  it("provides keyboard-accessible reorder buttons", () => {
+    render(<SourcesPane />)
+
+    const moveUp = screen.getByTestId("move-source-up-s1")
+    const moveDown = screen.getByTestId("move-source-down-s1")
+    expect(moveUp).toBeDisabled()
+    expect(moveDown).toBeEnabled()
+
+    fireEvent.click(moveDown)
+    expect(mockReorderSource).toHaveBeenCalledWith("s1", 1)
+  })
+
+  it("offers keyboard users a confirmation path before remove", async () => {
+    render(<SourcesPane />)
+
+    const removeButton = screen.getByTestId("remove-source-s1")
+    fireEvent.keyDown(removeButton, { key: "Enter" })
+
+    expect(await screen.findByText("Remove source?")).toBeInTheDocument()
+    expect(mockRemoveSource).not.toHaveBeenCalled()
+
+    const confirmButton = screen
+      .getAllByRole("button", { name: "Remove" })
+      .find((button) => button.className.includes("ant-btn-primary"))
+    expect(confirmButton).toBeTruthy()
+    if (confirmButton) {
+      fireEvent.click(confirmButton)
+    }
+
+    await waitFor(() => {
+      expect(mockRemoveSource).toHaveBeenCalledWith("s1")
+    })
   })
 
   it("keeps keyboard focus order logical within each source row", () => {
@@ -201,6 +286,21 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     ) as HTMLInputElement | null
     expect(checkboxInput).toBeTruthy()
     expect(checkboxInput?.disabled).toBe(true)
+  })
+
+  it("surfaces source metadata preview when metadata is available", () => {
+    workspaceStoreState.sources = [
+      {
+        ...defaultSources[0],
+        fileSize: 2 * 1024 * 1024,
+        duration: 125,
+        pageCount: 10
+      }
+    ]
+
+    render(<SourcesPane />)
+
+    expect(screen.getByText("2 MB • 2m 5s")).toBeInTheDocument()
   })
 
   it("enables virtualized rendering when source volume crosses threshold", () => {

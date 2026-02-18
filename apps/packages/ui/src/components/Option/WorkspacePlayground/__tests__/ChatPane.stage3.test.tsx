@@ -376,7 +376,7 @@ describe("ChatPane Stage 3 adaptive mode controls and settings", () => {
     render(<ChatPane />)
 
     expect(
-      screen.getByText("Enter to send, Shift+Enter for new line")
+      screen.getByText("Enter or Cmd/Ctrl+Enter to send, Shift+Enter for new line")
     ).toBeInTheDocument()
   })
 

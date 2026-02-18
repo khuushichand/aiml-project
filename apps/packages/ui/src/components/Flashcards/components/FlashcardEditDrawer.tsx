@@ -11,6 +11,8 @@ import {
   Space,
   Typography
 } from "antd"
+import dayjs from "dayjs"
+import relativeTime from "dayjs/plugin/relativeTime"
 import { useTranslation } from "react-i18next"
 import { useDebouncedFormField } from "../hooks"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
@@ -18,6 +20,7 @@ import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import type { Flashcard, FlashcardUpdate, Deck } from "@/services/flashcards"
 
 const { Text } = Typography
+dayjs.extend(relativeTime)
 
 type FlashcardModelType = Flashcard["model_type"]
 
@@ -221,6 +224,81 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
             />
           </Form.Item>
         </div>
+
+        {/* Section: Scheduling (read-only metadata) */}
+        {card && (
+          <div className="mb-6 rounded border border-border bg-surface p-3">
+            <h3 className="text-sm font-medium text-text-muted mb-3">
+              {t("option:flashcards.scheduling", { defaultValue: "Scheduling" })}
+            </h3>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <Text type="secondary" className="block text-[11px]">
+                  {t("option:flashcards.easeFactor", { defaultValue: "Ease factor" })}
+                </Text>
+                <Text>{card.ef.toFixed(2)}</Text>
+              </div>
+              <div>
+                <Text type="secondary" className="block text-[11px]">
+                  {t("option:flashcards.interval", { defaultValue: "Interval" })}
+                </Text>
+                <Text>
+                  {t("option:flashcards.intervalDaysShort", {
+                    defaultValue: "{{count}}d",
+                    count: Math.max(0, card.interval_days)
+                  })}
+                </Text>
+              </div>
+              <div>
+                <Text type="secondary" className="block text-[11px]">
+                  {t("option:flashcards.repetitions", { defaultValue: "Repetitions" })}
+                </Text>
+                <Text>{Math.max(0, card.repetitions)}</Text>
+              </div>
+              <div>
+                <Text type="secondary" className="block text-[11px]">
+                  {t("option:flashcards.lapses", { defaultValue: "Lapses" })}
+                </Text>
+                <Text>{Math.max(0, card.lapses)}</Text>
+              </div>
+            </div>
+
+            <div className="mt-3 space-y-2 text-xs">
+              <div>
+                <Text type="secondary" className="block text-[11px]">
+                  {t("option:flashcards.dueAt", { defaultValue: "Due at" })}
+                </Text>
+                <Text>
+                  {card.due_at
+                    ? t("option:flashcards.timestampWithRelative", {
+                        defaultValue: "{{absolute}} ({{relative}})",
+                        absolute: dayjs(card.due_at).format("YYYY-MM-DD HH:mm"),
+                        relative: dayjs(card.due_at).fromNow()
+                      })
+                    : t("option:flashcards.notScheduled", {
+                        defaultValue: "Not scheduled"
+                      })}
+                </Text>
+              </div>
+              <div>
+                <Text type="secondary" className="block text-[11px]">
+                  {t("option:flashcards.lastReviewed", { defaultValue: "Last reviewed" })}
+                </Text>
+                <Text>
+                  {card.last_reviewed_at
+                    ? t("option:flashcards.timestampWithRelative", {
+                        defaultValue: "{{absolute}} ({{relative}})",
+                        absolute: dayjs(card.last_reviewed_at).format("YYYY-MM-DD HH:mm"),
+                        relative: dayjs(card.last_reviewed_at).fromNow()
+                      })
+                    : t("option:flashcards.neverReviewed", {
+                        defaultValue: "Never"
+                      })}
+                </Text>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Section: Content */}
         <div className="mb-6">

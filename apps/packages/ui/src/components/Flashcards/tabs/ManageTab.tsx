@@ -252,6 +252,50 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const updateMutation = useUpdateFlashcardMutation()
   const deleteMutation = useDeleteFlashcardMutation()
 
+  const compactSchedulingLabels = React.useCallback(
+    (card: Flashcard) => ({
+      ef: t("option:flashcards.schedulingEfCompact", {
+        defaultValue: "EF {{value}}",
+        value: card.ef.toFixed(2)
+      }),
+      interval: t("option:flashcards.schedulingIntervalCompact", {
+        defaultValue: "Int {{count}}d",
+        count: Math.max(0, card.interval_days)
+      }),
+      repetitions: t("option:flashcards.schedulingRepetitionsCompact", {
+        defaultValue: "Reps {{count}}",
+        count: Math.max(0, card.repetitions)
+      }),
+      lapses: t("option:flashcards.schedulingLapsesCompact", {
+        defaultValue: "Lapses {{count}}",
+        count: Math.max(0, card.lapses)
+      })
+    }),
+    [t]
+  )
+
+  const expandedSchedulingLabels = React.useCallback(
+    (card: Flashcard) => ({
+      ef: t("option:flashcards.schedulingEfExpanded", {
+        defaultValue: "Ease {{value}}",
+        value: card.ef.toFixed(2)
+      }),
+      interval: t("option:flashcards.schedulingIntervalExpanded", {
+        defaultValue: "Interval {{count}}d",
+        count: Math.max(0, card.interval_days)
+      }),
+      repetitions: t("option:flashcards.schedulingRepetitionsExpanded", {
+        defaultValue: "Reps {{count}}",
+        count: Math.max(0, card.repetitions)
+      }),
+      lapses: t("option:flashcards.schedulingLapsesExpanded", {
+        defaultValue: "Lapses {{count}}",
+        count: Math.max(0, card.lapses)
+      })
+    }),
+    [t]
+  )
+
   // Reset focused index when page or filters change
   React.useEffect(() => {
     setFocusedIndex(-1)
@@ -1073,6 +1117,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           }}
           renderItem={(item, index) => {
             const isFocused = index === focusedIndex
+            const compactSchedule = compactSchedulingLabels(item)
+            const expandedSchedule = expandedSchedulingLabels(item)
             return (
             <List.Item
               data-testid={`flashcard-item-${item.uuid}`}
@@ -1123,17 +1169,25 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                     </div>
                   }
                   description={
-                    <div className="flex items-center gap-2 text-xs">
-                      {item.deck_id != null && (
-                        <span className="text-text-muted">
-                          {(decksQuery.data || []).find((d) => d.id === item.deck_id)?.name || `Deck ${item.deck_id}`}
-                        </span>
-                      )}
-                      {item.due_at && (
-                        <span className="text-text-subtle">
-                          {dayjs(item.due_at).fromNow()}
-                        </span>
-                      )}
+                    <div className="flex flex-col gap-0.5 text-xs">
+                      <div className="flex items-center gap-2">
+                        {item.deck_id != null && (
+                          <span className="text-text-muted">
+                            {(decksQuery.data || []).find((d) => d.id === item.deck_id)?.name || `Deck ${item.deck_id}`}
+                          </span>
+                        )}
+                        {item.due_at && (
+                          <span className="text-text-subtle">
+                            {dayjs(item.due_at).fromNow()}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-text-subtle">
+                        <span>{compactSchedule.ef}</span>
+                        <span>{compactSchedule.interval}</span>
+                        <span>{compactSchedule.repetitions}</span>
+                        <span>{compactSchedule.lapses}</span>
+                      </div>
                     </div>
                   }
                 />
@@ -1168,6 +1222,10 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                             {dayjs(item.due_at).format("YYYY-MM-DD HH:mm")})
                           </Tag>
                         )}
+                        <Tag>{expandedSchedule.ef}</Tag>
+                        <Tag>{expandedSchedule.interval}</Tag>
+                        <Tag>{expandedSchedule.repetitions}</Tag>
+                        <Tag>{expandedSchedule.lapses}</Tag>
                       </div>
                     }
                   />

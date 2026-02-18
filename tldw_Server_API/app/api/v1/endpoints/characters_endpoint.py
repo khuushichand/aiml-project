@@ -588,7 +588,10 @@ def _search_character_exemplars_hybrid_best_effort(
              summary="Import character card", tags=["characters"],
              status_code=status.HTTP_201_CREATED)
 async def import_character_endpoint(
-        character_file: UploadFile = File(..., description="Character card file (PNG, WEBP, JSON, MD)."),
+        character_file: UploadFile = File(
+            ...,
+            description="Character card file (PNG, WEBP, JPEG, JSON, YAML, YML, MD, TXT).",
+        ),
         allow_image_only: bool = Form(False),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         current_user: User = Depends(get_request_user),
@@ -597,10 +600,10 @@ async def import_character_endpoint(
     Import a character card from a file.
 
     Supports:
-    - Image files (PNG, WEBP) with embedded character data
+    - Image files (PNG, WEBP, JPEG) with embedded character data
     - JSON files (including Character Card V3 format)
-    - Markdown files
-    - Plain text files with JSON content
+    - YAML files
+    - Markdown and plain text files (including text containing JSON)
 
     For JSON data, you can upload a .json file or a text file containing JSON.
     """

@@ -152,6 +152,15 @@ Store durable facts there, not in every message:
 - relationship history
 - recurring rules of the setting
 
+### Recovery workflow for world books
+
+Entry-level version history is intentionally deferred for now.
+Use world-book exports as snapshot backups:
+
+1. Export before major edits or bulk operations.
+2. Keep timestamped snapshots during long editing sessions.
+3. If needed, restore by importing a known-good snapshot.
+
 ### Use chat dictionaries for consistent language
 
 Great for:

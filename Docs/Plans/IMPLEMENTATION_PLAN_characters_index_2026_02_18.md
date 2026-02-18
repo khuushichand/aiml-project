@@ -25,7 +25,7 @@ This index maps the 10 `/characters` category plans into a dependency-aware exec
 | 02 | IA & Discoverability | P1 | Complete | 4/4 complete | Unassigned | 04 | 2026-02-18 |
 | 03 | Search/Filtering/Scalability | P0 | Complete | 4/4 complete | Unassigned | 02, 08 | 2026-02-18 |
 | 04 | Creation & Editing | P0 | Complete | 4/4 complete | Unassigned | 01 | 2026-02-18 |
-| 05 | Import/Export | P1 | Not Started | 0/4 | Unassigned | 02, 08 | 2026-02-18 |
+| 05 | Import/Export | P1 | In Progress | Stage 1 complete, Stage 2 in progress | Unassigned | 02, 08 | 2026-02-18 |
 | 06 | Conversation Integration | P1 | Not Started | 0/4 | Unassigned | 02, 03, 08 | 2026-02-18 |
 | 07 | Visual Design Density | P1 | Complete | 3/3 complete | Unassigned | 02 | 2026-02-18 |
 | 08 | Error Handling & Recovery | P1 | Complete | 4/4 complete | Unassigned | 02 | 2026-02-18 |

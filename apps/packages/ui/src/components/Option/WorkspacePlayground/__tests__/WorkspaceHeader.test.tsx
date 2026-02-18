@@ -5,6 +5,8 @@ import { WorkspaceHeader } from "../WorkspaceHeader"
 const mockNavigate = vi.fn()
 const mockSwitchWorkspace = vi.fn()
 const mockCreateNewWorkspace = vi.fn()
+const mockExportWorkspaceBundle = vi.fn()
+const mockImportWorkspaceBundle = vi.fn()
 const mockDuplicateWorkspace = vi.fn()
 const mockArchiveWorkspace = vi.fn()
 const mockRestoreArchivedWorkspace = vi.fn()
@@ -46,6 +48,8 @@ const mockStoreState = {
   ],
   archivedWorkspaces: [],
   createNewWorkspace: mockCreateNewWorkspace,
+  exportWorkspaceBundle: mockExportWorkspaceBundle,
+  importWorkspaceBundle: mockImportWorkspaceBundle,
   switchWorkspace: mockSwitchWorkspace,
   duplicateWorkspace: mockDuplicateWorkspace,
   archiveWorkspace: mockArchiveWorkspace,
@@ -92,6 +96,41 @@ if (!(globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver) {
 describe("WorkspaceHeader workspace browser modal", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockExportWorkspaceBundle.mockReturnValue({
+      format: "tldw.workspace-playground.bundle",
+      schemaVersion: 1,
+      exportedAt: "2026-02-18T12:00:00.000Z",
+      workspace: {
+        name: "Alpha Research",
+        tag: "workspace:alpha-research",
+        createdAt: "2026-02-10T10:00:00.000Z",
+        snapshot: {
+          workspaceName: "Alpha Research",
+          workspaceTag: "workspace:alpha-research",
+          workspaceCreatedAt: "2026-02-10T10:00:00.000Z",
+          sources: [],
+          selectedSourceIds: [],
+          generatedArtifacts: [],
+          notes: "",
+          currentNote: {
+            title: "",
+            content: "",
+            keywords: [],
+            isDirty: false
+          },
+          leftPaneCollapsed: false,
+          rightPaneCollapsed: false,
+          audioSettings: {
+            provider: "tldw",
+            model: "kokoro",
+            voice: "af_heart",
+            speed: 1,
+            format: "mp3"
+          }
+        }
+      }
+    })
+    mockImportWorkspaceBundle.mockReturnValue("workspace-imported")
   })
 
   it("opens view-all modal and filters workspaces by search query", async () => {
@@ -147,5 +186,80 @@ describe("WorkspaceHeader workspace browser modal", () => {
     fireEvent.click(targetWorkspaceRow)
 
     expect(mockSwitchWorkspace).toHaveBeenCalledWith("workspace-beta")
+  })
+
+  it("exports workspace bundle from the workspace menu", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Export Workspace"))
+
+    expect(mockExportWorkspaceBundle).toHaveBeenCalledWith("workspace-alpha")
+  })
+
+  it("imports workspace bundle file from the workspace menu", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    const input = screen.getByTestId("workspace-import-input")
+    const file = new File(
+      [
+        JSON.stringify({
+          format: "tldw.workspace-playground.bundle",
+          schemaVersion: 1,
+          exportedAt: "2026-02-18T12:00:00.000Z",
+          workspace: {
+            name: "Imported",
+            tag: "workspace:imported",
+            createdAt: "2026-02-18T10:00:00.000Z",
+            snapshot: {
+              workspaceName: "Imported",
+              workspaceTag: "workspace:imported",
+              workspaceCreatedAt: "2026-02-18T10:00:00.000Z",
+              sources: [],
+              selectedSourceIds: [],
+              generatedArtifacts: [],
+              notes: "",
+              currentNote: {
+                title: "",
+                content: "",
+                keywords: [],
+                isDirty: false
+              },
+              leftPaneCollapsed: false,
+              rightPaneCollapsed: false,
+              audioSettings: {
+                provider: "tldw",
+                model: "kokoro",
+                voice: "af_heart",
+                speed: 1,
+                format: "mp3"
+              }
+            }
+          }
+        })
+      ],
+      "workspace.json",
+      { type: "application/json" }
+    )
+
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await waitFor(() => {
+      expect(mockImportWorkspaceBundle).toHaveBeenCalledTimes(1)
+    })
   })
 })

@@ -791,7 +791,11 @@ describe("CharactersManager first-use onboarding", () => {
 
     render(<CharactersManager />)
 
-    fireEvent.click(screen.getByRole("radio", { name: "Recently deleted" }))
+    await user.click(
+      screen.getByText("Recently deleted", {
+        selector: ".ant-segmented-item-label"
+      })
+    )
     await waitFor(() => {
       const deletedQuery = getDeletedScopeListCharactersQueryOptions()
       expect(deletedQuery.queryKey[1]).toMatchObject({
@@ -1747,6 +1751,12 @@ describe("CharactersManager first-use onboarding", () => {
     )
     await user.upload(input, file)
 
+    expect(tldwClientMock.importCharacterFile).not.toHaveBeenCalled()
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    expect(await screen.findByText("Uploaded Character")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Confirm import" }))
+
     await waitFor(() => {
       expect(tldwClientMock.importCharacterFile).toHaveBeenCalled()
     })
@@ -1754,5 +1764,177 @@ describe("CharactersManager first-use onboarding", () => {
       expect.objectContaining({ name: "uploaded-character.json" }),
       expect.objectContaining({ allowImageOnly: false })
     )
+  })
+
+  it("imports a batch of files and reports per-file failures", async () => {
+    const user = userEvent.setup()
+    tldwClientMock.importCharacterFile
+      .mockResolvedValueOnce({ success: true, message: "First import ok" })
+      .mockRejectedValueOnce(new Error("Invalid character payload"))
+
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+    expect(input).toHaveAttribute("multiple")
+
+    const fileOne = new File(
+      [JSON.stringify({ name: "Batch One" })],
+      "batch-one.json",
+      { type: "application/json" }
+    )
+    const fileTwo = new File(
+      [JSON.stringify({ name: "Batch Two" })],
+      "batch-two.json",
+      { type: "application/json" }
+    )
+
+    await user.upload(input, [fileOne, fileTwo])
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Confirm import" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.importCharacterFile).toHaveBeenCalledTimes(2)
+    })
+    await waitFor(() => {
+      expect(notificationMock.warning).toHaveBeenCalled()
+    })
+
+    const warningPayload = notificationMock.warning.mock.calls.at(-1)?.[0]
+    expect(warningPayload?.description).toContain("succeeded")
+    expect(warningPayload?.description).toContain("failed")
+    expect(warningPayload?.description).toContain(
+      "batch-two.json: Invalid character payload"
+    )
+  })
+
+  it("parses YAML metadata in preview before confirming import", async () => {
+    const user = userEvent.setup()
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const yamlFile = new File(
+      [
+        [
+          "name: YAML Character",
+          "description: Imported from YAML preview",
+          "tags: [assistant, yaml]"
+        ].join("\n")
+      ],
+      "yaml-character.yaml",
+      { type: "text/yaml" }
+    )
+
+    await user.upload(input, yamlFile)
+
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    expect(await screen.findByText("YAML Character")).toBeInTheDocument()
+    expect(
+      await screen.findByText("Imported from YAML preview")
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Confirm import" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.importCharacterFile).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "yaml-character.yaml" }),
+        expect.objectContaining({ allowImageOnly: false })
+      )
+    })
+  })
+
+  it("surfaces malformed JSON preview errors and blocks confirm import", async () => {
+    const user = userEvent.setup()
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const broken = new File(["{ invalid"], "broken-character.json", {
+      type: "application/json"
+    })
+    await user.upload(input, broken)
+
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    expect(await screen.findByText(/Invalid JSON syntax/i)).toBeInTheDocument()
+
+    const confirmButton = screen.getByRole("button", { name: "Confirm import" })
+    expect(confirmButton).toBeDisabled()
+    expect(tldwClientMock.importCharacterFile).not.toHaveBeenCalled()
+  })
+
+  it("allows canceling import preview without persisting files", async () => {
+    const user = userEvent.setup()
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const file = new File(
+      [JSON.stringify({ name: "Cancel Me" })],
+      "cancel-me.json",
+      { type: "application/json" }
+    )
+    await user.upload(input, file)
+
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Cancel" }))
+
+    await waitFor(() => {
+      expect(screen.queryByText("Import preview")).not.toBeInTheDocument()
+    })
+    expect(tldwClientMock.importCharacterFile).not.toHaveBeenCalled()
+  })
+
+  it("imports valid files and warns when malformed previews are skipped", async () => {
+    const user = userEvent.setup()
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const valid = new File([JSON.stringify({ name: "Valid One" })], "valid-one.json", {
+      type: "application/json"
+    })
+    const broken = new File(["{ invalid"], "broken-one.json", {
+      type: "application/json"
+    })
+    await user.upload(input, [valid, broken])
+
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    const confirmButton = screen.getByRole("button", { name: "Confirm import" })
+    expect(confirmButton).toBeEnabled()
+
+    await user.click(confirmButton)
+
+    await waitFor(() => {
+      expect(tldwClientMock.importCharacterFile).toHaveBeenCalledTimes(1)
+    })
+    expect(tldwClientMock.importCharacterFile).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "valid-one.json" }),
+      expect.objectContaining({ allowImageOnly: false })
+    )
+    await waitFor(() => {
+      expect(notificationMock.warning).toHaveBeenCalled()
+    })
+    const warningPayload = notificationMock.warning.mock.calls.at(-1)?.[0]
+    expect(warningPayload?.description).toContain("files were skipped")
+  })
+
+  it("shows unsupported extension errors in preview and blocks confirm", async () => {
+    const user = userEvent.setup()
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const unsupportedFile = new File(["name,description"], "unsupported.csv", {
+      type: "text/csv"
+    })
+    await user.upload(input, unsupportedFile)
+
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    expect(await screen.findByText(/Unsupported file type:/i)).toBeInTheDocument()
+
+    const confirmButton = screen.getByRole("button", { name: "Confirm import" })
+    expect(confirmButton).toBeDisabled()
+    expect(tldwClientMock.importCharacterFile).not.toHaveBeenCalled()
   })
 })

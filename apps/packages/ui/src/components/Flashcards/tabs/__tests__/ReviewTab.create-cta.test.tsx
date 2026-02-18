@@ -7,6 +7,7 @@ import {
   useReviewFlashcardMutation,
   useFlashcardShortcuts,
   useDueCountsQuery,
+  useDeckDueCountsQuery,
   useHasCardsQuery,
   useNextDueQuery
 } from "../../hooks"
@@ -22,7 +23,13 @@ vi.mock("react-i18next", () => ({
           }
     ) => {
       if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
-      if (defaultValueOrOptions?.defaultValue) return defaultValueOrOptions.defaultValue
+      if (defaultValueOrOptions?.defaultValue) {
+        return defaultValueOrOptions.defaultValue.replace(
+          /\{\{(\w+)\}\}/g,
+          (_match, token: string) =>
+            String((defaultValueOrOptions as Record<string, unknown>)[token] ?? `{{${token}}}`)
+        )
+      }
       return key
     }
   })
@@ -46,6 +53,7 @@ vi.mock("../../hooks", () => ({
   useReviewFlashcardMutation: vi.fn(),
   useFlashcardShortcuts: vi.fn(),
   useDueCountsQuery: vi.fn(),
+  useDeckDueCountsQuery: vi.fn(),
   useHasCardsQuery: vi.fn(),
   useNextDueQuery: vi.fn()
 }))
@@ -102,6 +110,9 @@ describe("ReviewTab create CTA visibility", () => {
     vi.mocked(useDueCountsQuery).mockReturnValue({
       data: { due: 0, new: 0, learning: 0, total: 0 }
     } as any)
+    vi.mocked(useDeckDueCountsQuery).mockReturnValue({
+      data: {}
+    } as any)
     vi.mocked(useHasCardsQuery).mockReturnValue({
       data: false
     } as any)
@@ -129,5 +140,29 @@ describe("ReviewTab create CTA visibility", () => {
     fireEvent.click(createButton)
     expect(onNavigateToCreate).toHaveBeenCalledTimes(1)
   })
-})
 
+  it("shows due counts in deck selector labels when available", () => {
+    vi.mocked(useDecksQuery).mockReturnValue({
+      data: [{ id: 11, name: "Biology" }],
+      isLoading: false
+    } as any)
+    vi.mocked(useDeckDueCountsQuery).mockReturnValue({
+      data: {
+        11: { due: 7, new: 3, learning: 2, total: 12 }
+      }
+    } as any)
+
+    render(
+      <ReviewTab
+        onNavigateToCreate={() => {}}
+        onNavigateToImport={() => {}}
+        reviewDeckId={undefined}
+        onReviewDeckChange={() => {}}
+        isActive
+      />
+    )
+
+    fireEvent.mouseDown(screen.getByRole("combobox"))
+    expect(screen.getByText("Biology (7 due)")).toBeInTheDocument()
+  })
+})

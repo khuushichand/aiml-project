@@ -408,7 +408,7 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
               setActiveKeys(normalizeActiveKeys(nextKeys, categoryKeys))
             }}
             ghost
-            expandIconPosition="end"
+            expandIconPlacement="end"
             items={collapseItems}
             className="workflow-node-palette"
           />

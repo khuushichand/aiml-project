@@ -49,7 +49,31 @@ Finding IDs: `6.1` through `6.4`
 - Backend unit tests for atomic increment semantics.
 - Integration tests for usage accumulation across repeated processing.
 - UI tests verifying zero-usage highlighting behavior.
-**Status**: Not Started
+**Status**: Complete
+**Progress Notes**:
+- Added persistent entry-level usage fields on `dictionary_entries`:
+  - `usage_count`, `last_used_at` (with migration guards for existing DBs).
+- Added batched usage tracking in text processing:
+  - `ChatDictionaryService.process_text()` now accumulates per-entry fire counts and writes them in a single DB pass via `_record_entry_usage_counts(...)`.
+- Exposed entry usage through API responses:
+  - `DictionaryEntryResponse` now includes `usage_count` and `last_used_at`.
+  - Dictionary statistics now include:
+    - `zero_usage_entries`
+    - `entry_usage` snapshot (per-entry ID/pattern/usage/last-used)
+- Updated entry management UX:
+  - New `Usage` column in the entry table.
+  - `Unused` badge for zero-fire entries.
+  - Zero-usage row highlighting for quick cleanup scanning.
+- Updated statistics modal UX:
+  - Added `Unused Entries` aggregate.
+  - Added `Entry usage snapshot` section (top rows).
+- Coverage additions:
+  - Backend tests:
+    - `test_dictionary_entry_usage_counts_increment_after_processing`
+    - expanded assertions in `test_dictionary_statistics_exposes_expanded_stage1_fields`
+  - UI tests:
+    - extended `Manager.entryStage1.test.tsx` to assert usage column + unused styling
+    - extended `Manager.statsStage1.test.tsx` to assert usage snapshot rendering
 
 ## Stage 3: Pattern Conflict Analysis
 **Goal**: Surface likely pattern overlap/shadowing before it causes confusion.
@@ -62,7 +86,28 @@ Finding IDs: `6.1` through `6.4`
 - Unit tests for conflict detector heuristic rules.
 - Integration tests for representative overlap scenarios.
 - Component tests for conflict section rendering and empty-state messaging.
-**Status**: Not Started
+**Status**: Complete
+**Progress Notes**:
+- Added pattern-conflict structures to statistics schema:
+  - `DictionaryPatternConflict`
+  - `pattern_conflict_count`
+  - `pattern_conflicts`
+- Implemented conflict-analysis heuristics in the statistics endpoint:
+  - literal-literal (duplicate/contains overlap)
+  - literal-regex (regex matching literal pattern)
+  - regex-regex (identical regex, shared prefix, shared seed-sample matches)
+- Added conflict reporting to statistics payload assembly (`get_dictionary_statistics`).
+- Updated stats modal UX:
+  - Added `Pattern Conflicts` aggregate row.
+  - Added `Pattern conflicts` section with severity tags, reason text, and involved pattern pair display.
+  - Added explicit empty-state text when no conflicts are detected.
+- Added/updated tests:
+  - Backend: `test_dictionary_statistics_reports_pattern_conflicts`
+  - Backend: expanded `test_dictionary_statistics_exposes_expanded_stage1_fields` assertions for zero conflicts
+  - UI: expanded `Manager.statsStage1.test.tsx` to validate conflict rendering and empty-state behavior
+- Verification:
+  - UI dictionary suite: `13` files / `54` tests passing.
+  - Backend files and new tests pass Python 3.12 syntax compilation checks (`py_compile`).
 
 ## Dependencies
 

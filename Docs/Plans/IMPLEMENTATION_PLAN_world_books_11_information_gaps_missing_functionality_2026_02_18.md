@@ -60,7 +60,7 @@ Finding IDs: `11.1` through `11.6`
 - Integration tests for generation request/response handling and suggestion insertion.
 - Component tests for suggestion approval/rejection/edit workflows.
 - Safety tests for empty/unsafe generation output handling.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Relationship Insight and Versioning Strategy
 **Goal**: Improve explainability while controlling complexity growth.
@@ -72,7 +72,7 @@ Finding IDs: `11.1` through `11.6`
 - Unit tests for relationship heuristic signal generation.
 - Component tests for referenced-by display and no-signal fallback.
 - Documentation check ensuring versioning policy is visible in user docs.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

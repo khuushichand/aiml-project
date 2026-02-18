@@ -201,6 +201,20 @@ describe("DictionariesManager statistics stage-1 coverage", () => {
           last_used_at: null
         }
       ],
+      pattern_conflict_count: 1,
+      pattern_conflicts: [
+        {
+          entry_id_a: 9,
+          entry_id_b: 10,
+          pattern_a: "BP",
+          pattern_b: "/B.*/",
+          type_a: "literal",
+          type_b: "regex",
+          conflict_type: "literal-regex",
+          severity: "medium",
+          reason: "Regex pattern overlaps with a literal pattern and may trigger on the same input."
+        }
+      ],
       total_usage_count: 12
     })
 
@@ -216,11 +230,14 @@ describe("DictionariesManager statistics stage-1 coverage", () => {
     expect(screen.getByText("Probabilistic Entries")).toBeInTheDocument()
     expect(screen.getByText("Timed Effect Entries")).toBeInTheDocument()
     expect(screen.getByText("Unused Entries")).toBeInTheDocument()
+    expect(screen.getByText("Pattern Conflicts")).toBeInTheDocument()
     expect(screen.getByText("Clinical, Abbrev")).toBeInTheDocument()
     expect(screen.getByText("0.65")).toBeInTheDocument()
     expect(screen.getByText("12")).toBeInTheDocument()
     expect(screen.getByText("Entry usage snapshot")).toBeInTheDocument()
     expect(screen.getByText(/7 uses/)).toBeInTheDocument()
+    expect(screen.getByText("Pattern conflicts")).toBeInTheDocument()
+    expect(screen.getByText(/Regex pattern overlaps with a literal pattern/i)).toBeInTheDocument()
   }, 60000)
 
   it("shows null-safe fallbacks for optional statistics fields", async () => {
@@ -243,6 +260,8 @@ describe("DictionariesManager statistics stage-1 coverage", () => {
       last_used: null,
       zero_usage_entries: null,
       entry_usage: [],
+      pattern_conflict_count: null,
+      pattern_conflicts: [],
       total_usage_count: null
     })
 
@@ -259,5 +278,6 @@ describe("DictionariesManager statistics stage-1 coverage", () => {
     })
     expect(screen.getByText("0.00")).toBeInTheDocument()
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3)
+    expect(screen.getByText("No potential conflicts detected.")).toBeInTheDocument()
   }, 60000)
 })

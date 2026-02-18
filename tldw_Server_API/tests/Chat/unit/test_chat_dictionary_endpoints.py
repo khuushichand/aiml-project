@@ -382,6 +382,8 @@ async def test_dictionary_statistics_exposes_expanded_stage1_fields(
     assert initial_stats.timed_effect_entries == 1
     assert initial_stats.zero_usage_entries == 2
     assert len(initial_stats.entry_usage) == 2
+    assert initial_stats.pattern_conflict_count == 0
+    assert initial_stats.pattern_conflicts == []
     assert isinstance(initial_stats.created_at, datetime.datetime)
     assert isinstance(initial_stats.updated_at, datetime.datetime)
     assert initial_stats.total_usage_count == 0
@@ -401,6 +403,8 @@ async def test_dictionary_statistics_exposes_expanded_stage1_fields(
     assert isinstance(usage_stats.last_used, datetime.datetime)
     assert usage_stats.zero_usage_entries == 1
     assert len(usage_stats.entry_usage) == 2
+    assert usage_stats.pattern_conflict_count == 0
+    assert usage_stats.pattern_conflicts == []
 
 
 @pytest.mark.asyncio
@@ -436,6 +440,26 @@ async def test_dictionary_entry_usage_counts_increment_after_processing(
     after_entry = next(entry for entry in entries_after.entries if entry.id == entry_id)
     assert after_entry.usage_count >= 1
     assert after_entry.last_used_at is not None
+
+
+@pytest.mark.asyncio
+async def test_dictionary_statistics_reports_pattern_conflicts(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Conflict Dictionary", "desc")
+    service.add_entry(dictionary_id, pattern="KCl", replacement="potassium chloride")
+    service.add_entry(dictionary_id, pattern="/KC.*/", replacement="kc-regex", type="regex")
+    service.add_entry(dictionary_id, pattern="kcl", replacement="kcl-lower")
+
+    stats = await chat_endpoints.get_dictionary_statistics(dictionary_id, db=chacha_db)
+
+    assert stats.pattern_conflict_count >= 2
+    assert len(stats.pattern_conflicts) >= 2
+
+    conflict_types = {conflict.conflict_type for conflict in stats.pattern_conflicts}
+    assert "literal-regex" in conflict_types
+    assert "literal-literal" in conflict_types
 
 
 @pytest.mark.asyncio

@@ -23,6 +23,13 @@ import { pickFirstReviewableCard } from "../utils/review-card-hygiene"
 
 export type DueStatus = "new" | "learning" | "due" | "all"
 
+export interface DueCounts {
+  due: number
+  new: number
+  learning: number
+  total: number
+}
+
 export interface UseFlashcardQueriesOptions {
   enabled?: boolean
 }
@@ -34,6 +41,26 @@ const invalidateFlashcardsQueries = (qc: ReturnType<typeof useQueryClient>) =>
       typeof query.queryKey[0] === "string" &&
       query.queryKey[0].startsWith("flashcards:")
   })
+
+const getListTotal = (res: { total?: number | null; count?: number }) => (res.total ?? res.count ?? 0)
+
+async function fetchDueCounts(deckId?: number | null): Promise<DueCounts> {
+  const [due, newCards, learning] = await Promise.all([
+    listFlashcards({ deck_id: deckId ?? undefined, due_status: "due", limit: 1, offset: 0 }),
+    listFlashcards({ deck_id: deckId ?? undefined, due_status: "new", limit: 1, offset: 0 }),
+    listFlashcards({ deck_id: deckId ?? undefined, due_status: "learning", limit: 1, offset: 0 })
+  ])
+
+  const dueTotal = getListTotal(due)
+  const newTotal = getListTotal(newCards)
+  const learningTotal = getListTotal(learning)
+  return {
+    due: dueTotal,
+    new: newTotal,
+    learning: learningTotal,
+    total: dueTotal + newTotal + learningTotal
+  }
+}
 
 /**
  * Hook for fetching flashcard decks
@@ -282,22 +309,25 @@ export function useDueCountsQuery(deckId?: number | null, options?: UseFlashcard
 
   return useQuery({
     queryKey: ["flashcards:due-counts", deckId],
+    queryFn: () => fetchDueCounts(deckId),
+    enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+/**
+ * Hook for fetching due counts for all decks (for selector labels and overviews)
+ */
+export function useDeckDueCountsQuery(options?: UseFlashcardQueriesOptions) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+
+  return useQuery({
+    queryKey: ["flashcards:due-counts:by-deck"],
     queryFn: async () => {
-      const [due, newCards, learning] = await Promise.all([
-        listFlashcards({ deck_id: deckId ?? undefined, due_status: "due", limit: 1, offset: 0 }),
-        listFlashcards({ deck_id: deckId ?? undefined, due_status: "new", limit: 1, offset: 0 }),
-        listFlashcards({ deck_id: deckId ?? undefined, due_status: "learning", limit: 1, offset: 0 })
-      ])
-      const getTotal = (res: { total?: number | null; count?: number }) => (res.total ?? res.count ?? 0)
-      const dueTotal = getTotal(due)
-      const newTotal = getTotal(newCards)
-      const learningTotal = getTotal(learning)
-      return {
-        due: dueTotal,
-        new: newTotal,
-        learning: learningTotal,
-        total: dueTotal + newTotal + learningTotal
-      }
+      const decks = await listDecks()
+      const entries = await Promise.all(
+        decks.map(async (deck) => [deck.id, await fetchDueCounts(deck.id)] as const)
+      )
+      return Object.fromEntries(entries) as Record<number, DueCounts>
     },
     enabled: options?.enabled ?? flashcardsEnabled
   })

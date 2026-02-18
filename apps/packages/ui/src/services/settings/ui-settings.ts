@@ -667,7 +667,8 @@ export const DEFAULT_MEDIA_COLLAPSED_SECTIONS: Record<string, boolean> = {
   statistics: false,
   content: false,
   metadata: true,
-  analysis: false
+  analysis: false,
+  intelligence: true
 }
 
 export const MEDIA_COLLAPSED_SECTIONS_SETTING = defineSetting(

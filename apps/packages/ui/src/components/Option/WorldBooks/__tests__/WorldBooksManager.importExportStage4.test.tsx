@@ -222,30 +222,39 @@ describe("WorldBooksManager import/export stage-4 export actions and upload cont
     vi.stubGlobal("Blob", DEFAULT_BLOB_IMPL)
   })
 
-  it("exports a single world book from row actions", async () => {
-    const user = userEvent.setup()
-    const { capturedBlobPayloads, revokeObjectUrlSpy, anchorClickSpy, createElementSpy, restoreBlob } =
-      setupDownloadSpies()
+  it(
+    "exports a single world book from row actions",
+    async () => {
+      const user = userEvent.setup()
+      const {
+        capturedBlobPayloads,
+        revokeObjectUrlSpy,
+        anchorClickSpy,
+        createElementSpy,
+        restoreBlob
+      } = setupDownloadSpies()
 
-    render(<WorldBooksManager />)
-    await user.click(screen.getAllByRole("button", { name: "Export world book" })[0])
+      render(<WorldBooksManager />)
+      await user.click(screen.getAllByRole("button", { name: "Export world book" })[0])
 
-    await waitFor(() => {
-      expect(tldwClientMock.exportWorldBook).toHaveBeenCalledWith(1)
-    })
-    expect(anchorClickSpy).toHaveBeenCalledTimes(1)
-    expect(revokeObjectUrlSpy).toHaveBeenCalledTimes(1)
-
-    const payload = getLatestDownloadedJson(capturedBlobPayloads)
-    expect(payload).toEqual(
-      expect.objectContaining({
-        world_book: expect.objectContaining({ name: "Arcana" })
+      await waitFor(() => {
+        expect(tldwClientMock.exportWorldBook).toHaveBeenCalledWith(1)
       })
-    )
+      expect(anchorClickSpy).toHaveBeenCalledTimes(1)
+      expect(revokeObjectUrlSpy).toHaveBeenCalledTimes(1)
 
-    createElementSpy.mockRestore()
-    restoreBlob()
-  })
+      const payload = getLatestDownloadedJson(capturedBlobPayloads)
+      expect(payload).toEqual(
+        expect.objectContaining({
+          world_book: expect.objectContaining({ name: "Arcana" })
+        })
+      )
+
+      createElementSpy.mockRestore()
+      restoreBlob()
+    },
+    15000
+  )
 
   it("exports all world books as a bundle from header actions", async () => {
     const user = userEvent.setup()

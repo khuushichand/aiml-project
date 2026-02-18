@@ -716,6 +716,47 @@ describe("workspace store snapshot persistence", () => {
     expect(state.selectedSourceIds).toEqual([readySource.id])
   })
 
+  it("reorders sources and restores that order after rehydration", async () => {
+    useWorkspaceStore.getState().initializeWorkspace("Reorder Workspace")
+
+    const sourceA = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 6101, title: "Source A", type: "pdf" })
+    const sourceB = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 6102, title: "Source B", type: "pdf" })
+    const sourceC = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 6103, title: "Source C", type: "pdf" })
+
+    useWorkspaceStore.getState().reorderSource(sourceC.id, 0)
+    useWorkspaceStore.getState().reorderSource(sourceA.id, 2)
+
+    expect(useWorkspaceStore.getState().sources.map((source) => source.title)).toEqual([
+      "Source C",
+      "Source B",
+      "Source A"
+    ])
+
+    const persisted = localStorage.getItem(STORAGE_KEY)
+    expect(persisted).toBeTruthy()
+
+    resetWorkspaceStore()
+    if (persisted) {
+      localStorage.setItem(STORAGE_KEY, persisted)
+    }
+    await useWorkspaceStore.persist.rehydrate()
+
+    expect(useWorkspaceStore.getState().sources.map((source) => source.title)).toEqual([
+      "Source C",
+      "Source B",
+      "Source A"
+    ])
+    expect(useWorkspaceStore.getState().sources[0]?.mediaId).toBe(6103)
+    expect(useWorkspaceStore.getState().sources[1]?.mediaId).toBe(6102)
+    expect(useWorkspaceStore.getState().sources[2]?.mediaId).toBe(6101)
+  })
+
   it("restores soft-deleted sources and artifacts at prior positions", () => {
     useWorkspaceStore.getState().initializeWorkspace("Undoable Workspace")
 
@@ -766,6 +807,116 @@ describe("workspace store snapshot persistence", () => {
       artifactB.id,
       artifactA.id
     ])
+  })
+
+  it("exports and imports workspace bundles with full snapshot fidelity", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Exportable Workspace")
+    const originalWorkspaceId = useWorkspaceStore.getState().workspaceId
+    const originalChatReferenceId =
+      useWorkspaceStore.getState().workspaceChatReferenceId
+
+    const source = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 9301, title: "Export source", type: "pdf" })
+    useWorkspaceStore.getState().setSelectedSourceIds([source.id])
+
+    const baseArtifact = useWorkspaceStore
+      .getState()
+      .addArtifact({
+        type: "summary",
+        title: "Version 1 summary",
+        status: "completed",
+        content: "Summary v1"
+      })
+
+    useWorkspaceStore
+      .getState()
+      .addArtifact({
+        type: "summary",
+        title: "Version 2 summary",
+        status: "completed",
+        previousVersionId: baseArtifact.id,
+        content: "Summary v2"
+      })
+
+    useWorkspaceStore.setState({
+      notes: "Workspace export notes",
+      currentNote: {
+        id: 42,
+        title: "Workspace note",
+        content: "Workspace note content",
+        keywords: ["export", "workspace"],
+        version: 7,
+        isDirty: false
+      },
+      leftPaneCollapsed: true,
+      rightPaneCollapsed: true,
+      audioSettings: {
+        provider: "openai",
+        model: "tts-1",
+        voice: "alloy",
+        speed: 1.2,
+        format: "wav"
+      }
+    })
+
+    useWorkspaceStore.getState().saveWorkspaceChatSession(originalWorkspaceId, {
+      messages: [
+        {
+          isBot: false,
+          name: "You",
+          message: "Export this workspace",
+          sources: []
+        }
+      ],
+      history: [{ role: "user", content: "Export this workspace" }],
+      historyId: "history-export",
+      serverChatId: "chat-export"
+    })
+
+    const bundle = useWorkspaceStore
+      .getState()
+      .exportWorkspaceBundle(originalWorkspaceId)
+    expect(bundle).not.toBeNull()
+    expect(bundle?.workspace.snapshot.sources[0]?.title).toBe("Export source")
+    expect(bundle?.workspace.chatSession?.historyId).toBe("history-export")
+    expect(bundle?.workspace.snapshot.generatedArtifacts[0]?.previousVersionId).toBe(
+      baseArtifact.id
+    )
+    expect(bundle?.workspace.snapshot.workspaceTag).toContain("workspace:")
+    expect(bundle?.workspace.snapshot.workspaceCreatedAt).toBeTruthy()
+
+    const importedWorkspaceId = useWorkspaceStore
+      .getState()
+      .importWorkspaceBundle(bundle!)
+    expect(importedWorkspaceId).toBeTruthy()
+    expect(importedWorkspaceId).not.toBe(originalWorkspaceId)
+
+    const importedState = useWorkspaceStore.getState()
+    expect(importedState.workspaceId).toBe(importedWorkspaceId)
+    expect(importedState.workspaceName).toBe("Exportable Workspace (Imported)")
+    expect(importedState.workspaceChatReferenceId).toBe(importedWorkspaceId)
+    expect(importedState.workspaceChatReferenceId).not.toBe(
+      originalChatReferenceId
+    )
+    expect(importedState.sources).toHaveLength(1)
+    expect(importedState.sources[0]?.title).toBe("Export source")
+    expect(importedState.selectedSourceIds).toEqual([source.id])
+    expect(importedState.generatedArtifacts).toHaveLength(2)
+    expect(importedState.generatedArtifacts[0]?.previousVersionId).toBe(
+      baseArtifact.id
+    )
+    expect(importedState.notes).toBe("Workspace export notes")
+    expect(importedState.currentNote.title).toBe("Workspace note")
+    expect(importedState.leftPaneCollapsed).toBe(true)
+    expect(importedState.rightPaneCollapsed).toBe(true)
+    expect(importedState.audioSettings.model).toBe("tts-1")
+
+    const importedSession = useWorkspaceStore
+      .getState()
+      .getWorkspaceChatSession(importedWorkspaceId as string)
+    expect(importedSession?.historyId).toBe("history-export")
+    expect(importedSession?.messages[0]?.message).toBe("Export this workspace")
   })
 
   it("captures and restores workspace state snapshot for destructive undo", () => {

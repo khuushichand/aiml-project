@@ -1,6 +1,6 @@
 import React from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import ViewMediaPage from '../ViewMediaPage'
 
@@ -224,6 +224,11 @@ const renderMediaPage = () => {
 }
 
 describe('ViewMediaPage stage 13 error handling', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
   beforeEach(() => {
     mocks.queryData = []
     mocks.detailSequencesById = {}
@@ -307,6 +312,12 @@ describe('ViewMediaPage stage 13 error handling', () => {
       expect(screen.getByTestId('media-detail-fetch-error')).toBeInTheDocument()
     })
     expect(screen.getByTestId('selected-content')).toHaveTextContent('')
+    expect(screen.getByTestId('media-detail-fetch-error')).toHaveTextContent(
+      'Unable to load this item. Please try again.'
+    )
+    expect(screen.getByTestId('media-detail-fetch-error')).not.toHaveTextContent(
+      'temporary failure'
+    )
 
     fireEvent.click(screen.getByTestId('media-detail-fetch-retry'))
 
@@ -380,5 +391,144 @@ describe('ViewMediaPage stage 13 error handling', () => {
       'This item is no longer available. It may have been deleted.'
     )
     expect(screen.queryByText('First detail content')).not.toBeInTheDocument()
+  })
+
+  it('detects stale selected media and auto-switches to the next available item', async () => {
+    let stalePollCallback: (() => void) | null = null
+    let applyStaleRefetch = false
+    vi.spyOn(window, 'setInterval').mockImplementation((handler: TimerHandler) => {
+      stalePollCallback = typeof handler === 'function' ? handler : null
+      return 1 as unknown as ReturnType<typeof window.setInterval>
+    })
+
+    const secondItem = {
+      kind: 'media',
+      id: 2,
+      title: 'Second item',
+      snippet: '',
+      keywords: [],
+      meta: { type: 'document' },
+      raw: {}
+    } as const
+
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 1,
+        title: 'First item',
+        snippet: '',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      },
+      secondItem
+    ]
+    mocks.detailSequencesById['1'] = [
+      {
+        ok: true,
+        value: {
+          id: 1,
+          title: 'First item',
+          type: 'document',
+          content: { text: 'First detail content' }
+        }
+      },
+      {
+        ok: false,
+        value: Object.assign(new Error('gone'), { status: 404 })
+      }
+    ]
+    mocks.detailSequencesById['2'] = [
+      {
+        ok: true,
+        value: {
+          id: 2,
+          title: 'Second item',
+          type: 'document',
+          content: { text: 'Second detail content' }
+        }
+      }
+    ]
+    mocks.refetch.mockImplementation(async () => {
+      if (applyStaleRefetch) {
+        mocks.queryData = [secondItem]
+      }
+      return { data: mocks.queryData }
+    })
+
+    renderMediaPage()
+    fireEvent.click(await screen.findByTestId('result-1'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-content')).toHaveTextContent('First detail content')
+    })
+    applyStaleRefetch = true
+    stalePollCallback?.()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-media-id')).toHaveTextContent('2')
+      expect(screen.getByTestId('selected-content')).toHaveTextContent('Second detail content')
+    })
+    expect(screen.getByTestId('media-stale-selection-notice')).toHaveTextContent(
+      'The selected item is no longer available. Your selection was updated.'
+    )
+    expect(mocks.messageWarning).toHaveBeenCalled()
+  })
+
+  it('clears selection when stale detection finds no replacement items', async () => {
+    let stalePollCallback: (() => void) | null = null
+    let applyStaleRefetch = false
+    vi.spyOn(window, 'setInterval').mockImplementation((handler: TimerHandler) => {
+      stalePollCallback = typeof handler === 'function' ? handler : null
+      return 1 as unknown as ReturnType<typeof window.setInterval>
+    })
+
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 5,
+        title: 'Only item',
+        snippet: '',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      }
+    ]
+    mocks.detailSequencesById['5'] = [
+      {
+        ok: true,
+        value: {
+          id: 5,
+          title: 'Only item',
+          type: 'document',
+          content: { text: 'Only detail content' }
+        }
+      },
+      {
+        ok: false,
+        value: Object.assign(new Error('gone'), { status: 404 })
+      }
+    ]
+    mocks.refetch.mockImplementation(async () => {
+      if (applyStaleRefetch) {
+        mocks.queryData = []
+      }
+      return { data: mocks.queryData }
+    })
+
+    renderMediaPage()
+    fireEvent.click(await screen.findByTestId('result-5'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-content')).toHaveTextContent('Only detail content')
+    })
+    applyStaleRefetch = true
+    stalePollCallback?.()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-media-id')).toHaveTextContent('none')
+      expect(screen.getByTestId('selected-content')).toHaveTextContent('')
+    })
+    expect(screen.getByTestId('media-stale-selection-notice')).toBeInTheDocument()
   })
 })

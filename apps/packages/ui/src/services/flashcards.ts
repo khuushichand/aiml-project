@@ -105,6 +105,21 @@ export type FlashcardsImportRequest = {
   has_header?: boolean | null
 }
 
+export type FlashcardsImportError = {
+  line?: number | null
+  index?: number | null
+  error: string
+}
+
+export type FlashcardsImportResponse = {
+  imported: number
+  items: Array<{
+    uuid: string
+    deck_id: number
+  }>
+  errors: FlashcardsImportError[]
+}
+
 export type FlashcardsExportParams = {
   deck_id?: number | null
   tag?: string | null
@@ -198,14 +213,14 @@ export async function importFlashcards(payload: FlashcardsImportRequest, overrid
   max_lines?: number | null
   max_line_length?: number | null
   max_field_length?: number | null
-}): Promise<any> {
+}): Promise<FlashcardsImportResponse> {
   const query = buildQuery({
     max_lines: overrides?.max_lines,
     max_line_length: overrides?.max_line_length,
     max_field_length: overrides?.max_field_length
   })
   const path = `/api/v1/flashcards/import${query}` as AllowedPath
-  return await bgRequest<any, AllowedPath, "POST">({
+  return await bgRequest<FlashcardsImportResponse, AllowedPath, "POST">({
     path,
     method: "POST",
     headers: { "Content-Type": "application/json" },

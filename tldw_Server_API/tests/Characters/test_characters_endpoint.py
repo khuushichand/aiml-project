@@ -913,6 +913,85 @@ class TestCharacterAPIIntegration:
         assert db_char is not None
         assert db_char["description"] == "Imported from PNG."
 
+    @pytest.mark.parametrize("file_ext", ["yaml", "yml"])
+    def test_import_character_yaml_integration(
+        self,
+        client: TestClient,
+        test_db: CharactersRAGDB,
+        file_ext: str,
+    ):
+        char_name_for_yaml = f"YAML Import Char {uuid.uuid4().hex[:4]}"
+        yaml_payload = "\n".join(
+            [
+                f"name: {char_name_for_yaml}",
+                "description: Imported from YAML endpoint.",
+                "personality: Structured",
+                "scenario: API integration coverage",
+                "first_mes: Hello from YAML!",
+                "mes_example: \"User: Hi\\nCharacter: Hello\"",
+                "tags:",
+                "  - yaml",
+                "  - api",
+            ]
+        )
+        files = {
+            "character_file": (
+                f"{char_name_for_yaml}.{file_ext}",
+                yaml_payload.encode("utf-8"),
+                "text/yaml",
+            )
+        }
+
+        response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/import", files=files)
+
+        assert response.status_code == 201, response.text
+        data_wrapper = response.json()
+        assert "character" in data_wrapper and data_wrapper["character"] is not None
+        data = data_wrapper["character"]
+        assert data["name"] == char_name_for_yaml
+        assert data["description"] == "Imported from YAML endpoint."
+        assert "yaml" in (data.get("tags") or [])
+
+        db_char = test_db.get_character_card_by_name(char_name_for_yaml)
+        assert db_char is not None
+        assert db_char["description"] == "Imported from YAML endpoint."
+
+    def test_import_character_rejects_unsupported_extension(self, client: TestClient):
+        files = {
+            "character_file": (
+                "unsupported.csv",
+                b"name,description\nbad,format\n",
+                "text/csv",
+            )
+        }
+        response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/import", files=files)
+
+        assert response.status_code == 400, response.text
+        detail = response.json().get("detail", "")
+        assert "not allowed" in detail.lower()
+
+    def test_import_malformed_yaml_falls_back_to_plain_text_character(
+        self,
+        client: TestClient,
+    ):
+        malformed_yaml = "---\nname: [missing\n---"
+        files = {
+            "character_file": (
+                "malformed.yaml",
+                malformed_yaml.encode("utf-8"),
+                "text/yaml",
+            )
+        }
+        response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/import", files=files)
+
+        assert response.status_code == 201, response.text
+        data_wrapper = response.json()
+        assert "character" in data_wrapper and data_wrapper["character"] is not None
+        data = data_wrapper["character"]
+        assert data.get("name")
+        assert malformed_yaml in (data.get("description") or "")
+        assert "plain-text" in (data.get("tags") or [])
+
     def test_export_character_v2_format_integration(self, client: TestClient):
         create_payload = create_sample_character_payload(
             "ExportV2",

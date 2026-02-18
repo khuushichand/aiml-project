@@ -225,9 +225,11 @@ const WorkspacePlaygroundBody: React.FC = () => {
   // Workspace store
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
   const initializeWorkspace = useWorkspaceStore((s) => s.initializeWorkspace)
+  const createNewWorkspace = useWorkspaceStore((s) => s.createNewWorkspace)
   const addSources = useWorkspaceStore((s) => s.addSources)
   const setSelectedSourceIds = useWorkspaceStore((s) => s.setSelectedSourceIds)
   const captureToCurrentNote = useWorkspaceStore((s) => s.captureToCurrentNote)
+  const clearCurrentNote = useWorkspaceStore((s) => s.clearCurrentNote)
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
   const leftPaneCollapsed = useWorkspaceStore((s) => s.leftPaneCollapsed)
@@ -279,6 +281,67 @@ const WorkspacePlaygroundBody: React.FC = () => {
     setGlobalSearchQuery("")
     setActiveSearchResultIndex(0)
   }, [])
+
+  const focusWorkspacePane = React.useCallback(
+    (pane: WorkspaceTabKey) => {
+      if (pane === "sources") {
+        if (isMobile) {
+          setActiveTab("sources")
+        } else if (isDesktopLayout()) {
+          setLeftPaneCollapsed(false)
+        } else {
+          setLeftDrawerOpen(true)
+        }
+
+        window.setTimeout(() => {
+          const panel = document.getElementById("workspace-sources-panel")
+          const firstFocusable = panel?.querySelector<HTMLElement>(
+            "button, input, textarea, [tabindex]:not([tabindex='-1'])"
+          )
+          firstFocusable?.focus()
+        }, 0)
+        return
+      }
+
+      if (pane === "studio") {
+        if (isMobile) {
+          setActiveTab("studio")
+        } else if (isDesktopLayout()) {
+          setRightPaneCollapsed(false)
+        } else {
+          setRightDrawerOpen(true)
+        }
+
+        window.setTimeout(() => {
+          const panel = document.getElementById("workspace-studio-panel")
+          const firstFocusable = panel?.querySelector<HTMLElement>(
+            "button, input, textarea, [tabindex]:not([tabindex='-1'])"
+          )
+          firstFocusable?.focus()
+        }, 0)
+        return
+      }
+
+      if (isMobile) {
+        setActiveTab("chat")
+      }
+      window.setTimeout(() => {
+        const chatInput = document.querySelector<HTMLElement>(
+          "#workspace-main-content textarea"
+        )
+        if (chatInput) {
+          chatInput.focus()
+          return
+        }
+        const main = document.getElementById("workspace-main-content")
+        const firstFocusable = main?.querySelector<HTMLElement>(
+          "button, input, textarea, [tabindex]:not([tabindex='-1'])"
+        )
+        firstFocusable?.focus()
+      }, 0)
+    },
+    [isMobile, setLeftPaneCollapsed, setRightPaneCollapsed]
+  )
 
   const focusSearchResult = React.useCallback(
     (result: WorkspaceGlobalSearchResult) => {
@@ -442,6 +505,63 @@ const WorkspacePlaygroundBody: React.FC = () => {
         return
       }
 
+      if (hasModifier && !event.shiftKey && key === "1") {
+        event.preventDefault()
+        focusWorkspacePane("sources")
+        return
+      }
+
+      if (hasModifier && !event.shiftKey && key === "2") {
+        event.preventDefault()
+        focusWorkspacePane("chat")
+        return
+      }
+
+      if (hasModifier && !event.shiftKey && key === "3") {
+        event.preventDefault()
+        focusWorkspacePane("studio")
+        return
+      }
+
+      if (hasModifier && event.shiftKey && key === "n") {
+        event.preventDefault()
+        createNewWorkspace()
+        return
+      }
+
+      if (hasModifier && !event.shiftKey && key === "n") {
+        event.preventDefault()
+        const hasNoteContent =
+          currentNote.title.trim().length > 0 ||
+          currentNote.content.trim().length > 0 ||
+          currentNote.keywords.length > 0
+
+        const startNewNote = () => {
+          clearCurrentNote()
+          focusWorkspacePane("studio")
+          window.setTimeout(() => {
+            focusWorkspaceNote("title")
+          }, 0)
+        }
+
+        if (currentNote.isDirty || hasNoteContent) {
+          Modal.confirm({
+            title: t("playground:studio.newNoteTitle", "Start a new note?"),
+            content: t(
+              "playground:studio.newNoteMessage",
+              "This clears your current note draft."
+            ),
+            okText: t("playground:studio.newNote", "New note"),
+            cancelText: t("common:cancel", "Cancel"),
+            onOk: startNewNote
+          })
+          return
+        }
+
+        startNewNote()
+        return
+      }
+
       if (event.key === "Escape") {
         event.preventDefault()
         closeGlobalSearch()
@@ -452,7 +572,18 @@ const WorkspacePlaygroundBody: React.FC = () => {
     return () => {
       window.removeEventListener("keydown", handleKeyboardShortcut)
     }
-  }, [closeGlobalSearch])
+  }, [
+    clearCurrentNote,
+    closeGlobalSearch,
+    createNewWorkspace,
+    currentNote.content,
+    currentNote.isDirty,
+    currentNote.keywords.length,
+    currentNote.title,
+    focusWorkspaceNote,
+    focusWorkspacePane,
+    t
+  ])
 
   useEffect(() => {
     if (typeof window === "undefined") return

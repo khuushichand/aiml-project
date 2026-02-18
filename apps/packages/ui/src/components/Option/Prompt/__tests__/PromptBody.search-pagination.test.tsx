@@ -1199,6 +1199,33 @@ describe("PromptBody server search and pagination", () => {
     warningSpy.mockRestore()
   })
 
+  it("shows access guidance when a shared prompt deep-link fails with authorization errors", async () => {
+    const warningSpy = vi.spyOn(notification, "warning")
+    mocks.getAllPrompts.mockResolvedValue([])
+    mocks.pullFromStudio.mockResolvedValue({
+      success: false,
+      error: "HTTP 403 Forbidden",
+      syncStatus: "local"
+    })
+
+    renderPromptBody(["/prompts?prompt=402&source=studio"])
+
+    await waitFor(() => {
+      expect(warningSpy).toHaveBeenCalled()
+    })
+    const latestWarning = warningSpy.mock.calls.at(-1)?.[0] as
+      | { message?: string; description?: string }
+      | undefined
+    expect(latestWarning?.message).toBe("Prompt not found")
+    expect(latestWarning?.description).toBe(
+      "You don't have permission to open this shared prompt. Check your server login and project access."
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId("prompt-location-search").textContent).toBe("")
+    })
+    warningSpy.mockRestore()
+  })
+
   it("retains row selection while paging through large local datasets", async () => {
     state.isOnline = false
     state.prompts = Array.from({ length: 45 }, (_, index) => ({
@@ -1313,6 +1340,7 @@ describe("PromptBody server search and pagination", () => {
   })
 
   it("warns on missing deep-link prompt and clears the prompt query parameter", async () => {
+    const warningSpy = vi.spyOn(notification, "warning")
     state.prompts = [
       {
         id: "existing-prompt",
@@ -1328,12 +1356,22 @@ describe("PromptBody server search and pagination", () => {
 
     renderPromptBody(["/prompts?prompt=missing-prompt"])
 
-    expect(await screen.findByText("Prompt not found")).toBeInTheDocument()
+    await waitFor(() => {
+      expect(warningSpy).toHaveBeenCalled()
+    })
+    const latestWarning = warningSpy.mock.calls.at(-1)?.[0] as
+      | { message?: string; description?: string }
+      | undefined
+    expect(latestWarning?.message).toBe("Prompt not found")
+    expect(latestWarning?.description).toBe(
+      "The requested prompt could not be found. It may have been deleted."
+    )
     expect(screen.queryByTestId("mock-prompt-drawer")).not.toBeInTheDocument()
 
     await waitFor(() => {
       expect(screen.getByTestId("prompt-location-search").textContent).toBe("")
     })
+    warningSpy.mockRestore()
   })
 
   it("retains failed bulk-delete rows for retry and clears selection after successful retry", async () => {

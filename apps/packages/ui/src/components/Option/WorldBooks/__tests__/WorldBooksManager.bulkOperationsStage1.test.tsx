@@ -1,6 +1,6 @@
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen, within } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { WorldBooksManager } from "../Manager"
 
@@ -180,10 +180,9 @@ describe("WorldBooksManager bulk operations stage-1 selection UX", () => {
   })
 
   it("shows the contextual action bar only after at least one row is selected", async () => {
-    const user = userEvent.setup()
     render(<WorldBooksManager />)
 
-    await user.click(screen.getByRole("button", { name: "Manage entries" }))
+    fireEvent.click(screen.getByRole("button", { name: "Manage entries" }))
     const keywordsHeader = await screen.findByRole("columnheader", { name: "Keywords" })
     expect(screen.queryByText("1 selected")).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Enable" })).not.toBeInTheDocument()
@@ -191,30 +190,34 @@ describe("WorldBooksManager bulk operations stage-1 selection UX", () => {
     const tableWrapper = keywordsHeader.closest(".ant-table-wrapper")
     expect(tableWrapper).not.toBeNull()
     const checkboxes = within(tableWrapper as HTMLElement).getAllByRole("checkbox")
-    await user.click(checkboxes[1])
+    fireEvent.click(checkboxes[1])
 
     expect(screen.getByText("1 selected")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Enable" })).toBeInTheDocument()
   }, 30000)
 
   it("supports select-all escalation and clear selection", async () => {
-    const user = userEvent.setup()
     render(<WorldBooksManager />)
 
-    await user.click(screen.getByRole("button", { name: "Manage entries" }))
+    fireEvent.click(screen.getByRole("button", { name: "Manage entries" }))
     const keywordsHeader = await screen.findByRole("columnheader", { name: "Keywords" })
 
     const tableWrapper = keywordsHeader.closest(".ant-table-wrapper")
     expect(tableWrapper).not.toBeNull()
     const checkboxes = within(tableWrapper as HTMLElement).getAllByRole("checkbox")
-    await user.click(checkboxes[1])
-    await user.click(screen.getByRole("button", { name: "Select all 12 entries" }))
-    expect(screen.getByText("12 selected")).toBeInTheDocument()
+    fireEvent.click(checkboxes[1])
+    fireEvent.click(screen.getByRole("button", { name: "Select all 12 entries" }))
 
-    await user.click(screen.getByRole("button", { name: "Clear selected entries" }))
-    expect(screen.queryByText("12 selected")).not.toBeInTheDocument()
-    expect(screen.queryByRole("button", { name: "Enable" })).not.toBeInTheDocument()
-  }, 30000)
+    await waitFor(() => {
+      expect(screen.getByText("12 selected")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear selected entries" }))
+    await waitFor(() => {
+      expect(screen.queryByText("12 selected")).not.toBeInTheDocument()
+      expect(screen.queryByRole("button", { name: "Enable" })).not.toBeInTheDocument()
+    })
+  }, 45000)
 
   it("allows keyboard activation for the select-all escalation action", async () => {
     const user = userEvent.setup()

@@ -357,7 +357,8 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       expect(mockAddArtifact).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "summary",
-          status: "generating"
+          status: "generating",
+          previousVersionId: "artifact-existing"
         })
       )
     })

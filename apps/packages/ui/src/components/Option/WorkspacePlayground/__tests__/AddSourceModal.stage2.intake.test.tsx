@@ -1,0 +1,239 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { AddSourceModal } from "../SourcesPane/AddSourceModal"
+
+const {
+  mockAddMedia,
+  mockWebSearch,
+  mockSearchMedia,
+  mockListMedia,
+  mockAddSource,
+  mockCloseAddSourceModal
+} = vi.hoisted(() => ({
+  mockAddMedia: vi.fn(),
+  mockWebSearch: vi.fn(),
+  mockSearchMedia: vi.fn(),
+  mockListMedia: vi.fn(),
+  mockAddSource: vi.fn(),
+  mockCloseAddSourceModal: vi.fn()
+}))
+
+const workspaceStoreState = {
+  addSourceModalOpen: true,
+  addSourceModalTab: "upload" as const,
+  addSourceProcessing: false,
+  addSourceError: null as string | null,
+  sources: [] as Array<{ mediaId: number }>,
+  closeAddSourceModal: mockCloseAddSourceModal,
+  setAddSourceModalTab: vi.fn(),
+  setAddSourceProcessing: vi.fn(),
+  setAddSourceError: vi.fn(),
+  addSource: mockAddSource,
+  workspaceTag: "workspace:test"
+}
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (
+      key: string,
+      defaultValueOrOptions?:
+        | string
+        | {
+            defaultValue?: string
+          },
+      interpolation?: Record<string, unknown>
+    ) => {
+      const renderValue = (value: string) =>
+        value.replace(/\{\{(\w+)\}\}/g, (_match, token) =>
+          String(interpolation?.[token] ?? "")
+        )
+      if (typeof defaultValueOrOptions === "string") return renderValue(defaultValueOrOptions)
+      if (defaultValueOrOptions?.defaultValue) return renderValue(defaultValueOrOptions.defaultValue)
+      return key
+    }
+  })
+}))
+
+vi.mock("@/hooks/useMediaQuery", () => ({
+  useMobile: () => false
+}))
+
+vi.mock("@/store/workspace", () => ({
+  useWorkspaceStore: (
+    selector: (state: typeof workspaceStoreState) => unknown
+  ) => selector(workspaceStoreState)
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    uploadMedia: vi.fn(),
+    addMedia: mockAddMedia,
+    webSearch: mockWebSearch,
+    searchMedia: mockSearchMedia,
+    listMedia: mockListMedia,
+    updateMediaKeywords: vi.fn().mockResolvedValue(undefined)
+  }
+}))
+
+describe("AddSourceModal Stage 2 intake and relevance", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    workspaceStoreState.addSourceModalOpen = true
+    workspaceStoreState.addSourceError = null
+    workspaceStoreState.sources = []
+    workspaceStoreState.addSourceModalTab = "upload"
+    mockWebSearch.mockResolvedValue({ results: [] })
+    mockSearchMedia.mockResolvedValue({ results: [] })
+    mockListMedia.mockResolvedValue({ media: [] })
+  })
+
+  it("orders tabs as Upload, Library, URL, Paste, Search", async () => {
+    render(<AddSourceModal />)
+
+    const tabLabels = screen
+      .getAllByRole("tab")
+      .map((tab) => tab.textContent?.replace(/\s+/g, " ").trim())
+
+    expect(tabLabels).toEqual([
+      "Upload",
+      "Library",
+      "URL",
+      "Paste",
+      "Search"
+    ])
+  })
+
+  it("supports batch URL ingestion with per-URL status reporting", async () => {
+    workspaceStoreState.addSourceModalTab = "url"
+    mockAddMedia
+      .mockResolvedValueOnce({ results: [{ media_id: 8001, title: "One" }] })
+      .mockRejectedValueOnce(new Error("timeout"))
+
+    render(<AddSourceModal />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Batch (one per line)" }))
+    fireEvent.change(screen.getByPlaceholderText(/article-1/), {
+      target: {
+        value: "https://example.com/one\nhttps://example.com/two"
+      }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Add URLs" }))
+
+    await waitFor(() => {
+      expect(mockAddSource).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mediaId: 8001,
+          status: "processing"
+        })
+      )
+    })
+
+    expect(screen.getByText("https://example.com/one")).toBeInTheDocument()
+    expect(screen.getByText("https://example.com/two")).toBeInTheDocument()
+    expect(screen.getByText("Added")).toBeInTheDocument()
+    expect(screen.getByText(/Unable to reach the server|timed out/i)).toBeInTheDocument()
+    expect(mockCloseAddSourceModal).not.toHaveBeenCalled()
+  })
+
+  it("normalizes metadata from URL ingestion responses", async () => {
+    workspaceStoreState.addSourceModalTab = "url"
+    mockAddMedia.mockResolvedValueOnce({
+      results: [
+        {
+          media_id: 9001,
+          title: "Metadata Doc",
+          media_type: "pdf",
+          file_size: 4096,
+          page_count: 12,
+          url: "https://example.com/doc"
+        }
+      ]
+    })
+
+    render(<AddSourceModal />)
+
+    fireEvent.change(
+      screen.getByPlaceholderText("https://example.com/article or YouTube URL"),
+      {
+        target: { value: "https://example.com/doc" }
+      }
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Add URL" }))
+
+    await waitFor(() => {
+      expect(mockAddSource).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mediaId: 9001,
+          type: "pdf",
+          fileSize: 4096,
+          pageCount: 12,
+          url: "https://example.com/doc"
+        })
+      )
+    })
+  })
+
+  it("renders search snippets and favicon hints in web results", async () => {
+    workspaceStoreState.addSourceModalTab = "search"
+    mockWebSearch.mockResolvedValueOnce({
+      results: [
+        {
+          title: "Climate Result",
+          url: "https://example.com/climate",
+          snippet: "Key findings about climate mitigation strategies."
+        }
+      ]
+    })
+
+    render(<AddSourceModal />)
+
+    fireEvent.change(screen.getByPlaceholderText("Search the web..."), {
+      target: { value: "climate" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Search" }))
+
+    expect(
+      await screen.findByText("Key findings about climate mitigation strategies.")
+    ).toBeInTheDocument()
+
+    const favicon = screen.getByTestId("search-result-favicon-0")
+    expect(favicon).toHaveAttribute("src", expect.stringContaining("google.com/s2/favicons"))
+  })
+
+  it("supports library load-more pagination and total count text", async () => {
+    workspaceStoreState.addSourceModalTab = "existing"
+    mockListMedia
+      .mockResolvedValueOnce({
+        media: [
+          { id: 1, title: "Doc 1", type: "pdf" },
+          { id: 2, title: "Doc 2", type: "pdf" }
+        ],
+        total_count: 4
+      })
+      .mockResolvedValueOnce({
+        media: [
+          { id: 3, title: "Doc 3", type: "pdf" },
+          { id: 4, title: "Doc 4", type: "pdf" }
+        ],
+        total_count: 4
+      })
+
+    render(<AddSourceModal />)
+
+    expect(await screen.findByText("Showing 2 of 4")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }))
+
+    expect(await screen.findByText("Showing 4 of 4")).toBeInTheDocument()
+    expect(mockListMedia).toHaveBeenNthCalledWith(1, {
+      page: 1,
+      results_per_page: 50,
+      include_keywords: true
+    })
+    expect(mockListMedia).toHaveBeenNthCalledWith(2, {
+      page: 2,
+      results_per_page: 50,
+      include_keywords: true
+    })
+  })
+})

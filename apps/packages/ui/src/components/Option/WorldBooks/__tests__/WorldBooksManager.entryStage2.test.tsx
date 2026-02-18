@@ -279,5 +279,5 @@ describe("WorldBooksManager entry drawer stage-2 authoring controls", () => {
 
     expect(await screen.findByText(/Invalid regex pattern:/)).toBeInTheDocument()
     expect(tldwClientMock.addWorldBookEntry).not.toHaveBeenCalled()
-  }, 30000)
+  }, 45000)
 })

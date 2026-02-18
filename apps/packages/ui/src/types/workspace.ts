@@ -55,6 +55,7 @@ export interface GeneratedArtifact {
   type: ArtifactType
   title: string
   status: ArtifactStatus
+  previousVersionId?: string
   serverId?: number | string // ID from outputs/quizzes/data-tables/slides endpoint
   content?: string // For text-based artifacts like summary, mindmap
   audioUrl?: string // For audio_overview - object URL to audio blob

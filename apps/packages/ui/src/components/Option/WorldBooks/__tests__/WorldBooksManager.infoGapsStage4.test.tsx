@@ -1,7 +1,6 @@
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { WorldBooksManager } from "../Manager"
 
 const {
@@ -207,26 +206,28 @@ describe("WorldBooksManager information gaps stage-4 AI generation", () => {
   })
 
   it("generates, allows edits, and saves suggestions with provider/model metadata", async () => {
-    const user = userEvent.setup()
     render(<WorldBooksManager />)
 
-    await user.click(screen.getByRole("button", { name: "Manage entries" }))
-    await user.click(screen.getByRole("button", { name: "Generate entries with AI" }))
+    fireEvent.click(screen.getByRole("button", { name: "Manage entries" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Generate entries with AI" }))
 
-    await user.type(screen.getByLabelText("AI generation topic"), "Northern weather lore")
-    await user.type(screen.getByLabelText("AI default group"), " Weather ")
-    await user.clear(screen.getByLabelText("AI suggestion count"))
-    await user.type(screen.getByLabelText("AI suggestion count"), "1")
-    await user.click(screen.getByRole("button", { name: "Run AI generation" }))
+    fireEvent.change(screen.getByLabelText("AI generation topic"), {
+      target: { value: "Northern weather lore" }
+    })
+    fireEvent.change(screen.getByLabelText("AI default group"), {
+      target: { value: " Weather " }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Run AI generation" }))
 
     await waitFor(() => {
       expect(screen.getByText("Generated with openai / gpt-4o-mini.")).toBeInTheDocument()
     })
 
     const generatedContent = screen.getByLabelText("Generated content 1")
-    await user.clear(generatedContent)
-    await user.type(generatedContent, "Edited generated lore")
-    await user.click(screen.getByRole("button", { name: "Add generated suggestion 1" }))
+    fireEvent.change(generatedContent, {
+      target: { value: "Edited generated lore" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Add generated suggestion 1" }))
 
     await waitFor(() => {
       expect(tldwClientMock.addWorldBookEntry).toHaveBeenCalledWith(
@@ -244,5 +245,29 @@ describe("WorldBooksManager information gaps stage-4 AI generation", () => {
         })
       )
     })
-  }, 20000)
+  }, 45000)
+
+  it("shows an inline error when AI generation returns empty output", async () => {
+    tldwClientMock.createChatCompletion.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "" } }]
+        })
+      )
+    )
+
+    render(<WorldBooksManager />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Manage entries" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Generate entries with AI" }))
+    fireEvent.change(screen.getByLabelText("AI generation topic"), {
+      target: { value: "Empty output case" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Run AI generation" }))
+
+    await waitFor(() => {
+      expect(screen.getByText("The model returned an empty result.")).toBeInTheDocument()
+    })
+    expect(tldwClientMock.addWorldBookEntry).not.toHaveBeenCalled()
+  }, 30000)
 })

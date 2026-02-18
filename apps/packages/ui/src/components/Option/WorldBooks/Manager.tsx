@@ -67,6 +67,7 @@ import {
   buildGlobalWorldBookStatistics,
   type GlobalWorldBookStatistics
 } from "./worldBookGlobalStatsUtils"
+import { buildReferencedBySignalMap } from "./worldBookRelationshipUtils"
 
 // Helper component for form field labels with tooltips
 const LabelWithHelp: React.FC<{ label: string; help: string }> = ({ label, help }) => (
@@ -147,6 +148,10 @@ const FALLBACK_AI_GENERATION_MODEL = "gpt-4o-mini"
 const DEFAULT_AI_GENERATION_COUNT = 3
 const MIN_AI_GENERATION_COUNT = 1
 const MAX_AI_GENERATION_COUNT = 8
+const ACCESSIBLE_SWITCH_TEXT_PROPS = {
+  checkedChildren: "On",
+  unCheckedChildren: "Off"
+} as const
 
 type WorldBookGeneratedEntryDraft = {
   id: string
@@ -305,6 +310,8 @@ export const WorldBookForm: React.FC<WorldBookFormProps> = ({
   onSubmit
 }) => {
   const submitLabel = mode === "create" ? "Create" : "Save"
+  const [advancedSettingsOpen, setAdvancedSettingsOpen] = React.useState(false)
+  const advancedSettingsContentId = React.useId()
   const recursiveScanningEnabled = Boolean(Form.useWatch("recursive_scanning", form))
   const recursiveDepthLimit =
     typeof maxRecursiveDepth === "number" && Number.isFinite(maxRecursiveDepth)
@@ -380,11 +387,24 @@ export const WorldBookForm: React.FC<WorldBookFormProps> = ({
         <Input />
       </Form.Item>
       <Form.Item name="enabled" label="Enabled" valuePropName="checked">
-        <Switch />
+        <Switch {...ACCESSIBLE_SWITCH_TEXT_PROPS} />
       </Form.Item>
-      <details className="mb-4">
-        <summary className="cursor-pointer text-sm text-text-muted hover:text-text">Advanced Settings</summary>
-        <div className="mt-3 pl-2 border-l-2 border-border space-y-0">
+      <details
+        className="mb-4"
+        open={advancedSettingsOpen}
+        onToggle={(event) => {
+          const nextOpen = (event.currentTarget as HTMLDetailsElement).open
+          setAdvancedSettingsOpen(nextOpen)
+        }}
+      >
+        <summary
+          className="cursor-pointer text-sm text-text-muted hover:text-text"
+          aria-expanded={advancedSettingsOpen}
+          aria-controls={advancedSettingsContentId}
+        >
+          Advanced Settings
+        </summary>
+        <div id={advancedSettingsContentId} className="mt-3 pl-2 border-l-2 border-border space-y-0">
           <Form.Item
             name="scan_depth"
             label={<LabelWithHelp label="Scan Depth" help="How many recent messages to search for keywords (1-20). Higher values find more matches but use more processing." />}
@@ -402,7 +422,7 @@ export const WorldBookForm: React.FC<WorldBookFormProps> = ({
             label={<LabelWithHelp label="Recursive Scanning" help="Also search matched content for additional keyword matches. Useful for interconnected lore but may increase context usage." />}
             valuePropName="checked"
           >
-            <Switch />
+            <Switch {...ACCESSIBLE_SWITCH_TEXT_PROPS} />
           </Form.Item>
         </div>
       </details>
@@ -622,6 +642,7 @@ const WorldBookTestMatchingModal: React.FC<WorldBookTestMatchingModalProps> = ({
                 checked={recursiveScanning}
                 onChange={setRecursiveScanning}
                 aria-label="Recursive scanning for keyword test"
+                {...ACCESSIBLE_SWITCH_TEXT_PROPS}
               />
               <span className="text-xs text-text-muted">Recursive scanning</span>
             </div>
@@ -747,6 +768,9 @@ export const WorldBooksManager: React.FC = () => {
   const [editExpectedVersion, setEditExpectedVersion] = React.useState<number | null>(null)
   const [editConflict, setEditConflict] = React.useState<EditWorldBookConflictState | null>(null)
   const [openImport, setOpenImport] = React.useState(false)
+  const [importFormatHelpOpen, setImportFormatHelpOpen] = React.useState(false)
+  const [importErrorDetailsOpen, setImportErrorDetailsOpen] = React.useState(false)
+  const [importPreviewEntriesOpen, setImportPreviewEntriesOpen] = React.useState(false)
   const [openMatrix, setOpenMatrix] = React.useState(false)
   const [openGlobalStats, setOpenGlobalStats] = React.useState(false)
   const [openTestMatching, setOpenTestMatching] = React.useState(false)
@@ -782,6 +806,9 @@ export const WorldBooksManager: React.FC = () => {
   const [editForm] = Form.useForm()
   const [entryForm] = Form.useForm()
   const [attachForm] = Form.useForm()
+  const importFormatHelpContentId = React.useId()
+  const importErrorDetailsContentId = React.useId()
+  const importPreviewEntriesContentId = React.useId()
   const confirmDanger = useConfirmDanger()
   const deleteTimersRef = React.useRef<Record<number, any>>({})
   const matrixBaselineKeysRef = React.useRef<Set<string>>(new Set())
@@ -1046,6 +1073,9 @@ export const WorldBooksManager: React.FC = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tldw:listWorldBooks'] })
       setOpenImport(false)
+      setImportFormatHelpOpen(false)
+      setImportErrorDetailsOpen(false)
+      setImportPreviewEntriesOpen(false)
       setImportPreview(null)
       setImportPayload(null)
       setImportError(null)
@@ -3334,6 +3364,7 @@ export const WorldBooksManager: React.FC = () => {
                                           enabled: nextEnabled
                                         })
                                       }
+                                      {...ACCESSIBLE_SWITCH_TEXT_PROPS}
                                     />
                                   </div>
                                   <div className="flex items-center justify-between gap-2">
@@ -3621,6 +3652,12 @@ const EntryManager: React.FC<{
   const [editMatchingOptionsOpen, setEditMatchingOptionsOpen] = React.useState<boolean>(() =>
     readSessionBoolean("worldbooks:edit-matching-options-open", false)
   )
+  const [keywordIndexOpen, setKeywordIndexOpen] = React.useState(false)
+  const [bulkFormatsOpen, setBulkFormatsOpen] = React.useState(false)
+  const keywordIndexContentId = React.useId()
+  const editMatchingOptionsContentId = React.useId()
+  const addMatchingOptionsContentId = React.useId()
+  const bulkFormatsContentId = React.useId()
   const addRegexMatch = Form.useWatch('regex_match', form)
   const addCaseSensitive = Form.useWatch('case_sensitive', form)
   const addWholeWord = Form.useWatch('whole_word_match', form)
@@ -3779,6 +3816,18 @@ const EntryManager: React.FC<{
   const keywordConflictCount = React.useMemo(
     () => keywordIndex.filter((item) => item.conflict).length,
     [keywordIndex]
+  )
+  const entryById = React.useMemo(() => {
+    const map = new Map<number, any>()
+    ;(entries || []).forEach((entry: any) => {
+      const id = Number(entry?.entry_id)
+      if (Number.isFinite(id) && id > 0) map.set(id, entry)
+    })
+    return map
+  }, [entries])
+  const referencedBySignalMap = React.useMemo(
+    () => buildReferencedBySignalMap(entries as any[]),
+    [entries]
   )
 
   const entryGroupOptions = React.useMemo(() => {
@@ -4464,11 +4513,14 @@ const EntryManager: React.FC<{
           <p className="text-xs text-text-muted">
             Entry order is controlled by priority (0-100). Higher-priority entries are evaluated first.
           </p>
+          <p className="text-xs text-text-muted">
+            Referenced By is a heuristic based on keyword text found inside other entry content.
+          </p>
           <Table
             size="small"
             virtual
             pagination={false}
-            scroll={{ y: 420, x: isEntryManagerMobile ? 680 : 900 }}
+            scroll={{ y: 420, x: isEntryManagerMobile ? 760 : 1060 }}
             rowKey={(r: any) => r.entry_id}
             rowSelection={{
               selectedRowKeys,
@@ -4495,6 +4547,78 @@ const EntryManager: React.FC<{
                 }
               },
               { title: 'Content', dataIndex: 'content', key: 'content', render: (v: string) => <span className="line-clamp-2">{v}</span> },
+              {
+                title: (
+                  <Tooltip title="Heuristic: counts entries whose content contains this entry's keywords.">
+                    <span>Referenced By</span>
+                  </Tooltip>
+                ),
+                key: "referenced_by",
+                width: 150,
+                render: (_: unknown, row: any) => {
+                  const entryId = Number(row?.entry_id)
+                  if (!Number.isFinite(entryId) || entryId <= 0) {
+                    return <span className="text-xs text-text-muted">None</span>
+                  }
+                  const references = referencedBySignalMap[entryId] || []
+                  if (references.length === 0) {
+                    return <span className="text-xs text-text-muted">None</span>
+                  }
+
+                  return (
+                    <Popover
+                      trigger="click"
+                      content={
+                        <div className="max-w-xs space-y-1">
+                          <p className="text-xs text-text-muted">
+                            Heuristic keyword overlaps for this entry:
+                          </p>
+                          {references.map((reference) => {
+                            const sourceEntry = entryById.get(reference.sourceEntryId)
+                            const sourceKeywords = sourceEntry
+                              ? normalizeKeywordList(sourceEntry?.keywords).slice(0, 2).join(", ")
+                              : ""
+                            return (
+                              <div
+                                key={`${entryId}-${reference.sourceEntryId}-${reference.matchedKeyword}`}
+                                className="rounded border border-border px-2 py-1 text-xs"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span>Entry #{reference.sourceEntryId}</span>
+                                  <Button
+                                    type="link"
+                                    size="small"
+                                    className="px-0"
+                                    aria-label={`Open referencing entry ${reference.sourceEntryId}`}
+                                    onClick={() => {
+                                      if (sourceEntry) openEditModal(sourceEntry)
+                                    }}
+                                  >
+                                    Open
+                                  </Button>
+                                </div>
+                                <p className="text-text-muted">
+                                  matches "{reference.matchedKeyword}"
+                                  {sourceKeywords ? ` (${sourceKeywords})` : ""}
+                                </p>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      }
+                    >
+                      <Button
+                        type="link"
+                        size="small"
+                        className="px-0"
+                        aria-label={`View references for entry ${entryId}`}
+                      >
+                        {references.length} entries
+                      </Button>
+                    </Popover>
+                  )
+                }
+              },
               ...(screens.md
                 ? [
                     {
@@ -4551,14 +4675,23 @@ const EntryManager: React.FC<{
               ) }
             ] as any}
           />
-          <details className="mt-2">
+          <details
+            className="mt-2"
+            open={keywordIndexOpen}
+            onToggle={(event) => {
+              const nextOpen = (event.currentTarget as HTMLDetailsElement).open
+              setKeywordIndexOpen(nextOpen)
+            }}
+          >
             <summary
               className="cursor-pointer text-sm text-text-muted hover:text-text"
               aria-label={`Keyword Index${keywordConflictCount > 0 ? `, ${keywordConflictCount} conflicts` : ""}`}
+              aria-expanded={keywordIndexOpen}
+              aria-controls={keywordIndexContentId}
             >
               Keyword Index{keywordConflictCount > 0 ? ` (${keywordConflictCount} conflicts)` : ""}
             </summary>
-            <div className="mt-2 flex flex-wrap gap-1">
+            <div id={keywordIndexContentId} className="mt-2 flex flex-wrap gap-1">
               {keywordIndex.length === 0 && <span className="text-sm text-text-muted">No keywords yet</span>}
               {keywordIndex.map((k) => (
                 <Tooltip key={k.keyword} title={k.conflict ? `Conflict: ${k.variantCount} content variations` : `${k.count} entries`}>
@@ -4624,7 +4757,7 @@ const EntryManager: React.FC<{
           >
             <InputNumber style={{ width: '100%' }} min={0} max={100} />
           </Form.Item>
-          <Form.Item name="enabled" label="Enabled" valuePropName="checked"><Switch /></Form.Item>
+          <Form.Item name="enabled" label="Enabled" valuePropName="checked"><Switch {...ACCESSIBLE_SWITCH_TEXT_PROPS} /></Form.Item>
           <Form.Item
             name="appendable"
             label={
@@ -4635,7 +4768,7 @@ const EntryManager: React.FC<{
             }
             valuePropName="checked"
           >
-            <Switch />
+            <Switch {...ACCESSIBLE_SWITCH_TEXT_PROPS} />
           </Form.Item>
           <details
             className="mb-4"
@@ -4646,15 +4779,22 @@ const EntryManager: React.FC<{
               writeSessionBoolean("worldbooks:edit-matching-options-open", nextOpen)
             }}
           >
-            <summary className="cursor-pointer text-sm text-text-muted hover:text-text">Matching Options</summary>
+            <summary
+              className="cursor-pointer text-sm text-text-muted hover:text-text"
+              aria-expanded={editMatchingOptionsOpen}
+              aria-controls={editMatchingOptionsContentId}
+            >
+              Matching Options
+            </summary>
+            <div id={editMatchingOptionsContentId}>
             <p className="text-xs text-text-muted mt-1 mb-2">These options control how keywords are matched in chat messages.</p>
             <div className="mt-2 pl-2 border-l-2 border-border space-y-0">
-              <Form.Item name="case_sensitive" label="Case Sensitive" valuePropName="checked"><Switch /></Form.Item>
+              <Form.Item name="case_sensitive" label="Case Sensitive" valuePropName="checked"><Switch {...ACCESSIBLE_SWITCH_TEXT_PROPS} /></Form.Item>
               <Form.Item name="regex_match" label="Regex Match" valuePropName="checked">
-                <Switch onChange={(checked) => { if (checked) editForm.setFieldsValue({ whole_word_match: false }) }} />
+                <Switch {...ACCESSIBLE_SWITCH_TEXT_PROPS} onChange={(checked) => { if (checked) editForm.setFieldsValue({ whole_word_match: false }) }} />
               </Form.Item>
               {!editRegexMatch && (
-                <Form.Item name="whole_word_match" label="Whole Word Match" valuePropName="checked"><Switch /></Form.Item>
+                <Form.Item name="whole_word_match" label="Whole Word Match" valuePropName="checked"><Switch {...ACCESSIBLE_SWITCH_TEXT_PROPS} /></Form.Item>
               )}
             </div>
             <p className="text-xs text-text-muted mt-2">
@@ -4664,6 +4804,7 @@ const EntryManager: React.FC<{
                 wholeWord: editWholeWord
               })}
             </p>
+            </div>
           </details>
           <Button type="primary" htmlType="submit" loading={updating} className="w-full">Save Changes</Button>
         </Form>
@@ -4681,7 +4822,12 @@ const EntryManager: React.FC<{
             >
               Generate with AI
             </Button>
-            <Switch checked={bulkMode} onChange={setBulkMode} />
+            <Switch
+              checked={bulkMode}
+              onChange={setBulkMode}
+              aria-label="Toggle bulk add mode"
+              {...ACCESSIBLE_SWITCH_TEXT_PROPS}
+            />
             <span className="text-xs text-text-muted">Bulk add mode</span>
           </div>
         </div>
@@ -4720,7 +4866,7 @@ const EntryManager: React.FC<{
             >
               <InputNumber style={{ width: '100%' }} min={0} max={100} placeholder="Default: 50" />
             </Form.Item>
-            <Form.Item name="enabled" label="Enabled" valuePropName="checked"><Switch defaultChecked /></Form.Item>
+            <Form.Item name="enabled" label="Enabled" valuePropName="checked"><Switch defaultChecked {...ACCESSIBLE_SWITCH_TEXT_PROPS} /></Form.Item>
             <Form.Item
               name="appendable"
               label={
@@ -4731,7 +4877,7 @@ const EntryManager: React.FC<{
               }
               valuePropName="checked"
             >
-              <Switch />
+              <Switch {...ACCESSIBLE_SWITCH_TEXT_PROPS} />
             </Form.Item>
           <details
             className="mb-4"
@@ -4742,15 +4888,22 @@ const EntryManager: React.FC<{
               writeSessionBoolean("worldbooks:add-matching-options-open", nextOpen)
             }}
           >
-            <summary className="cursor-pointer text-sm text-text-muted hover:text-text">Matching Options</summary>
+            <summary
+              className="cursor-pointer text-sm text-text-muted hover:text-text"
+              aria-expanded={addMatchingOptionsOpen}
+              aria-controls={addMatchingOptionsContentId}
+            >
+              Matching Options
+            </summary>
+            <div id={addMatchingOptionsContentId}>
             <p className="text-xs text-text-muted mt-1 mb-2">These options control how keywords are matched in chat messages.</p>
             <div className="mt-2 pl-2 border-l-2 border-border space-y-0">
-              <Form.Item name="case_sensitive" label="Case Sensitive" valuePropName="checked"><Switch /></Form.Item>
+              <Form.Item name="case_sensitive" label="Case Sensitive" valuePropName="checked"><Switch {...ACCESSIBLE_SWITCH_TEXT_PROPS} /></Form.Item>
               <Form.Item name="regex_match" label="Regex Match" valuePropName="checked">
-                <Switch onChange={(checked) => { if (checked) form.setFieldsValue({ whole_word_match: false }) }} />
+                <Switch {...ACCESSIBLE_SWITCH_TEXT_PROPS} onChange={(checked) => { if (checked) form.setFieldsValue({ whole_word_match: false }) }} />
               </Form.Item>
               {!addRegexMatch && (
-                <Form.Item name="whole_word_match" label="Whole Word Match" valuePropName="checked"><Switch /></Form.Item>
+                <Form.Item name="whole_word_match" label="Whole Word Match" valuePropName="checked"><Switch {...ACCESSIBLE_SWITCH_TEXT_PROPS} /></Form.Item>
               )}
             </div>
             <p className="text-xs text-text-muted mt-2">
@@ -4760,15 +4913,29 @@ const EntryManager: React.FC<{
                 wholeWord: addWholeWord
               })}
             </p>
+            </div>
           </details>
           <Button type="primary" htmlType="submit" loading={adding} className="w-full">Add Entry</Button>
         </Form>
       )}
         {bulkMode && (
           <div className="space-y-2">
-            <details className="rounded border border-border p-2">
-              <summary className="cursor-pointer text-sm text-text-muted hover:text-text">Supported formats</summary>
-              <div className="mt-2 space-y-1 text-xs text-text-muted">
+            <details
+              className="rounded border border-border p-2"
+              open={bulkFormatsOpen}
+              onToggle={(event) => {
+                const nextOpen = (event.currentTarget as HTMLDetailsElement).open
+                setBulkFormatsOpen(nextOpen)
+              }}
+            >
+              <summary
+                className="cursor-pointer text-sm text-text-muted hover:text-text"
+                aria-expanded={bulkFormatsOpen}
+                aria-controls={bulkFormatsContentId}
+              >
+                Supported formats
+              </summary>
+              <div id={bulkFormatsContentId} className="mt-2 space-y-1 text-xs text-text-muted">
                 {BULK_ENTRY_FORMAT_EXAMPLES.filter((format) =>
                   SUPPORTED_BULK_SEPARATORS.includes(format.separator)
                 ).map((format) => (

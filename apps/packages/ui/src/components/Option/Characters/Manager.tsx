@@ -137,6 +137,279 @@ const emitCharacterRecoveryTelemetry = (
   )
 }
 
+type CharacterImportResult = {
+  success: boolean
+  fileName: string
+  message: string
+}
+
+type CharacterImportOptions = {
+  allowImageOnly?: boolean
+  suppressNotifications?: boolean
+  invalidateOnSuccess?: boolean
+}
+
+type CharacterImportPreview = {
+  id: string
+  file: File
+  fileName: string
+  format: string
+  name: string
+  description: string
+  tagCount: number
+  fieldCount: number
+  avatarUrl: string | null
+  parseError: string | null
+}
+
+const IMPORT_ALLOWED_EXTENSIONS = [
+  ".png",
+  ".webp",
+  ".jpeg",
+  ".jpg",
+  ".json",
+  ".yaml",
+  ".yml",
+  ".md",
+  ".txt"
+] as const
+const IMPORT_ALLOWED_EXTENSION_SET = new Set<string>(IMPORT_ALLOWED_EXTENSIONS)
+const IMPORT_UPLOAD_ACCEPT = IMPORT_ALLOWED_EXTENSIONS.join(",")
+const IMPORT_IMAGE_EXTENSIONS = new Set([".png", ".webp", ".jpeg", ".jpg"])
+
+const getImportFileExtension = (fileName: string): string => {
+  const idx = fileName.lastIndexOf(".")
+  return idx >= 0 ? fileName.slice(idx).toLowerCase() : ""
+}
+
+const buildDefaultImportName = (fileName: string): string => {
+  const idx = fileName.lastIndexOf(".")
+  const base = idx >= 0 ? fileName.slice(0, idx) : fileName
+  return base.trim() || fileName
+}
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === "string" && value.trim().length > 0
+
+const normalizeImportTags = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map((tag) => String(tag).trim())
+      .filter((tag) => tag.length > 0)
+  }
+  if (isNonEmptyString(value)) {
+    try {
+      const parsed = JSON.parse(value)
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((tag) => String(tag).trim())
+          .filter((tag) => tag.length > 0)
+      }
+    } catch {
+      // fall through
+    }
+    return value
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter((tag) => tag.length > 0)
+  }
+  return []
+}
+
+const countPopulatedImportFields = (record: Record<string, unknown>): number =>
+  Object.values(record).reduce((count, value) => {
+    if (value == null) return count
+    if (typeof value === "string") {
+      return value.trim().length > 0 ? count + 1 : count
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0 ? count + 1 : count
+    }
+    if (typeof value === "object") {
+      return Object.keys(value as Record<string, unknown>).length > 0
+        ? count + 1
+        : count
+    }
+    return count + 1
+  }, 0)
+
+const toPreviewAvatarUrl = (value: unknown): string | null => {
+  if (!isNonEmptyString(value)) return null
+  const trimmed = value.trim()
+  if (trimmed.startsWith("data:image/")) return trimmed
+  return `data:image/png;base64,${trimmed}`
+}
+
+const normalizeImportPayload = (rawPayload: unknown): Record<string, unknown> => {
+  if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) {
+    return {}
+  }
+  const record = rawPayload as Record<string, unknown>
+  if (record.data && typeof record.data === "object" && !Array.isArray(record.data)) {
+    return record.data as Record<string, unknown>
+  }
+  return record
+}
+
+const extractLooseTextCharacterFields = (text: string): Record<string, unknown> => {
+  const fields: Record<string, unknown> = {}
+  const nameMatch = text.match(/^\s*(?:name|char_name|character_name)\s*:\s*(.+)$/im)
+  if (nameMatch?.[1]) {
+    fields.name = nameMatch[1].trim()
+  }
+
+  const descriptionMatch = text.match(/^\s*description\s*:\s*(.+)$/im)
+  if (descriptionMatch?.[1]) {
+    fields.description = descriptionMatch[1].trim()
+  }
+
+  const inlineTagsMatch = text.match(/^\s*tags\s*:\s*\[(.+)\]\s*$/im)
+  if (inlineTagsMatch?.[1]) {
+    fields.tags = inlineTagsMatch[1]
+      .split(",")
+      .map((tag) => tag.trim().replace(/^["']|["']$/g, ""))
+      .filter((tag) => tag.length > 0)
+    return fields
+  }
+
+  const blockTagLines = text.match(
+    /^\s*tags\s*:\s*$(?:\r?\n)([\s\S]*?)(?:\r?\n\s*\S.*:|$)/im
+  )?.[1]
+  if (blockTagLines) {
+    const tags = blockTagLines
+      .split(/\r?\n/)
+      .map((line) => line.match(/^\s*-\s*(.+)$/)?.[1]?.trim())
+      .filter((value): value is string => Boolean(value))
+      .map((tag) => tag.replace(/^["']|["']$/g, ""))
+    if (tags.length > 0) {
+      fields.tags = tags
+    }
+  }
+
+  return fields
+}
+
+const parseCharacterImportPreview = async (
+  file: File,
+  index: number
+): Promise<CharacterImportPreview> => {
+  const extension = getImportFileExtension(file.name)
+  const format = extension ? extension.slice(1).toUpperCase() : "FILE"
+  const defaultName = buildDefaultImportName(file.name)
+  if (!extension || !IMPORT_ALLOWED_EXTENSION_SET.has(extension)) {
+    const allowed = IMPORT_ALLOWED_EXTENSIONS.join(", ")
+    return {
+      id: `${file.name}-${file.lastModified}-${index}`,
+      file,
+      fileName: file.name,
+      format,
+      name: defaultName,
+      description: "",
+      tagCount: 0,
+      fieldCount: 0,
+      avatarUrl: null,
+      parseError: `Unsupported file type: ${extension || "no extension"}. Supported formats: ${allowed}`
+    }
+  }
+
+  if (IMPORT_IMAGE_EXTENSIONS.has(extension)) {
+    const avatarUrl =
+      typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
+        ? URL.createObjectURL(file)
+        : null
+    return {
+      id: `${file.name}-${file.lastModified}-${index}`,
+      file,
+      fileName: file.name,
+      format,
+      name: defaultName,
+      description: "",
+      tagCount: 0,
+      fieldCount: 0,
+      avatarUrl,
+      parseError: null
+    }
+  }
+
+  let text = ""
+  try {
+    text = await file.text()
+  } catch {
+    return {
+      id: `${file.name}-${file.lastModified}-${index}`,
+      file,
+      fileName: file.name,
+      format,
+      name: defaultName,
+      description: "",
+      tagCount: 0,
+      fieldCount: 0,
+      avatarUrl: null,
+      parseError: "Unable to read file contents for preview."
+    }
+  }
+
+  let rawPayload: unknown = null
+  if (extension === ".json") {
+    try {
+      rawPayload = JSON.parse(text)
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "Invalid JSON"
+      return {
+        id: `${file.name}-${file.lastModified}-${index}`,
+        file,
+        fileName: file.name,
+        format,
+        name: defaultName,
+        description: "",
+        tagCount: 0,
+        fieldCount: 0,
+        avatarUrl: null,
+        parseError: `Invalid JSON syntax: ${message}`
+      }
+    }
+  } else {
+    const trimmed = text.trim()
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      try {
+        rawPayload = JSON.parse(trimmed)
+      } catch {
+        rawPayload = extractLooseTextCharacterFields(text)
+      }
+    } else {
+      rawPayload = extractLooseTextCharacterFields(text)
+    }
+  }
+
+  const payload = normalizeImportPayload(rawPayload)
+  const inferredName = isNonEmptyString(payload.name)
+    ? payload.name.trim()
+    : defaultName
+  const description = isNonEmptyString(payload.description)
+    ? payload.description.trim()
+    : ""
+  const tags = normalizeImportTags(payload.tags)
+  const avatarUrl =
+    toPreviewAvatarUrl(payload.image_base64) || toPreviewAvatarUrl(payload.avatar)
+  const fieldCount = countPopulatedImportFields(payload)
+
+  return {
+    id: `${file.name}-${file.lastModified}-${index}`,
+    file,
+    fileName: file.name,
+    format,
+    name: inferredName,
+    description,
+    tagCount: tags.length,
+    fieldCount,
+    avatarUrl,
+    parseError: null
+  }
+}
+
 const toCharactersSortBy = (column: string | null): CharacterListSortBy => {
   switch (column) {
     case "creator":
@@ -738,6 +1011,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     return DEFAULT_PAGE_SIZE
   })
   const [importing, setImporting] = React.useState(false)
+  const [importPreviewOpen, setImportPreviewOpen] = React.useState(false)
+  const [importPreviewLoading, setImportPreviewLoading] = React.useState(false)
+  const [importPreviewItems, setImportPreviewItems] = React.useState<CharacterImportPreview[]>([])
   const [previewCharacter, setPreviewCharacter] = React.useState<any | null>(null)
   const crossNavigationContext = React.useMemo(
     () => {
@@ -2266,25 +2542,79 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     return null
   }
 
+  const revokeImportPreviewAvatarUrls = React.useCallback(
+    (items: CharacterImportPreview[]) => {
+      if (typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") {
+        return
+      }
+      for (const item of items) {
+        const extension = getImportFileExtension(item.fileName)
+        if (item.avatarUrl && IMPORT_IMAGE_EXTENSIONS.has(extension)) {
+          try {
+            URL.revokeObjectURL(item.avatarUrl)
+          } catch {
+            // no-op cleanup
+          }
+        }
+      }
+    },
+    []
+  )
+
+  const resetImportPreview = React.useCallback(() => {
+    setImportPreviewOpen(false)
+    setImportPreviewLoading(false)
+    setImportPreviewItems((previous) => {
+      revokeImportPreviewAvatarUrls(previous)
+      return []
+    })
+  }, [revokeImportPreviewAvatarUrls])
+
+  React.useEffect(() => {
+    return () => {
+      revokeImportPreviewAvatarUrls(importPreviewItems)
+    }
+  }, [importPreviewItems, revokeImportPreviewAvatarUrls])
+
+  const importablePreviewItems = React.useMemo(
+    () => importPreviewItems.filter((item) => !item.parseError),
+    [importPreviewItems]
+  )
+
   const importCharacterFile = React.useCallback(
-    async (file: File, allowImageOnly = false) => {
+    async (
+      file: File,
+      options?: CharacterImportOptions
+    ): Promise<CharacterImportResult> => {
+      const allowImageOnly = options?.allowImageOnly ?? false
+      const suppressNotifications = options?.suppressNotifications ?? false
+      const invalidateOnSuccess = options?.invalidateOnSuccess ?? true
       setImporting(true)
       try {
         const response = await tldwClient.importCharacterFile(file, {
           allowImageOnly
         })
-        qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+        if (invalidateOnSuccess) {
+          qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+        }
         const message =
           response?.message ||
           t("settings:manageCharacters.import.success", {
             defaultValue: "Character imported successfully"
           })
-        notification.success({
-          message: t("settings:manageCharacters.import.title", {
-            defaultValue: "Import complete"
-          }),
-          description: message
-        })
+        if (!suppressNotifications) {
+          notification.success({
+            message: t("settings:manageCharacters.import.title", {
+              defaultValue: "Import complete"
+            }),
+            description: message
+          })
+        }
+        return {
+          success: true,
+          fileName: file.name,
+          message
+        }
       } catch (err: any) {
         const detail = resolveImportDetail(err)
         if (
@@ -2292,32 +2622,54 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           detail?.can_import_image_only &&
           !allowImageOnly
         ) {
+          const message =
+            detail?.message ||
+            t("settings:manageCharacters.import.imageOnlyDesc", {
+              defaultValue:
+                "No character data detected in the image metadata. Import as an image-only character?"
+            })
+          if (suppressNotifications) {
+            return {
+              success: false,
+              fileName: file.name,
+              message
+            }
+          }
           Modal.confirm({
             title: t("settings:manageCharacters.import.imageOnlyTitle", {
               defaultValue: "No character data detected"
             }),
-            content: detail?.message || t("settings:manageCharacters.import.imageOnlyDesc", {
-              defaultValue:
-                "No character data detected in the image metadata. Import as an image-only character?"
-            }),
+            content: message,
             okText: t("settings:manageCharacters.import.imageOnlyConfirm", {
               defaultValue: "Import image only"
             }),
             cancelText: t("common:cancel", { defaultValue: "Cancel" }),
-            onOk: () => importCharacterFile(file, true)
+            onOk: () => void importCharacterFile(file, { allowImageOnly: true })
           })
-          return
+          return {
+            success: false,
+            fileName: file.name,
+            message
+          }
         }
-        notification.error({
-          message: t("settings:manageCharacters.import.errorTitle", {
-            defaultValue: "Import failed"
-          }),
-          description:
-            err?.message ||
-            t("settings:manageCharacters.import.errorDesc", {
-              defaultValue: "Unable to import character. Please try again."
-            })
-        })
+        const errorMessage =
+          err?.message ||
+          t("settings:manageCharacters.import.errorDesc", {
+            defaultValue: "Unable to import character. Please try again."
+          })
+        if (!suppressNotifications) {
+          notification.error({
+            message: t("settings:manageCharacters.import.errorTitle", {
+              defaultValue: "Import failed"
+            }),
+            description: errorMessage
+          })
+        }
+        return {
+          success: false,
+          fileName: file.name,
+          message: errorMessage
+        }
       } finally {
         setImporting(false)
       }
@@ -2325,12 +2677,171 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     [notification, qc, t]
   )
 
+  const runBatchImport = React.useCallback(
+    async (batch: File[]) => {
+      const results: CharacterImportResult[] = []
+      for (const nextFile of batch) {
+        results.push(
+          await importCharacterFile(nextFile, {
+            suppressNotifications: true,
+            invalidateOnSuccess: false
+          })
+        )
+      }
+
+      const successCount = results.filter((result) => result.success).length
+      const failed = results.filter((result) => !result.success)
+
+      if (successCount > 0) {
+        qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
+      }
+
+      if (failed.length === 0) {
+        notification.success({
+          message: t("settings:manageCharacters.import.batchSuccessTitle", {
+            defaultValue: "Batch import complete"
+          }),
+          description: t("settings:manageCharacters.import.batchSuccessDesc", {
+            defaultValue: "Imported {{count}} files successfully.",
+            count: successCount
+          })
+        })
+        return
+      }
+
+      const failureDetails = failed
+        .map((result) => `${result.fileName}: ${result.message}`)
+        .join(" | ")
+
+      const message =
+        successCount > 0
+          ? t("settings:manageCharacters.import.batchPartialTitle", {
+              defaultValue: "Batch import partially complete"
+            })
+          : t("settings:manageCharacters.import.batchFailedTitle", {
+              defaultValue: "Batch import failed"
+            })
+      const description = `${t(
+        "settings:manageCharacters.import.batchSummary",
+        {
+          defaultValue: "{{success}} succeeded, {{failed}} failed.",
+          success: successCount,
+          failed: failed.length
+        }
+      )} ${failureDetails}`.trim()
+
+      if (successCount > 0) {
+        notification.warning({ message, description })
+      } else {
+        notification.error({ message, description })
+      }
+    },
+    [importCharacterFile, notification, qc, t]
+  )
+
+  const openImportPreviewForBatch = React.useCallback(
+    async (batch: File[]) => {
+      setImportPreviewLoading(true)
+      try {
+        const previews = await Promise.all(
+          batch.map((nextFile, index) =>
+            parseCharacterImportPreview(nextFile, index)
+          )
+        )
+        setImportPreviewItems((previous) => {
+          revokeImportPreviewAvatarUrls(previous)
+          return previews
+        })
+        setImportPreviewOpen(true)
+      } catch (error: any) {
+        notification.error({
+          message: t("settings:manageCharacters.import.previewErrorTitle", {
+            defaultValue: "Preview unavailable"
+          }),
+          description:
+            error?.message ||
+            t("settings:manageCharacters.import.previewErrorDesc", {
+              defaultValue:
+                "Could not build an import preview. Try uploading the file again."
+            })
+        })
+      } finally {
+        setImportPreviewLoading(false)
+      }
+    },
+    [notification, revokeImportPreviewAvatarUrls, t]
+  )
+
+  const handleConfirmImportPreview = React.useCallback(async () => {
+    const importableFiles = importablePreviewItems.map((item) => item.file)
+    const skippedCount = importPreviewItems.length - importableFiles.length
+    if (importableFiles.length === 0) {
+      notification.error({
+        message: t("settings:manageCharacters.import.previewNothingTitle", {
+          defaultValue: "No importable files"
+        }),
+        description: t("settings:manageCharacters.import.previewNothingDesc", {
+          defaultValue: "Fix preview errors or choose different files."
+        })
+      })
+      return
+    }
+
+    resetImportPreview()
+
+    if (importableFiles.length === 1) {
+      await importCharacterFile(importableFiles[0])
+    } else {
+      await runBatchImport(importableFiles)
+    }
+
+    if (skippedCount > 0) {
+      notification.warning({
+        message: t("settings:manageCharacters.import.previewSkippedTitle", {
+          defaultValue: "Some files were skipped"
+        }),
+        description: t("settings:manageCharacters.import.previewSkippedDesc", {
+          defaultValue:
+            "{{count}} files were skipped because preview parsing failed.",
+          count: skippedCount
+        })
+      })
+    }
+  }, [
+    importCharacterFile,
+    importPreviewItems.length,
+    importablePreviewItems,
+    notification,
+    resetImportPreview,
+    runBatchImport,
+    t
+  ])
+
   const handleImportUpload = React.useCallback(
-    async (file: File) => {
-      await importCharacterFile(file)
+    async (file: File, fileList: File[]) => {
+      const batch = (fileList && fileList.length > 0 ? fileList : [file]).filter(
+        Boolean
+      )
+
+      if (batch.length > 1) {
+        const first = batch[0]
+        const firstUid = (first as any)?.uid
+        const fileUid = (file as any)?.uid
+        const isFirstFile =
+          (typeof fileUid === "string" &&
+            typeof firstUid === "string" &&
+            fileUid === firstUid) ||
+          (first &&
+            file.name === first.name &&
+            file.size === first.size &&
+            file.lastModified === first.lastModified)
+        if (!isFirstFile) return false
+      }
+
+      await openImportPreviewForBatch(batch)
       return false
     },
-    [importCharacterFile]
+    [openImportPreviewForBatch]
   )
 
   const hasFilters =
@@ -3790,11 +4301,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           </Button>
           <div ref={importButtonContainerRef}>
             <Upload
-              accept=".png,.webp,.json,.md,.txt"
+              accept={IMPORT_UPLOAD_ACCEPT}
+              multiple
               showUploadList={false}
               beforeUpload={handleImportUpload}
-              disabled={importing}>
-              <Button loading={importing}>
+              disabled={importing || importPreviewLoading}>
+              <Button loading={importing || importPreviewLoading}>
                 {t("settings:manageCharacters.import.button", {
                   defaultValue: "Upload character"
                 })}
@@ -4099,7 +4611,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 defaultValue: "Import character"
               })}
               onSecondaryAction={triggerImportPicker}
-              secondaryDisabled={importing}
+              secondaryDisabled={importing || importPreviewLoading}
             />
 
             <div className="rounded-xl border border-border bg-surface p-3">
@@ -5005,6 +5517,88 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         deleting={deleting}
         exporting={!!exporting && exporting === (previewCharacter?.id || previewCharacter?.slug || previewCharacter?.name)}
       />
+
+      <Modal
+        title={t("settings:manageCharacters.import.previewTitle", {
+          defaultValue: "Import preview"
+        })}
+        open={importPreviewOpen}
+        onCancel={resetImportPreview}
+        footer={[
+          <Button
+            key="cancel"
+            onClick={resetImportPreview}>
+            {t("common:cancel", { defaultValue: "Cancel" })}
+          </Button>,
+          <Button
+            key="confirm"
+            type="primary"
+            loading={importing}
+            disabled={importablePreviewItems.length === 0 || importPreviewLoading}
+            onClick={() => {
+              void handleConfirmImportPreview()
+            }}>
+            {t("settings:manageCharacters.import.confirmPreview", {
+              defaultValue: "Confirm import"
+            })}
+          </Button>
+        ]}
+        rootClassName="characters-motion-modal">
+        {importPreviewLoading ? (
+          <Skeleton active paragraph={{ rows: 3 }} />
+        ) : (
+          <div className="space-y-3">
+            {importPreviewItems.map((item) => (
+              <div
+                key={item.id}
+                className="rounded-md border border-border bg-surface2/40 p-3"
+                data-testid="character-import-preview-item">
+                <div className="flex items-start gap-3">
+                  {item.avatarUrl ? (
+                    <img
+                      src={item.avatarUrl}
+                      alt={item.name}
+                      className="h-12 w-12 rounded-md object-cover border border-border"
+                    />
+                  ) : (
+                    <div className="flex h-12 w-12 items-center justify-center rounded-md border border-border bg-surface">
+                      <UserCircle2 className="h-6 w-6 text-text-muted" />
+                    </div>
+                  )}
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-sm text-text">
+                        {item.name}
+                      </span>
+                      <span className="text-xs text-text-subtle uppercase">
+                        {item.format}
+                      </span>
+                    </div>
+                    <div className="text-xs text-text-muted">{item.fileName}</div>
+                    {item.description && (
+                      <div className="text-sm text-text line-clamp-2">
+                        {item.description}
+                      </div>
+                    )}
+                    <div className="text-xs text-text-subtle">
+                      {t("settings:manageCharacters.import.previewMeta", {
+                        defaultValue: "Fields: {{fields}} · Tags: {{tags}}",
+                        fields: item.fieldCount,
+                        tags: item.tagCount
+                      })}
+                    </div>
+                    {item.parseError && (
+                      <div className="text-xs text-danger">
+                        {item.parseError}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
 
       <Modal
         title={

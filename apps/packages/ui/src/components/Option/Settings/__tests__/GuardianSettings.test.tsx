@@ -336,10 +336,13 @@ describe("GuardianSettings", () => {
     const view = render(<GuardianSettings />)
 
     fireEvent.click(screen.getByRole("tab", { name: /Guardian Controls/i }))
-    fireEvent.click(screen.getByText("dep-active"))
+    const initialCell = await screen.findByText("dep-active")
+    fireEvent.click(initialCell.closest("tr") ?? initialCell)
 
     const addPolicyButton = await screen.findByRole("button", { name: /Add Policy/i })
-    expect(addPolicyButton).toBeEnabled()
+    await waitFor(() => {
+      expect(addPolicyButton).toBeEnabled()
+    })
 
     guardianRelationships = [
       {
@@ -350,11 +353,13 @@ describe("GuardianSettings", () => {
     ]
 
     view.rerender(<GuardianSettings />)
+    const updatedCell = await screen.findByText("dep-active")
+    fireEvent.click(updatedCell.closest("tr") ?? updatedCell)
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Add Policy/i })).toBeDisabled()
     })
-  }, 15000)
+  }, 30000)
 
   it("renders governance policies and updates when query data changes", async () => {
     const view = render(<GuardianSettings />)

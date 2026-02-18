@@ -466,6 +466,27 @@ export const PromptBody = () => {
       parsedServerPromptId > 0 &&
       (source === "studio" || source === null)
 
+    const getSharedPromptFailureDescription = (errorMessage?: string) => {
+      const normalized = String(errorMessage || "").toLowerCase()
+      const isAccessDenied =
+        normalized.includes("401") ||
+        normalized.includes("403") ||
+        normalized.includes("forbidden") ||
+        normalized.includes("unauthor") ||
+        normalized.includes("not authenticated") ||
+        normalized.includes("api key")
+      if (isAccessDenied) {
+        return t("managePrompts.notification.sharedPromptAccessDeniedDesc", {
+          defaultValue:
+            "You don't have permission to open this shared prompt. Check your server login and project access."
+        })
+      }
+      return t("managePrompts.notification.sharedPromptNotFoundDesc", {
+        defaultValue:
+          "The shared prompt could not be pulled from the server. It may not exist or you may not have access."
+      })
+    }
+
     if (isOnline && isServerPromptLink) {
       clearPromptParam()
       void (async () => {
@@ -475,10 +496,7 @@ export const PromptBody = () => {
             message: t("managePrompts.notification.promptNotFound", {
               defaultValue: "Prompt not found"
             }),
-            description: t("managePrompts.notification.sharedPromptNotFoundDesc", {
-              defaultValue:
-                "The shared prompt could not be pulled from the server. It may not exist or you may not have access."
-            })
+            description: getSharedPromptFailureDescription(syncResult.error)
           })
           return
         }

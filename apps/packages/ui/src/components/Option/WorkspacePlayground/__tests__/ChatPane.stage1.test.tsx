@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { Modal } from "antd"
 import { ConnectionPhase } from "@/types/connection"
@@ -221,6 +221,21 @@ describe("ChatPane Stage 1 reliability and controls", () => {
     fireEvent.click(stopButton)
 
     expect(mockStopStreamingRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it("submits the composer with Cmd/Ctrl+Enter", async () => {
+    render(<ChatPane />)
+
+    const textarea = screen.getByPlaceholderText("Type a message...")
+    fireEvent.change(textarea, { target: { value: "Shortcut submission" } })
+    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true })
+
+    await waitFor(() => {
+      expect(mockOnSubmit).toHaveBeenCalledWith({
+        message: "Shortcut submission",
+        image: ""
+      })
+    })
   })
 
   it("clears chat with confirmation and persists empty session state", () => {

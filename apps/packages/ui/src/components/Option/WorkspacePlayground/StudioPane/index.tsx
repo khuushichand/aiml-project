@@ -712,7 +712,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         artifact = addArtifact({
           type,
           title: `${artifactLabel}`,
-          status: "generating"
+          status: "generating",
+          previousVersionId:
+            options.mode === "new_version" ? options.targetArtifactId : undefined
         })
       }
 
@@ -1535,8 +1537,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                                 key === "replace" ? "replace" : "new_version"
                               handleGenerateOutput(artifact.type, {
                                 mode,
-                                targetArtifactId:
-                                  mode === "replace" ? artifact.id : undefined
+                                targetArtifactId: artifact.id
                               })
                             }
                           }}

@@ -34,7 +34,7 @@ Finding IDs: `13.1` through `13.7`
 - Integration tests simulating cross-client delete/update.
 - Contract tests for ETag/conditional request handling (if implemented).
 - Regression tests for normal navigation without stale events.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Undo Delete Consistency and Regression Hardening
 **Goal**: Standardize immediate recovery and protect existing robust error paths.
@@ -46,7 +46,7 @@ Finding IDs: `13.1` through `13.7`
 - Integration tests for soft-delete undo flow.
 - Regression tests for offline and partial-failure scenarios.
 - Snapshot tests for consolidated error and retry messaging.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

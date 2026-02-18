@@ -9,7 +9,8 @@ import {
   Save as SaveIcon,
   Trash2 as TrashIcon,
   Eye as EyeIcon,
-  Edit3 as EditIcon
+  Edit3 as EditIcon,
+  Columns2 as SplitIcon
 } from 'lucide-react'
 
 interface NotesEditorHeaderProps {
@@ -19,7 +20,7 @@ interface NotesEditorHeaderProps {
   backlinkMessageId: string | null
   editorDisabled: boolean
   openingLinkedChat: boolean
-  showPreview: boolean
+  editorMode: 'edit' | 'split' | 'preview'
   hasContent: boolean
   canSave: boolean
   canExport: boolean
@@ -28,7 +29,7 @@ interface NotesEditorHeaderProps {
   isDirty?: boolean
   onOpenLinkedConversation: () => void
   onNewNote: () => void
-  onTogglePreview: () => void
+  onChangeEditorMode: (mode: 'edit' | 'split' | 'preview') => void
   onCopy: () => void
   onExport: () => void
   onSave: () => void
@@ -42,7 +43,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
   backlinkMessageId,
   editorDisabled,
   openingLinkedChat,
-  showPreview,
+  editorMode,
   hasContent,
   canSave,
   canExport,
@@ -51,7 +52,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
   isDirty,
   onOpenLinkedConversation,
   onNewNote,
-  onTogglePreview,
+  onChangeEditorMode,
   onCopy,
   onExport,
   onSave,
@@ -90,117 +91,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
           </div>
         )}
       </div>
-      <div className="flex items-center gap-2">
-        {!editorDisabled && (
-          <>
-            {backlinkConversationId && (
-              <Tooltip
-                title={t('option:notesSearch.openConversationTooltip', {
-                  defaultValue: 'Open linked conversation'
-                })}
-              >
-                <Button
-                  size="small"
-                  loading={openingLinkedChat}
-                  onClick={onOpenLinkedConversation}
-                  icon={(<LinkIcon className="w-4 h-4" />) as any}
-                >
-                  {t('option:notesSearch.openConversation', {
-                    defaultValue: 'Open conversation'
-                  })}
-                </Button>
-              </Tooltip>
-            )}
-            <Tooltip
-              title={t('option:notesSearch.newTooltip', {
-                defaultValue: 'Create a new note'
-              })}
-            >
-              <Button
-                data-testid="notes-new-button"
-                size="small"
-                onClick={onNewNote}
-                icon={(<PlusIcon className="w-4 h-4" />) as any}
-              >
-                {t('option:notesSearch.new', {
-                  defaultValue: 'New note'
-                })}
-              </Button>
-            </Tooltip>
-          </>
-        )}
-        <Tooltip
-          title={
-            showPreview
-              ? t('option:notesSearch.toolbarEditModeTooltip', {
-                  defaultValue: 'Switch back to edit mode'
-                })
-              : t('option:notesSearch.toolbarPreviewTooltip', {
-                  defaultValue: 'Preview rendered Markdown'
-                })
-          }
-        >
-          <Button
-            size="small"
-            onClick={onTogglePreview}
-            icon={
-              (showPreview ? (
-                <EditIcon className="w-4 h-4" />
-              ) : (
-                <EyeIcon className="w-4 h-4" />
-              )) as any
-            }
-            aria-label={
-              showPreview
-                ? t('option:notesSearch.toolbarEditModeTooltip', {
-                    defaultValue: 'Switch back to edit mode'
-                  })
-                : t('option:notesSearch.toolbarPreviewTooltip', {
-                    defaultValue: 'Preview rendered Markdown'
-                  })
-            }
-          >
-            {showPreview
-              ? t('option:notesSearch.editModeLabel', {
-                  defaultValue: 'Edit'
-                })
-              : t('option:notesSearch.previewModeLabel', {
-                  defaultValue: 'Preview'
-                })}
-          </Button>
-        </Tooltip>
-        <Tooltip
-          title={t('option:notesSearch.toolbarCopyTooltip', {
-            defaultValue: 'Copy note content'
-          })}
-        >
-          <Button
-            size="small"
-            onClick={onCopy}
-            icon={(<CopyIcon className="w-4 h-4" />) as any}
-            disabled={!hasContent}
-            aria-label={t('option:notesSearch.toolbarCopyTooltip', {
-              defaultValue: 'Copy note content'
-            })}
-          />
-        </Tooltip>
-        <Tooltip
-          title={t('option:notesSearch.toolbarExportMdTooltip', {
-            defaultValue: 'Export note as Markdown (.md)'
-          })}
-        >
-          <Button
-            size="small"
-            onClick={onExport}
-            icon={(<FileDownIcon className="w-4 h-4" />) as any}
-            disabled={!canExport}
-            aria-label={t('option:notesSearch.toolbarExportMdTooltip', {
-              defaultValue: 'Export note as Markdown (.md)'
-            })}
-          >
-            MD
-          </Button>
-        </Tooltip>
+      <div className="flex items-center gap-2" data-testid="notes-header-actions">
         <Tooltip
           title={
             !canSave
@@ -222,10 +113,156 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
             aria-label={t('option:notesSearch.toolbarSaveTooltip', {
               defaultValue: 'Save note'
             })}
+            data-testid="notes-save-button"
           >
             {t('common:save', { defaultValue: 'Save' })}
           </Button>
         </Tooltip>
+        <div className="flex items-center gap-2">
+          {!editorDisabled && (
+            <>
+              {backlinkConversationId && (
+                <Tooltip
+                  title={t('option:notesSearch.openConversationTooltip', {
+                    defaultValue: 'Open linked conversation'
+                  })}
+                >
+                  <Button
+                    size="small"
+                    loading={openingLinkedChat}
+                    onClick={onOpenLinkedConversation}
+                    icon={(<LinkIcon className="w-4 h-4" />) as any}
+                  >
+                    {t('option:notesSearch.openConversation', {
+                      defaultValue: 'Open conversation'
+                    })}
+                  </Button>
+                </Tooltip>
+              )}
+              <Tooltip
+                title={t('option:notesSearch.newTooltip', {
+                  defaultValue: 'Create a new note'
+                })}
+              >
+                <Button
+                  data-testid="notes-new-button"
+                  size="small"
+                  onClick={onNewNote}
+                  icon={(<PlusIcon className="w-4 h-4" />) as any}
+                >
+                  {t('option:notesSearch.new', {
+                    defaultValue: 'New note'
+                  })}
+                </Button>
+              </Tooltip>
+            </>
+          )}
+          <div
+            className="inline-flex items-center gap-1 rounded-md border border-border p-0.5"
+            role="group"
+            aria-label={t('option:notesSearch.editorModeGroup', {
+              defaultValue: 'Editor mode'
+            })}
+          >
+            <Tooltip
+              title={t('option:notesSearch.toolbarEditModeTooltip', {
+                defaultValue: 'Write markdown content'
+              })}
+            >
+              <Button
+                size="small"
+                type={editorMode === 'edit' ? 'primary' : 'text'}
+                onClick={() => onChangeEditorMode('edit')}
+                icon={(<EditIcon className="w-4 h-4" />) as any}
+                aria-pressed={editorMode === 'edit'}
+                aria-label={t('option:notesSearch.editModeLabel', {
+                  defaultValue: 'Edit'
+                })}
+              >
+                {t('option:notesSearch.editModeLabel', {
+                  defaultValue: 'Edit'
+                })}
+              </Button>
+            </Tooltip>
+            <Tooltip
+              title={t('option:notesSearch.toolbarSplitModeTooltip', {
+                defaultValue: 'Show editor and preview together'
+              })}
+            >
+              <Button
+                size="small"
+                type={editorMode === 'split' ? 'primary' : 'text'}
+                onClick={() => onChangeEditorMode('split')}
+                icon={(<SplitIcon className="w-4 h-4" />) as any}
+                aria-pressed={editorMode === 'split'}
+                aria-label={t('option:notesSearch.splitModeLabel', {
+                  defaultValue: 'Split'
+                })}
+              >
+                {t('option:notesSearch.splitModeLabel', {
+                  defaultValue: 'Split'
+                })}
+              </Button>
+            </Tooltip>
+            <Tooltip
+              title={t('option:notesSearch.toolbarPreviewTooltip', {
+                defaultValue: 'Preview rendered Markdown'
+              })}
+            >
+              <Button
+                size="small"
+                type={editorMode === 'preview' ? 'primary' : 'text'}
+                onClick={() => onChangeEditorMode('preview')}
+                icon={(<EyeIcon className="w-4 h-4" />) as any}
+                aria-pressed={editorMode === 'preview'}
+                aria-label={t('option:notesSearch.previewModeLabel', {
+                  defaultValue: 'Preview'
+                })}
+              >
+                {t('option:notesSearch.previewModeLabel', {
+                  defaultValue: 'Preview'
+                })}
+              </Button>
+            </Tooltip>
+          </div>
+          <Tooltip
+            title={t('option:notesSearch.toolbarCopyTooltip', {
+              defaultValue: 'Copy note content'
+            })}
+          >
+            <Button
+              size="small"
+              onClick={onCopy}
+              icon={(<CopyIcon className="w-4 h-4" />) as any}
+              disabled={!hasContent}
+              aria-label={t('option:notesSearch.toolbarCopyTooltip', {
+                defaultValue: 'Copy note content'
+              })}
+            />
+          </Tooltip>
+          <Tooltip
+            title={t('option:notesSearch.toolbarExportMdTooltip', {
+              defaultValue: 'Export note as Markdown (.md)'
+            })}
+          >
+            <Button
+              size="small"
+              onClick={onExport}
+              icon={(<FileDownIcon className="w-4 h-4" />) as any}
+              disabled={!canExport}
+              aria-label={t('option:notesSearch.toolbarExportMdTooltip', {
+                defaultValue: 'Export note as Markdown (.md)'
+              })}
+            >
+              MD
+            </Button>
+          </Tooltip>
+        </div>
+        <span
+          className="h-5 w-px bg-border"
+          data-testid="notes-destructive-divider"
+          aria-hidden="true"
+        />
         <Tooltip
           title={t('option:notesSearch.toolbarDeleteTooltip', {
             defaultValue: 'Delete note'
@@ -240,6 +277,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
             aria-label={t('option:notesSearch.toolbarDeleteTooltip', {
               defaultValue: 'Delete note'
             })}
+            data-testid="notes-delete-button"
           >
             {t('common:delete', { defaultValue: 'Delete' })}
           </Button>

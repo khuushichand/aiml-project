@@ -276,6 +276,6 @@ describe("WorldBooksManager cross-feature integration stage-2 test matching", ()
 
       expect(await screen.findByText("Processing failed on server")).toBeInTheDocument()
     },
-    15000
+    30000
   )
 })

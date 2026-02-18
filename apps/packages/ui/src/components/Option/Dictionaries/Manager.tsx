@@ -3,7 +3,7 @@ import { AutoComplete, Button, Collapse, Divider, Drawer, Form, Input, Modal, Sk
 import { useTranslation } from "react-i18next"
 import React from "react"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { Pen, Trash2, Book, Play, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, AlertTriangle, Loader2, Copy, Plus, Check, X } from "lucide-react"
+import { Pen, Trash2, Book, Play, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, AlertTriangle, Loader2, Copy, Plus, Check, X, MessageCircle } from "lucide-react"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
@@ -11,6 +11,8 @@ import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { LabelWithHelp } from "@/components/Common/LabelWithHelp"
+import { useStoreMessageOption } from "@/store/option"
+import { shallow } from "zustand/shallow"
 import {
   buildDictionaryDeactivationWarning,
   buildDictionaryDeletionConfirmationCopy,
@@ -61,10 +63,28 @@ export const DictionariesManager: React.FC = () => {
   const [importValidationErrors, setImportValidationErrors] = React.useState<string[]>([])
   const [importFileName, setImportFileName] = React.useState<string | null>(null)
   const [statsFor, setStatsFor] = React.useState<any | null>(null)
+  const [assignFor, setAssignFor] = React.useState<any | null>(null)
+  const [assignChatIds, setAssignChatIds] = React.useState<string[]>([])
+  const [assignSearch, setAssignSearch] = React.useState("")
+  const [assignSaving, setAssignSaving] = React.useState(false)
   const [dictionarySearch, setDictionarySearch] = React.useState("")
   const [activeUpdateMap, setActiveUpdateMap] = React.useState<Record<number, boolean>>({})
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const confirmDanger = useConfirmDanger()
+  const {
+    setHistoryId,
+    setServerChatId,
+    setServerChatState,
+    setServerChatTitle
+  } = useStoreMessageOption(
+    (state) => ({
+      setHistoryId: state.setHistoryId,
+      setServerChatId: state.setServerChatId,
+      setServerChatState: state.setServerChatState,
+      setServerChatTitle: state.setServerChatTitle
+    }),
+    shallow
+  )
 
   // Track validation status per dictionary: { [id]: { status: 'valid' | 'warning' | 'error' | 'loading', message?: string } }
   const [validationStatus, setValidationStatus] = React.useState<Record<number, { status: 'valid' | 'warning' | 'error' | 'loading' | 'unknown'; message?: string }>>({})
@@ -122,6 +142,24 @@ export const DictionariesManager: React.FC = () => {
       return res?.dictionaries || []
     },
     enabled: isOnline
+  })
+
+  const {
+    data: assignableChatsData,
+    status: assignableChatsStatus,
+    error: assignableChatsError,
+    refetch: refetchAssignableChats
+  } = useQuery({
+    queryKey: ["tldw:listChatsForDictionaryAssign", assignFor?.id ?? null],
+    queryFn: async () => {
+      await tldwClient.initialize()
+      return await tldwClient.listChats({
+        limit: 100,
+        offset: 0,
+        include_deleted: false
+      })
+    },
+    enabled: Boolean(assignFor?.id && isOnline)
   })
 
   const { mutate: createDict, isPending: creating } = useMutation({
@@ -254,6 +292,150 @@ export const DictionariesManager: React.FC = () => {
     }
     return map
   }, [data])
+
+  const openChatContextFromDictionary = React.useCallback(
+    (chatRef: any) => {
+      const chatId = resolveDictionaryChatReferenceId(chatRef)
+      if (!chatId) return
+
+      const state = normalizeDictionaryChatState(chatRef?.state)
+      const title = formatDictionaryChatReferenceTitle(chatRef)
+
+      setHistoryId(null, { preserveServerChatId: true })
+      setServerChatId(chatId)
+      setServerChatState(state)
+      setServerChatTitle(title)
+
+      try {
+        window.location.hash = "#/"
+      } catch {
+        // best-effort navigation
+      }
+    },
+    [setHistoryId, setServerChatId, setServerChatState, setServerChatTitle]
+  )
+
+  const openQuickAssignModal = React.useCallback((dictionary: any) => {
+    const refs = Array.isArray(dictionary?.used_by_chat_refs)
+      ? dictionary.used_by_chat_refs
+      : []
+    const preselectedIds = refs
+      .map((chat: any) => resolveDictionaryChatReferenceId(chat))
+      .filter((chatId: string) => chatId.length > 0)
+
+    setAssignFor(dictionary)
+    setAssignChatIds(Array.from(new Set(preselectedIds)))
+    setAssignSearch("")
+  }, [])
+
+  const assignableChats = React.useMemo(() => {
+    if (!Array.isArray(assignableChatsData)) return []
+    return assignableChatsData
+  }, [assignableChatsData])
+
+  const filteredAssignableChats = React.useMemo(() => {
+    if (!assignSearch.trim()) return assignableChats
+    const normalized = assignSearch.trim().toLowerCase()
+    return assignableChats.filter((chat: any) => {
+      const id = resolveDictionaryChatReferenceId(chat).toLowerCase()
+      const title = formatDictionaryChatReferenceTitle(chat).toLowerCase()
+      return id.includes(normalized) || title.includes(normalized)
+    })
+  }, [assignSearch, assignableChats])
+
+  const toggleAssignChatSelection = React.useCallback((chatId: string) => {
+    if (!chatId) return
+    setAssignChatIds((prev) => {
+      const exists = prev.includes(chatId)
+      if (exists) {
+        return prev.filter((value) => value !== chatId)
+      }
+      return [...prev, chatId]
+    })
+  }, [])
+
+  const handleConfirmQuickAssign = React.useCallback(async () => {
+    const dictionaryId = Number(assignFor?.id)
+    if (!Number.isFinite(dictionaryId) || dictionaryId <= 0) return
+
+    const selectedChatIds = Array.from(
+      new Set(
+        assignChatIds
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0)
+      )
+    )
+
+    if (selectedChatIds.length === 0) {
+      notification.warning({
+        message: "No chats selected",
+        description: "Select at least one chat session before assigning."
+      })
+      return
+    }
+
+    setAssignSaving(true)
+    try {
+      const assignmentResults = await Promise.all(
+        selectedChatIds.map(async (chatId) => {
+          try {
+            let existingSettings: Record<string, unknown> = {}
+            try {
+              const settingsResponse = await tldwClient.getChatSettings(chatId)
+              const rawSettings = settingsResponse?.settings
+              if (rawSettings && typeof rawSettings === "object") {
+                existingSettings = rawSettings as Record<string, unknown>
+              }
+            } catch (settingsError) {
+              if (!isDictionaryChatSettingsNotFound(settingsError)) {
+                throw settingsError
+              }
+            }
+
+            const patch = buildDictionaryChatAssignmentPatch(
+              existingSettings,
+              dictionaryId
+            )
+            await tldwClient.updateChatSettings(chatId, patch)
+            return { chatId, ok: true }
+          } catch (chatError) {
+            return { chatId, ok: false, error: chatError }
+          }
+        })
+      )
+
+      const successCount = assignmentResults.filter((item) => item.ok).length
+      const failureCount = assignmentResults.length - successCount
+
+      if (successCount > 0) {
+        notification.success({
+          message: "Dictionary assigned",
+          description:
+            successCount === 1
+              ? "Dictionary assigned to 1 chat session."
+              : `Dictionary assigned to ${successCount} chat sessions.`
+        })
+        qc.invalidateQueries({ queryKey: ["tldw:listDictionaries"] })
+      }
+      if (failureCount > 0) {
+        notification.warning({
+          message: "Some assignments failed",
+          description:
+            failureCount === 1
+              ? "1 chat session could not be updated. Retry and check server logs."
+              : `${failureCount} chat sessions could not be updated. Retry and check server logs.`
+        })
+      }
+
+      if (failureCount === 0) {
+        setAssignFor(null)
+        setAssignChatIds([])
+        setAssignSearch("")
+      }
+    } finally {
+      setAssignSaving(false)
+    }
+  }, [assignChatIds, assignFor, notification, qc])
 
   const confirmDeactivationIfNeeded = React.useCallback(
     async (dictionary: any, nextIsActive: boolean) => {
@@ -660,26 +842,48 @@ export const DictionariesManager: React.FC = () => {
           return <span className="text-xs">{label}</span>
         }
 
+        const firstChat = chatRefs[0]
         return (
-          <Tooltip
-            title={
-              <div className="space-y-1">
-                {chatRefs.map((chat: any) => {
-                  const chatId = String(chat?.chat_id || '')
-                  const shortId = chatId.length > 8 ? chatId.slice(0, 8) : chatId
-                  const title = String(chat?.title || '').trim() || `Chat ${shortId}`
-                  const state = String(chat?.state || 'in-progress')
-                  return (
-                    <div key={chatId || `${title}-${state}`} className="text-xs">
-                      {title} <span className="text-text-muted">({state})</span>
-                    </div>
-                  )
-                })}
-              </div>
-            }
-          >
-            <span className="text-xs underline decoration-dotted cursor-help">{label}</span>
-          </Tooltip>
+          <div className="space-y-1">
+            <button
+              type="button"
+              className="text-xs underline decoration-dotted cursor-pointer"
+              onClick={() => openChatContextFromDictionary(firstChat)}
+              aria-label={`Open most recent linked chat for ${record?.name || "dictionary"}`}
+            >
+              {label}
+            </button>
+            <Tooltip
+              title={
+                <div className="space-y-1">
+                  {chatRefs.map((chat: any) => {
+                    const chatId = resolveDictionaryChatReferenceId(chat)
+                    const title = formatDictionaryChatReferenceTitle(chat)
+                    const state = normalizeDictionaryChatState(chat?.state)
+                    return (
+                      <button
+                        key={chatId || `${title}-${state}`}
+                        type="button"
+                        className="block text-left text-xs hover:underline"
+                        onClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          openChatContextFromDictionary(chat)
+                        }}
+                        aria-label={`Open chat ${title} from dictionary usage`}
+                      >
+                        {title} <span className="text-text-muted">({state})</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              }
+            >
+              <span className="text-[11px] text-text-muted underline decoration-dotted cursor-help">
+                View linked chats
+              </span>
+            </Tooltip>
+          </div>
         )
       }
     },
@@ -786,6 +990,15 @@ export const DictionariesManager: React.FC = () => {
             aria-label={`Manage entries for ${record.name}`}
           >
             Entries
+          </button>
+        </Tooltip>
+        <Tooltip title="Quick assign to chat sessions">
+          <button
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+            onClick={() => openQuickAssignModal(record)}
+            aria-label={`Quick assign ${record.name} to chats`}
+          >
+            <MessageCircle className="w-5 h-5" />
           </button>
         </Tooltip>
         <Tooltip title="Export as JSON">
@@ -973,6 +1186,112 @@ export const DictionariesManager: React.FC = () => {
           onSecondaryAction={() => setOpenImport(true)}
         />
       )}
+
+      <Modal
+        title={
+          assignFor?.name
+            ? `Quick assign: ${assignFor.name}`
+            : "Quick assign dictionary"
+        }
+        open={!!assignFor}
+        onCancel={() => {
+          if (assignSaving) return
+          setAssignFor(null)
+          setAssignChatIds([])
+          setAssignSearch("")
+        }}
+        onOk={() => void handleConfirmQuickAssign()}
+        okText={
+          assignChatIds.length === 1
+            ? "Assign to 1 chat"
+            : `Assign to ${assignChatIds.length} chats`
+        }
+        okButtonProps={{
+          disabled: assignChatIds.length === 0,
+          loading: assignSaving
+        }}
+        cancelButtonProps={{ disabled: assignSaving }}
+      >
+        <div className="space-y-3">
+          <p className="text-xs text-text-muted">
+            Choose chat sessions to link with this dictionary.
+          </p>
+          <Input
+            value={assignSearch}
+            onChange={(event) => setAssignSearch(event.target.value)}
+            allowClear
+            placeholder="Search chats by title or ID"
+            aria-label="Search chats for quick assign"
+          />
+
+          {assignableChatsStatus === "pending" && (
+            <Skeleton active paragraph={{ rows: 3 }} />
+          )}
+
+          {assignableChatsStatus === "error" && (
+            <div className="space-y-2 rounded-md border border-danger/30 bg-danger/5 p-3">
+              <p className="text-xs text-danger">
+                {assignableChatsError instanceof Error
+                  ? assignableChatsError.message
+                  : "Unable to load chat sessions for assignment."}
+              </p>
+              <Button size="small" onClick={() => void refetchAssignableChats()}>
+                Retry
+              </Button>
+            </div>
+          )}
+
+          {assignableChatsStatus === "success" &&
+            filteredAssignableChats.length === 0 && (
+              <div className="rounded-md border border-border bg-surface2/40 px-3 py-2 text-xs text-text-muted">
+                No chat sessions match your search.
+              </div>
+            )}
+
+          {assignableChatsStatus === "success" &&
+            filteredAssignableChats.length > 0 && (
+              <div className="max-h-72 space-y-1 overflow-y-auto rounded-md border border-border bg-surface2/20 p-2">
+                {filteredAssignableChats.map((chat: any) => {
+                  const chatId = resolveDictionaryChatReferenceId(chat)
+                  if (!chatId) return null
+                  const title = formatDictionaryChatReferenceTitle(chat)
+                  const state = normalizeDictionaryChatState(chat?.state)
+                  const checked = assignChatIds.includes(chatId)
+                  return (
+                    <label
+                      key={`assign-chat-${chatId}`}
+                      className="flex items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-surface2/60"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleAssignChatSelection(chatId)}
+                        aria-label={`Select chat ${title}`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate">{title}</div>
+                        <div className="text-[11px] text-text-muted">
+                          {chatId} · {state}
+                        </div>
+                      </div>
+                      <Button
+                        type="link"
+                        size="small"
+                        onClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          openChatContextFromDictionary(chat)
+                        }}
+                      >
+                        Open
+                      </Button>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+        </div>
+      </Modal>
 
       <Modal title="Create Dictionary" open={open} onCancel={() => setOpen(false)} footer={null}>
         <Form layout="vertical" form={createForm} onFinish={(v) => createDict(v)}>
@@ -1194,6 +1513,9 @@ export const DictionariesManager: React.FC = () => {
               <Descriptions.Item label="Unused Entries">
                 {toDisplayStatNumber(statsFor.zero_usage_entries)}
               </Descriptions.Item>
+              <Descriptions.Item label="Pattern Conflicts">
+                {toDisplayStatNumber(statsFor.pattern_conflict_count)}
+              </Descriptions.Item>
               <Descriptions.Item label="Groups">{toDisplayGroupSummary(statsFor.groups)}</Descriptions.Item>
               <Descriptions.Item label="Average Probability">
                 {toDisplayProbabilitySummary(statsFor.average_probability)}
@@ -1235,6 +1557,33 @@ export const DictionariesManager: React.FC = () => {
                 </div>
               </div>
             )}
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-text">Pattern conflicts</div>
+              {Array.isArray(statsFor.pattern_conflicts) && statsFor.pattern_conflicts.length > 0 ? (
+                <div className="space-y-1 rounded border border-border bg-surface2/40 p-2">
+                  {statsFor.pattern_conflicts.slice(0, 8).map((item: any, index: number) => (
+                    <div
+                      key={`pattern-conflict-${item?.entry_id_a}-${item?.entry_id_b}-${index}`}
+                      className="space-y-0.5 text-xs"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Tag color={toPatternConflictTagColor(item?.severity)}>
+                          {String(item?.severity || "low").toUpperCase()}
+                        </Tag>
+                        <span className="text-text">{item?.reason || "Potential overlap detected."}</span>
+                      </div>
+                      <div className="font-mono text-text-muted">
+                        {item?.pattern_a || "—"} {"\u2194"} {item?.pattern_b || "—"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-text-muted">
+                  No potential conflicts detected.
+                </div>
+              )}
+            </div>
           </div>
         )}
       </Modal>
@@ -1273,6 +1622,172 @@ function toDisplayProbabilitySummary(value: unknown): string {
     }
   }
   return "0.00"
+}
+
+function toPatternConflictTagColor(value: unknown): string {
+  const normalized = String(value || "").toLowerCase()
+  if (normalized === "high") return "red"
+  if (normalized === "medium") return "orange"
+  return "blue"
+}
+
+const DICTIONARY_SETTINGS_SINGLE_KEYS = new Set([
+  "chatdictionaryid",
+  "chat_dictionary_id",
+  "dictionaryid",
+  "dictionary_id"
+])
+
+const DICTIONARY_SETTINGS_LIST_KEYS = new Set([
+  "chatdictionaryids",
+  "chat_dictionary_ids",
+  "chatdictionary",
+  "chat_dictionary",
+  "dictionaryids",
+  "dictionary_ids",
+  "chatdictionaries",
+  "chat_dictionaries"
+])
+
+function toPositiveDictionaryId(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    const parsed = Number(trimmed)
+    if (Number.isInteger(parsed) && parsed > 0) return parsed
+  }
+  return null
+}
+
+function collectDictionaryIdsFromSettingsValue(
+  value: unknown,
+  collector: Set<number>
+) {
+  const direct = toPositiveDictionaryId(value)
+  if (direct != null) {
+    collector.add(direct)
+    return
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectDictionaryIdsFromSettingsValue(item, collector)
+    }
+    return
+  }
+
+  if (!value || typeof value !== "object") {
+    return
+  }
+
+  for (const [rawKey, nested] of Object.entries(
+    value as Record<string, unknown>
+  )) {
+    const normalizedKey = rawKey.trim().toLowerCase()
+    if (
+      normalizedKey === "id" ||
+      DICTIONARY_SETTINGS_SINGLE_KEYS.has(normalizedKey) ||
+      DICTIONARY_SETTINGS_LIST_KEYS.has(normalizedKey)
+    ) {
+      collectDictionaryIdsFromSettingsValue(nested, collector)
+    }
+  }
+}
+
+function collectDictionaryIdsFromChatSettings(settings: unknown): number[] {
+  const collected = new Set<number>()
+  const queue: unknown[] = [settings]
+
+  while (queue.length > 0) {
+    const current = queue.pop()
+    if (!current || typeof current !== "object") continue
+
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        queue.push(item)
+      }
+      continue
+    }
+
+    for (const [rawKey, value] of Object.entries(
+      current as Record<string, unknown>
+    )) {
+      const normalizedKey = rawKey.trim().toLowerCase()
+      if (
+        DICTIONARY_SETTINGS_SINGLE_KEYS.has(normalizedKey) ||
+        DICTIONARY_SETTINGS_LIST_KEYS.has(normalizedKey)
+      ) {
+        collectDictionaryIdsFromSettingsValue(value, collected)
+      }
+      if (value && typeof value === "object") {
+        queue.push(value)
+      }
+    }
+  }
+
+  return Array.from(collected).sort((a, b) => a - b)
+}
+
+function buildDictionaryChatAssignmentPatch(
+  existingSettings: Record<string, unknown>,
+  dictionaryId: number
+): Record<string, unknown> {
+  const merged = new Set(collectDictionaryIdsFromChatSettings(existingSettings))
+  if (dictionaryId > 0) {
+    merged.add(dictionaryId)
+  }
+  const ordered = Array.from(merged).sort((a, b) => a - b)
+  const patch: Record<string, unknown> = {
+    chat_dictionary_ids: ordered
+  }
+  if (ordered.length === 1) {
+    patch.chat_dictionary_id = ordered[0]
+  }
+  return patch
+}
+
+function isDictionaryChatSettingsNotFound(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message.toLowerCase()
+      : String(error || "").toLowerCase()
+  if (!message) return false
+  return (
+    message.includes("404") ||
+    message.includes("not found")
+  )
+}
+
+function resolveDictionaryChatReferenceId(chatRef: unknown): string {
+  if (!chatRef || typeof chatRef !== "object") return ""
+  const asRecord = chatRef as Record<string, unknown>
+  const raw = asRecord.chat_id ?? asRecord.id
+  if (raw == null) return ""
+  const normalized = String(raw).trim()
+  return normalized
+}
+
+function formatDictionaryChatReferenceTitle(chatRef: unknown): string {
+  const chatId = resolveDictionaryChatReferenceId(chatRef)
+  const shortId = chatId.length > 8 ? chatId.slice(0, 8) : chatId
+  if (chatRef && typeof chatRef === "object") {
+    const title = String(
+      (chatRef as Record<string, unknown>).title || ""
+    ).trim()
+    if (title) return title
+  }
+  return shortId ? `Chat ${shortId}` : "Chat"
+}
+
+function normalizeDictionaryChatState(value: unknown): "in-progress" | "resolved" | "backlog" | "non-viable" {
+  const normalized = String(value || "").trim().toLowerCase()
+  if (normalized === "resolved") return "resolved"
+  if (normalized === "backlog") return "backlog"
+  if (normalized === "non-viable") return "non-viable"
+  return "in-progress"
 }
 
 /** Validates regex pattern and returns error message or null if valid */

@@ -321,7 +321,7 @@ export const DiscoSkillsSettings: React.FC = () => {
               items={collapseItems}
               bordered={false}
               className="bg-transparent"
-              expandIconPosition="start"
+              expandIconPlacement="start"
             />
           </div>
         </>

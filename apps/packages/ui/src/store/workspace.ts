@@ -14,6 +14,13 @@ import {
   type WorkspaceBroadcastUpdateMessage,
   type WorkspaceStorageQuotaEventDetail
 } from "@/store/workspace-events"
+import {
+  WORKSPACE_EXPORT_BUNDLE_FORMAT,
+  WORKSPACE_EXPORT_BUNDLE_SCHEMA_VERSION,
+  type WorkspaceBundleChatSession,
+  type WorkspaceBundleSnapshot,
+  type WorkspaceExportBundle
+} from "@/store/workspace-bundle"
 import type {
   AddSourceModalState,
   AddSourceTab,
@@ -286,6 +293,7 @@ interface SourcesActions {
   ) => WorkspaceSource[]
   removeSource: (id: string) => void
   removeSources: (ids: string[]) => void
+  reorderSource: (sourceId: string, targetIndex: number) => void
   toggleSourceSelection: (id: string) => void
   selectAllSources: () => void
   deselectAllSources: () => void
@@ -368,6 +376,10 @@ interface AudioSettingsActions {
 interface WorkspaceListActions {
   /** Save current workspace state to the saved workspaces list */
   saveCurrentWorkspace: () => void
+  /** Export a workspace snapshot bundle (defaults to current workspace) */
+  exportWorkspaceBundle: (id?: string) => WorkspaceExportBundle | null
+  /** Import a workspace snapshot bundle and switch to it */
+  importWorkspaceBundle: (bundle: WorkspaceExportBundle) => string | null
   /** Switch to a different workspace by ID */
   switchWorkspace: (id: string) => void
   /** Create a new workspace (optionally with a name), saving current first */
@@ -719,6 +731,67 @@ const buildWorkspaceSnapshot = (state: WorkspaceState): WorkspaceSnapshot => ({
   audioSettings: { ...state.audioSettings }
 })
 
+const buildWorkspaceBundleSnapshot = (
+  snapshot: WorkspaceSnapshot
+): WorkspaceBundleSnapshot => ({
+  workspaceName: snapshot.workspaceName,
+  workspaceTag: snapshot.workspaceTag,
+  workspaceCreatedAt: snapshot.workspaceCreatedAt,
+  sources: snapshot.sources.map((source) => ({ ...source })),
+  selectedSourceIds: [...snapshot.selectedSourceIds],
+  generatedArtifacts: snapshot.generatedArtifacts.map((artifact) => ({
+    ...artifact
+  })),
+  notes: snapshot.notes,
+  currentNote: { ...snapshot.currentNote },
+  leftPaneCollapsed: snapshot.leftPaneCollapsed,
+  rightPaneCollapsed: snapshot.rightPaneCollapsed,
+  audioSettings: { ...snapshot.audioSettings }
+})
+
+const cloneWorkspaceBundleChatSession = (
+  session: WorkspaceBundleChatSession
+): WorkspaceBundleChatSession => ({
+  messages: Array.isArray(session.messages)
+    ? session.messages.map((message) => ({ ...message }))
+    : [],
+  history: Array.isArray(session.history)
+    ? session.history.map((entry) => ({ ...entry }))
+    : [],
+  historyId: typeof session.historyId === "string" ? session.historyId : null,
+  serverChatId:
+    typeof session.serverChatId === "string" ? session.serverChatId : null
+})
+
+const hydrateWorkspaceBundleSnapshot = (
+  snapshot: WorkspaceBundleSnapshot,
+  workspaceId: string,
+  workspaceName: string,
+  workspaceTag: string
+): WorkspaceSnapshot => {
+  const revivedSources = reviveSources(snapshot.sources || [])
+  const sourceIdSet = new Set(revivedSources.map((source) => source.id))
+  const selectedSourceIds = (snapshot.selectedSourceIds || []).filter((id) =>
+    sourceIdSet.has(id)
+  )
+
+  return {
+    workspaceId,
+    workspaceName,
+    workspaceTag,
+    workspaceCreatedAt: new Date(),
+    workspaceChatReferenceId: workspaceId,
+    sources: revivedSources,
+    selectedSourceIds,
+    generatedArtifacts: reviveArtifacts(snapshot.generatedArtifacts || []),
+    notes: typeof snapshot.notes === "string" ? snapshot.notes : "",
+    currentNote: snapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
+    leftPaneCollapsed: Boolean(snapshot.leftPaneCollapsed),
+    rightPaneCollapsed: Boolean(snapshot.rightPaneCollapsed),
+    audioSettings: snapshot.audioSettings || { ...DEFAULT_AUDIO_SETTINGS }
+  }
+}
+
 const buildWorkspaceUndoSnapshot = (
   state: WorkspaceState
 ): WorkspaceUndoSnapshot => {
@@ -1029,6 +1102,28 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           selectedSourceIds: state.selectedSourceIds.filter(
             (sid) => !idsSet.has(sid)
           )
+        }
+      }),
+
+    reorderSource: (sourceId, targetIndex) =>
+      set((state) => {
+        const currentIndex = state.sources.findIndex(
+          (source) => source.id === sourceId
+        )
+        if (currentIndex < 0) return state
+
+        const boundedTargetIndex = Math.max(
+          0,
+          Math.min(targetIndex, state.sources.length - 1)
+        )
+        if (boundedTargetIndex === currentIndex) return state
+
+        const reorderedSources = [...state.sources]
+        const [movedSource] = reorderedSources.splice(currentIndex, 1)
+        reorderedSources.splice(boundedTargetIndex, 0, movedSource)
+
+        return {
+          sources: reorderedSources
         }
       }),
 
@@ -1427,6 +1522,135 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           }
         }
       })
+    },
+
+    exportWorkspaceBundle: (id) => {
+      const state = get()
+      const targetWorkspaceId = id || state.workspaceId
+      if (!targetWorkspaceId) return null
+
+      const snapshot =
+        targetWorkspaceId === state.workspaceId
+          ? buildWorkspaceSnapshot(state)
+          : state.workspaceSnapshots[targetWorkspaceId]
+      if (!snapshot) return null
+
+      const savedWorkspace =
+        state.savedWorkspaces.find((workspace) => workspace.id === targetWorkspaceId) ||
+        state.archivedWorkspaces.find(
+          (workspace) => workspace.id === targetWorkspaceId
+        ) ||
+        null
+
+      const chatSession = state.workspaceChatSessions[targetWorkspaceId]
+
+      return {
+        format: WORKSPACE_EXPORT_BUNDLE_FORMAT,
+        schemaVersion: WORKSPACE_EXPORT_BUNDLE_SCHEMA_VERSION,
+        exportedAt: new Date().toISOString(),
+        workspace: {
+          name: snapshot.workspaceName || savedWorkspace?.name || "Untitled Workspace",
+          tag: snapshot.workspaceTag || savedWorkspace?.tag || "",
+          createdAt:
+            snapshot.workspaceCreatedAt ||
+            savedWorkspace?.createdAt ||
+            null,
+          snapshot: buildWorkspaceBundleSnapshot(snapshot),
+          ...(chatSession
+            ? {
+                chatSession: cloneWorkspaceBundleChatSession({
+                  messages: chatSession.messages,
+                  history: chatSession.history,
+                  historyId: chatSession.historyId,
+                  serverChatId: chatSession.serverChatId
+                })
+              }
+            : {})
+        }
+      }
+    },
+
+    importWorkspaceBundle: (bundle) => {
+      if (
+        bundle.format !== WORKSPACE_EXPORT_BUNDLE_FORMAT ||
+        bundle.schemaVersion !== WORKSPACE_EXPORT_BUNDLE_SCHEMA_VERSION
+      ) {
+        return null
+      }
+
+      const snapshotPayload = bundle.workspace?.snapshot
+      if (!snapshotPayload) return null
+
+      const state = get()
+      const now = new Date()
+      const currentSnapshot = state.workspaceId
+        ? buildWorkspaceSnapshot(state)
+        : null
+
+      const baseName =
+        (typeof snapshotPayload.workspaceName === "string" &&
+        snapshotPayload.workspaceName.trim()
+          ? snapshotPayload.workspaceName.trim()
+          : typeof bundle.workspace?.name === "string"
+            ? bundle.workspace.name.trim()
+            : "") || "Imported Workspace"
+      const importedName = `${baseName} (Imported)`
+      const importedId = generateWorkspaceId()
+      const importedSlug = createSlug(importedName) || importedId.slice(0, 8)
+      const importedTag = `workspace:${importedSlug}`
+
+      const importedSnapshot = hydrateWorkspaceBundleSnapshot(
+        snapshotPayload,
+        importedId,
+        importedName,
+        importedTag
+      )
+
+      const nextSnapshots: Record<string, WorkspaceSnapshot> = {
+        ...state.workspaceSnapshots,
+        [importedSnapshot.workspaceId]: importedSnapshot
+      }
+      let nextSavedWorkspaces = state.savedWorkspaces
+
+      if (currentSnapshot?.workspaceId) {
+        nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
+        nextSavedWorkspaces = upsertSavedWorkspace(
+          nextSavedWorkspaces,
+          createSavedWorkspaceEntry(currentSnapshot, now)
+        )
+      }
+
+      nextSavedWorkspaces = upsertSavedWorkspace(
+        nextSavedWorkspaces,
+        createSavedWorkspaceEntry(importedSnapshot, now)
+      )
+
+      const importedChatSession =
+        bundle.workspace?.chatSession &&
+        cloneWorkspaceBundleChatSession(bundle.workspace.chatSession)
+      const nextWorkspaceChatSessions = importedChatSession
+        ? {
+            ...state.workspaceChatSessions,
+            [importedSnapshot.workspaceId]: {
+              messages: importedChatSession.messages,
+              history: importedChatSession.history,
+              historyId: importedChatSession.historyId,
+              serverChatId: importedChatSession.serverChatId
+            }
+          }
+        : state.workspaceChatSessions
+
+      set({
+        ...applyWorkspaceSnapshot(importedSnapshot),
+        savedWorkspaces: nextSavedWorkspaces,
+        archivedWorkspaces: state.archivedWorkspaces.filter(
+          (workspace) => workspace.id !== importedSnapshot.workspaceId
+        ),
+        workspaceSnapshots: nextSnapshots,
+        workspaceChatSessions: nextWorkspaceChatSessions
+      })
+
+      return importedSnapshot.workspaceId
     },
 
     switchWorkspace: (id) => {

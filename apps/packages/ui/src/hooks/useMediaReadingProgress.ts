@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MutableRefObject } from 'react'
 import { tldwClient } from '@/services/tldw/TldwApiClient'
 
@@ -139,6 +139,7 @@ export function useMediaReadingProgress({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const restoreTokenRef = useRef(0)
   const lastMediaIdKeyRef = useRef<string | null>(null)
+  const [progressPercent, setProgressPercent] = useState<number | null>(null)
 
   const saveProgress = useCallback(
     async () => {
@@ -147,6 +148,7 @@ export function useMediaReadingProgress({
       if (!container) return
 
       const payload = computeReadingProgress(container, totalPages)
+      setProgressPercent(payload.percentage ?? 0)
       const signature = buildProgressSignature(payload)
       if (signature === lastSavedSignatureRef.current) {
         return
@@ -168,6 +170,7 @@ export function useMediaReadingProgress({
     try {
       await tldwClient.deleteReadingProgress(mediaIdKey)
       lastSavedSignatureRef.current = ''
+      setProgressPercent(0)
     } catch (error) {
       console.debug('Failed to clear media reading progress', error)
     }
@@ -187,6 +190,7 @@ export function useMediaReadingProgress({
         if (cancelled || restoreToken !== restoreTokenRef.current) return
         if (progress.has_progress === false) {
           lastSavedSignatureRef.current = ''
+          setProgressPercent(0)
           return
         }
 
@@ -197,6 +201,7 @@ export function useMediaReadingProgress({
             : parseScrollPercentageFromCfi(progress.cfi)
 
         if (percentage == null) return
+        setProgressPercent(Number(percentage.toFixed(2)))
 
         let attempts = 0
         const maxAttempts = 12
@@ -229,6 +234,7 @@ export function useMediaReadingProgress({
     if (lastMediaIdKeyRef.current !== mediaIdKey) {
       lastSavedSignatureRef.current = ''
       lastMediaIdKeyRef.current = mediaIdKey
+      setProgressPercent(mediaIdKey ? 0 : null)
     }
   }, [mediaIdKey])
 
@@ -238,6 +244,8 @@ export function useMediaReadingProgress({
     if (!container) return
 
     const onScroll = () => {
+      const payload = computeReadingProgress(container, totalPages)
+      setProgressPercent(payload.percentage ?? 0)
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current)
       }
@@ -255,10 +263,11 @@ export function useMediaReadingProgress({
       }
       void saveProgress()
     }
-  }, [debounceMs, mediaIdKey, saveProgress, scrollContainerRef])
+  }, [debounceMs, mediaIdKey, saveProgress, scrollContainerRef, totalPages])
 
   return {
     saveProgress,
-    clearProgress
+    clearProgress,
+    progressPercent
   }
 }

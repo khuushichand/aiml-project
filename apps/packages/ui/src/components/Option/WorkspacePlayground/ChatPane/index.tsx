@@ -553,6 +553,12 @@ const SimpleChatInput: React.FC<{
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault()
+      handleSubmit()
+      return
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       handleSubmit()
@@ -599,7 +605,7 @@ const SimpleChatInput: React.FC<{
       <p className="mt-1 text-xs text-text-muted">
         {t(
           "playground:chat.inputKeyboardHint",
-          "Enter to send, Shift+Enter for new line"
+          "Enter or Cmd/Ctrl+Enter to send, Shift+Enter for new line"
         )}
       </p>
     </div>

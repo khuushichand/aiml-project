@@ -11,9 +11,12 @@ import {
   Type,
   PanelLeftClose,
   Loader2,
-  AlertTriangle
+  AlertTriangle,
+  Info,
+  ChevronUp,
+  ChevronDown
 } from "lucide-react"
-import { Input, Checkbox, Empty, Button, Tooltip, message } from "antd"
+import { Input, Checkbox, Empty, Button, Tooltip, message, Popconfirm } from "antd"
 import { useWorkspaceStore } from "@/store/workspace"
 import type { WorkspaceSourceType } from "@/types/workspace"
 import {
@@ -40,6 +43,30 @@ const SOURCE_TYPE_ICONS: Record<WorkspaceSourceType, React.ElementType> = {
 const SOURCE_VIRTUALIZATION_THRESHOLD = 60
 const SOURCE_VIRTUAL_ROW_HEIGHT = 80
 const SOURCE_VIRTUAL_OVERSCAN = 5
+
+const formatFileSize = (bytes?: number): string | null => {
+  if (!Number.isFinite(bytes) || (bytes as number) <= 0) return null
+  const value = bytes as number
+  if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`
+  if (value >= 1024 * 1024) return `${Math.round(value / (1024 * 1024))} MB`
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`
+  return `${Math.round(value)} B`
+}
+
+const formatDuration = (seconds?: number): string | null => {
+  if (!Number.isFinite(seconds) || (seconds as number) <= 0) return null
+  const totalSeconds = Math.round(seconds as number)
+  const hrs = Math.floor(totalSeconds / 3600)
+  const mins = Math.floor((totalSeconds % 3600) / 60)
+  const secs = totalSeconds % 60
+  if (hrs > 0) {
+    return `${hrs}h ${mins}m`
+  }
+  if (mins > 0) {
+    return `${mins}m ${secs}s`
+  }
+  return `${secs}s`
+}
 
 interface SourcesPaneProps {
   /** Callback to hide/collapse the pane */
@@ -70,6 +97,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
   const openAddSourceModal = useWorkspaceStore((s) => s.openAddSourceModal)
   const removeSource = useWorkspaceStore((s) => s.removeSource)
   const restoreSource = useWorkspaceStore((s) => s.restoreSource)
+  const reorderSource = useWorkspaceStore((s) => s.reorderSource)
   const sourceItemRefs = React.useRef<Record<string, HTMLDivElement | null>>({})
   const sourceListContainerRef = React.useRef<HTMLDivElement | null>(null)
   const [highlightedSourceId, setHighlightedSourceId] = React.useState<
@@ -78,6 +106,9 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
   const [sourceListScrollTop, setSourceListScrollTop] = React.useState(0)
   const [sourceListViewportHeight, setSourceListViewportHeight] =
     React.useState(420)
+  const [confirmingRemovalSourceId, setConfirmingRemovalSourceId] =
+    React.useState<string | null>(null)
+  const [draggedSourceId, setDraggedSourceId] = React.useState<string | null>(null)
 
   // Filter sources based on search query
   const filteredSources = React.useMemo(() => {
@@ -121,6 +152,65 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
       selectAllSources()
     }
   }
+
+  const removeSourceWithUndo = React.useCallback(
+    (source: (typeof sources)[number]) => {
+      const sourceIndex = sources.findIndex((entry) => entry.id === source.id)
+      const wasSelected = selectedSourceIds.includes(source.id)
+      const undoHandle = scheduleWorkspaceUndoAction({
+        apply: () => {
+          removeSource(source.id)
+        },
+        undo: () => {
+          restoreSource(source, {
+            index: sourceIndex,
+            select: wasSelected
+          })
+        }
+      })
+
+      const undoMessageKey = `workspace-source-undo-${undoHandle.id}`
+      const maybeOpen = (
+        messageApi as { open?: (config: unknown) => void }
+      ).open
+      const messageConfig = {
+        key: undoMessageKey,
+        type: "warning",
+        duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+        content: t(
+          "playground:sources.undoRemove",
+          "Source removed."
+        ),
+        btn: (
+          <Button
+            size="small"
+            type="link"
+            onClick={() => {
+              if (undoWorkspaceAction(undoHandle.id)) {
+                messageApi.success(
+                  t("playground:sources.restoreSuccess", "Source restored")
+                )
+              }
+              messageApi.destroy(undoMessageKey)
+            }}
+          >
+            {t("common:undo", "Undo")}
+          </Button>
+        )
+      }
+      if (typeof maybeOpen === "function") {
+        maybeOpen(messageConfig)
+      } else {
+        const maybeWarning = (
+          messageApi as { warning?: (content: string) => void }
+        ).warning
+        if (typeof maybeWarning === "function") {
+          maybeWarning(t("playground:sources.undoRemove", "Source removed."))
+        }
+      }
+    },
+    [messageApi, removeSource, restoreSource, selectedSourceIds, sources, t]
+  )
 
   React.useEffect(() => {
     const container = sourceListContainerRef.current
@@ -211,6 +301,27 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
     const isReady = sourceStatus === "ready"
     const isProcessing = sourceStatus === "processing"
     const isError = sourceStatus === "error"
+    const metadataParts: string[] = []
+    const fileSizeLabel = formatFileSize(source.fileSize)
+    const durationLabel = formatDuration(source.duration)
+    const pageCountLabel =
+      Number.isFinite(source.pageCount) && (source.pageCount as number) > 0
+        ? `${source.pageCount} pages`
+        : null
+    if (fileSizeLabel) metadataParts.push(fileSizeLabel)
+    if (durationLabel) metadataParts.push(durationLabel)
+    if (pageCountLabel) metadataParts.push(pageCountLabel)
+    metadataParts.push(
+      t("playground:sources.addedAt", "Added {{date}}", {
+        date: source.addedAt.toLocaleDateString()
+      })
+    )
+    const metadataPreview = metadataParts.slice(0, 2).join(" • ")
+    const metadataTooltip = metadataParts.join(" • ")
+    const sourceOrderIndex = sources.findIndex((entry) => entry.id === source.id)
+    const canMoveUp = sourceOrderIndex > 0
+    const canMoveDown = sourceOrderIndex >= 0 && sourceOrderIndex < sources.length - 1
+    const isDropTarget = draggedSourceId != null && draggedSourceId !== source.id
 
     return (
       <div
@@ -227,6 +338,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
             event.preventDefault()
             return
           }
+          setDraggedSourceId(source.id)
           event.dataTransfer.effectAllowed = "copyMove"
           event.dataTransfer.setData(
             WORKSPACE_SOURCE_DRAG_TYPE,
@@ -239,6 +351,21 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
           )
           event.dataTransfer.setData("text/plain", source.title)
         }}
+        onDragOver={(event) => {
+          if (!isReady || !draggedSourceId || draggedSourceId === source.id) return
+          event.preventDefault()
+          event.dataTransfer.dropEffect = "move"
+        }}
+        onDrop={(event) => {
+          if (!isReady || !draggedSourceId || draggedSourceId === source.id) return
+          event.preventDefault()
+          const targetIndex = sources.findIndex((entry) => entry.id === source.id)
+          if (targetIndex >= 0) {
+            reorderSource(draggedSourceId, targetIndex)
+          }
+          setDraggedSourceId(null)
+        }}
+        onDragEnd={() => setDraggedSourceId(null)}
         className={`group flex items-start gap-2 rounded-lg p-2 transition-colors ${
           isSelected
             ? "bg-primary/10 border border-primary/30"
@@ -247,6 +374,8 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
           isHighlighted
             ? "ring-2 ring-primary/40 border-primary/40 bg-primary/15"
             : ""
+        } ${
+          isDropTarget ? "border-primary/50 bg-primary/5" : ""
         } ${isReady ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
       >
         <div
@@ -274,6 +403,12 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
             <p className="truncate text-xs text-text-muted capitalize">
               {source.type}
             </p>
+            <Tooltip title={metadataTooltip}>
+              <p className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-[11px] text-text-subtle">
+                <Info className="h-3 w-3 shrink-0" />
+                <span className="truncate">{metadataPreview}</span>
+              </p>
+            </Tooltip>
             {isProcessing && (
               <p className="mt-0.5 flex items-center gap-1 text-[11px] text-primary">
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -295,81 +430,82 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
             )}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            const sourceIndex = sources.findIndex((entry) => entry.id === source.id)
-            const wasSelected = selectedSourceIds.includes(source.id)
-            const undoHandle = scheduleWorkspaceUndoAction({
-              apply: () => {
-                removeSource(source.id)
-              },
-              undo: () => {
-                restoreSource(source, {
-                  index: sourceIndex,
-                  select: wasSelected
-                })
-              }
-            })
-
-            const undoMessageKey = `workspace-source-undo-${undoHandle.id}`
-            const maybeOpen = (
-              messageApi as { open?: (config: unknown) => void }
-            ).open
-            const messageConfig = {
-              key: undoMessageKey,
-              type: "warning",
-              duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
-              content: t(
-                "playground:sources.undoRemove",
-                "Source removed."
-              ),
-              btn: (
-                <Button
-                  size="small"
-                  type="link"
-                  onClick={() => {
-                    if (undoWorkspaceAction(undoHandle.id)) {
-                      messageApi.success(
-                        t("playground:sources.restoreSuccess", "Source restored")
-                      )
-                    }
-                    messageApi.destroy(undoMessageKey)
-                  }}
-                >
-                  {t("common:undo", "Undo")}
-                </Button>
-              )
-            }
-            if (typeof maybeOpen === "function") {
-              maybeOpen(messageConfig)
-            } else {
-              const maybeWarning = (
-                messageApi as { warning?: (content: string) => void }
-              ).warning
-              if (typeof maybeWarning === "function") {
-                maybeWarning(t("playground:sources.undoRemove", "Source removed."))
-              }
-            }
-          }}
-          data-testid={`remove-source-${source.id}`}
-          className="shrink-0 rounded p-1 text-text-muted opacity-0 transition hover:bg-error/10 hover:text-error group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11 [@media(hover:none)]:opacity-100"
-          aria-label={t("common:remove", "Remove")}
-        >
-          <svg
-            className="h-3.5 w-3.5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
+        <div className="flex shrink-0 items-start gap-1">
+          <div className="flex flex-col">
+            <button
+              type="button"
+              className="rounded p-0.5 text-text-muted transition hover:bg-surface focus-visible:bg-surface disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label={t("playground:sources.moveUp", "Move source up")}
+              data-testid={`move-source-up-${source.id}`}
+              disabled={!canMoveUp}
+              onClick={() => {
+                if (!canMoveUp) return
+                reorderSource(source.id, sourceOrderIndex - 1)
+              }}
+            >
+              <ChevronUp className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              className="rounded p-0.5 text-text-muted transition hover:bg-surface focus-visible:bg-surface disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label={t("playground:sources.moveDown", "Move source down")}
+              data-testid={`move-source-down-${source.id}`}
+              disabled={!canMoveDown}
+              onClick={() => {
+                if (!canMoveDown) return
+                reorderSource(source.id, sourceOrderIndex + 1)
+              }}
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <Popconfirm
+            open={confirmingRemovalSourceId === source.id}
+            title={t("playground:sources.confirmRemoveTitle", "Remove source?")}
+            description={t(
+              "playground:sources.confirmRemoveDescription",
+              "Press Remove to confirm. You can still undo for a few seconds."
+            )}
+            okText={t("common:remove", "Remove")}
+            cancelText={t("common:cancel", "Cancel")}
+            onConfirm={() => {
+              setConfirmingRemovalSourceId(null)
+              removeSourceWithUndo(source)
+            }}
+            onCancel={() => setConfirmingRemovalSourceId(null)}
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
-        </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (confirmingRemovalSourceId === source.id) return
+                removeSourceWithUndo(source)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault()
+                  setConfirmingRemovalSourceId(source.id)
+                }
+              }}
+              data-testid={`remove-source-${source.id}`}
+              className="rounded p-1 text-text-muted opacity-0 transition hover:bg-error/10 hover:text-error group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11 [@media(hover:none)]:opacity-100"
+              aria-label={t("common:remove", "Remove")}
+            >
+              <svg
+                className="h-3.5 w-3.5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </button>
+          </Popconfirm>
+        </div>
       </div>
     )
   }

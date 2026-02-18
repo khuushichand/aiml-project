@@ -21,7 +21,7 @@ Finding IDs: `C-16` through `C-18`
 - Component tests for multi-file selection and progress state rendering.
 - Integration tests for mixed valid/invalid file batches.
 - E2E test covering drag-drop batch import flow.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Add Import Preview and Confirmation Step
 **Goal**: Let users validate imported character details before persistence.
@@ -33,7 +33,7 @@ Finding IDs: `C-16` through `C-18`
 - Unit tests for parser-to-preview model mapping.
 - Component tests for confirm/cancel paths.
 - Integration tests for preview confirm -> persisted record consistency.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 3: Resolve YAML Support Contract
 **Goal**: Align UI and documentation with actual supported formats.

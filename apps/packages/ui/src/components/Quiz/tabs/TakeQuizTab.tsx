@@ -3,21 +3,33 @@ import {
   Alert,
   Button,
   Card,
+  Descriptions,
   Empty,
   Input,
   List,
+  Modal,
   Progress,
   Radio,
+  Select,
   Space,
   Spin,
   Tag,
+  Tooltip,
   Typography,
   message
 } from "antd"
 import { useTranslation } from "react-i18next"
 import { PlayCircleOutlined, ClockCircleOutlined, QuestionCircleOutlined } from "@ant-design/icons"
-import { useQuizzesQuery, useQuizQuery, useStartAttemptMutation, useSubmitAttemptMutation } from "../hooks"
-import type { AnswerValue, QuestionPublic, QuizAttempt } from "@/services/quizzes"
+import {
+  useAttemptsQuery,
+  useQuizzesQuery,
+  useQuizQuery,
+  useStartAttemptMutation,
+  useSubmitAttemptMutation
+} from "../hooks"
+import { useQuizTimer } from "../hooks/useQuizTimer"
+import { useQuizAutoSave } from "../hooks/useQuizAutoSave"
+import type { AnswerValue, QuestionPublic, Quiz, QuizAttempt } from "@/services/quizzes"
 
 interface TakeQuizTabProps {
   onNavigateToGenerate: () => void
@@ -25,6 +37,10 @@ interface TakeQuizTabProps {
   startQuizId?: number | null
   onStartHandled?: () => void
 }
+
+const DEFAULT_PASSING_SCORE = 70
+const TAKE_QUIZ_LIST_PREFS_KEY = "quiz-take-list-prefs-v1"
+type QuizSortKey = "name_asc" | "date_desc" | "questions_desc"
 
 export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
   onNavigateToGenerate,
@@ -34,44 +50,152 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
 }) => {
   const { t } = useTranslation(["option", "common"])
   const [messageApi, contextHolder] = message.useMessage()
-  const [page, setPage] = React.useState(1)
-  const [pageSize, setPageSize] = React.useState(12)
+  const [page, setPage] = React.useState(() => {
+    if (typeof window === "undefined") return 1
+    try {
+      const raw = window.sessionStorage.getItem(TAKE_QUIZ_LIST_PREFS_KEY)
+      if (!raw) return 1
+      const parsed = JSON.parse(raw) as { page?: number }
+      return typeof parsed.page === "number" && parsed.page > 0 ? parsed.page : 1
+    } catch {
+      return 1
+    }
+  })
+  const [pageSize, setPageSize] = React.useState(() => {
+    if (typeof window === "undefined") return 12
+    try {
+      const raw = window.sessionStorage.getItem(TAKE_QUIZ_LIST_PREFS_KEY)
+      if (!raw) return 12
+      const parsed = JSON.parse(raw) as { pageSize?: number }
+      return typeof parsed.pageSize === "number" && parsed.pageSize > 0 ? parsed.pageSize : 12
+    } catch {
+      return 12
+    }
+  })
+  const [searchQuery, setSearchQuery] = React.useState(() => {
+    if (typeof window === "undefined") return ""
+    try {
+      const raw = window.sessionStorage.getItem(TAKE_QUIZ_LIST_PREFS_KEY)
+      if (!raw) return ""
+      const parsed = JSON.parse(raw) as { searchQuery?: string }
+      return typeof parsed.searchQuery === "string" ? parsed.searchQuery : ""
+    } catch {
+      return ""
+    }
+  })
+  const [sortBy, setSortBy] = React.useState<QuizSortKey>(() => {
+    if (typeof window === "undefined") return "date_desc"
+    try {
+      const raw = window.sessionStorage.getItem(TAKE_QUIZ_LIST_PREFS_KEY)
+      if (!raw) return "date_desc"
+      const parsed = JSON.parse(raw) as { sortBy?: QuizSortKey }
+      if (parsed.sortBy === "name_asc" || parsed.sortBy === "date_desc" || parsed.sortBy === "questions_desc") {
+        return parsed.sortBy
+      }
+      return "date_desc"
+    } catch {
+      return "date_desc"
+    }
+  })
   const [activeQuizId, setActiveQuizId] = React.useState<number | null>(null)
+  const [pendingQuizId, setPendingQuizId] = React.useState<number | null>(null)
+  const [autoSaveWarningDismissed, setAutoSaveWarningDismissed] = React.useState(false)
+  const [focusedQuestionId, setFocusedQuestionId] = React.useState<number | null>(null)
+  const [unansweredQuestionNumbers, setUnansweredQuestionNumbers] = React.useState<number[]>([])
   const [attempt, setAttempt] = React.useState<QuizAttempt | null>(null)
   const [result, setResult] = React.useState<QuizAttempt | null>(null)
   const [questions, setQuestions] = React.useState<QuestionPublic[]>([])
   const [answers, setAnswers] = React.useState<Record<number, AnswerValue>>({})
   const lastAutoStartId = React.useRef<number | null>(null)
+  const hasInitializedSearchRef = React.useRef(false)
+  const questionRefs = React.useRef<Map<number, HTMLDivElement | null>>(new Map())
   const offset = (page - 1) * pageSize
 
-  const { data, isLoading } = useQuizzesQuery({ limit: pageSize, offset })
-  const { data: quizDetails } = useQuizQuery(activeQuizId, { enabled: activeQuizId != null })
+  const normalizedSearchQuery = searchQuery.trim()
+  const { data, isLoading } = useQuizzesQuery({
+    limit: pageSize,
+    offset,
+    q: normalizedSearchQuery.length > 0 ? normalizedSearchQuery : undefined
+  })
+  const { data: attemptsData } = useAttemptsQuery({ limit: 200, offset: 0 })
+  const detailQuizId = pendingQuizId ?? activeQuizId
+  const { data: quizDetails } = useQuizQuery(detailQuizId, { enabled: detailQuizId != null })
   const startAttemptMutation = useStartAttemptMutation()
   const submitAttemptMutation = useSubmitAttemptMutation()
 
   const quizzes = data?.items ?? []
+  const attempts = attemptsData?.items ?? []
   const total = data?.count ?? 0
+  const sortedQuizzes = React.useMemo(() => {
+    const items = [...quizzes]
+    if (sortBy === "name_asc") {
+      items.sort((left, right) => left.name.localeCompare(right.name))
+    } else if (sortBy === "questions_desc") {
+      items.sort((left, right) => right.total_questions - left.total_questions)
+    } else {
+      items.sort((left, right) => {
+        const leftTs = new Date(left.created_at ?? 0).getTime()
+        const rightTs = new Date(right.created_at ?? 0).getTime()
+        return rightTs - leftTs
+      })
+    }
+    return items
+  }, [quizzes, sortBy])
+
+  const {
+    storageUnavailable,
+    restoreSavedAnswers,
+    clearSavedProgress
+  } = useQuizAutoSave(attempt?.id ?? null, attempt?.quiz_id ?? activeQuizId, answers, setAnswers)
+
+  const timerState = useQuizTimer({
+    timeLimitSeconds: quizDetails?.time_limit_seconds,
+    startedAt: attempt?.started_at,
+    enabled: attempt != null && result == null,
+    onExpire: () => {
+      void handleSubmit({ allowPartial: true })
+    }
+  })
 
   const resetSession = () => {
     setAttempt(null)
     setResult(null)
     setQuestions([])
     setAnswers({})
+    setFocusedQuestionId(null)
+    setUnansweredQuestionNumbers([])
     setActiveQuizId(null)
+    setPendingQuizId(null)
   }
 
-  const handleStart = async (quizId: number) => {
+  const handleStart = async (quizId: number): Promise<boolean> => {
     try {
       setActiveQuizId(quizId)
       setResult(null)
       setAnswers({})
+      setFocusedQuestionId(null)
+      setUnansweredQuestionNumbers([])
       const newAttempt = await startAttemptMutation.mutateAsync(quizId)
       setAttempt(newAttempt)
       setQuestions(newAttempt.questions ?? [])
+      return true
     } catch (error) {
       messageApi.error(
         t("option:quiz.startError", { defaultValue: "Failed to start quiz" })
       )
+      return false
+    }
+  }
+
+  const requestStart = (quizId: number) => {
+    setPendingQuizId(quizId)
+  }
+
+  const handleConfirmStart = async () => {
+    if (pendingQuizId == null) return
+    const started = await handleStart(pendingQuizId)
+    if (started) {
+      setPendingQuizId(null)
     }
   }
 
@@ -80,43 +204,117 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
       return
     }
     lastAutoStartId.current = startQuizId
-    handleStart(startQuizId)
+    requestStart(startQuizId)
     onStartHandled?.()
   }, [startQuizId, onStartHandled])
 
-  const updateAnswer = (questionId: number, value: AnswerValue) => {
-    setAnswers((prev) => ({ ...prev, [questionId]: value }))
-  }
+  React.useEffect(() => {
+    if (!attempt) return
+    void restoreSavedAnswers().then((restored) => {
+      if (restored) {
+        messageApi.info(
+          t("option:quiz.progressRestored", {
+            defaultValue: "Restored your saved quiz progress."
+          })
+        )
+      }
+    })
+  }, [attempt?.id, restoreSavedAnswers, messageApi, t])
 
-  const hasAnswer = (questionId: number) => {
-    const value = answers[questionId]
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.sessionStorage.setItem(
+        TAKE_QUIZ_LIST_PREFS_KEY,
+        JSON.stringify({
+          page,
+          pageSize,
+          searchQuery,
+          sortBy
+        })
+      )
+    } catch {
+      // ignore sessionStorage write errors
+    }
+  }, [page, pageSize, searchQuery, sortBy])
+
+  React.useEffect(() => {
+    if (!hasInitializedSearchRef.current) {
+      hasInitializedSearchRef.current = true
+      return
+    }
+    setPage(1)
+  }, [normalizedSearchQuery])
+
+  const hasAnswerValue = (value: AnswerValue | null | undefined) => {
     if (value === null || value === undefined) return false
     if (typeof value === "string") return value.trim().length > 0
     return true
   }
 
+  const updateAnswer = (questionId: number, value: AnswerValue) => {
+    setAnswers((prev) => ({ ...prev, [questionId]: value }))
+    setFocusedQuestionId(questionId)
+    setUnansweredQuestionNumbers([])
+  }
+
+  const hasAnswer = (questionId: number) => {
+    return hasAnswerValue(answers[questionId])
+  }
+
   const answeredCount = questions.filter((q) => hasAnswer(q.id)).length
   const progress = questions.length > 0 ? Math.round((answeredCount / questions.length) * 100) : 0
 
-  const handleSubmit = async () => {
+  const setQuestionRef = React.useCallback((questionId: number, node: HTMLDivElement | null) => {
+    questionRefs.current.set(questionId, node)
+  }, [])
+
+  const focusQuestion = React.useCallback((questionId: number) => {
+    setFocusedQuestionId(questionId)
+    questionRefs.current.get(questionId)?.scrollIntoView({
+      behavior: "smooth",
+      block: "center"
+    })
+  }, [])
+
+  const handleSubmit = async (options?: { allowPartial?: boolean }) => {
     if (!attempt) return
+    if (submitAttemptMutation.isPending) return
+
     const missing = questions.filter((q) => !hasAnswer(q.id))
-    if (missing.length > 0) {
+    if (!options?.allowPartial && missing.length > 0) {
+      const missingQuestionNumbers = missing
+        .map((question) => questions.findIndex((item) => item.id === question.id) + 1)
+        .filter((num) => num > 0)
+      setUnansweredQuestionNumbers(missingQuestionNumbers)
+      focusQuestion(missing[0].id)
       messageApi.warning(
-        t("option:quiz.answerAll", { defaultValue: "Please answer all questions before submitting." })
+        t("option:quiz.answerAll", {
+          defaultValue: "Please answer all questions before submitting. Unanswered: {{numbers}}",
+          numbers: missingQuestionNumbers.join(", ")
+        })
       )
       return
+    }
+    if (options?.allowPartial && missing.length > 0) {
+      messageApi.warning(
+        t("option:quiz.timerExpiredSubmitting", {
+          defaultValue: "Time expired. Submitting your current answers."
+        })
+      )
     }
     try {
       const payload = questions.map((q) => ({
         question_id: q.id,
         user_answer: answers[q.id]
-      }))
+      })).filter((entry) => entry.user_answer !== null && entry.user_answer !== undefined)
       const submission = await submitAttemptMutation.mutateAsync({
         attemptId: attempt.id,
         answers: payload
       })
       setResult(submission)
+      setUnansweredQuestionNumbers([])
+      await clearSavedProgress()
     } catch (error) {
       messageApi.error(
         t("option:quiz.submitError", { defaultValue: "Failed to submit quiz" })
@@ -155,13 +353,20 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
       )
     }
     return (
-      <Input
-        placeholder={t("option:quiz.correctAnswerPlaceholder", {
-          defaultValue: "Enter the correct answer..."
-        })}
-        value={typeof answers[question.id] === "string" ? (answers[question.id] as string) : ""}
-        onChange={(e) => updateAnswer(question.id, e.target.value)}
-      />
+      <Space orientation="vertical" className="w-full" size={4}>
+        <Input
+          placeholder={t("option:quiz.correctAnswerPlaceholder", {
+            defaultValue: "Enter the correct answer..."
+          })}
+          value={typeof answers[question.id] === "string" ? (answers[question.id] as string) : ""}
+          onChange={(e) => updateAnswer(question.id, e.target.value)}
+        />
+        <Typography.Text type="secondary" className="text-xs">
+          {t("option:quiz.fillBlankGuidance", {
+            defaultValue: "Case-insensitive exact match. Extra spaces are ignored."
+          })}
+        </Typography.Text>
+      </Space>
     )
   }
 
@@ -170,7 +375,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     const total = result.total_possible || 0
     const score = result.score ?? 0
     const percentage = total > 0 ? Math.round((score / total) * 100) : 0
-    const passingScore = quizDetails?.passing_score ?? 70
+    const passingScore = quizDetails?.passing_score ?? DEFAULT_PASSING_SCORE
     const passed = percentage >= passingScore
     const answerMap = new Map(result.answers.map((a) => [a.question_id, a]))
 
@@ -184,12 +389,13 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
             total,
             percent: percentage
           })}
-          description={
-            quizDetails?.passing_score
-              ? t("option:quiz.passingScoreLabel", { defaultValue: "Pass" }) +
-                `: ${quizDetails.passing_score}%`
-              : undefined
-          }
+          description={quizDetails?.passing_score != null
+            ? t("option:quiz.passingScoreLabel", { defaultValue: "Pass" }) +
+              `: ${quizDetails.passing_score}%`
+            : t("option:quiz.noPassingScoreDefault", {
+              defaultValue: "No passing score set. Using default: {{score}}%.",
+              score: DEFAULT_PASSING_SCORE
+            })}
           showIcon
         />
 
@@ -244,20 +450,151 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
           <Button onClick={resetSession}>
             {t("option:quiz.backToList", { defaultValue: "Back to list" })}
           </Button>
-          <Button
-            type="primary"
-            onClick={() => activeQuizId != null && handleStart(activeQuizId)}
+          <Tooltip
+            title={t("option:quiz.retakeBehavior", {
+              defaultValue: "Retake uses the same questions in the same order."
+            })}
           >
-            {t("option:quiz.retake", { defaultValue: "Retake Quiz" })}
-          </Button>
+            <Button
+              type="primary"
+              onClick={() => activeQuizId != null && requestStart(activeQuizId)}
+            >
+              {t("option:quiz.retake", { defaultValue: "Retake Quiz" })}
+            </Button>
+          </Tooltip>
         </Space>
       </div>
+    )
+  }
+
+  const formatQuizTimeLimit = (timeLimitSeconds: number | null | undefined) => {
+    if (!timeLimitSeconds || timeLimitSeconds <= 0) {
+      return t("option:quiz.noTimeLimit", { defaultValue: "No time limit" })
+    }
+    const minutes = Math.floor(timeLimitSeconds / 60)
+    const seconds = timeLimitSeconds % 60
+    if (minutes === 0) {
+      return t("option:quiz.secondsShort", { defaultValue: "{{count}} sec", count: seconds })
+    }
+    if (seconds === 0) {
+      return `${minutes} ${t("option:quiz.minutes", { defaultValue: "min" })}`
+    }
+    return `${minutes}m ${seconds}s`
+  }
+
+  const formatQuizDate = (dateString: string | null | undefined) => {
+    if (!dateString) return null
+    const parsed = new Date(dateString)
+    if (Number.isNaN(parsed.getTime())) return null
+    return parsed.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    })
+  }
+
+  const getQuizDifficultyLabel = (quiz: Quiz | null | undefined) => {
+    const rawDifficulty = (quiz as Quiz & { difficulty?: string | null } | null)?.difficulty
+    if (!rawDifficulty) {
+      return t("option:quiz.notSpecified", { defaultValue: "Not specified" })
+    }
+    return `${rawDifficulty.charAt(0).toUpperCase()}${rawDifficulty.slice(1)}`
+  }
+
+  const lastScoreByQuizId = React.useMemo(() => {
+    const scoreMap = new Map<number, number>()
+    const sortedAttempts = [...attempts].sort((left, right) => {
+      const leftDate = new Date(left.completed_at ?? left.started_at).getTime()
+      const rightDate = new Date(right.completed_at ?? right.started_at).getTime()
+      return rightDate - leftDate
+    })
+    sortedAttempts.forEach((entry) => {
+      if (scoreMap.has(entry.quiz_id)) return
+      if (!entry.completed_at) return
+      if (!entry.total_possible || entry.total_possible <= 0) return
+      const percentage = Math.round(((entry.score ?? 0) / entry.total_possible) * 100)
+      scoreMap.set(entry.quiz_id, percentage)
+    })
+    return scoreMap
+  }, [attempts])
+
+  const pendingQuiz = React.useMemo(() => {
+    if (pendingQuizId == null) return null
+    if (quizDetails?.id === pendingQuizId) return quizDetails
+    return quizzes.find((quiz) => quiz.id === pendingQuizId) ?? null
+  }, [pendingQuizId, quizDetails, quizzes])
+
+  const renderStartConfirmationModal = () => (
+    <Modal
+      title={t("option:quiz.readyToBegin", { defaultValue: "Ready to begin?" })}
+      open={pendingQuizId != null}
+      onCancel={() => setPendingQuizId(null)}
+      onOk={handleConfirmStart}
+      okText={t("option:quiz.begin", { defaultValue: "Begin Quiz" })}
+      cancelText={t("common:cancel", { defaultValue: "Cancel" })}
+      confirmLoading={startAttemptMutation.isPending}
+      destroyOnHidden
+    >
+      <div className="space-y-3">
+        <Typography.Text className="block text-text-muted">
+          {pendingQuiz?.name ?? t("option:quiz.selectedQuiz", { defaultValue: "Selected quiz" })}
+        </Typography.Text>
+        <Descriptions size="small" bordered column={1}>
+          <Descriptions.Item
+            label={t("option:quiz.questions", { defaultValue: "Questions" })}
+          >
+            {pendingQuiz?.total_questions ?? "-"}
+          </Descriptions.Item>
+          <Descriptions.Item
+            label={t("option:quiz.timeLimit", { defaultValue: "Time limit" })}
+          >
+            {formatQuizTimeLimit(pendingQuiz?.time_limit_seconds)}
+          </Descriptions.Item>
+          <Descriptions.Item
+            label={t("option:quiz.passingScore", { defaultValue: "Passing score" })}
+          >
+            {pendingQuiz?.passing_score != null
+              ? `${pendingQuiz.passing_score}%`
+              : `${DEFAULT_PASSING_SCORE}% (${t("option:quiz.defaultLabel", { defaultValue: "default" })})`}
+          </Descriptions.Item>
+          <Descriptions.Item
+            label={t("option:quiz.difficulty", { defaultValue: "Difficulty" })}
+          >
+            {getQuizDifficultyLabel(pendingQuiz)}
+          </Descriptions.Item>
+        </Descriptions>
+        <Alert
+          type="info"
+          showIcon
+          title={t("option:quiz.retakeBehavior", {
+            defaultValue: "Retake uses the same questions in the same order."
+          })}
+        />
+      </div>
+    </Modal>
+  )
+
+  const renderAutoSaveWarning = () => {
+    if (!storageUnavailable || autoSaveWarningDismissed) return null
+    return (
+      <Alert
+        type="warning"
+        showIcon
+        closable
+        onClose={() => setAutoSaveWarningDismissed(true)}
+        title={t("option:quiz.autosaveUnavailable", {
+          defaultValue:
+            "Auto-save unavailable — your progress won't be preserved if you navigate away."
+        })}
+      />
     )
   }
 
   if (isLoading) {
     return (
       <div className="flex justify-center py-12">
+        {contextHolder}
+        {renderStartConfirmationModal()}
         <Spin size="large" />
       </div>
     )
@@ -267,6 +604,8 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     return (
       <div className="space-y-4">
         {contextHolder}
+        {renderAutoSaveWarning()}
+        {renderStartConfirmationModal()}
         {renderResults()}
       </div>
     )
@@ -276,21 +615,80 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     return (
       <div className="space-y-4">
         {contextHolder}
+        {renderAutoSaveWarning()}
+        {renderStartConfirmationModal()}
         <Card
           title={quizDetails?.name || t("option:quiz.take", { defaultValue: "Take Quiz" })}
           extra={
-            <Tag icon={<QuestionCircleOutlined />}>
-              {answeredCount}/{questions.length}
-            </Tag>
+            <Space>
+              <Tag icon={<QuestionCircleOutlined />}>
+                {answeredCount}/{questions.length}
+              </Tag>
+              {timerState && (
+                <Tag
+                  icon={<ClockCircleOutlined />}
+                  color={timerState.isDanger ? "red" : timerState.isWarning ? "orange" : "default"}
+                >
+                  {timerState.formattedTime}
+                </Tag>
+              )}
+            </Space>
           }
         >
           <div className="space-y-4">
+            <Card size="small">
+              <div className="space-y-2">
+                <Typography.Text className="text-xs text-text-muted">
+                  {t("option:quiz.questionNavigator", { defaultValue: "Question navigator" })}
+                </Typography.Text>
+                <div className="flex flex-wrap gap-2">
+                  {questions.map((question, index) => {
+                    const answered = hasAnswer(question.id)
+                    const focused = focusedQuestionId === question.id
+                    return (
+                      <Button
+                        key={question.id}
+                        size="small"
+                        type={focused ? "primary" : "default"}
+                        danger={!answered}
+                        onClick={() => focusQuestion(question.id)}
+                        aria-label={t("option:quiz.goToQuestion", {
+                          defaultValue: "Go to question {{number}}",
+                          number: index + 1
+                        })}
+                      >
+                        {index + 1}
+                      </Button>
+                    )
+                  })}
+                </div>
+              </div>
+            </Card>
+
+            {unansweredQuestionNumbers.length > 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                title={t("option:quiz.unansweredSummary", {
+                  defaultValue: "Unanswered questions: {{numbers}}",
+                  numbers: unansweredQuestionNumbers.join(", ")
+                })}
+              />
+            )}
+
             <Progress percent={progress} />
             <List
               dataSource={questions}
               renderItem={(question, index) => (
                 <List.Item>
-                  <div className="w-full space-y-2">
+                  <div
+                    ref={(node) => setQuestionRef(question.id, node)}
+                    data-testid={`quiz-question-${question.id}`}
+                    data-highlighted={focusedQuestionId === question.id}
+                    className={`w-full space-y-2 rounded-md p-2 transition-colors ${
+                      focusedQuestionId === question.id ? "border border-warning/60 bg-warning/10" : ""
+                    }`}
+                  >
                     <div className="font-medium">
                       {index + 1}. {question.question_text}
                     </div>
@@ -305,8 +703,9 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
               </Button>
               <Button
                 type="primary"
-                onClick={handleSubmit}
+                onClick={() => handleSubmit()}
                 loading={submitAttemptMutation.isPending}
+                disabled={submitAttemptMutation.isPending}
               >
                 {t("common:submit", { defaultValue: "Submit" })}
               </Button>
@@ -321,6 +720,8 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     return (
       <>
         {contextHolder}
+        {renderAutoSaveWarning()}
+        {renderStartConfirmationModal()}
         <Empty
           description={
             <div className="space-y-2">
@@ -354,13 +755,44 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
   return (
     <div className="space-y-4">
       {contextHolder}
+      {renderAutoSaveWarning()}
+      {renderStartConfirmationModal()}
       <div className="text-sm text-text-muted">
         {t("option:quiz.selectQuiz", { defaultValue: "Select a quiz to begin" })}
       </div>
 
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <Input.Search
+          allowClear
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder={t("option:quiz.searchPlaceholder", { defaultValue: "Search quizzes..." })}
+          className="w-full md:max-w-md"
+        />
+        <Select
+          className="w-full md:w-56"
+          value={sortBy}
+          onChange={(nextValue) => setSortBy(nextValue)}
+          options={[
+            {
+              value: "date_desc",
+              label: t("option:quiz.sortNewest", { defaultValue: "Newest first" })
+            },
+            {
+              value: "name_asc",
+              label: t("option:quiz.sortName", { defaultValue: "Name (A-Z)" })
+            },
+            {
+              value: "questions_desc",
+              label: t("option:quiz.sortQuestionCount", { defaultValue: "Most questions" })
+            }
+          ]}
+        />
+      </div>
+
       <List
         grid={{ gutter: 16, xs: 1, sm: 2, md: 2, lg: 3, xl: 3, xxl: 4 }}
-        dataSource={quizzes}
+        dataSource={sortedQuizzes}
         pagination={{
           current: page,
           pageSize,
@@ -388,7 +820,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
                   type="primary"
                   icon={<PlayCircleOutlined />}
                   onClick={() => {
-                    handleStart(quiz.id)
+                    requestStart(quiz.id)
                   }}
                 >
                   {t("option:quiz.startQuiz", { defaultValue: "Start Quiz" })}
@@ -411,11 +843,37 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
                       </Tag>
                       {quiz.time_limit_seconds && (
                         <Tag icon={<ClockCircleOutlined />}>
-                          {Math.floor(quiz.time_limit_seconds / 60)}{" "}
-                          {t("option:quiz.minutes", { defaultValue: "min" })}
+                          {formatQuizTimeLimit(quiz.time_limit_seconds)}
+                        </Tag>
+                      )}
+                      {quiz.passing_score != null && (
+                        <Tag color="blue">
+                          {t("option:quiz.passingScoreLabel", { defaultValue: "Pass" })}: {quiz.passing_score}%
+                        </Tag>
+                      )}
+                      {(quiz as Quiz & { difficulty?: string | null }).difficulty && (
+                        <Tag color="purple">
+                          {getQuizDifficultyLabel(quiz)}
+                        </Tag>
+                      )}
+                      {quiz.media_id != null && (
+                        <Tag color="green">
+                          <Typography.Link href={`/media?id=${quiz.media_id}`}>
+                            {t("option:quiz.sourceMedia", { defaultValue: "Source media #{{id}}", id: quiz.media_id })}
+                          </Typography.Link>
+                        </Tag>
+                      )}
+                      {lastScoreByQuizId.has(quiz.id) && (
+                        <Tag color="geekblue">
+                          {t("option:quiz.lastScore", { defaultValue: "Last score: {{score}}%", score: lastScoreByQuizId.get(quiz.id) })}
                         </Tag>
                       )}
                     </div>
+                    {formatQuizDate(quiz.created_at) && (
+                      <p className="text-xs text-text-subtle">
+                        {t("option:quiz.createdOn", { defaultValue: "Created: {{date}}", date: formatQuizDate(quiz.created_at) })}
+                      </p>
+                    )}
                   </div>
                 }
               />

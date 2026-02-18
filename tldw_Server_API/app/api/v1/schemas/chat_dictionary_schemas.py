@@ -366,6 +366,19 @@ class DictionaryEntryUsageStatistic(BaseModel):
     last_used_at: Optional[datetime] = Field(None, description="Entry last-used timestamp")
 
 
+class DictionaryPatternConflict(BaseModel):
+    """Potentially overlapping/shadowing pair of dictionary patterns."""
+    entry_id_a: int = Field(..., description="First entry ID")
+    entry_id_b: int = Field(..., description="Second entry ID")
+    pattern_a: str = Field(..., description="First entry pattern")
+    pattern_b: str = Field(..., description="Second entry pattern")
+    type_a: str = Field(..., description="First entry type")
+    type_b: str = Field(..., description="Second entry type")
+    conflict_type: str = Field(..., description="Conflict heuristic category")
+    severity: str = Field(..., pattern="^(low|medium|high)$", description="Relative conflict severity")
+    reason: str = Field(..., description="Human-readable explanation")
+
+
 class DictionaryStatistics(BaseModel):
     """Statistics for a dictionary."""
     dictionary_id: int = Field(..., description="Dictionary ID")
@@ -385,6 +398,11 @@ class DictionaryStatistics(BaseModel):
     entry_usage: list[DictionaryEntryUsageStatistic] = Field(
         default_factory=list,
         description="Per-entry usage snapshot for maintenance workflows",
+    )
+    pattern_conflict_count: int = Field(0, description="Number of potential pattern conflicts")
+    pattern_conflicts: list[DictionaryPatternConflict] = Field(
+        default_factory=list,
+        description="Potential overlapping/shadowing pattern pairs",
     )
     total_usage_count: Optional[int] = Field(None, description="Total times used (if tracked)")
     last_used: Optional[datetime] = Field(None, description="Last usage timestamp (if tracked)")

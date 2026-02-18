@@ -2,6 +2,7 @@ import React from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ContentViewer } from '../ContentViewer'
+import { useMediaReadingProgress } from '@/hooks/useMediaReadingProgress'
 
 const mocks = vi.hoisted(() => ({
   bgRequest: vi.fn(),
@@ -16,13 +17,14 @@ vi.mock('react-i18next', () => ({
       key: string,
       fallbackOrOptions?:
         | string
-        | { defaultValue?: string; size?: string; minutes?: number; timestamp?: string }
+        | { defaultValue?: string; size?: string; minutes?: number; percent?: number; timestamp?: string }
     ) => {
       if (typeof fallbackOrOptions === 'string') return fallbackOrOptions
       if (fallbackOrOptions?.defaultValue) {
         return fallbackOrOptions.defaultValue
           .replace('{{size}}', String(fallbackOrOptions.size ?? ''))
           .replace('{{minutes}}', String(fallbackOrOptions.minutes ?? ''))
+          .replace('{{percent}}', String(fallbackOrOptions.percent ?? ''))
           .replace('{{timestamp}}', String(fallbackOrOptions.timestamp ?? ''))
       }
       return key
@@ -125,6 +127,11 @@ describe('ContentViewer stage 4 metadata regressions', () => {
     mocks.messageSuccess.mockReset()
     mocks.messageError.mockReset()
     mocks.messageWarning.mockReset()
+    vi.mocked(useMediaReadingProgress).mockReturnValue({
+      saveProgress: vi.fn(),
+      clearProgress: vi.fn(),
+      progressPercent: null
+    })
   })
 
   afterEach(() => {
@@ -172,6 +179,24 @@ describe('ContentViewer stage 4 metadata regressions', () => {
     )
 
     expect(screen.queryByText('06:00')).not.toBeInTheDocument()
+  })
+
+  it('shows a reading progress chip when progress is available', () => {
+    vi.mocked(useMediaReadingProgress).mockReturnValue({
+      saveProgress: vi.fn(),
+      clearProgress: vi.fn(),
+      progressPercent: 41.7
+    })
+
+    render(
+      <ContentViewer
+        selectedMedia={baseSelectedMedia}
+        content={'Body text'}
+        mediaDetail={{ type: 'audio' }}
+      />
+    )
+
+    expect(screen.getByTestId('media-reading-progress')).toHaveTextContent('42% read')
   })
 
   it('debounces keyword save requests and sends only the latest keyword set', async () => {

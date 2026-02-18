@@ -1,5 +1,6 @@
 import React from "react"
 import {
+  Alert,
   Button,
   Card,
   Form,
@@ -17,8 +18,36 @@ import {
   useImportLimitsQuery
 } from "../hooks"
 import { FileDropZone } from "../components"
+import type { FlashcardsImportError } from "@/services/flashcards"
 
 const { Text } = Typography
+
+interface ImportResultSummary {
+  imported: number
+  skipped: number
+  errors: FlashcardsImportError[]
+}
+
+const normalizeImportErrors = (value: unknown): FlashcardsImportError[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null
+      const row = entry as Record<string, unknown>
+      const rawError = row.error
+      if (typeof rawError !== "string" || rawError.trim().length === 0) {
+        return null
+      }
+      const line = typeof row.line === "number" ? row.line : null
+      const index = typeof row.index === "number" ? row.index : null
+      return {
+        error: rawError,
+        line,
+        index
+      }
+    })
+    .filter((item): item is FlashcardsImportError => item !== null)
+}
 
 /**
  * Import panel for CSV/TSV flashcard import.
@@ -32,16 +61,43 @@ const ImportPanel: React.FC = () => {
   const [content, setContent] = React.useState("")
   const [delimiter, setDelimiter] = React.useState<string>("\t")
   const [hasHeader, setHasHeader] = React.useState<boolean>(true)
+  const [lastResult, setLastResult] = React.useState<ImportResultSummary | null>(null)
 
   const handleImport = async () => {
     try {
-      await importMutation.mutateAsync({
+      const result = await importMutation.mutateAsync({
         content,
         delimiter,
         hasHeader
       })
-      message.success(t("option:flashcards.imported", { defaultValue: "Imported" }))
-      setContent("")
+      const imported = typeof result.imported === "number" ? result.imported : result.items?.length ?? 0
+      const errors = normalizeImportErrors(result.errors)
+      const skipped = errors.length
+
+      setLastResult({
+        imported,
+        skipped,
+        errors
+      })
+
+      if (errors.length > 0) {
+        message.warning(
+          t("option:flashcards.importResultWithErrors", {
+            defaultValue: "Imported {{imported}} cards, skipped {{skipped}} rows ({{errorCount}} errors).",
+            imported,
+            skipped,
+            errorCount: errors.length
+          })
+        )
+      } else {
+        message.success(
+          t("option:flashcards.importResultSuccess", {
+            defaultValue: "Imported {{count}} cards.",
+            count: imported
+          })
+        )
+        setContent("")
+      }
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Import failed"
       message.error(errorMessage)
@@ -139,6 +195,61 @@ const ImportPanel: React.FC = () => {
       >
         {t("option:flashcards.importButton", { defaultValue: "Import" })}
       </Button>
+
+      {lastResult && (
+        <Alert
+          showIcon
+          type={lastResult.errors.length > 0 ? "warning" : "success"}
+          title={
+            lastResult.errors.length > 0
+              ? t("option:flashcards.lastImportPartial", {
+                  defaultValue: "Last import: {{imported}} imported, {{skipped}} skipped",
+                  imported: lastResult.imported,
+                  skipped: lastResult.skipped
+                })
+              : t("option:flashcards.lastImportSuccess", {
+                  defaultValue: "Last import: {{imported}} cards imported",
+                  imported: lastResult.imported
+                })
+          }
+          description={
+            lastResult.errors.length > 0 && (
+              <div className="mt-1 space-y-1 text-xs">
+                {lastResult.errors.slice(0, 6).map((err, idx) => {
+                  const location =
+                    typeof err.line === "number"
+                      ? t("option:flashcards.importErrorLine", {
+                          defaultValue: "Line {{line}}",
+                          line: err.line
+                        })
+                      : typeof err.index === "number"
+                        ? t("option:flashcards.importErrorItem", {
+                            defaultValue: "Item {{index}}",
+                            index: err.index
+                          })
+                        : t("option:flashcards.importErrorRowUnknown", {
+                            defaultValue: "Unknown row"
+                          })
+                  return (
+                    <div key={`${location}-${idx}`}>
+                      <Text code>{location}</Text>
+                      <Text className="ml-2">{err.error}</Text>
+                    </div>
+                  )
+                })}
+                {lastResult.errors.length > 6 && (
+                  <Text type="secondary">
+                    {t("option:flashcards.importErrorsMore", {
+                      defaultValue: "+{{count}} more errors",
+                      count: lastResult.errors.length - 6
+                    })}
+                  </Text>
+                )}
+              </div>
+            )
+          }
+        />
+      )}
     </div>
   )
 }

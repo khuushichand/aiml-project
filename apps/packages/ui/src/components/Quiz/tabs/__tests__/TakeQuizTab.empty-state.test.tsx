@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { TakeQuizTab } from "../TakeQuizTab"
 import {
+  useAttemptsQuery,
   useQuizzesQuery,
   useQuizQuery,
   useStartAttemptMutation,
@@ -26,10 +27,26 @@ vi.mock("react-i18next", () => ({
 }))
 
 vi.mock("../../hooks", () => ({
+  useAttemptsQuery: vi.fn(),
   useQuizzesQuery: vi.fn(),
   useQuizQuery: vi.fn(),
   useStartAttemptMutation: vi.fn(),
   useSubmitAttemptMutation: vi.fn()
+}))
+
+vi.mock("../../hooks/useQuizTimer", () => ({
+  useQuizTimer: vi.fn(() => null)
+}))
+
+vi.mock("../../hooks/useQuizAutoSave", () => ({
+  useQuizAutoSave: vi.fn(() => ({
+    storageUnavailable: false,
+    restoreSavedAnswers: vi.fn(async () => false),
+    clearSavedProgress: vi.fn(async () => {}),
+    hasSavedProgress: vi.fn(async () => false),
+    getSavedProgress: vi.fn(async () => null),
+    forceSave: vi.fn(async () => {})
+  }))
 }))
 
 if (!(globalThis as any).ResizeObserver) {
@@ -70,6 +87,9 @@ describe("TakeQuizTab empty-state guidance", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(useAttemptsQuery).mockReturnValue({
+      data: { items: [], count: 0 }
+    } as any)
     vi.mocked(useQuizzesQuery).mockReturnValue({
       data: { items: [], count: 0 },
       isLoading: false

@@ -12,6 +12,7 @@ import {
   useReviewFlashcardMutation,
   useFlashcardShortcuts,
   useDueCountsQuery,
+  useDeckDueCountsQuery,
   useHasCardsQuery,
   useNextDueQuery
 } from "../hooks"
@@ -70,6 +71,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   const reviewQuery = useReviewQuery(reviewDeckId)
   const reviewMutation = useReviewFlashcardMutation()
   const dueCountsQuery = useDueCountsQuery(reviewDeckId)
+  const deckDueCountsQuery = useDeckDueCountsQuery()
   const hasCardsQuery = useHasCardsQuery()
   const nextDueQuery = useNextDueQuery(reviewDeckId)
   const nextDueInfo = nextDueQuery.data
@@ -157,7 +159,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         // Store the card for potential undo before submitting
         const cardForUndo = { ...card }
 
-        await reviewMutation.mutateAsync({
+        const reviewResult = await reviewMutation.mutateAsync({
           cardUuid: card.uuid,
           rating,
           answerTimeMs
@@ -204,7 +206,26 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
           }
         }, 10000) // 10 second undo window
 
-        message.success(t("common:success", { defaultValue: "Success" }))
+        const dueLabel = reviewResult.due_at
+          ? dayjs(reviewResult.due_at).fromNow()
+          : t("option:flashcards.nextReviewUnknown", {
+              defaultValue: "soon"
+            })
+        const intervalLabel =
+          reviewResult.interval_days === 1
+            ? t("option:flashcards.intervalOneDay", { defaultValue: "1 day" })
+            : t("option:flashcards.intervalManyDays", {
+                defaultValue: "{{count}} days",
+                count: reviewResult.interval_days
+              })
+
+        message.success(
+          t("option:flashcards.reviewSavedWithSchedule", {
+            defaultValue: "Saved. Next review {{due}} (interval: {{interval}}).",
+            due: dueLabel,
+            interval: intervalLabel
+          })
+        )
       } catch (e: unknown) {
         const errorMessage =
           e instanceof Error ? e.message : "Failed to submit review"
@@ -319,7 +340,14 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
           }}
           data-testid="flashcards-review-deck-select"
           options={(decksQuery.data || []).map((d) => ({
-            label: d.name,
+            label:
+              ((deckDueCountsQuery.data?.[d.id]?.due ?? 0) > 0)
+                ? t("option:flashcards.deckWithDueCount", {
+                    defaultValue: "{{deckName}} ({{count}} due)",
+                    deckName: d.name,
+                    count: deckDueCountsQuery.data?.[d.id]?.due ?? 0
+                  })
+                : d.name,
             value: d.id
           }))}
         />

@@ -839,7 +839,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         items={collapseItems}
         defaultActiveKey={["scope"]}
         className="mt-4"
-        expandIconPosition="end"
+        expandIconPlacement="end"
       />
     </Modal>
   )

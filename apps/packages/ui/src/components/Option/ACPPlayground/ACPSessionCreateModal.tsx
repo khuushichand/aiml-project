@@ -487,7 +487,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
         {/* Advanced Section - Collapsible */}
         <Collapse
           ghost
-          expandIconPosition="end"
+          expandIconPlacement="end"
           expandIcon={({ isActive }) => (
             <ChevronDown
               className={`h-4 w-4 transition-transform ${isActive ? "rotate-180" : ""}`}

@@ -1,7 +1,18 @@
 import React from 'react'
 import type { InputRef } from 'antd'
 import { Input, Typography, Select, Button, Tooltip } from 'antd'
-import { Plus as PlusIcon, Search as SearchIcon, ChevronLeft, ChevronRight } from 'lucide-react'
+import {
+  Plus as PlusIcon,
+  Search as SearchIcon,
+  ChevronLeft,
+  ChevronRight,
+  Bold as BoldIcon,
+  Italic as ItalicIcon,
+  Heading1 as HeadingIcon,
+  List as ListIcon,
+  Link2 as LinkIcon,
+  Code2 as CodeIcon
+} from 'lucide-react'
 import { bgRequest } from '@/services/background-proxy'
 import { useQuery, keepPreviousData, useQueryClient } from '@tanstack/react-query'
 import { useServerOnline } from '@/hooks/useServerOnline'
@@ -116,10 +127,19 @@ const toNoteVersion = (note: any): number | null => {
 
 // 120px offset accounts for page header and padding
 const MIN_SIDEBAR_HEIGHT = 600
+const NOTE_AUTOSAVE_DELAY_MS = 5000
 const calculateSidebarHeight = () => {
   const vh = typeof window !== 'undefined' ? window.innerHeight : MIN_SIDEBAR_HEIGHT
   return Math.max(MIN_SIDEBAR_HEIGHT, vh - 120)
 }
+
+type SaveNoteOptions = {
+  showSuccessMessage?: boolean
+}
+
+type SaveIndicatorState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
+type NotesEditorMode = 'edit' | 'split' | 'preview'
+type MarkdownToolbarAction = 'bold' | 'italic' | 'heading' | 'list' | 'link' | 'code'
 
 const NotesManagerPage: React.FC = () => {
   const { t } = useTranslation(['option', 'common'])
@@ -132,6 +152,7 @@ const NotesManagerPage: React.FC = () => {
   const [content, setContent] = React.useState('')
   const [loadingDetail, setLoadingDetail] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
+  const [saveIndicator, setSaveIndicator] = React.useState<SaveIndicatorState>('idle')
   const [keywordTokens, setKeywordTokens] = React.useState<string[]>([])
   const [keywordOptions, setKeywordOptions] = React.useState<string[]>([])
   const [allKeywords, setAllKeywords] = React.useState<string[]>([])
@@ -147,8 +168,10 @@ const NotesManagerPage: React.FC = () => {
   const [backlinkConversationId, setBacklinkConversationId] = React.useState<string | null>(null)
   const [backlinkMessageId, setBacklinkMessageId] = React.useState<string | null>(null)
   const [openingLinkedChat, setOpeningLinkedChat] = React.useState(false)
-  const [showPreview, setShowPreview] = React.useState(false)
+  const [editorMode, setEditorMode] = React.useState<NotesEditorMode>('edit')
   const keywordSearchTimeoutRef = React.useRef<number | null>(null)
+  const autosaveTimeoutRef = React.useRef<number | null>(null)
+  const contentTextareaRef = React.useRef<HTMLTextAreaElement | null>(null)
   const isOnline = useServerOnline()
   const { demoEnabled } = useDemoMode()
   const queryClient = useQueryClient()
@@ -183,6 +206,147 @@ const NotesManagerPage: React.FC = () => {
   )
 
   const editorDisabled = !isOnline || (!capsLoading && capabilities && !capabilities.hasNotes)
+
+  const clearAutosaveTimeout = React.useCallback(() => {
+    if (autosaveTimeoutRef.current != null) {
+      window.clearTimeout(autosaveTimeoutRef.current)
+      autosaveTimeoutRef.current = null
+    }
+  }, [])
+
+  const saveIndicatorText = React.useMemo(() => {
+    if (saveIndicator === 'saving') {
+      return t('option:notesSearch.saving', { defaultValue: 'Saving...' })
+    }
+    if (saveIndicator === 'error') {
+      return t('option:notesSearch.autosaveFailed', {
+        defaultValue: 'Autosave failed. Press Save to retry.'
+      })
+    }
+    if (saveIndicator === 'saved' && !isDirty) {
+      return t('option:notesSearch.saved', { defaultValue: 'All changes saved' })
+    }
+    return null
+  }, [isDirty, saveIndicator, t])
+
+  const editorMetrics = React.useMemo(() => {
+    const chars = content.length
+    const words = content.trim().length > 0 ? content.trim().split(/\s+/).filter(Boolean).length : 0
+    const readingTimeMinutes = words === 0 ? 0 : Math.max(1, Math.ceil(words / 200))
+    return { chars, words, readingTimeMinutes }
+  }, [content])
+
+  const metricSummaryText = React.useMemo(() => {
+    const wordLabel = editorMetrics.words === 1 ? 'word' : 'words'
+    const charLabel = editorMetrics.chars === 1 ? 'char' : 'chars'
+    const readLabel = editorMetrics.readingTimeMinutes === 1 ? 'min read' : 'mins read'
+    return `${editorMetrics.words} ${wordLabel} · ${editorMetrics.chars} ${charLabel} · ${editorMetrics.readingTimeMinutes} ${readLabel}`
+  }, [editorMetrics])
+
+  const resizeEditorTextarea = React.useCallback(() => {
+    const textarea = contentTextareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 900
+    const maxHeight = Math.max(
+      280,
+      Math.floor(viewportHeight * (editorMode === 'split' ? 0.42 : 0.62))
+    )
+    const minHeight = editorMode === 'split' ? 220 : 280
+    const nextHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight)
+    textarea.style.height = `${nextHeight}px`
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden'
+  }, [editorMode])
+
+  const setContentDirty = React.useCallback((nextContent: string) => {
+    setContent(nextContent)
+    setIsDirty(true)
+    setSaveIndicator('dirty')
+  }, [])
+
+  const applyMarkdownToolbarAction = React.useCallback(
+    (action: MarkdownToolbarAction) => {
+      if (editorDisabled) return
+      const textarea = contentTextareaRef.current
+      if (!textarea) return
+
+      textarea.focus()
+      const start = textarea.selectionStart ?? 0
+      const end = textarea.selectionEnd ?? start
+      const selected = content.slice(start, end)
+
+      let replacement = selected
+      let nextSelectionStart = start
+      let nextSelectionEnd = end
+
+      if (action === 'bold') {
+        const inner = selected || 'bold text'
+        replacement = `**${inner}**`
+        nextSelectionStart = start + 2
+        nextSelectionEnd = nextSelectionStart + inner.length
+      } else if (action === 'italic') {
+        const inner = selected || 'italic text'
+        replacement = `*${inner}*`
+        nextSelectionStart = start + 1
+        nextSelectionEnd = nextSelectionStart + inner.length
+      } else if (action === 'code') {
+        const inner = selected || 'code'
+        replacement = `\`${inner}\``
+        nextSelectionStart = start + 1
+        nextSelectionEnd = nextSelectionStart + inner.length
+      } else if (action === 'heading') {
+        if (selected) {
+          replacement = selected
+            .split('\n')
+            .map((line) => (line.startsWith('#') ? line : `# ${line}`))
+            .join('\n')
+          nextSelectionStart = start
+          nextSelectionEnd = start + replacement.length
+        } else {
+          replacement = '# Heading'
+          nextSelectionStart = start + 2
+          nextSelectionEnd = start + replacement.length
+        }
+      } else if (action === 'list') {
+        if (selected) {
+          replacement = selected
+            .split('\n')
+            .map((line) => {
+              const trimmed = line.trim()
+              if (!trimmed) return line
+              if (trimmed.startsWith('- ')) return line
+              return line.replace(trimmed, `- ${trimmed}`)
+            })
+            .join('\n')
+          nextSelectionStart = start
+          nextSelectionEnd = start + replacement.length
+        } else {
+          replacement = '- List item'
+          nextSelectionStart = start + 2
+          nextSelectionEnd = start + replacement.length
+        }
+      } else if (action === 'link') {
+        const text = selected || 'link text'
+        const url = 'https://'
+        replacement = `[${text}](${url})`
+        const urlStart = start + replacement.indexOf(url)
+        nextSelectionStart = urlStart
+        nextSelectionEnd = urlStart + url.length
+      }
+
+      const nextContent = `${content.slice(0, start)}${replacement}${content.slice(end)}`
+      setContentDirty(nextContent)
+
+      window.requestAnimationFrame(() => {
+        const activeTextarea = contentTextareaRef.current
+        if (!activeTextarea) return
+        activeTextarea.focus()
+        activeTextarea.setSelectionRange(nextSelectionStart, nextSelectionEnd)
+        resizeEditorTextarea()
+      })
+    },
+    [content, editorDisabled, resizeEditorTextarea, setContentDirty]
+  )
 
   const fetchFilteredNotesRaw = async (
     q: string,
@@ -371,6 +535,7 @@ const NotesManagerPage: React.FC = () => {
       setBacklinkConversationId(links.conversation_id)
       setBacklinkMessageId(links.message_id)
       setIsDirty(false)
+      setSaveIndicator('idle')
     } catch {
       message.error('Failed to load note')
     } finally { setLoadingDetail(false) }
@@ -386,6 +551,7 @@ const NotesManagerPage: React.FC = () => {
     setBacklinkConversationId(null)
     setBacklinkMessageId(null)
     setIsDirty(false)
+    setSaveIndicator('idle')
   }
 
   const confirmDiscardIfDirty = React.useCallback(async () => {
@@ -460,76 +626,130 @@ const NotesManagerPage: React.FC = () => {
     })
   }
 
-  const saveNote = async () => {
-    if (!content.trim() && !title.trim()) { message.warning('Nothing to save'); return }
-    setSaving(true)
-    try {
-      const metadata: Record<string, any> = {
-        ...(originalMetadata || {}),
-        keywords: editorKeywords
+  const saveNote = React.useCallback(
+    async ({ showSuccessMessage = true }: SaveNoteOptions = {}) => {
+      if (saving) return
+      if (!content.trim() && !title.trim()) {
+        if (showSuccessMessage) {
+          message.warning('Nothing to save')
+        }
+        setSaveIndicator('idle')
+        return
       }
-      if (backlinkConversationId) metadata.conversation_id = backlinkConversationId
-      if (backlinkMessageId) metadata.message_id = backlinkMessageId
-      const payload: Record<string, any> = {
-        title: title || undefined,
-        content,
-        metadata,
-        keywords: editorKeywords
-      }
-      if (backlinkConversationId) payload.conversation_id = backlinkConversationId
-      if (backlinkMessageId) payload.message_id = backlinkMessageId
-      if (selectedId == null) {
-        const created = await bgRequest<any>({ path: '/api/v1/notes/' as any, method: 'POST' as any, headers: { 'Content-Type': 'application/json' }, body: payload })
-        message.success('Note created')
-        setIsDirty(false)
-        await refetch()
-        if (created?.id != null) await loadDetail(created.id)
-      } else {
-        let expectedVersion = selectedVersion
-        if (expectedVersion == null) {
-          try {
-            const latest = await bgRequest<any>({ path: `/api/v1/notes/${selectedId}` as any, method: 'GET' as any })
-            expectedVersion = toNoteVersion(latest)
-          } catch (e: any) {
-            message.error(e?.message || 'Save failed')
+      setSaving(true)
+      setSaveIndicator('saving')
+      try {
+        const metadata: Record<string, any> = {
+          ...(originalMetadata || {}),
+          keywords: editorKeywords
+        }
+        if (backlinkConversationId) metadata.conversation_id = backlinkConversationId
+        if (backlinkMessageId) metadata.message_id = backlinkMessageId
+        const payload: Record<string, any> = {
+          title: title || undefined,
+          content,
+          metadata,
+          keywords: editorKeywords
+        }
+        if (backlinkConversationId) payload.conversation_id = backlinkConversationId
+        if (backlinkMessageId) payload.message_id = backlinkMessageId
+        if (selectedId == null) {
+          const created = await bgRequest<any>({
+            path: '/api/v1/notes/' as any,
+            method: 'POST' as any,
+            headers: { 'Content-Type': 'application/json' },
+            body: payload
+          })
+          if (showSuccessMessage) {
+            message.success('Note created')
+          }
+          setIsDirty(false)
+          setSaveIndicator('saved')
+          await refetch()
+          if (created?.id != null) await loadDetail(created.id)
+        } else {
+          let expectedVersion = selectedVersion
+          if (expectedVersion == null) {
+            try {
+              const latest = await bgRequest<any>({
+                path: `/api/v1/notes/${selectedId}` as any,
+                method: 'GET' as any
+              })
+              expectedVersion = toNoteVersion(latest)
+            } catch (e: any) {
+              setSaveIndicator('error')
+              if (showSuccessMessage) {
+                message.error(e?.message || 'Save failed')
+              }
+              return
+            }
+          }
+          if (expectedVersion == null) {
+            setSaveIndicator('error')
+            if (showSuccessMessage) {
+              message.error('Missing version; reload and try again')
+            }
             return
           }
-        }
-        if (expectedVersion == null) {
-          message.error('Missing version; reload and try again')
-          return
-        }
-        const updated = await bgRequest<any>({
-          path: `/api/v1/notes/${selectedId}?expected_version=${encodeURIComponent(
-            String(expectedVersion)
-          )}` as any,
-          method: 'PUT' as any,
-          headers: { 'Content-Type': 'application/json' },
-          body: payload
-        })
-        const updatedVersion = toNoteVersion(updated)
-        message.success('Note updated')
-        setIsDirty(false)
-        await refetch()
-        if (updatedVersion != null) {
-          setSelectedVersion(updatedVersion)
-        } else if (selectedId != null) {
-          try {
-            const latest = await bgRequest<any>({ path: `/api/v1/notes/${selectedId}` as any, method: 'GET' as any })
-            setSelectedVersion(toNoteVersion(latest))
-          } catch (err) {
-            console.debug('[NotesManagerPage] Version refresh after save failed:', err)
+          const updated = await bgRequest<any>({
+            path: `/api/v1/notes/${selectedId}?expected_version=${encodeURIComponent(
+              String(expectedVersion)
+            )}` as any,
+            method: 'PUT' as any,
+            headers: { 'Content-Type': 'application/json' },
+            body: payload
+          })
+          const updatedVersion = toNoteVersion(updated)
+          if (showSuccessMessage) {
+            message.success('Note updated')
+          }
+          setIsDirty(false)
+          setSaveIndicator('saved')
+          await refetch()
+          if (updatedVersion != null) {
+            setSelectedVersion(updatedVersion)
+          } else if (selectedId != null) {
+            try {
+              const latest = await bgRequest<any>({
+                path: `/api/v1/notes/${selectedId}` as any,
+                method: 'GET' as any
+              })
+              setSelectedVersion(toNoteVersion(latest))
+            } catch (err) {
+              console.debug('[NotesManagerPage] Version refresh after save failed:', err)
+            }
           }
         }
+      } catch (e: any) {
+        setSaveIndicator('error')
+        if (isVersionConflictError(e)) {
+          if (showSuccessMessage) {
+            handleVersionConflict(selectedId)
+          }
+        } else if (showSuccessMessage) {
+          message.error(String(e?.message || '') || 'Operation failed')
+        }
+      } finally {
+        setSaving(false)
       }
-    } catch (e: any) {
-      if (isVersionConflictError(e)) {
-        handleVersionConflict(selectedId)
-      } else {
-        message.error(String(e?.message || '') || 'Operation failed')
-      }
-    } finally { setSaving(false) }
-  }
+    },
+    [
+      backlinkConversationId,
+      backlinkMessageId,
+      content,
+      editorKeywords,
+      handleVersionConflict,
+      isVersionConflictError,
+      loadDetail,
+      message,
+      originalMetadata,
+      refetch,
+      saving,
+      selectedId,
+      selectedVersion,
+      title
+    ]
+  )
 
   const reloadNotes = async (noteId?: string | number | null) => {
     await refetch()
@@ -963,17 +1183,60 @@ const NotesManagerPage: React.FC = () => {
   }, [isDirty])
 
   React.useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const lowered = event.key.toLowerCase()
+      const hasModifier = event.ctrlKey || event.metaKey
+      if (!hasModifier || lowered !== 's' || event.altKey) return
+      event.preventDefault()
+      if (editorDisabled) return
+      void saveNote()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [editorDisabled, saveNote])
+
+  React.useEffect(() => {
+    if (!isDirty || editorDisabled || saving) {
+      clearAutosaveTimeout()
+      return
+    }
+    if (!content.trim() && !title.trim()) {
+      clearAutosaveTimeout()
+      return
+    }
+    clearAutosaveTimeout()
+    autosaveTimeoutRef.current = window.setTimeout(() => {
+      void saveNote({ showSuccessMessage: false })
+    }, NOTE_AUTOSAVE_DELAY_MS)
+    return () => {
+      clearAutosaveTimeout()
+    }
+  }, [clearAutosaveTimeout, content, editorDisabled, isDirty, saveNote, saving, title])
+
+  React.useEffect(() => {
     return () => {
       if (keywordSearchTimeoutRef.current != null) {
         clearTimeout(keywordSearchTimeoutRef.current)
       }
+      clearAutosaveTimeout()
     }
-  }, [])
+  }, [clearAutosaveTimeout])
 
   React.useEffect(() => {
     // When selecting a different note, default back to edit mode so users can start typing immediately.
-    setShowPreview(false)
+    setEditorMode('edit')
   }, [selectedId])
+
+  React.useEffect(() => {
+    resizeEditorTextarea()
+  }, [content, editorMode, resizeEditorTextarea])
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onResize = () => resizeEditorTextarea()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [resizeEditorTextarea])
 
   // Deep-link support: if tldw:lastNoteId is set (e.g., from omni-search),
   // automatically load that note once when the list is available.
@@ -1203,7 +1466,7 @@ const NotesManagerPage: React.FC = () => {
           backlinkMessageId={backlinkMessageId}
           editorDisabled={editorDisabled}
           openingLinkedChat={openingLinkedChat}
-          showPreview={showPreview}
+          editorMode={editorMode}
           hasContent={content.trim().length > 0}
           canSave={
             !editorDisabled &&
@@ -1219,8 +1482,8 @@ const NotesManagerPage: React.FC = () => {
           onNewNote={() => {
             void handleNewNote()
           }}
-          onTogglePreview={() => {
-            setShowPreview((prev) => !prev)
+          onChangeEditorMode={(nextMode) => {
+            setEditorMode(nextMode)
           }}
           onCopy={() => {
             void copySelected()
@@ -1242,6 +1505,7 @@ const NotesManagerPage: React.FC = () => {
             onChange={(e) => {
               setTitle(e.target.value)
               setIsDirty(true)
+              setSaveIndicator('dirty')
             }}
             disabled={editorDisabled}
             ref={titleInputRef}
@@ -1263,6 +1527,7 @@ const NotesManagerPage: React.FC = () => {
               onChange={(vals) => {
                 setEditorKeywords(vals as string[])
                 setIsDirty(true)
+                setSaveIndicator('dirty')
               }}
               options={keywordOptions.map((k) => ({ label: k, value: k }))}
               disabled={editorDisabled}
@@ -1276,9 +1541,96 @@ const NotesManagerPage: React.FC = () => {
                   'Keywords help you find this note using the keyword filter on the left.'
               })}
             </Typography.Text>
+            {saveIndicatorText && (
+              <Typography.Text
+                type={saveIndicator === 'error' ? 'danger' : 'secondary'}
+                className="block text-[11px] mt-1 text-text-muted"
+                aria-live="polite"
+              >
+                {saveIndicatorText}
+              </Typography.Text>
+            )}
           </div>
-          <div className="mt-3 flex-1 min-h-0">
-            {showPreview ? (
+          {editorMode !== 'preview' && (
+            <div className="mt-3 flex items-center flex-wrap gap-1 rounded-lg border border-border bg-surface2 p-2">
+              <Typography.Text
+                type="secondary"
+                className="text-[11px] mr-1 uppercase tracking-[0.08em]"
+              >
+                {t('option:notesSearch.formattingLabel', {
+                  defaultValue: 'Formatting'
+                })}
+              </Typography.Text>
+              <Tooltip title={t('option:notesSearch.toolbarBoldTooltip', { defaultValue: 'Bold' })}>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={(<BoldIcon className="w-4 h-4" />) as any}
+                  onClick={() => applyMarkdownToolbarAction('bold')}
+                  disabled={editorDisabled}
+                  aria-label={t('option:notesSearch.toolbarBoldTooltip', { defaultValue: 'Bold' })}
+                  data-testid="notes-toolbar-bold"
+                />
+              </Tooltip>
+              <Tooltip title={t('option:notesSearch.toolbarItalicTooltip', { defaultValue: 'Italic' })}>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={(<ItalicIcon className="w-4 h-4" />) as any}
+                  onClick={() => applyMarkdownToolbarAction('italic')}
+                  disabled={editorDisabled}
+                  aria-label={t('option:notesSearch.toolbarItalicTooltip', { defaultValue: 'Italic' })}
+                  data-testid="notes-toolbar-italic"
+                />
+              </Tooltip>
+              <Tooltip title={t('option:notesSearch.toolbarHeadingTooltip', { defaultValue: 'Heading' })}>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={(<HeadingIcon className="w-4 h-4" />) as any}
+                  onClick={() => applyMarkdownToolbarAction('heading')}
+                  disabled={editorDisabled}
+                  aria-label={t('option:notesSearch.toolbarHeadingTooltip', { defaultValue: 'Heading' })}
+                  data-testid="notes-toolbar-heading"
+                />
+              </Tooltip>
+              <Tooltip title={t('option:notesSearch.toolbarListTooltip', { defaultValue: 'List' })}>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={(<ListIcon className="w-4 h-4" />) as any}
+                  onClick={() => applyMarkdownToolbarAction('list')}
+                  disabled={editorDisabled}
+                  aria-label={t('option:notesSearch.toolbarListTooltip', { defaultValue: 'List' })}
+                  data-testid="notes-toolbar-list"
+                />
+              </Tooltip>
+              <Tooltip title={t('option:notesSearch.toolbarLinkTooltip', { defaultValue: 'Link' })}>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={(<LinkIcon className="w-4 h-4" />) as any}
+                  onClick={() => applyMarkdownToolbarAction('link')}
+                  disabled={editorDisabled}
+                  aria-label={t('option:notesSearch.toolbarLinkTooltip', { defaultValue: 'Link' })}
+                  data-testid="notes-toolbar-link"
+                />
+              </Tooltip>
+              <Tooltip title={t('option:notesSearch.toolbarCodeTooltip', { defaultValue: 'Code' })}>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={(<CodeIcon className="w-4 h-4" />) as any}
+                  onClick={() => applyMarkdownToolbarAction('code')}
+                  disabled={editorDisabled}
+                  aria-label={t('option:notesSearch.toolbarCodeTooltip', { defaultValue: 'Code' })}
+                  data-testid="notes-toolbar-code"
+                />
+              </Tooltip>
+            </div>
+          )}
+          <div className="mt-2 flex-1 min-h-0">
+            {editorMode === 'preview' ? (
               content.trim().length > 0 ? (
                 <div className="h-full flex flex-col">
                   <Typography.Text
@@ -1304,20 +1656,105 @@ const NotesManagerPage: React.FC = () => {
                   })}
                 </Typography.Text>
               )
+            ) : editorMode === 'split' ? (
+              <div className="grid h-full min-h-0 grid-cols-1 gap-3 lg:grid-cols-2">
+                <div className="flex min-h-0 flex-col">
+                  <Typography.Text
+                    type="secondary"
+                    className="block text-[11px] mb-2 text-text-muted"
+                  >
+                    {t('option:notesSearch.editModeLabel', {
+                      defaultValue: 'Edit'
+                    })}
+                  </Typography.Text>
+                  <textarea
+                    ref={contentTextareaRef}
+                    className="w-full min-h-[220px] text-sm p-4 rounded-lg border border-border bg-surface2 text-text resize-none leading-relaxed focus:outline-none focus:ring-2 focus:ring-focus"
+                    value={content}
+                    onChange={(e) => {
+                      setContentDirty(e.target.value)
+                    }}
+                    placeholder={t('option:notesSearch.editorPlaceholder', {
+                      defaultValue: 'Write your note here... (Markdown supported)'
+                    })}
+                    readOnly={editorDisabled}
+                    aria-label={t('option:notesSearch.editorAriaLabel', {
+                      defaultValue: 'Note content'
+                    })}
+                  />
+                  <Typography.Text
+                    type="secondary"
+                    className="block text-[11px] mt-1 text-text-muted"
+                  >
+                    {t('option:notesSearch.editorSupportHint', {
+                      defaultValue: 'Markdown + LaTeX supported'
+                    })}
+                  </Typography.Text>
+                </div>
+                <div className="flex min-h-0 flex-col">
+                  {content.trim().length > 0 ? (
+                    <>
+                      <Typography.Text
+                        type="secondary"
+                        className="block text-[11px] mb-2 text-text-muted"
+                      >
+                        {t('option:notesSearch.previewTitle', {
+                          defaultValue: 'Preview (Markdown + LaTeX)'
+                        })}
+                      </Typography.Text>
+                      <div className="w-full flex-1 text-sm p-4 rounded-lg border border-border bg-surface2 overflow-auto">
+                        <MarkdownPreview content={content} size="sm" />
+                      </div>
+                    </>
+                  ) : (
+                    <Typography.Text
+                      type="secondary"
+                      className="block text-[11px] mt-1 text-text-muted"
+                    >
+                      {t('option:notesSearch.emptyPreview', {
+                        defaultValue:
+                          'Start typing to see a live preview of your note.'
+                      })}
+                    </Typography.Text>
+                  )}
+                </div>
+              </div>
             ) : (
-              <textarea
-                className="w-full h-full min-h-0 text-sm p-4 rounded-lg border border-border bg-surface2 text-text resize-none leading-relaxed focus:outline-none focus:ring-2 focus:ring-focus"
-                value={content}
-                onChange={(e) => {
-                  setContent(e.target.value)
-                  setIsDirty(true)
-                }}
-                placeholder={t('option:notesSearch.editorPlaceholder', {
-                  defaultValue: 'Write your note here... (Markdown supported)'
-                })}
-                readOnly={editorDisabled}
-              />
+              <div className="flex h-full min-h-0 flex-col">
+                <textarea
+                  ref={contentTextareaRef}
+                  className="w-full min-h-[280px] text-sm p-4 rounded-lg border border-border bg-surface2 text-text resize-none leading-relaxed focus:outline-none focus:ring-2 focus:ring-focus"
+                  value={content}
+                  onChange={(e) => {
+                    setContentDirty(e.target.value)
+                  }}
+                  placeholder={t('option:notesSearch.editorPlaceholder', {
+                    defaultValue: 'Write your note here... (Markdown supported)'
+                  })}
+                  readOnly={editorDisabled}
+                  aria-label={t('option:notesSearch.editorAriaLabel', {
+                    defaultValue: 'Note content'
+                  })}
+                />
+                <Typography.Text
+                  type="secondary"
+                  className="block text-[11px] mt-1 text-text-muted"
+                >
+                  {t('option:notesSearch.editorSupportHint', {
+                    defaultValue: 'Markdown + LaTeX supported'
+                  })}
+                </Typography.Text>
+              </div>
             )}
+          </div>
+          <div className="mt-2 border-t border-border pt-2">
+            <Typography.Text
+              type="secondary"
+              className="text-[11px] text-text-muted"
+              data-testid="notes-editor-metrics"
+            >
+              {metricSummaryText}
+            </Typography.Text>
           </div>
         </div>
       </div>

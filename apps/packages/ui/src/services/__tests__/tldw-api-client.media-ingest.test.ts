@@ -193,4 +193,40 @@ describe("TldwApiClient media ingest contract", () => {
     expect(callArg.file?.data).toBe(rawBuffer)
     expect(Array.isArray(callArg.file?.data)).toBe(false)
   })
+
+  it("uploads yaml character imports through the same endpoint contract", async () => {
+    mocks.bgUpload.mockResolvedValue({
+      id: 124,
+      name: "Imported YAML Character",
+      message: "Character imported successfully"
+    })
+
+    const client = new TldwApiClient()
+    ;(client as any).ensureConfigForRequest = vi.fn(async () => ({ ok: true }))
+    const rawBuffer = new TextEncoder().encode("name: YAML Client Test").buffer
+    const file = {
+      name: "card.yaml",
+      type: "text/yaml",
+      arrayBuffer: vi.fn(async () => rawBuffer)
+    } as unknown as File
+
+    await client.importCharacterFile(file)
+
+    expect(mocks.bgUpload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/characters/import",
+        method: "POST",
+        fileFieldName: "character_file",
+        file: expect.objectContaining({
+          name: "card.yaml",
+          type: "text/yaml"
+        })
+      })
+    )
+
+    const callArg = mocks.bgUpload.mock.calls.at(-1)?.[0] as {
+      fields?: Record<string, unknown>
+    }
+    expect(callArg.fields).toBeUndefined()
+  })
 })

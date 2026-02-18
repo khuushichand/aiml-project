@@ -100,6 +100,7 @@ const MEDIA_NAVIGATION_PANEL_VISIBLE_STORAGE_KEY =
 const MEDIA_NAVIGATION_GENERATED_FALLBACK_STORAGE_KEY =
   'media:navigation:includeGeneratedFallback'
 const MEDIA_SIDEBAR_COLLAPSED_STORAGE_KEY = 'media:sidebar:collapsed'
+export const MEDIA_STALE_CHECK_INTERVAL_MS = 30_000
 
 const ViewMediaPage: React.FC = () => {
   const { t } = useTranslation(['review', 'common', 'settings'])
@@ -385,6 +386,9 @@ const MediaPageContent: React.FC = () => {
     mediaId: string | number
     message: string
   } | null>(null)
+  const [staleSelectionNotice, setStaleSelectionNotice] = useState<string | null>(
+    null
+  )
   const [contentHeight, setContentHeight] = useState<number>(0)
   const permalinkMediaId = useMemo(
     () => getMediaPermalinkIdFromSearch(location.search),
@@ -1831,6 +1835,16 @@ const MediaPageContent: React.FC = () => {
   }, [loadSelectedDetails])
 
   useEffect(() => {
+    if (!staleSelectionNotice) return
+    const timer = window.setTimeout(() => {
+      setStaleSelectionNotice(null)
+    }, 8000)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [staleSelectionNotice])
+
+  useEffect(() => {
     if (!pendingInitialMediaId) return
 
     const pendingId = pendingInitialMediaId
@@ -1912,6 +1926,98 @@ const MediaPageContent: React.FC = () => {
 
     void loadSelectedDetailsRef.current(currentSelection)
   }, [lastFetchedId, selected?.id])
+
+  useEffect(() => {
+    if (!selected || selected.kind !== 'media') return
+    if (detailLoading) return
+
+    let cancelled = false
+    let inFlight = false
+    const selectedId = String(selected.id)
+    const selectedValue = selected.id
+
+    const reconcileStaleSelection = async () => {
+      if (inFlight || cancelled) return
+      inFlight = true
+      try {
+        await bgRequest<any>({
+          path: `/api/v1/media/${selectedId}` as any,
+          method: 'GET' as any
+        })
+      } catch (error) {
+        const statusCode = getErrorStatusCode(error)
+        if (statusCode !== 404 && statusCode !== 410) {
+          return
+        }
+        if (cancelled) return
+
+        const staleMessage = t('review:mediaPage.staleSelectionRecovered', {
+          defaultValue:
+            'The selected item is no longer available. Your selection was updated.'
+        })
+        setStaleSelectionNotice(staleMessage)
+        message.warning(staleMessage)
+
+        const currentIndex = displayResults.findIndex(
+          (item) => String(item.id) === selectedId
+        )
+        const refreshed = await refetch()
+        const refreshedResults = Array.isArray(refreshed?.data)
+          ? (refreshed.data as MediaResultItem[])
+          : []
+        const remaining = refreshedResults.filter(
+          (item) => String(item.id) !== selectedId
+        )
+
+        if (remaining.length > 0) {
+          const nextIndex =
+            currentIndex >= 0
+              ? Math.min(currentIndex, remaining.length - 1)
+              : 0
+          const replacement = remaining[nextIndex]
+          setLastFetchedId(null)
+          setSelected(replacement)
+          setDetailFetchError({
+            mediaId: selectedValue,
+            message: t('review:mediaPage.detailUnavailable', {
+              defaultValue: 'This item is no longer available. It may have been deleted.'
+            })
+          })
+          return
+        }
+
+        setSelected(null)
+        setSelectedContent('')
+        setSelectedDetail(null)
+        setLastFetchedId(null)
+        setDetailFetchError({
+          mediaId: selectedValue,
+          message: t('review:mediaPage.detailUnavailable', {
+            defaultValue: 'This item is no longer available. It may have been deleted.'
+          })
+        })
+      } finally {
+        inFlight = false
+      }
+    }
+
+    const interval = window.setInterval(() => {
+      void reconcileStaleSelection()
+    }, MEDIA_STALE_CHECK_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [
+    detailLoading,
+    displayResults,
+    message,
+    refetch,
+    selected?.id,
+    selected?.kind,
+    t
+  ])
 
   const selectedMediaPermalinkId =
     selected?.kind === 'media' && selected?.id != null ? String(selected.id) : null
@@ -2861,6 +2967,14 @@ const MediaPageContent: React.FC = () => {
           ) : null}
 
           <div className="flex-1 flex flex-col min-h-0">
+            {staleSelectionNotice ? (
+              <div
+                className="mx-3 mt-3 rounded-md border border-border bg-surface2 px-3 py-2 text-sm text-text"
+                data-testid="media-stale-selection-notice"
+              >
+                {staleSelectionNotice}
+              </div>
+            ) : null}
             {selected &&
             detailFetchError &&
             String(detailFetchError.mediaId) === String(selected.id) ? (
