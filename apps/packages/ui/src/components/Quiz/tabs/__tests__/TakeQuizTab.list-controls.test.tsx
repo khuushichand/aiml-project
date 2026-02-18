@@ -37,6 +37,10 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
+vi.mock("@/hooks/useServerOnline", () => ({
+  useServerOnline: () => true
+}))
+
 vi.mock("../../hooks", () => ({
   useAttemptsQuery: vi.fn(),
   useQuizzesQuery: vi.fn(),
@@ -98,6 +102,7 @@ describe("TakeQuizTab list controls and default passing policy", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
     window.sessionStorage.clear()
 
     vi.mocked(useAttemptsQuery).mockReturnValue({
@@ -196,7 +201,7 @@ describe("TakeQuizTab list controls and default passing policy", () => {
         expect.objectContaining({ q: "biology" })
       )
     })
-  })
+  }, 15000)
 
   it("shows explicit default passing score policy when quiz has no passing score", async () => {
     render(
@@ -209,7 +214,7 @@ describe("TakeQuizTab list controls and default passing policy", () => {
     fireEvent.click(screen.getByRole("button", { name: /Start Quiz/i }))
     fireEvent.click(screen.getByRole("button", { name: "Begin Quiz" }))
 
-    await screen.findByText(/Cells are alive\./)
+    await screen.findByTestId("quiz-question-1")
     fireEvent.click(screen.getByRole("radio", { name: "True" }))
     fireEvent.click(screen.getByRole("button", { name: "Submit" }))
 
@@ -218,5 +223,5 @@ describe("TakeQuizTab list controls and default passing policy", () => {
         screen.getByText("No passing score set. Using default: 70%.")
       ).toBeInTheDocument()
     })
-  })
+  }, 15000)
 })

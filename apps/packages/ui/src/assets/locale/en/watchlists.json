@@ -7,11 +7,11 @@
   "comingSoon": "Coming soon...",
   "tabs": {
     "overview": "Overview",
-    "sources": "Sources",
-    "jobs": "Jobs",
-    "runs": "Runs",
-    "items": "Items",
-    "outputs": "Outputs",
+    "sources": "Feeds",
+    "jobs": "Monitors",
+    "runs": "Activity",
+    "items": "Articles",
+    "outputs": "Reports",
     "templates": "Templates",
     "settings": "Settings"
   },
@@ -29,22 +29,51 @@
       "degradedTitle": "System requires attention",
       "degradedDescription": "Some sources or recent runs show failures. Open failed runs to investigate."
     },
+    "onboarding": {
+      "title": "Quick setup",
+      "pipeline": "Add Feed -> Create Monitor -> Review Results",
+      "steps": {
+        "addFeed": {
+          "title": "Add your first feed",
+          "description": "Start by adding an RSS/site source in Feeds."
+        },
+        "createMonitor": {
+          "title": "Create your first monitor",
+          "description": "Pick feeds, then set a schedule with presets."
+        },
+        "reviewResults": {
+          "title": "Review results",
+          "description": "Open Articles for content and Activity for run diagnostics."
+        }
+      },
+      "cta": {
+        "addFeed": "Add first feed",
+        "createMonitor": "Create first monitor",
+        "reviewArticles": "Open Articles"
+      }
+    },
+    "setupComplete": {
+      "title": "Setup complete",
+      "nextRunDescription": "Your next monitor run is {{time}}. New content will appear in Articles and Activity.",
+      "runNowDescription": "Run a monitor from Monitors to generate your first Articles and Activity entries.",
+      "openActivity": "Open Activity"
+    },
     "cards": {
       "sources": {
-        "title": "Sources",
+        "title": "Feeds",
         "total": "Total",
         "healthy": "Healthy {{count}}",
         "degraded": "Degraded {{count}}",
         "inactive": "Inactive {{count}}"
       },
       "jobs": {
-        "title": "Jobs",
+        "title": "Monitors",
         "active": "Active",
         "nextRun": "Next run {{time}}",
         "noNextRun": "No upcoming schedules"
       },
       "items": {
-        "title": "Items",
+        "title": "Articles",
         "unread": "Unread"
       },
       "runs": {
@@ -70,23 +99,28 @@
     "runFailedDescription": "Run #{{id}} failed. {{hint}}"
   },
   "sources": {
-    "title": "Sources",
-    "addSource": "Add Source",
-    "editSource": "Edit Source",
-    "searchPlaceholder": "Search sources...",
+    "title": "Feeds",
+    "addSource": "Add Feed",
+    "editSource": "Edit Feed",
+    "searchPlaceholder": "Search feeds...",
     "filterByTag": "Filter by tag",
     "filterByType": "Filter by type",
-    "totalItems": "{{total}} sources",
-    "fetchError": "Failed to load sources",
-    "saveError": "Failed to save source",
-    "deleteError": "Failed to delete source",
-    "toggleError": "Failed to update source",
-    "created": "Source created",
-    "updated": "Source updated",
-    "deleted": "Source deleted",
-    "enabled": "Source enabled",
-    "disabled": "Source disabled",
-    "deleteConfirm": "Delete this source?",
+    "totalItems": "{{total}} feeds",
+    "fetchError": "Failed to load feeds",
+    "saveError": "Failed to save feed",
+    "deleteError": "Failed to delete feed",
+    "toggleError": "Failed to update feed",
+    "created": "Feed created",
+    "updated": "Feed updated",
+    "deleted": "Feed deleted",
+    "undoDeleteTitle": "Feed deleted",
+    "undoDeleteDescription": "Undo restores this feed for {{seconds}} seconds.",
+    "undoBulkDeleteTitle": "{{count}} feeds deleted",
+    "undoBulkDeleteDescription": "Undo restores deleted feeds for {{seconds}} seconds.",
+    "undoBulkRestorePartialError": "{{restored}} restored, {{failed}} failed to restore",
+    "enabled": "Feed enabled",
+    "disabled": "Feed disabled",
+    "deleteConfirm": "Delete this feed?",
     "never": "Never",
     "groupFilterError": "Failed to load group filter",
     "export": "Export OPML",
@@ -111,9 +145,14 @@
     "bulkDelete": "Delete",
     "bulkDeleteConfirm": "Delete selected sources?",
     "bulkUpdated": "{{count}} sources updated",
+    "bulkUpdatePartial": "Updated {{success}} feeds, {{failed}} failed",
     "bulkDeleted": "{{count}} sources deleted",
+    "bulkDeletePartial": "Deleted {{success}} feeds, {{failed}} failed",
     "bulkDeleteError": "Bulk delete failed",
     "bulkError": "Bulk update failed",
+    "undoBulkToggleTitle": "Updated {{count}} feeds",
+    "undoBulkToggleDescription": "Undo restores previous feed states for {{seconds}} seconds.",
+    "undoBulkTogglePartialError": "{{restored}} restored, {{failed}} failed to restore",
     "staleCount": "Stale x{{count}}",
     "backoffUntil": "Backoff {{time}}",
     "seenInfo": "Source Health & Dedup Stats",
@@ -151,7 +190,7 @@
   },
   "groups": {
     "title": "Groups",
-    "all": "All Sources",
+    "all": "All Feeds",
     "create": "Create Group",
     "created": "Group created",
     "createError": "Failed to create group",
@@ -170,21 +209,23 @@
     }
   },
   "jobs": {
-    "title": "Jobs",
-    "description": "Create scheduled jobs to automatically fetch and process content from your sources.",
-    "addJob": "Add Job",
-    "editJob": "Edit Job",
-    "totalItems": "{{total}} jobs",
-    "fetchError": "Failed to load jobs",
-    "saveError": "Failed to save job",
-    "deleteError": "Failed to delete job",
-    "toggleError": "Failed to update job",
+    "title": "Monitors",
+    "description": "Create monitors that automatically fetch and process updates from your feeds.",
+    "addJob": "Add Monitor",
+    "editJob": "Edit Monitor",
+    "totalItems": "{{total}} monitors",
+    "fetchError": "Failed to load monitors",
+    "saveError": "Failed to save monitor",
+    "deleteError": "Failed to delete monitor",
+    "toggleError": "Failed to update monitor",
     "runError": "Failed to trigger run",
-    "created": "Job created",
-    "updated": "Job updated",
-    "deleted": "Job deleted",
-    "enabled": "Job enabled",
-    "disabled": "Job disabled",
+    "created": "Monitor created",
+    "updated": "Monitor updated",
+    "deleted": "Monitor deleted",
+    "undoDeleteTitle": "Monitor deleted",
+    "undoDeleteDescription": "Undo restores this monitor for {{seconds}} seconds.",
+    "enabled": "Monitor enabled",
+    "disabled": "Monitor disabled",
     "runTriggered": "Run triggered",
     "deleteConfirm": "Delete this job?",
     "runNow": "Run Now",
@@ -194,7 +235,7 @@
     "columns": {
       "name": "Name",
       "schedule": "Schedule",
-      "scope": "Scope",
+      "scope": "Feeds",
       "filters": "Filters",
       "lastRun": "Last Run",
       "nextRun": "Next Run",
@@ -207,23 +248,39 @@
       "nameTooLong": "Name must be less than 200 characters",
       "namePlaceholder": "e.g., Daily Tech News",
       "description": "Description",
-      "descriptionPlaceholder": "Optional description of what this job does",
+      "descriptionPlaceholder": "Optional description of what this monitor does",
       "active": "Active",
-      "scope": "Scope",
-      "scopeRequired": "Please select at least one source, group, or tag",
+      "scope": "Feeds to Include",
+      "scopeRequired": "Please select at least one feed, group, or tag",
       "schedule": "Schedule",
-      "filters": "Filters"
+      "filters": "Filters",
+      "presetMeceMd": "Structured review (Markdown)",
+      "retentionDefault": "Default retention",
+      "retentionTemporary": "Temporary retention",
+      "retentionDefaultPlaceholder": "Server default",
+      "retentionTemporaryPlaceholder": "Server temporary default",
+      "retentionDefaultPreview": "Stored as {{seconds}} seconds",
+      "retentionTemporaryPreview": "Stored as {{seconds}} seconds",
+      "retentionUnit": {
+        "seconds": "Seconds",
+        "minutes": "Minutes",
+        "hours": "Hours",
+        "days": "Days",
+        "weeks": "Weeks"
+      },
+      "presetHint": "Presets prefill template and delivery defaults. Structured review groups content into non-overlapping sections for easier scanning."
     },
+    "noFeeds": "No feeds selected",
     "scope": {
-      "sources": "Sources",
+      "sources": "Feeds",
       "groups": "Groups",
       "tags": "Tags",
-      "selectSources": "Select sources to include",
+      "selectSources": "Select feeds to include",
       "selectGroups": "Select groups to include",
       "selectTags": "Select tags to include",
-      "sourcesHelp": "Job will fetch from selected sources directly",
-      "groupsHelp": "Job will fetch from all sources in selected groups",
-      "tagsHelp": "Job will fetch from all sources with selected tags"
+      "sourcesHelp": "Monitor will fetch directly from selected feeds",
+      "groupsHelp": "Monitor will fetch from all feeds in selected groups",
+      "tagsHelp": "Monitor will fetch from all feeds with selected tags"
     },
     "preview": {
       "button": "Preview",
@@ -255,17 +312,50 @@
     "help": "Filters determine which items are included, excluded, or flagged during job runs. Include filters require at least one match."
   },
   "schedule": {
-    "presets": "Quick Presets",
+    "presets": "Schedule presets",
     "custom": "Custom Schedule",
     "cronPlaceholder": "Cron expression (e.g., 0 9 * * MON)",
     "apply": "Apply",
     "clear": "Clear",
     "preview": "Preview",
     "timezone": "Timezone",
-    "help": "Cron format: minute hour day-of-month month day-of-week. Use * for any, */N for every N intervals."
+    "hour": "Hour",
+    "minute": "Minute",
+    "weekday": "Weekday",
+    "weekdayOption": {
+      "MON": "Monday",
+      "TUE": "Tuesday",
+      "WED": "Wednesday",
+      "THU": "Thursday",
+      "FRI": "Friday",
+      "SAT": "Saturday",
+      "SUN": "Sunday"
+    },
+    "preset": {
+      "hourly": {
+        "label": "Every hour",
+        "description": "Runs once each hour at the selected minute."
+      },
+      "every6hours": {
+        "label": "Every 6 hours",
+        "description": "Runs four times each day at the selected minute."
+      },
+      "daily": {
+        "label": "Daily",
+        "description": "Runs every day at the selected time."
+      },
+      "weekly": {
+        "label": "Weekly",
+        "description": "Runs once a week on the selected weekday and time."
+      }
+    },
+    "advancedLabel": "Advanced cron expression",
+    "advancedHint": "Enable only if presets cannot express the cadence you need.",
+    "helpSimple": "Pick a schedule preset above. You can switch to Advanced cron for uncommon timing patterns.",
+    "helpAdvanced": "Cron format: minute hour day-of-month month day-of-week. Example: 0 9 * * MON runs every Monday at 09:00."
   },
   "runs": {
-    "title": "Runs",
+    "title": "Activity",
     "description": "View execution history and logs for your watchlist jobs.",
     "totalItems": "{{total}} runs",
     "fetchError": "Failed to load runs",
@@ -454,10 +544,11 @@
       "note": "TTL values are configured on the server."
     },
     "clusters": {
-      "title": "Claim Clusters",
-      "jobPlaceholder": "Select job",
+      "title": "Related Claim Clusters",
+      "help": "Claim clusters group similar claims detected across feeds. Subscribe a monitor to include those cluster updates in briefings.",
+      "jobPlaceholder": "Select monitor",
       "searchPlaceholder": "Search clusters",
-      "selectJob": "Select a job to manage cluster subscriptions.",
+      "selectJob": "Select a monitor to manage cluster subscriptions.",
       "fetchError": "Failed to load claim clusters",
       "updateError": "Failed to update cluster subscription",
       "empty": "No clusters found",

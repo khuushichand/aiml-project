@@ -23,7 +23,14 @@ Finding IDs: `9.1` through `9.5`
 - Component tests for breakpoint-based action rendering.
 - Mobile viewport tests for overflow action menu usability.
 - Accessibility tests for menu button semantics and keyboard activation.
-**Status**: Not Started
+**Status**: Complete
+**Completion Notes (2026-02-18)**:
+- Added mobile action compaction in dictionary rows:
+  - primary actions remain directly visible (`Edit`, `Entries`),
+  - secondary actions moved into an overflow menu (`Quick assign`, exports, stats, duplicate, delete).
+- Added explicit overflow trigger semantics (`aria-haspopup="menu"`) and keyboard activation coverage.
+- Preserved 44x44 touch-target sizing for all row action triggers in compact mode.
+- Added regression coverage in `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.responsiveStage1.test.tsx`.
 
 ## Stage 2: Entry Manager Layout for Small Screens
 **Goal**: Eliminate cramped nested modal interactions on mobile.

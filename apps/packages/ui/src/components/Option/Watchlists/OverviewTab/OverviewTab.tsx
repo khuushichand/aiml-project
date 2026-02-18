@@ -6,6 +6,7 @@ import {
   Empty,
   List,
   Space,
+  Steps,
   Spin,
   Statistic,
   Tag,
@@ -88,6 +89,10 @@ export const OverviewTab: React.FC = () => {
     setActiveTab("sources")
   }, [setActiveTab])
 
+  const handleOpenRuns = useCallback(() => {
+    setActiveTab("runs")
+  }, [setActiveTab])
+
   if (loading && !data) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -131,6 +136,62 @@ export const OverviewTab: React.FC = () => {
 
       {data && (
         <>
+          {(data.sources.total === 0 || data.jobs.total === 0) && (
+            <Card
+              size="small"
+              title={t("watchlists:overview.onboarding.title", "Quick setup")}
+            >
+              <p className="mb-3 text-sm text-text-muted">
+                {t(
+                  "watchlists:overview.onboarding.pipeline",
+                  "Add Feed -> Create Monitor -> Review Results"
+                )}
+              </p>
+              <Steps
+                size="small"
+                current={data.sources.total === 0 ? 0 : data.jobs.total === 0 ? 1 : 2}
+                items={[
+                  {
+                    title: t("watchlists:overview.onboarding.steps.addFeed.title", "Add your first feed"),
+                    description: t(
+                      "watchlists:overview.onboarding.steps.addFeed.description",
+                      "Start by adding an RSS/site source in Feeds."
+                    )
+                  },
+                  {
+                    title: t("watchlists:overview.onboarding.steps.createMonitor.title", "Create your first monitor"),
+                    description: t(
+                      "watchlists:overview.onboarding.steps.createMonitor.description",
+                      "Pick feeds, then set a schedule with presets."
+                    )
+                  },
+                  {
+                    title: t("watchlists:overview.onboarding.steps.reviewResults.title", "Review results"),
+                    description: t(
+                      "watchlists:overview.onboarding.steps.reviewResults.description",
+                      "Open Articles for content and Activity for run diagnostics."
+                    )
+                  }
+                ]}
+              />
+              <Space className="mt-4" wrap>
+                {data.sources.total === 0 && (
+                  <Button type="primary" onClick={handleOpenSources}>
+                    {t("watchlists:overview.onboarding.cta.addFeed", "Add first feed")}
+                  </Button>
+                )}
+                {data.sources.total > 0 && data.jobs.total === 0 && (
+                  <Button type="primary" onClick={handleOpenJobs}>
+                    {t("watchlists:overview.onboarding.cta.createMonitor", "Create first monitor")}
+                  </Button>
+                )}
+                <Button onClick={handleOpenItems}>
+                  {t("watchlists:overview.onboarding.cta.reviewArticles", "Open Articles")}
+                </Button>
+              </Space>
+            </Card>
+          )}
+
           <Alert
             showIcon
             type={data.systemHealth === "degraded" ? "warning" : "success"}
@@ -152,13 +213,38 @@ export const OverviewTab: React.FC = () => {
             }
           />
 
+          {data.sources.total > 0 && data.jobs.total > 0 && (
+            <Alert
+              showIcon
+              type="info"
+              message={t("watchlists:overview.setupComplete.title", "Setup complete")}
+              description={
+                data.jobs.nextRunAt
+                  ? t(
+                      "watchlists:overview.setupComplete.nextRunDescription",
+                      "Your next monitor run is {{time}}. New content will appear in Articles and Activity.",
+                      { time: formatRelativeTime(data.jobs.nextRunAt, t) }
+                    )
+                  : t(
+                      "watchlists:overview.setupComplete.runNowDescription",
+                      "Run a monitor from Monitors to generate your first Articles and Activity entries."
+                    )
+              }
+              action={
+                <Button size="small" onClick={handleOpenRuns}>
+                  {t("watchlists:overview.setupComplete.openActivity", "Open Activity")}
+                </Button>
+              }
+            />
+          )}
+
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <Card
               size="small"
               title={(
                 <span className="flex items-center gap-2">
                   <Rss className="h-4 w-4" />
-                  {t("watchlists:overview.cards.sources.title", "Sources")}
+                  {t("watchlists:overview.cards.sources.title", "Feeds")}
                 </span>
               )}
               extra={(
@@ -195,7 +281,7 @@ export const OverviewTab: React.FC = () => {
               title={(
                 <span className="flex items-center gap-2">
                   <Workflow className="h-4 w-4" />
-                  {t("watchlists:overview.cards.jobs.title", "Jobs")}
+                  {t("watchlists:overview.cards.jobs.title", "Monitors")}
                 </span>
               )}
               extra={(
@@ -223,7 +309,7 @@ export const OverviewTab: React.FC = () => {
               title={(
                 <span className="flex items-center gap-2">
                   <Newspaper className="h-4 w-4" />
-                  {t("watchlists:overview.cards.items.title", "Items")}
+                  {t("watchlists:overview.cards.items.title", "Articles")}
                 </span>
               )}
               extra={(

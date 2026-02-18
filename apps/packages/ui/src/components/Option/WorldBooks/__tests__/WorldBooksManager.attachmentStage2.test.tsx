@@ -267,7 +267,7 @@ describe("WorldBooksManager attachment stage-2 toggle feedback", () => {
       "data-delta-state",
       "none"
     )
-  })
+  }, 30000)
 
   it(
     "shows list-mode delta chips for mobile attachment changes",

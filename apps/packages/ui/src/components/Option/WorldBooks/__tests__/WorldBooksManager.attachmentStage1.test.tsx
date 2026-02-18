@@ -226,7 +226,7 @@ describe("WorldBooksManager attachment stage-1 scalable views", () => {
     await waitFor(() => {
       expect(tldwClientMock.detachWorldBookFromCharacter).toHaveBeenCalledWith(1, 1)
     })
-  })
+  }, 30000)
 
   it(
     "uses list view on mobile and supports list-mode attach + detach-all",

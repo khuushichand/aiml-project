@@ -116,8 +116,9 @@ export const CronDisplay: React.FC<CronDisplayProps> = ({
   )
 
   if (showTooltip) {
+    const tooltipText = `Runs on this cadence. Advanced schedule: ${expression}`
     return (
-      <Tooltip title={`Cron: ${expression}`}>
+      <Tooltip title={tooltipText}>
         {content}
       </Tooltip>
     )

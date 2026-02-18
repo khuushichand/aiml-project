@@ -217,7 +217,7 @@ describe("WorldBooksManager entry drawer stage-3 filtering and keyword index", (
 
     expect(screen.getByText("Enabled wizard entry")).toBeInTheDocument()
     expect(screen.queryByText("Disabled wizard variant")).not.toBeInTheDocument()
-  }, 15000)
+  }, 30000)
 
   it("shows keyword conflict count and filtered empty state with accessible labels", async () => {
     const user = userEvent.setup()

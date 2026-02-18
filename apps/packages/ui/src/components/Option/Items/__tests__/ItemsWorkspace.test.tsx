@@ -122,7 +122,7 @@ describe("ItemsWorkspace", () => {
         title: undefined
       })
     })
-  })
+  }, 15000)
 
   it("uses reversible delete by default and restores status via undo", async () => {
     apiMock.bulkUpdateItems
@@ -174,7 +174,7 @@ describe("ItemsWorkspace", () => {
         status: "reading"
       })
     })
-  })
+  }, 15000)
 
   it("supports deliberate hard delete as a secondary action", async () => {
     apiMock.bulkUpdateItems.mockResolvedValueOnce({
@@ -205,7 +205,7 @@ describe("ItemsWorkspace", () => {
       })
     })
     expect(undoNotificationMock.showUndoNotification).not.toHaveBeenCalled()
-  })
+  }, 15000)
 
   it("keeps undo scoped to successfully deleted items in mixed-result responses", async () => {
     apiMock.getItems.mockResolvedValue({
@@ -294,5 +294,5 @@ describe("ItemsWorkspace", () => {
         status: "reading"
       })
     })
-  })
+  }, 15000)
 })

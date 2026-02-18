@@ -4,6 +4,20 @@
 
 This index maps the 15 notes-page category plans into one delivery sequence aligned to the 2026-02-17 UX/HCI audit and its phase roadmap.
 
+## Execution Status (2026-02-18)
+
+- `IMPLEMENTATION_PLAN_notes_page_02_note_editor_2026_02_18.md`
+  - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+  - Stage 4: Complete
+  - Decision record: `DECISION_RECORD_notes_editor_revision_history_stage4_2026_02_18.md`
+- `IMPLEMENTATION_PLAN_notes_page_06_note_graph_linking_2026_02_18.md`
+  - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+  - Stage 4: Complete
+
 ## Plan Catalog
 
 | # | Plan | Category | Primary Scope |

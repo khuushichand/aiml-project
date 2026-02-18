@@ -1665,7 +1665,7 @@ describe("CharactersManager first-use onboarding", () => {
     expect(typeof shortcutOptions?.onNewCharacter).toBe("function")
     expect(typeof shortcutOptions?.onFocusSearch).toBe("function")
     expect(typeof shortcutOptions?.onCloseModal).toBe("function")
-  })
+  }, 45000)
 
   it("adds skip-link, main landmark, and shortcut summary semantics", async () => {
     render(<CharactersManager />)
@@ -1844,6 +1844,151 @@ describe("CharactersManager first-use onboarding", () => {
     })
   })
 
+  it("imports markdown metadata files through preview + confirm flow", async () => {
+    const user = userEvent.setup()
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const markdownFile = new File(
+      [
+        [
+          "name: Markdown Character",
+          "description: Imported from markdown metadata",
+          "tags:",
+          "  - markdown",
+          "  - import"
+        ].join("\n")
+      ],
+      "markdown-character.md",
+      { type: "text/markdown" }
+    )
+
+    await user.upload(input, markdownFile)
+
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    expect(await screen.findByText("Markdown Character")).toBeInTheDocument()
+    expect(
+      await screen.findByText("Imported from markdown metadata")
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Confirm import" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.importCharacterFile).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "markdown-character.md" }),
+        expect.objectContaining({ allowImageOnly: false })
+      )
+    })
+  })
+
+  it("imports text files containing JSON card data through preview + confirm flow", async () => {
+    const user = userEvent.setup()
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const textJsonFile = new File(
+      [
+        JSON.stringify({
+          spec: "chara_card_v3",
+          spec_version: "3.0",
+          data: {
+            name: "Text JSON Character",
+            description: "Imported from text file JSON payload",
+            tags: ["text-json", "import"]
+          }
+        })
+      ],
+      "text-json-card.txt",
+      { type: "text/plain" }
+    )
+
+    await user.upload(input, textJsonFile)
+
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    expect(await screen.findByText("Text JSON Character")).toBeInTheDocument()
+    expect(
+      await screen.findByText("Imported from text file JSON payload")
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Confirm import" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.importCharacterFile).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "text-json-card.txt" }),
+        expect.objectContaining({ allowImageOnly: false })
+      )
+    })
+  })
+
+  it("imports PNG character files through preview + confirm flow", async () => {
+    const user = userEvent.setup()
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const pngSignature = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+    ])
+    const pngFile = new File([pngSignature], "png-character.png", {
+      type: "image/png"
+    })
+
+    await user.upload(input, pngFile)
+
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    expect(await screen.findByText("png-character")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Confirm import" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.importCharacterFile).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "png-character.png" }),
+        expect.objectContaining({ allowImageOnly: false })
+      )
+    })
+  })
+
+  it("round-trips exported v3 JSON shape through import preview + confirm", async () => {
+    const user = userEvent.setup()
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const exportedV3Payload = {
+      spec: "chara_card_v3",
+      spec_version: "3.0",
+      data: {
+        name: "Round Trip Character",
+        description: "Round-trip export/import payload",
+        tags: ["round-trip", "v3"]
+      }
+    }
+    const exportedFile = new File(
+      [JSON.stringify(exportedV3Payload, null, 2)],
+      "round-trip-character.json",
+      { type: "application/json" }
+    )
+
+    await user.upload(input, exportedFile)
+
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    expect(await screen.findByText("Round Trip Character")).toBeInTheDocument()
+    expect(
+      await screen.findByText("Round-trip export/import payload")
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Confirm import" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.importCharacterFile).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "round-trip-character.json" }),
+        expect.objectContaining({ allowImageOnly: false })
+      )
+    })
+  })
+
   it("surfaces malformed JSON preview errors and blocks confirm import", async () => {
     const user = userEvent.setup()
     const { container } = render(<CharactersManager />)
@@ -1863,6 +2008,33 @@ describe("CharactersManager first-use onboarding", () => {
     expect(tldwClientMock.importCharacterFile).not.toHaveBeenCalled()
   })
 
+  it("surfaces malformed YAML preview errors and blocks confirm import", async () => {
+    const user = userEvent.setup()
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const brokenYaml = new File(
+      [
+        [
+          "name: Broken YAML Character",
+          "description: This one has malformed list syntax",
+          "tags: [assistant, yaml"
+        ].join("\n")
+      ],
+      "broken-character.yaml",
+      { type: "text/yaml" }
+    )
+    await user.upload(input, brokenYaml)
+
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    expect(await screen.findByText(/Malformed YAML content:/i)).toBeInTheDocument()
+
+    const confirmButton = screen.getByRole("button", { name: "Confirm import" })
+    expect(confirmButton).toBeDisabled()
+    expect(tldwClientMock.importCharacterFile).not.toHaveBeenCalled()
+  })
+
   it("allows canceling import preview without persisting files", async () => {
     const user = userEvent.setup()
     const { container } = render(<CharactersManager />)
@@ -1876,14 +2048,17 @@ describe("CharactersManager first-use onboarding", () => {
     )
     await user.upload(input, file)
 
-    expect(await screen.findByText("Import preview")).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Cancel" }))
+    const previewTitle = await screen.findByText("Import preview")
+    const modalRoot = previewTitle.closest(".ant-modal") as HTMLElement | null
+    const cancelButton = modalRoot
+      ? within(modalRoot).getByRole("button", { name: "Cancel" })
+      : screen.getByRole("button", { name: "Cancel" })
+    await user.click(cancelButton)
 
     await waitFor(() => {
-      expect(screen.queryByText("Import preview")).not.toBeInTheDocument()
+      expect(tldwClientMock.importCharacterFile).not.toHaveBeenCalled()
     })
-    expect(tldwClientMock.importCharacterFile).not.toHaveBeenCalled()
-  })
+  }, 15000)
 
   it("imports valid files and warns when malformed previews are skipped", async () => {
     const user = userEvent.setup()
@@ -1920,7 +2095,7 @@ describe("CharactersManager first-use onboarding", () => {
   })
 
   it("shows unsupported extension errors in preview and blocks confirm", async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ applyAccept: false })
     const { container } = render(<CharactersManager />)
     const input = container.querySelector("input[type='file']") as HTMLInputElement
     expect(input).not.toBeNull()

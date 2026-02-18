@@ -13,10 +13,20 @@ import {
   Loader2,
   AlertTriangle,
   Info,
+  Eye,
   ChevronUp,
   ChevronDown
 } from "lucide-react"
-import { Input, Checkbox, Empty, Button, Tooltip, message, Popconfirm } from "antd"
+import {
+  Input,
+  Checkbox,
+  Empty,
+  Button,
+  Tooltip,
+  message,
+  Popconfirm,
+  Modal
+} from "antd"
 import { useWorkspaceStore } from "@/store/workspace"
 import type { WorkspaceSourceType } from "@/types/workspace"
 import {
@@ -68,6 +78,14 @@ const formatDuration = (seconds?: number): string | null => {
   return `${secs}s`
 }
 
+type SourceAnnotation = {
+  id: string
+  quote: string
+  note: string
+  createdAt: number
+  updatedAt: number
+}
+
 interface SourcesPaneProps {
   /** Callback to hide/collapse the pane */
   onHide?: () => void
@@ -109,6 +127,15 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
   const [confirmingRemovalSourceId, setConfirmingRemovalSourceId] =
     React.useState<string | null>(null)
   const [draggedSourceId, setDraggedSourceId] = React.useState<string | null>(null)
+  const [previewSourceId, setPreviewSourceId] = React.useState<string | null>(null)
+  const [sourceAnnotations, setSourceAnnotations] = React.useState<
+    Record<string, SourceAnnotation[]>
+  >({})
+  const [annotationQuoteDraft, setAnnotationQuoteDraft] = React.useState("")
+  const [annotationNoteDraft, setAnnotationNoteDraft] = React.useState("")
+  const [editingAnnotationId, setEditingAnnotationId] = React.useState<
+    string | null
+  >(null)
 
   // Filter sources based on search query
   const filteredSources = React.useMemo(() => {
@@ -144,6 +171,12 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
   const allSelected =
     sources.length > 0 && selectedSourceIds.length === sources.length
   const someSelected = selectedSourceIds.length > 0 && !allSelected
+  const previewSource = previewSourceId
+    ? sources.find((source) => source.id === previewSourceId) || null
+    : null
+  const previewAnnotations = previewSourceId
+    ? sourceAnnotations[previewSourceId] || []
+    : []
 
   const handleSelectAllToggle = () => {
     if (allSelected || someSelected) {
@@ -152,6 +185,106 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
       selectAllSources()
     }
   }
+
+  const resetAnnotationEditor = React.useCallback(() => {
+    setAnnotationQuoteDraft("")
+    setAnnotationNoteDraft("")
+    setEditingAnnotationId(null)
+  }, [])
+
+  const handleOpenPreview = React.useCallback(
+    (sourceId: string) => {
+      setPreviewSourceId(sourceId)
+      resetAnnotationEditor()
+    },
+    [resetAnnotationEditor]
+  )
+
+  const handleClosePreview = React.useCallback(() => {
+    setPreviewSourceId(null)
+    resetAnnotationEditor()
+  }, [resetAnnotationEditor])
+
+  const handleSaveAnnotation = React.useCallback(() => {
+    if (!previewSourceId) return
+    const quote = annotationQuoteDraft.trim()
+    const note = annotationNoteDraft.trim()
+    if (!quote && !note) {
+      messageApi.warning(
+        t(
+          "playground:sources.annotationEmpty",
+          "Add a highlight excerpt or an annotation note."
+        )
+      )
+      return
+    }
+
+    setSourceAnnotations((previous) => {
+      const existing = previous[previewSourceId] || []
+      const now = Date.now()
+      if (editingAnnotationId) {
+        return {
+          ...previous,
+          [previewSourceId]: existing.map((annotation) =>
+            annotation.id === editingAnnotationId
+              ? {
+                  ...annotation,
+                  quote,
+                  note,
+                  updatedAt: now
+                }
+              : annotation
+          )
+        }
+      }
+
+      const nextAnnotation: SourceAnnotation = {
+        id: `${previewSourceId}-${now}-${Math.random().toString(36).slice(2, 7)}`,
+        quote,
+        note,
+        createdAt: now,
+        updatedAt: now
+      }
+      return {
+        ...previous,
+        [previewSourceId]: [nextAnnotation, ...existing]
+      }
+    })
+    resetAnnotationEditor()
+  }, [
+    annotationNoteDraft,
+    annotationQuoteDraft,
+    editingAnnotationId,
+    messageApi,
+    previewSourceId,
+    resetAnnotationEditor,
+    t
+  ])
+
+  const handleEditAnnotation = React.useCallback((annotation: SourceAnnotation) => {
+    setAnnotationQuoteDraft(annotation.quote)
+    setAnnotationNoteDraft(annotation.note)
+    setEditingAnnotationId(annotation.id)
+  }, [])
+
+  const handleDeleteAnnotation = React.useCallback(
+    (annotationId: string) => {
+      if (!previewSourceId) return
+      setSourceAnnotations((previous) => {
+        const existing = previous[previewSourceId] || []
+        return {
+          ...previous,
+          [previewSourceId]: existing.filter(
+            (annotation) => annotation.id !== annotationId
+          )
+        }
+      })
+      if (editingAnnotationId === annotationId) {
+        resetAnnotationEditor()
+      }
+    },
+    [editingAnnotationId, previewSourceId, resetAnnotationEditor]
+  )
 
   const removeSourceWithUndo = React.useCallback(
     (source: (typeof sources)[number]) => {
@@ -431,6 +564,20 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
           </div>
         </div>
         <div className="flex shrink-0 items-start gap-1">
+          <Tooltip title={t("playground:sources.previewAnnotate", "Preview & annotate")}>
+            <button
+              type="button"
+              onClick={() => handleOpenPreview(source.id)}
+              data-testid={`preview-source-${source.id}`}
+              className="rounded p-1 text-text-muted transition hover:bg-surface hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              aria-label={t(
+                "playground:sources.previewAnnotate",
+                "Preview & annotate"
+              )}
+            >
+              <Eye className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
           <div className="flex flex-col">
             <button
               type="button"
@@ -659,6 +806,125 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
       )}
 
       {/* Add Source Modal */}
+      <Modal
+        open={Boolean(previewSource)}
+        title={t(
+          "playground:sources.previewModalTitle",
+          "Source preview and annotations"
+        )}
+        onCancel={handleClosePreview}
+        footer={null}
+        width={680}
+      >
+        {previewSource && (
+          <div className="space-y-4">
+            <div className="rounded border border-border bg-surface2/40 p-3">
+              <p className="text-sm font-semibold text-text">{previewSource.title}</p>
+              <p className="text-xs capitalize text-text-muted">
+                {previewSource.type} • {previewSource.status || "ready"}
+              </p>
+              {previewSource.url && (
+                <a
+                  href={previewSource.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1 inline-block text-xs text-primary hover:underline"
+                >
+                  {previewSource.url}
+                </a>
+              )}
+            </div>
+
+            <div className="rounded border border-border bg-surface/50 p-3">
+              <p className="mb-2 text-xs font-semibold uppercase text-text-muted">
+                {t("playground:sources.highlights", "Highlights & annotations")}
+              </p>
+              <Input
+                placeholder={t(
+                  "playground:sources.annotationQuotePlaceholder",
+                  "Highlighted excerpt (optional)"
+                )}
+                value={annotationQuoteDraft}
+                onChange={(event) => setAnnotationQuoteDraft(event.target.value)}
+                className="mb-2"
+              />
+              <Input.TextArea
+                placeholder={t(
+                  "playground:sources.annotationNotePlaceholder",
+                  "Annotation note"
+                )}
+                value={annotationNoteDraft}
+                onChange={(event) => setAnnotationNoteDraft(event.target.value)}
+                rows={3}
+              />
+              <div className="mt-2 flex items-center justify-end gap-2">
+                {editingAnnotationId && (
+                  <Button size="small" onClick={resetAnnotationEditor}>
+                    {t("common:cancel", "Cancel")}
+                  </Button>
+                )}
+                <Button
+                  type="primary"
+                  size="small"
+                  onClick={handleSaveAnnotation}
+                >
+                  {editingAnnotationId
+                    ? t("playground:sources.saveAnnotation", "Save annotation")
+                    : t("playground:sources.addAnnotation", "Add annotation")}
+                </Button>
+              </div>
+            </div>
+
+            <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+              {previewAnnotations.length === 0 ? (
+                <p className="text-xs text-text-muted">
+                  {t("playground:sources.noAnnotations", "No annotations yet.")}
+                </p>
+              ) : (
+                previewAnnotations.map((annotation) => (
+                  <div
+                    key={annotation.id}
+                    data-testid={`source-annotation-${annotation.id}`}
+                    className="rounded border border-border bg-surface2/40 p-2"
+                  >
+                    {annotation.quote && (
+                      <p className="text-xs text-text-muted">
+                        "{annotation.quote}"
+                      </p>
+                    )}
+                    {annotation.note && (
+                      <p className="mt-1 text-sm text-text">{annotation.note}</p>
+                    )}
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="text-[11px] text-text-muted">
+                        {new Date(annotation.updatedAt).toLocaleString()}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          type="text"
+                          size="small"
+                          onClick={() => handleEditAnnotation(annotation)}
+                        >
+                          {t("common:edit", "Edit")}
+                        </Button>
+                        <Button
+                          type="text"
+                          danger
+                          size="small"
+                          onClick={() => handleDeleteAnnotation(annotation.id)}
+                        >
+                          {t("common:delete", "Delete")}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
+
       <AddSourceModal />
     </div>
   )

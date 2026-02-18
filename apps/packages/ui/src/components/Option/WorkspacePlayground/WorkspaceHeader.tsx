@@ -27,6 +27,9 @@ import {
   isWorkspaceExportBundle
 } from "@/store/workspace-bundle"
 import {
+  WORKSPACE_TEMPLATE_PRESETS,
+  buildWorkspaceBibtex,
+  createWorkspaceBibtexFilename,
   filterSavedWorkspaces,
   formatWorkspaceLastAccessed
 } from "./workspace-header.utils"
@@ -63,7 +66,10 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
 
   const workspaceName = useWorkspaceStore((s) => s.workspaceName)
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
+  const workspaceTag = useWorkspaceStore((s) => s.workspaceTag)
+  const sources = useWorkspaceStore((s) => s.sources)
   const setWorkspaceName = useWorkspaceStore((s) => s.setWorkspaceName)
+  const setCurrentNote = useWorkspaceStore((s) => s.setCurrentNote)
   const savedWorkspaces = useWorkspaceStore((s) => s.savedWorkspaces)
   const archivedWorkspaces = useWorkspaceStore((s) => s.archivedWorkspaces)
   const createNewWorkspace = useWorkspaceStore((s) => s.createNewWorkspace)
@@ -113,6 +119,30 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
 
   const handleCreateNewWorkspace = () => {
     createNewWorkspace()
+  }
+
+  const handleCreateWorkspaceFromTemplate = (templateId: string) => {
+    const template = WORKSPACE_TEMPLATE_PRESETS.find(
+      (candidate) => candidate.id === templateId
+    )
+    if (!template) return
+
+    createNewWorkspace(template.workspaceName)
+    setCurrentNote({
+      id: undefined,
+      title: template.noteTitle,
+      content: template.noteContent,
+      keywords: [...template.keywords],
+      version: undefined,
+      isDirty: true
+    })
+
+    messageApi.success(
+      t("playground:workspace.templateCreated", {
+        defaultValue: "Created workspace from template: {{template}}",
+        template: template.label
+      })
+    )
   }
 
   const handleSwitchWorkspace = (id: string) => {
@@ -261,6 +291,47 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
 
   const handleOpenImportWorkspace = () => {
     importFileInputRef.current?.click()
+  }
+
+  const handleExportWorkspaceCitations = () => {
+    if (sources.length === 0) {
+      messageApi.error(
+        t(
+          "playground:workspace.exportCitationsEmpty",
+          "Add at least one source before exporting citations."
+        )
+      )
+      return
+    }
+
+    const bibtex = buildWorkspaceBibtex(sources, { workspaceTag })
+    if (!bibtex.trim()) {
+      messageApi.error(
+        t(
+          "playground:workspace.exportCitationsFailed",
+          "Unable to build citations for this workspace."
+        )
+      )
+      return
+    }
+
+    const filename = createWorkspaceBibtexFilename(
+      workspaceName || "workspace"
+    )
+    const blob = new Blob([bibtex], { type: "text/plain;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = filename
+    anchor.click()
+    URL.revokeObjectURL(url)
+
+    messageApi.success(
+      t(
+        "playground:workspace.exportCitationsSuccess",
+        "Citations exported (BibTeX)"
+      )
+    )
   }
 
   const handleImportWorkspaceFile = async (
@@ -415,6 +486,15 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
               "Export Workspace"
             ),
             onClick: handleExportCurrentWorkspace
+          },
+          {
+            key: "export-citations-bibtex",
+            icon: <Download className="h-4 w-4" />,
+            label: t(
+              "playground:workspace.exportCitationsBibtex",
+              "Export Citations (BibTeX)"
+            ),
+            onClick: handleExportWorkspaceCitations
           }
         ]
       : []),
@@ -425,6 +505,18 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       onClick: handleOpenImportWorkspace
     },
     { type: "divider" as const, key: "divider-import-export" },
+    {
+      key: "template-header",
+      type: "group" as const,
+      label: t("playground:workspace.templatesHeader", "Start from Template")
+    },
+    ...WORKSPACE_TEMPLATE_PRESETS.map((template) => ({
+      key: `workspace-template-${template.id}`,
+      icon: <Plus className="h-4 w-4" />,
+      label: template.label,
+      onClick: () => handleCreateWorkspaceFromTemplate(template.id)
+    })),
+    { type: "divider" as const, key: "divider-templates" },
     // New workspace option
     {
       key: "new",

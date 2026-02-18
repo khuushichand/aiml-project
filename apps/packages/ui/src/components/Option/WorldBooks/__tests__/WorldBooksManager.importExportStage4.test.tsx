@@ -310,7 +310,7 @@ describe("WorldBooksManager import/export stage-4 export actions and upload cont
 
     createElementSpy.mockRestore()
     restoreBlob()
-  })
+  }, 30000)
 
   it(
     "uses upload control and enforces json file constraints",

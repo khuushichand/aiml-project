@@ -22,7 +22,22 @@ Finding IDs: `H3-1` through `H3-4`
 - Component tests for edit button visibility and drawer state transitions in review mode.
 - Integration tests ensuring review progress counts remain stable through edit/save/cancel.
 - E2E flow: review card -> edit typo -> save -> continue rating.
-**Status**: Not Started
+**Status**: Complete
+
+**Progress Notes (2026-02-18)**:
+- Added in-review `Edit` action button on the active review card.
+- Wired `FlashcardEditDrawer` directly into `ReviewTab` as overlay-mode edit without leaving the review workflow.
+- Added edit lifecycle callbacks in review context:
+  - save: update mutation + in-place return to review
+  - delete: remove current card + continue review queue context.
+- Added keyboard shortcut support for edit (`E`) in `useFlashcardShortcuts` and wired it in `ReviewTab`.
+- Added inline review shortcut hint text: `"Press E to edit this card"`.
+- Added focused tests for:
+  - drawer open/close from review card action
+  - shortcut callback wiring for edit
+  - shortcut parser mapping (`E -> edit`).
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run --config vitest.config.ts src/components/Flashcards/hooks/__tests__/useFlashcardShortcuts.test.ts src/components/Flashcards/tabs/__tests__/ReviewTab.edit-in-review.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.analytics-summary.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx` (pass: `4` files, `8` tests)
 
 ## Stage 2: Scheduling Reset and Safe Recovery Controls
 **Goal**: Let users recover from poor scheduling states without destructive workarounds.
@@ -34,7 +49,29 @@ Finding IDs: `H3-1` through `H3-4`
 - Backend mutation tests for reset semantics and permission checks.
 - Integration tests for reset confirmation, API success/failure, and UI state refresh.
 - Regression tests ensuring reset does not delete card content or deck/tag associations.
-**Status**: Not Started
+**Status**: Complete
+
+**Progress Notes (2026-02-18)**:
+- Added backend scheduling reset pathway:
+  - DB method: `reset_flashcard_scheduling(card_uuid, expected_version)`
+  - API endpoint: `POST /api/v1/flashcards/{card_uuid}/reset-scheduling`
+  - request body: `{ expected_version }` with optimistic-lock conflict handling.
+- Reset semantics now normalize scheduling to new-card defaults:
+  - `ef=2.5`, `interval_days=0`, `repetitions=0`, `lapses=0`
+  - `last_reviewed_at=NULL`, `due_at=now`.
+- Added reset control in `FlashcardEditDrawer` with explicit confirmation and consequence copy.
+- Wired reset action in both edit contexts:
+  - Cards tab (`ManageTab`)
+  - Review tab overlay edit (`ReviewTab`).
+- Audit coverage:
+  - Reset executes as a flashcard update, so existing `flashcards_sync_update` trigger writes a timestamped `sync_log` entry (activity log trail).
+- Added test coverage:
+  - UI: reset confirmation and callback invocation in edit drawer.
+  - Backend integration test case for reset semantics + version conflict path.
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run --config vitest.config.ts src/components/Flashcards/hooks/__tests__/useFlashcardShortcuts.test.ts src/components/Flashcards/components/__tests__/FlashcardCreateDrawer.cloze-help.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.reset-scheduling.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.save.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.scheduling-metadata.test.tsx src/components/Flashcards/components/__tests__/KeyboardShortcutsModal.rating-scale.test.tsx src/components/Flashcards/tabs/__tests__/ManageTab.scheduling-metadata.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.analytics-summary.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.edit-in-review.test.tsx` (pass: `10` files, `16` tests)
+  - `source .venv/bin/activate && python -m py_compile tldw_Server_API/app/api/v1/schemas/flashcards.py tldw_Server_API/app/api/v1/endpoints/flashcards.py tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py tldw_Server_API/tests/Flashcards/test_flashcards_endpoint_integration.py` (pass)
+  - `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Flashcards/test_flashcards_endpoint_integration.py -k \"analytics_summary or reset_scheduling\"` (blocked in current venv due missing project runtime dependency `loguru` plugin import).
 
 ## Stage 3: Expanded Undo and Session Control
 **Goal**: Extend user control beyond review rating undo.
@@ -46,7 +83,25 @@ Finding IDs: `H3-1` through `H3-4`
 - Mutation tests for undo token lifecycle and expiration behavior.
 - Integration tests for edit undo and bulk-move undo flows.
 - Accessibility tests for timer announcements and undo affordances.
-**Status**: Not Started
+**Status**: In Progress
+
+**Progress Notes (2026-02-18)**:
+- Added bounded undo support in Cards workflow for:
+  - single-card edit save
+  - single-card move
+  - bulk move.
+- Undo windows now use explicit expiry messaging in notification copy:
+  - `"Undo within 30s ..."`
+- Implemented rollback behavior:
+  - edit undo restores previous card fields (deck/content/template/tags) using optimistic versioning.
+  - move undo restores previous deck assignments for moved cards.
+- Added integration tests validating:
+  - undo notification is offered after edit and move mutations
+  - invoking undo executes rollback mutation paths with expected payloads/version handling.
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run --config vitest.config.ts src/components/Flashcards/hooks/__tests__/useFlashcardShortcuts.test.ts src/components/Flashcards/components/__tests__/FlashcardCreateDrawer.cloze-help.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.reset-scheduling.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.save.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.scheduling-metadata.test.tsx src/components/Flashcards/components/__tests__/KeyboardShortcutsModal.rating-scale.test.tsx src/components/Flashcards/tabs/__tests__/ManageTab.scheduling-metadata.test.tsx src/components/Flashcards/tabs/__tests__/ManageTab.undo-stage3.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.analytics-summary.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.edit-in-review.test.tsx` (pass: `11` files, `18` tests)
+- Remaining Stage 3 gap:
+  - Import rollback/staging is not yet implemented.
 
 ## Stage 4: Cram/Preview Study Mode
 **Goal**: Support intentional study sessions outside SRS due queue.

@@ -61,7 +61,7 @@ Finding IDs: `1.1` through `1.10`
 - Query-state tests for search/sort/pagination interaction.
 - Component tests for pass/fail message behavior with missing `passing_score`.
 - Integration tests for stable list state after tab switches.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
@@ -88,5 +88,11 @@ Finding IDs: `1.1` through `1.10`
   - Added fill-in-the-blank guidance text matching backend behavior (trimmed, case-insensitive exact match).
   - Added test coverage for navigator jump behavior, unanswered guard summary, first-missing highlight, and fill-blank guidance rendering.
 
+- Stage 4 completed:
+  - Added quiz-list search control and sort options (newest, name, question count).
+  - Persisted list controls state (`page`, `pageSize`, `searchQuery`, `sortBy`) in session storage for remount/tab-transition stability.
+  - Made pass/fail fallback policy explicit in results when no quiz-specific passing score exists (`70%` default).
+  - Added test coverage for search-query forwarding and explicit default passing-score messaging.
+
 - Validation:
-  - `cd apps/packages/ui && bunx vitest run src/components/Quiz/tabs/__tests__/TakeQuizTab.empty-state.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.start-flow.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.navigation-guardrails.test.tsx`
+  - `cd apps/packages/ui && bunx vitest run src/components/Quiz/tabs/__tests__/TakeQuizTab.empty-state.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.start-flow.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.navigation-guardrails.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.list-controls.test.tsx`

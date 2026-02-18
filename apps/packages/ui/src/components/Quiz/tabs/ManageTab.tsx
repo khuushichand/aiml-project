@@ -822,15 +822,23 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             )}
 
             {questionDraft.question_type === "true_false" && (
-              <Radio.Group
-                value={questionDraft.correct_answer}
-                onChange={(e) => updateQuestionDraft({ correct_answer: e.target.value })}
-              >
-                <Space orientation="vertical">
-                  <Radio value="true">{t("option:quiz.true", { defaultValue: "True" })}</Radio>
-                  <Radio value="false">{t("option:quiz.false", { defaultValue: "False" })}</Radio>
-                </Space>
-              </Radio.Group>
+              <fieldset className="border-0 m-0 p-0">
+                <legend className="sr-only">
+                  {t("option:quiz.trueFalseLegend", {
+                    defaultValue: "True or false for: {{question}}",
+                    question: questionDraft.question_text || t("option:quiz.question", { defaultValue: "question" })
+                  })}
+                </legend>
+                <Radio.Group
+                  value={questionDraft.correct_answer}
+                  onChange={(e) => updateQuestionDraft({ correct_answer: e.target.value })}
+                >
+                  <Space orientation="vertical">
+                    <Radio value="true">{t("option:quiz.true", { defaultValue: "True" })}</Radio>
+                    <Radio value="false">{t("option:quiz.false", { defaultValue: "False" })}</Radio>
+                  </Space>
+                </Radio.Group>
+              </fieldset>
             )}
 
             {questionDraft.question_type === "fill_blank" && (

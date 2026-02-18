@@ -122,13 +122,13 @@ export const ScopeSelector: React.FC<ScopeSelectorProps> = ({
       label: (
         <span className="flex items-center gap-1.5">
           <Rss className="h-3.5 w-3.5" />
-          {t("watchlists:jobs.scope.sources", "Sources")}
+          {t("watchlists:jobs.scope.sources", "Feeds")}
         </span>
       ),
       children: (
         <Select
           mode="multiple"
-          placeholder={t("watchlists:jobs.scope.selectSources", "Select sources to include")}
+          placeholder={t("watchlists:jobs.scope.selectSources", "Select feeds to include")}
           value={value.sources || []}
           onChange={handleSourcesChange}
           loading={loading}
@@ -218,11 +218,11 @@ export const ScopeSelector: React.FC<ScopeSelectorProps> = ({
       />
       <div className="mt-2 text-xs text-text-muted">
         {activeMode === "sources" &&
-          t("watchlists:jobs.scope.sourcesHelp", "Job will fetch from selected sources directly")}
+          t("watchlists:jobs.scope.sourcesHelp", "Monitor will fetch directly from selected feeds")}
         {activeMode === "groups" &&
-          t("watchlists:jobs.scope.groupsHelp", "Job will fetch from all sources in selected groups")}
+          t("watchlists:jobs.scope.groupsHelp", "Monitor will fetch from all feeds in selected groups")}
         {activeMode === "tags" &&
-          t("watchlists:jobs.scope.tagsHelp", "Job will fetch from all sources with selected tags")}
+          t("watchlists:jobs.scope.tagsHelp", "Monitor will fetch from all feeds with selected tags")}
       </div>
     </div>
   )

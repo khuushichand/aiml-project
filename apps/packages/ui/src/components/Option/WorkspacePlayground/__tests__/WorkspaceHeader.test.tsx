@@ -13,13 +13,26 @@ const mockRestoreArchivedWorkspace = vi.fn()
 const mockDeleteWorkspace = vi.fn()
 const mockSaveCurrentWorkspace = vi.fn()
 const mockSetWorkspaceName = vi.fn()
+const mockSetCurrentNote = vi.fn()
 
 const now = new Date("2026-02-18T12:00:00.000Z")
 
 const mockStoreState = {
   workspaceName: "Alpha Research",
   workspaceId: "workspace-alpha",
+  workspaceTag: "workspace:alpha-research",
+  sources: [
+    {
+      id: "source-1",
+      mediaId: 101,
+      title: "Alpha Whitepaper",
+      type: "pdf",
+      addedAt: new Date("2026-02-17T11:00:00.000Z"),
+      url: "https://example.com/alpha-whitepaper"
+    }
+  ],
   setWorkspaceName: mockSetWorkspaceName,
+  setCurrentNote: mockSetCurrentNote,
   savedWorkspaces: [
     {
       id: "workspace-alpha",
@@ -202,6 +215,54 @@ describe("WorkspaceHeader workspace browser modal", () => {
     fireEvent.click(await screen.findByText("Export Workspace"))
 
     expect(mockExportWorkspaceBundle).toHaveBeenCalledWith("workspace-alpha")
+  })
+
+  it("exports workspace citations in BibTeX format", async () => {
+    const createObjectUrlSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:workspace-bibtex")
+    const revokeObjectUrlSpy = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined)
+
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Export Citations (BibTeX)"))
+
+    expect(createObjectUrlSpy).toHaveBeenCalledTimes(1)
+    expect(revokeObjectUrlSpy).toHaveBeenCalledWith("blob:workspace-bibtex")
+  })
+
+  it("creates a workspace from a template and seeds starter note content", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Literature Review"))
+
+    expect(mockCreateNewWorkspace).toHaveBeenCalledWith(
+      "Literature Review Workspace"
+    )
+    expect(mockSetCurrentNote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Literature Review Plan",
+        keywords: expect.arrayContaining(["literature", "evidence"])
+      })
+    )
   })
 
   it("imports workspace bundle file from the workspace menu", async () => {

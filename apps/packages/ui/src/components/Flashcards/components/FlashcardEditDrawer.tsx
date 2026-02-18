@@ -9,6 +9,7 @@ import {
   Modal,
   Select,
   Space,
+  Tooltip,
   Typography
 } from "antd"
 import dayjs from "dayjs"
@@ -21,6 +22,7 @@ import type { Flashcard, FlashcardUpdate, Deck } from "@/services/flashcards"
 
 const { Text } = Typography
 dayjs.extend(relativeTime)
+const CLOZE_PATTERN = /\{\{c\d+::[\s\S]+?\}\}/
 
 type FlashcardModelType = Flashcard["model_type"]
 
@@ -30,6 +32,7 @@ interface FlashcardEditDrawerProps {
   card: Flashcard | null
   onSave: (values: FlashcardUpdate) => Promise<void>
   onDelete: () => void
+  onResetScheduling?: () => Promise<void>
   isLoading?: boolean
   decks: Deck[]
   decksLoading?: boolean
@@ -41,15 +44,20 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
   card,
   onSave,
   onDelete,
+  onResetScheduling,
   isLoading = false,
   decks,
   decksLoading = false
 }) => {
   const { t } = useTranslation(["option", "common"])
   const [form] = Form.useForm<FlashcardUpdate & { tags_text?: string[] }>()
+  const selectedModelType = Form.useWatch("model_type", form) as
+    | FlashcardModelType
+    | undefined
   const [showPreview, setShowPreview] = React.useState(false)
   const [isDirty, setIsDirty] = React.useState(false)
   const [confirmCloseOpen, setConfirmCloseOpen] = React.useState(false)
+  const [confirmResetOpen, setConfirmResetOpen] = React.useState(false)
 
   const frontPreview = useDebouncedFormField(form, "front")
   const backPreview = useDebouncedFormField(form, "back")
@@ -60,6 +68,26 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
   const markdownSupportHint = t("option:flashcards.markdownSupportHint", {
     defaultValue: "Supports Markdown and LaTeX."
   })
+  const isClozeTemplate = selectedModelType === "cloze"
+
+  const templateHelperText = React.useMemo(() => {
+    if (selectedModelType === "basic_reverse") {
+      return t("option:flashcards.templateReverseHelp", {
+        defaultValue:
+          "Choose Basic + Reverse when you want both directions (term -> meaning and meaning -> term)."
+      })
+    }
+    if (selectedModelType === "cloze") {
+      return t("option:flashcards.templateClozeHelp", {
+        defaultValue:
+          "Choose Cloze when you want to hide key words inside a sentence or paragraph."
+      })
+    }
+    return t("option:flashcards.templateBasicHelp", {
+      defaultValue:
+        "Choose Basic for direct question and answer cards (facts, definitions, short prompts)."
+    })
+  }, [selectedModelType, t])
 
   // Count how many additional fields have values for the badge indicator
   const additionalFieldCount = React.useMemo(() => {
@@ -121,6 +149,7 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
     form.resetFields()
     setIsDirty(false)
     setConfirmCloseOpen(false)
+    setConfirmResetOpen(false)
     onClose()
   }, [form, onClose])
 
@@ -131,6 +160,17 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
       handleClose()
     }
   }, [handleClose, isDirty])
+
+  const handleConfirmResetScheduling = React.useCallback(async () => {
+    if (!onResetScheduling) return
+    try {
+      await onResetScheduling()
+      setConfirmResetOpen(false)
+      setIsDirty(false)
+    } catch (e: unknown) {
+      console.error("Reset scheduling error:", e)
+    }
+  }, [onResetScheduling])
 
   return (
     <>
@@ -210,6 +250,18 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
               }}
             />
           </Form.Item>
+          <Text type="secondary" className="block text-[11px] -mt-4 mb-3">
+            {templateHelperText}
+          </Text>
+          {isClozeTemplate && (
+            <Text type="secondary" className="block text-[11px] -mt-2 mb-3">
+              {t("option:flashcards.clozeSyntaxHelp", {
+                defaultValue:
+                  "Cloze syntax: add at least one deletion like {{syntax}} in Front text.",
+                syntax: "{{c1::answer}}"
+              })}
+            </Text>
+          )}
           <Form.Item
             name="tags"
             label={t("option:flashcards.tags", { defaultValue: "Tags" })}
@@ -234,13 +286,33 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
                 <Text type="secondary" className="block text-[11px]">
-                  {t("option:flashcards.easeFactor", { defaultValue: "Ease factor" })}
+                  <Tooltip
+                    title={t("option:flashcards.schedulingMemoryStrengthHelp", {
+                      defaultValue: "SM-2 ease factor (how fast review gaps grow)."
+                    })}
+                  >
+                    <span>
+                      {t("option:flashcards.memoryStrength", {
+                        defaultValue: "Memory strength"
+                      })}
+                    </span>
+                  </Tooltip>
                 </Text>
                 <Text>{card.ef.toFixed(2)}</Text>
               </div>
               <div>
                 <Text type="secondary" className="block text-[11px]">
-                  {t("option:flashcards.interval", { defaultValue: "Interval" })}
+                  <Tooltip
+                    title={t("option:flashcards.schedulingNextGapHelp", {
+                      defaultValue: "SM-2 interval (days until next review)."
+                    })}
+                  >
+                    <span>
+                      {t("option:flashcards.nextReviewGap", {
+                        defaultValue: "Next review gap"
+                      })}
+                    </span>
+                  </Tooltip>
                 </Text>
                 <Text>
                   {t("option:flashcards.intervalDaysShort", {
@@ -251,13 +323,33 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
               </div>
               <div>
                 <Text type="secondary" className="block text-[11px]">
-                  {t("option:flashcards.repetitions", { defaultValue: "Repetitions" })}
+                  <Tooltip
+                    title={t("option:flashcards.schedulingRecallRunsHelp", {
+                      defaultValue: "SM-2 repetitions (successful recalls)."
+                    })}
+                  >
+                    <span>
+                      {t("option:flashcards.recallRuns", {
+                        defaultValue: "Recall runs"
+                      })}
+                    </span>
+                  </Tooltip>
                 </Text>
                 <Text>{Math.max(0, card.repetitions)}</Text>
               </div>
               <div>
                 <Text type="secondary" className="block text-[11px]">
-                  {t("option:flashcards.lapses", { defaultValue: "Lapses" })}
+                  <Tooltip
+                    title={t("option:flashcards.schedulingRelearnsHelp", {
+                      defaultValue: "SM-2 lapses (times forgotten)."
+                    })}
+                  >
+                    <span>
+                      {t("option:flashcards.relearns", {
+                        defaultValue: "Relearns"
+                      })}
+                    </span>
+                  </Tooltip>
                 </Text>
                 <Text>{Math.max(0, card.lapses)}</Text>
               </div>
@@ -297,6 +389,27 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
                 </Text>
               </div>
             </div>
+
+            {onResetScheduling && (
+              <div className="mt-3 border-t border-border pt-3">
+                <Text type="secondary" className="block text-[11px] mb-2">
+                  {t("option:flashcards.resetSchedulingHelp", {
+                    defaultValue:
+                      "Reset scheduling when this card's timing feels wrong. This keeps card content but starts scheduling from new-card defaults."
+                  })}
+                </Text>
+                <Button
+                  danger
+                  size="small"
+                  onClick={() => setConfirmResetOpen(true)}
+                  disabled={isLoading}
+                >
+                  {t("option:flashcards.resetScheduling", {
+                    defaultValue: "Reset scheduling"
+                  })}
+                </Button>
+              </div>
+            )}
           </div>
         )}
 
@@ -319,7 +432,34 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
           <Form.Item
             name="front"
             label={t("option:flashcards.front", { defaultValue: "Front" })}
-            rules={[{ required: true }]}
+            rules={[
+              {
+                required: true,
+                message: t("option:flashcards.frontRequired", {
+                  defaultValue: "Front is required."
+                })
+              },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (getFieldValue("model_type") !== "cloze") {
+                    return Promise.resolve()
+                  }
+                  const frontText = String(value ?? "")
+                  if (CLOZE_PATTERN.test(frontText)) {
+                    return Promise.resolve()
+                  }
+                  return Promise.reject(
+                    new Error(
+                      t("option:flashcards.clozeValidationMessage", {
+                        defaultValue:
+                          "For Cloze cards, include at least one deletion like {{syntax}}.",
+                        syntax: "{{c1::answer}}"
+                      })
+                    )
+                  )
+                }
+              })
+            ]}
           >
             <Input.TextArea rows={3} />
           </Form.Item>
@@ -434,6 +574,36 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
       <p>
         {t("option:flashcards.unsavedChangesDescription", {
           defaultValue: "You have unsaved changes. Are you sure you want to close?"
+        })}
+      </p>
+    </Modal>
+
+    <Modal
+      open={confirmResetOpen}
+      title={t("option:flashcards.resetSchedulingConfirmTitle", {
+        defaultValue: "Reset scheduling for this card?"
+      })}
+      onCancel={() => setConfirmResetOpen(false)}
+      footer={[
+        <Button key="cancel" onClick={() => setConfirmResetOpen(false)}>
+          {t("common:cancel", { defaultValue: "Cancel" })}
+        </Button>,
+        <Button
+          key="reset"
+          danger
+          loading={isLoading}
+          onClick={handleConfirmResetScheduling}
+        >
+          {t("option:flashcards.resetScheduling", {
+            defaultValue: "Reset scheduling"
+          })}
+        </Button>
+      ]}
+    >
+      <p>
+        {t("option:flashcards.resetSchedulingConfirmDescription", {
+          defaultValue:
+            "This will reset memory strength, next review gap, recall runs, and relearns to new-card defaults. Card content and tags will not change."
         })}
       </p>
     </Modal>

@@ -16,6 +16,7 @@ import {
 import type { ColumnsType } from "antd/es/table"
 import { Download, Edit2, ExternalLink, Eye, Plus, RefreshCw, Trash2, UploadCloud } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
   checkWatchlistSourcesNow,
@@ -43,6 +44,11 @@ import {
   resolveCheckNowTargets,
   shouldConfirmMultiSourceCheck
 } from "./check-now-utils"
+import {
+  restoreDeletedSources,
+  SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+  toSourceCreatePayload
+} from "./source-undo"
 import { getSourceStatusVisual } from "./sourceStatus"
 
 const { Search } = Input
@@ -58,6 +64,7 @@ const CLIENT_FILTER_MAX_ITEMS = 1000
 
 export const SourcesTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
+  const { showUndoNotification } = useUndoNotification()
 
   // Store state
   const sources = useWatchlistsStore((s) => s.sources)
@@ -287,10 +294,28 @@ export const SourcesTab: React.FC = () => {
 
   // Handle delete
   const handleDelete = async (sourceId: number) => {
+    const deletedSource = sources.find((source) => source.id === sourceId)
     try {
       await deleteWatchlistSource(sourceId)
       removeSource(sourceId)
-      message.success(t("watchlists:sources.deleted", "Source deleted"))
+      if (!deletedSource) {
+        message.success(t("watchlists:sources.deleted", "Feed deleted"))
+        return
+      }
+
+      showUndoNotification({
+        title: t("watchlists:sources.undoDeleteTitle", "Feed deleted"),
+        description: t(
+          "watchlists:sources.undoDeleteDescription",
+          "Undo restores this feed for {{seconds}} seconds.",
+          { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
+        ),
+        duration: SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+        onUndo: async () => {
+          await createWatchlistSource(toSourceCreatePayload(deletedSource))
+          await loadSources()
+        }
+      })
     } catch (err) {
       console.error("Failed to delete source:", err)
       message.error(t("watchlists:sources.deleteError", "Failed to delete source"))
@@ -299,27 +324,85 @@ export const SourcesTab: React.FC = () => {
 
   const handleBulkToggle = async (active: boolean) => {
     if (selectedSources.length === 0) return
+    const toggledSources = [...selectedSources]
     setBulkWorking(true)
     try {
       const results = await Promise.allSettled(
-        selectedSources.map((source) =>
+        toggledSources.map((source) =>
           updateWatchlistSource(source.id, { active })
         )
       )
       let successCount = 0
+      const previouslyToggledSources: WatchlistSource[] = []
       results.forEach((result, idx) => {
         if (result.status === "fulfilled") {
-          updateSourceInList(selectedSources[idx].id, result.value)
+          const source = toggledSources[idx]
+          updateSourceInList(source.id, result.value)
+          previouslyToggledSources.push(source)
           successCount += 1
         }
       })
-      message.success(
-        t(
-          "watchlists:sources.bulkUpdated",
-          "{{count}} sources updated",
-          { count: successCount }
+      const failedCount = toggledSources.length - successCount
+
+      if (successCount > 0) {
+        showUndoNotification({
+          title: t(
+            "watchlists:sources.undoBulkToggleTitle",
+            "Updated {{count}} feeds",
+            { count: successCount }
+          ),
+          description: t(
+            "watchlists:sources.undoBulkToggleDescription",
+            "Undo restores previous feed states for {{seconds}} seconds.",
+            { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
+          ),
+          duration: SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+          onUndo: async () => {
+            const restoreResults = await Promise.allSettled(
+              previouslyToggledSources.map((source) =>
+                updateWatchlistSource(source.id, { active: source.active })
+              )
+            )
+            let restoredCount = 0
+            let restoreFailures = 0
+            restoreResults.forEach((result, idx) => {
+              if (result.status === "fulfilled") {
+                updateSourceInList(previouslyToggledSources[idx].id, result.value)
+                restoredCount += 1
+              } else {
+                restoreFailures += 1
+              }
+            })
+
+            if (restoreFailures > 0) {
+              throw new Error(
+                t(
+                  "watchlists:sources.undoBulkTogglePartialError",
+                  "{{restored}} restored, {{failed}} failed to restore",
+                  {
+                    restored: restoredCount,
+                    failed: restoreFailures
+                  }
+                )
+              )
+            }
+          }
+        })
+      }
+
+      if (failedCount > 0) {
+        message.warning(
+          t(
+            "watchlists:sources.bulkUpdatePartial",
+            "Updated {{success}} feeds, {{failed}} failed",
+            { success: successCount, failed: failedCount }
+          )
         )
-      )
+      }
+
+      if (successCount === 0) {
+        message.error(t("watchlists:sources.bulkError", "Bulk update failed"))
+      }
     } catch (err) {
       console.error("Bulk update failed:", err)
       message.error(t("watchlists:sources.bulkError", "Bulk update failed"))
@@ -331,25 +414,72 @@ export const SourcesTab: React.FC = () => {
 
   const handleBulkDelete = async () => {
     if (selectedSources.length === 0) return
+    const deletedSources = [...selectedSources]
     setBulkWorking(true)
     try {
       const results = await Promise.allSettled(
-        selectedSources.map((source) => deleteWatchlistSource(source.id))
+        deletedSources.map((source) => deleteWatchlistSource(source.id))
       )
       let successCount = 0
+      const removedSources: WatchlistSource[] = []
       results.forEach((result, idx) => {
         if (result.status === "fulfilled") {
-          removeSource(selectedSources[idx].id)
+          const removedSource = deletedSources[idx]
+          removeSource(removedSource.id)
+          removedSources.push(removedSource)
           successCount += 1
         }
       })
-      message.success(
-        t(
-          "watchlists:sources.bulkDeleted",
-          "{{count}} sources deleted",
-          { count: successCount }
+      const failedCount = deletedSources.length - successCount
+
+      if (successCount > 0) {
+        showUndoNotification({
+          title: t(
+            "watchlists:sources.undoBulkDeleteTitle",
+            "{{count}} feeds deleted",
+            { count: successCount }
+          ),
+          description: t(
+            "watchlists:sources.undoBulkDeleteDescription",
+            "Undo restores deleted feeds for {{seconds}} seconds.",
+            { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
+          ),
+          duration: SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+          onUndo: async () => {
+            const restoreSummary = await restoreDeletedSources(
+              removedSources,
+              createWatchlistSource
+            )
+            await loadSources()
+            if (restoreSummary.failed > 0) {
+              throw new Error(
+                t(
+                  "watchlists:sources.undoBulkRestorePartialError",
+                  "{{restored}} restored, {{failed}} failed to restore",
+                  {
+                    restored: restoreSummary.restored,
+                    failed: restoreSummary.failed
+                  }
+                )
+              )
+            }
+          }
+        })
+      }
+
+      if (failedCount > 0) {
+        message.warning(
+          t(
+            "watchlists:sources.bulkDeletePartial",
+            "Deleted {{success}} feeds, {{failed}} failed",
+            { success: successCount, failed: failedCount }
+          )
         )
-      )
+      }
+
+      if (successCount === 0) {
+        message.error(t("watchlists:sources.bulkDeleteError", "Bulk delete failed"))
+      }
     } catch (err) {
       console.error("Bulk delete failed:", err)
       message.error(t("watchlists:sources.bulkDeleteError", "Bulk delete failed"))

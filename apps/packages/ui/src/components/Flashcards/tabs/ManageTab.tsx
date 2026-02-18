@@ -33,6 +33,7 @@ import {
   useDecksQuery,
   useManageQuery,
   useUpdateFlashcardMutation,
+  useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
   useCardsKeyboardNav,
   type DueStatus
@@ -61,6 +62,11 @@ type PendingDeletion = {
   card: Flashcard
   expiresAt: number
   batchId: string
+}
+
+type MoveUndoSnapshot = {
+  uuid: string
+  previousDeckId: number | null
 }
 
 interface ManageTabProps {
@@ -250,24 +256,25 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const someOnPageSelected = selectedOnPageCount > 0 && selectedOnPageCount < pageCount
 
   const updateMutation = useUpdateFlashcardMutation()
+  const resetSchedulingMutation = useResetFlashcardSchedulingMutation()
   const deleteMutation = useDeleteFlashcardMutation()
 
   const compactSchedulingLabels = React.useCallback(
     (card: Flashcard) => ({
-      ef: t("option:flashcards.schedulingEfCompact", {
-        defaultValue: "EF {{value}}",
+      memoryStrength: t("option:flashcards.schedulingMemoryStrengthCompact", {
+        defaultValue: "Memory {{value}}",
         value: card.ef.toFixed(2)
       }),
-      interval: t("option:flashcards.schedulingIntervalCompact", {
-        defaultValue: "Int {{count}}d",
+      nextReviewGap: t("option:flashcards.schedulingNextReviewGapCompact", {
+        defaultValue: "Next gap {{count}}d",
         count: Math.max(0, card.interval_days)
       }),
-      repetitions: t("option:flashcards.schedulingRepetitionsCompact", {
-        defaultValue: "Reps {{count}}",
+      recallRuns: t("option:flashcards.schedulingRecallRunsCompact", {
+        defaultValue: "Recall runs {{count}}",
         count: Math.max(0, card.repetitions)
       }),
-      lapses: t("option:flashcards.schedulingLapsesCompact", {
-        defaultValue: "Lapses {{count}}",
+      relearns: t("option:flashcards.schedulingRelearnsCompact", {
+        defaultValue: "Relearns {{count}}",
         count: Math.max(0, card.lapses)
       })
     }),
@@ -276,20 +283,20 @@ export const ManageTab: React.FC<ManageTabProps> = ({
 
   const expandedSchedulingLabels = React.useCallback(
     (card: Flashcard) => ({
-      ef: t("option:flashcards.schedulingEfExpanded", {
-        defaultValue: "Ease {{value}}",
+      memoryStrength: t("option:flashcards.schedulingMemoryStrengthExpanded", {
+        defaultValue: "Memory strength {{value}}",
         value: card.ef.toFixed(2)
       }),
-      interval: t("option:flashcards.schedulingIntervalExpanded", {
-        defaultValue: "Interval {{count}}d",
+      nextReviewGap: t("option:flashcards.schedulingNextReviewGapExpanded", {
+        defaultValue: "Next review gap {{count}}d",
         count: Math.max(0, card.interval_days)
       }),
-      repetitions: t("option:flashcards.schedulingRepetitionsExpanded", {
-        defaultValue: "Reps {{count}}",
+      recallRuns: t("option:flashcards.schedulingRecallRunsExpanded", {
+        defaultValue: "Recall runs {{count}}",
         count: Math.max(0, card.repetitions)
       }),
-      lapses: t("option:flashcards.schedulingLapsesExpanded", {
-        defaultValue: "Lapses {{count}}",
+      relearns: t("option:flashcards.schedulingRelearnsExpanded", {
+        defaultValue: "Relearns {{count}}",
         count: Math.max(0, card.lapses)
       })
     }),
@@ -689,12 +696,23 @@ export const ManageTab: React.FC<ManageTabProps> = ({
 
   const submitMove = async () => {
     try {
+      const undoSnapshots: MoveUndoSnapshot[] = []
+      let movedCount = 0
       if (moveCard) {
         const full = await getFlashcard(moveCard.uuid)
-        await updateFlashcard(moveCard.uuid, {
-          deck_id: moveDeckId ?? null,
-          expected_version: full.version
-        })
+        const previousDeckId = full.deck_id ?? null
+        const targetDeckId = moveDeckId ?? null
+        if (previousDeckId !== targetDeckId) {
+          await updateFlashcard(moveCard.uuid, {
+            deck_id: targetDeckId,
+            expected_version: full.version
+          })
+          undoSnapshots.push({
+            uuid: moveCard.uuid,
+            previousDeckId
+          })
+          movedCount += 1
+        }
       } else {
         if (moveDeckId == null) {
           message.error(
@@ -713,10 +731,19 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               const results = await Promise.allSettled(
                 chunk.map(async (c) => {
                   const full = await getFlashcard(c.uuid)
+                  const previousDeckId = full.deck_id ?? null
+                  if (previousDeckId === moveDeckId) {
+                    return
+                  }
                   await updateFlashcard(c.uuid, {
                     deck_id: moveDeckId,
                     expected_version: full.version
                   })
+                  undoSnapshots.push({
+                    uuid: c.uuid,
+                    previousDeckId
+                  })
+                  movedCount += 1
                 })
               )
               const failures = results.filter((r) => r.status === "rejected")
@@ -732,6 +759,55 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       setMoveCard(null)
       setMoveDeckId(null)
       await qc.invalidateQueries({ queryKey: ["flashcards:list"] })
+      if (movedCount === 0) {
+        message.info(
+          t("option:flashcards.bulkMoveNoChanges", {
+            defaultValue: "No cards needed moving."
+          })
+        )
+        return
+      }
+      showUndoNotification({
+        title: moveCard
+          ? t("option:flashcards.cardMoved", {
+              defaultValue: "Card moved"
+            })
+          : t("option:flashcards.cardsMoved", {
+              defaultValue: "{{count}} cards moved",
+              count: movedCount
+            }),
+        description: t("option:flashcards.moveUndoHint", {
+          defaultValue: "Undo within {{seconds}}s to revert this move.",
+          seconds: DELETE_UNDO_SECONDS
+        }),
+        duration: DELETE_UNDO_SECONDS,
+        onUndo: async () => {
+          await processInChunks(
+            undoSnapshots,
+            BULK_MUTATION_CHUNK_SIZE,
+            async (chunk) => {
+              const results = await Promise.allSettled(
+                chunk.map(async (snapshot) => {
+                  const latest = await getFlashcard(snapshot.uuid)
+                  await updateFlashcard(snapshot.uuid, {
+                    deck_id: snapshot.previousDeckId,
+                    expected_version: latest.version
+                  })
+                })
+              )
+              const failed = results.filter((r) => r.status === "rejected")
+              if (failed.length > 0) {
+                throw new Error(
+                  t("option:flashcards.moveUndoPartialFailure", {
+                    defaultValue: "Some cards could not be restored."
+                  })
+                )
+              }
+            }
+          )
+          await qc.invalidateQueries({ queryKey: ["flashcards:list"] })
+        }
+      })
       message.success(t("common:updated", { defaultValue: "Updated" }))
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Move failed"
@@ -773,9 +849,39 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const doUpdate = async (values: FlashcardUpdate) => {
     try {
       if (!editing) return
+      const editingUuid = editing.uuid
+      const previous = await getFlashcard(editingUuid)
       await updateMutation.mutateAsync({
-        uuid: editing.uuid,
+        uuid: editingUuid,
         update: values
+      })
+      showUndoNotification({
+        title: t("option:flashcards.cardUpdated", {
+          defaultValue: "Card updated"
+        }),
+        description: t("option:flashcards.editUndoHint", {
+          defaultValue: "Undo within {{seconds}}s to restore previous content.",
+          seconds: DELETE_UNDO_SECONDS
+        }),
+        duration: DELETE_UNDO_SECONDS,
+        onUndo: async () => {
+          const latest = await getFlashcard(editingUuid)
+          await updateMutation.mutateAsync({
+            uuid: editingUuid,
+            update: {
+              deck_id: previous.deck_id ?? null,
+              front: previous.front,
+              back: previous.back,
+              notes: previous.notes ?? null,
+              extra: previous.extra ?? null,
+              tags: previous.tags ?? [],
+              is_cloze: previous.is_cloze,
+              model_type: previous.model_type,
+              reverse: previous.reverse,
+              expected_version: latest.version
+            }
+          })
+        }
       })
       message.success(t("common:updated", { defaultValue: "Updated" }))
       setEditOpen(false)
@@ -817,6 +923,26 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       })
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Delete failed"
+      message.error(errorMessage)
+    }
+  }
+
+  const doResetScheduling = async () => {
+    try {
+      if (!editing) return
+      await resetSchedulingMutation.mutateAsync({
+        uuid: editing.uuid,
+        expectedVersion: editing.version
+      })
+      message.success(
+        t("option:flashcards.schedulingResetSuccess", {
+          defaultValue: "Scheduling reset to new-card defaults."
+        })
+      )
+      setEditOpen(false)
+      setEditing(null)
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : "Reset scheduling failed"
       message.error(errorMessage)
     }
   }
@@ -1183,10 +1309,34 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                         )}
                       </div>
                       <div className="flex flex-wrap items-center gap-2 text-text-subtle">
-                        <span>{compactSchedule.ef}</span>
-                        <span>{compactSchedule.interval}</span>
-                        <span>{compactSchedule.repetitions}</span>
-                        <span>{compactSchedule.lapses}</span>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingMemoryStrengthHelp", {
+                            defaultValue: "SM-2 ease factor (how fast review gaps grow)."
+                          })}
+                        >
+                          <span>{compactSchedule.memoryStrength}</span>
+                        </Tooltip>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingNextGapHelp", {
+                            defaultValue: "SM-2 interval (days until next review)."
+                          })}
+                        >
+                          <span>{compactSchedule.nextReviewGap}</span>
+                        </Tooltip>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingRecallRunsHelp", {
+                            defaultValue: "SM-2 repetitions (successful recalls)."
+                          })}
+                        >
+                          <span>{compactSchedule.recallRuns}</span>
+                        </Tooltip>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingRelearnsHelp", {
+                            defaultValue: "SM-2 lapses (times forgotten)."
+                          })}
+                        >
+                          <span>{compactSchedule.relearns}</span>
+                        </Tooltip>
                       </div>
                     </div>
                   }
@@ -1222,10 +1372,34 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                             {dayjs(item.due_at).format("YYYY-MM-DD HH:mm")})
                           </Tag>
                         )}
-                        <Tag>{expandedSchedule.ef}</Tag>
-                        <Tag>{expandedSchedule.interval}</Tag>
-                        <Tag>{expandedSchedule.repetitions}</Tag>
-                        <Tag>{expandedSchedule.lapses}</Tag>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingMemoryStrengthHelp", {
+                            defaultValue: "SM-2 ease factor (how fast review gaps grow)."
+                          })}
+                        >
+                          <Tag>{expandedSchedule.memoryStrength}</Tag>
+                        </Tooltip>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingNextGapHelp", {
+                            defaultValue: "SM-2 interval (days until next review)."
+                          })}
+                        >
+                          <Tag>{expandedSchedule.nextReviewGap}</Tag>
+                        </Tooltip>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingRecallRunsHelp", {
+                            defaultValue: "SM-2 repetitions (successful recalls)."
+                          })}
+                        >
+                          <Tag>{expandedSchedule.recallRuns}</Tag>
+                        </Tooltip>
+                        <Tooltip
+                          title={t("option:flashcards.schedulingRelearnsHelp", {
+                            defaultValue: "SM-2 lapses (times forgotten)."
+                          })}
+                        >
+                          <Tag>{expandedSchedule.relearns}</Tag>
+                        </Tooltip>
                       </div>
                     }
                   />
@@ -1432,7 +1606,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         card={editing}
         onSave={doUpdate}
         onDelete={doDelete}
-        isLoading={updateMutation.isPending}
+        onResetScheduling={doResetScheduling}
+        isLoading={updateMutation.isPending || resetSchedulingMutation.isPending}
         decks={decksQuery.data || []}
         decksLoading={decksQuery.isLoading}
       />

@@ -22,7 +22,7 @@ Finding IDs: `H3.1` through `H3.5`
 - Component tests for delete -> undo -> restore flow.
 - Integration tests for timeout expiration and irreversible finalization.
 - Regression tests for permission enforcement in undo paths.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 2: Preflight and Safety Prompts
 **Goal**: Prevent irreversible mistakes before action submission.
@@ -52,3 +52,9 @@ Finding IDs: `H3.1` through `H3.5`
 
 - Undo model should align with backend retention and soft-delete policies.
 - Cancel action depends on server-side run interruption semantics and authorization checks.
+
+## Progress Notes
+
+- 2026-02-18: Implemented source delete and bulk-delete undo notifications in `SourcesTab` using a 10-second restore window and recreate-on-undo flow.
+- 2026-02-18: Implemented monitor delete undo notification in `JobsTab` using the same 10-second restore window.
+- 2026-02-18: Added bulk enable/disable undo in `SourcesTab` to restore prior active states when needed.

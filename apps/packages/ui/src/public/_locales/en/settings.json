@@ -1364,6 +1364,18 @@
   "manageCharacters_advanced_hide": {
     "message": "Hide advanced fields"
   },
+  "manageCharacters_import_previewUnsupportedType": {
+    "message": "Unsupported file type: {{extension}}. Supported formats: {{allowed}}"
+  },
+  "manageCharacters_import_previewReadError": {
+    "message": "Unable to read file contents for preview."
+  },
+  "manageCharacters_import_previewInvalidJson": {
+    "message": "Invalid JSON syntax: {{message}}"
+  },
+  "manageCharacters_import_previewInvalidYaml": {
+    "message": "Malformed YAML content: {{message}}"
+  },
   "manageCharacters_form_name_label": {
     "message": "Name"
   },

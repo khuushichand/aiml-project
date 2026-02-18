@@ -77,7 +77,7 @@ describe("PromptDrawer template variable UX", () => {
     expect(screen.getByTestId("prompt-drawer-user-preview")).toHaveTextContent(
       "{{topic}}"
     )
-  })
+  }, 15000)
 
   it("blocks submit on invalid template syntax and allows valid template references", async () => {
     const onSubmit = vi.fn()

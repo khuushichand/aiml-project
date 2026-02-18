@@ -46,7 +46,12 @@ Finding IDs: `14.1` through `14.12`
 - Integration tests for bulk selection and action execution.
 - Component tests for export format selection and payload generation.
 - Integration tests for reprocess action and job status updates.
-**Status**: In Progress
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Completed: export modal/action in `ContentViewer` with JSON/Markdown/plain text support and regression tests.
+- Completed: reprocess action in `ContentViewer` menu with success/error coverage.
+- Completed: ingest job tracker panel integrated into `/media` sidebar with batch ID input, refresh/auto-refresh, status rendering, and retry coverage.
+- Completed: main list multi-select mode and bulk action toolbar baseline (`tag/delete/export`) with regression coverage.
 
 ## Stage 4: Research Workflow Organization and Annotation
 **Goal**: Support researcher organization and annotation-first reading workflows.
@@ -58,7 +63,14 @@ Finding IDs: `14.1` through `14.12`
 - Integration tests for annotation create/edit/delete/sync flows.
 - Component tests for collection creation, assignment, and filtering.
 - Regression tests for existing keyword/tag workflows.
-**Status**: Not Started
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Added annotation authoring controls in `ContentViewer` intelligence annotations tab:
+  create from selection/manual text, edit note, delete, and sync-now actions.
+- Added client-side media collections in `/media` with storage-backed persistence.
+- Integrated collection filter into sidebar search/filter flow and added multi-review handoff for active collection or bulk selection.
+- Added regression coverage for annotation CRUD/sync, selection-to-annotation highlight creation, and collection bulk workflows.
+- Added collection assignment/merge and collection-filter scoped keyword-tagging tests to preserve existing tagging behavior under organization filters.
 
 ## Stage 5: Extended Insights and Academic Integrations
 **Goal**: Add lower-priority expansion features after core workflows are stable.
@@ -70,7 +82,14 @@ Finding IDs: `14.1` through `14.12`
 - Integration tests for stats aggregation and rendering.
 - Export contract tests for citation data format.
 - Scheduler/job tests for recurring re-ingestion setup and status reporting.
-**Status**: Not Started
+**Status**: In Progress
+**Progress Notes (2026-02-18)**:
+- Added `MediaLibraryStatsPanel` to `/media` with:
+  visible/total counts, visible word-count aggregation, top media-type distribution, and storage usage summary.
+- Wired storage usage to backend `GET /api/v1/storage/usage` in `ViewMediaPage` with loading and error states.
+- Added regression coverage in `MediaLibraryStatsPanel.test.tsx` for metric rendering and storage loading/error states.
+- Added `BibTeX` export format in `ContentViewer` export modal, deriving citation fields from `safe_metadata` (DOI, authors, journal, year, URL).
+- Added export regression coverage to validate `.bib` output payload generation.
 
 ## Dependencies
 

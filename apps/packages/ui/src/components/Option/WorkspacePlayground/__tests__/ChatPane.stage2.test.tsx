@@ -23,6 +23,7 @@ const mockOnSubmit = vi.fn()
 const mockRegenerateLastMessage = vi.fn()
 const mockDeleteMessage = vi.fn()
 const mockEditMessage = vi.fn()
+const mockCreateChatBranch = vi.fn()
 const mockMessageInfo = vi.fn()
 
 const connectionStoreState = {
@@ -80,6 +81,7 @@ const messageOptionState = {
   regenerateLastMessage: mockRegenerateLastMessage,
   deleteMessage: mockDeleteMessage,
   editMessage: mockEditMessage,
+  createChatBranch: mockCreateChatBranch,
   historyId: null as string | null,
   setHistoryId: mockSetHistoryId,
   serverChatId: null as string | null,
@@ -158,11 +160,17 @@ vi.mock("@/components/Common/Playground/Message", () => ({
   PlaygroundMessage: ({
     message,
     onSourceClick,
-    sources
+    sources,
+    onSwipePrev,
+    onSwipeNext,
+    onNewBranch
   }: {
     message: string
     onSourceClick?: (source: any) => void
     sources?: any[]
+    onSwipePrev?: () => void
+    onSwipeNext?: () => void
+    onNewBranch?: () => void
   }) => (
     <div data-testid="playground-message">
       <div>{message}</div>
@@ -173,6 +181,33 @@ vi.mock("@/components/Common/Playground/Message", () => ({
           aria-label="Open citation"
         >
           Open citation
+        </button>
+      )}
+      {onSwipePrev && (
+        <button
+          type="button"
+          onClick={onSwipePrev}
+          aria-label="Variant previous"
+        >
+          Variant previous
+        </button>
+      )}
+      {onSwipeNext && (
+        <button
+          type="button"
+          onClick={onSwipeNext}
+          aria-label="Variant next"
+        >
+          Variant next
+        </button>
+      )}
+      {onNewBranch && (
+        <button
+          type="button"
+          onClick={onNewBranch}
+          aria-label="Create branch"
+        >
+          Create branch
         </button>
       )}
     </div>
@@ -438,5 +473,50 @@ describe("ChatPane Stage 2 citation traceability and retrieval transparency", ()
         key: "workspace-playground:source-context-warning"
       })
     )
+  })
+
+  it("routes message branch actions to createChatBranch", () => {
+    messageOptionState.messages = [
+      {
+        id: "bot-branch",
+        isBot: true,
+        name: "Assistant",
+        message: "Branch me",
+        sources: []
+      }
+    ]
+
+    render(<ChatPane />)
+    fireEvent.click(screen.getByRole("button", { name: "Create branch" }))
+
+    expect(mockCreateChatBranch).toHaveBeenCalledWith(0)
+  })
+
+  it("switches assistant variants using swipe handlers", () => {
+    messageOptionState.messages = [
+      {
+        id: "bot-variant",
+        isBot: true,
+        name: "Assistant",
+        message: "Variant A",
+        sources: [],
+        variants: [
+          { id: "variant-a", message: "Variant A", sources: [] },
+          { id: "variant-b", message: "Variant B", sources: [] }
+        ],
+        activeVariantIndex: 0
+      }
+    ]
+
+    render(<ChatPane />)
+    fireEvent.click(screen.getByRole("button", { name: "Variant next" }))
+
+    const updater = mockSetMessages.mock.calls.at(-1)?.[0]
+    expect(typeof updater).toBe("function")
+    if (typeof updater === "function") {
+      const updatedMessages = updater(messageOptionState.messages)
+      expect(updatedMessages[0]?.activeVariantIndex).toBe(1)
+      expect(updatedMessages[0]?.message).toBe("Variant B")
+    }
   })
 })

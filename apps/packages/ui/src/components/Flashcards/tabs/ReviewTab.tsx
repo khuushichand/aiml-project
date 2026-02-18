@@ -5,18 +5,22 @@ import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
 import { useTranslation } from "react-i18next"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
-import type { Flashcard } from "@/services/flashcards"
+import type { Flashcard, FlashcardUpdate } from "@/services/flashcards"
 import {
   useDecksQuery,
   useReviewQuery,
   useReviewFlashcardMutation,
+  useUpdateFlashcardMutation,
+  useResetFlashcardSchedulingMutation,
+  useDeleteFlashcardMutation,
   useFlashcardShortcuts,
   useDueCountsQuery,
   useDeckDueCountsQuery,
+  useReviewAnalyticsSummaryQuery,
   useHasCardsQuery,
   useNextDueQuery
 } from "../hooks"
-import { MarkdownWithBoundary, ReviewProgress } from "../components"
+import { MarkdownWithBoundary, ReviewProgress, ReviewAnalyticsSummary, FlashcardEditDrawer } from "../components"
 import { calculateIntervals } from "../utils/calculateIntervals"
 import { formatCardType } from "../utils/model-type-labels"
 import { buildReviewUndoState } from "../utils/review-undo"
@@ -54,6 +58,8 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   const [showAnswer, setShowAnswer] = React.useState(false)
   const [reviewedCount, setReviewedCount] = React.useState(0)
   const [localOverrideCard, setLocalOverrideCard] = React.useState<Flashcard | null>(null)
+  const [editDrawerOpen, setEditDrawerOpen] = React.useState(false)
+  const [showRatingRationale, setShowRatingRationale] = React.useState(false)
 
   // Undo state - stores the last reviewed card for potential re-rating
   const [lastReviewedCard, setLastReviewedCard] = React.useState<Flashcard | null>(null)
@@ -70,8 +76,12 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   const decksQuery = useDecksQuery()
   const reviewQuery = useReviewQuery(reviewDeckId)
   const reviewMutation = useReviewFlashcardMutation()
+  const updateMutation = useUpdateFlashcardMutation()
+  const resetSchedulingMutation = useResetFlashcardSchedulingMutation()
+  const deleteMutation = useDeleteFlashcardMutation()
   const dueCountsQuery = useDueCountsQuery(reviewDeckId)
   const deckDueCountsQuery = useDeckDueCountsQuery()
+  const analyticsSummaryQuery = useReviewAnalyticsSummaryQuery(reviewDeckId)
   const hasCardsQuery = useHasCardsQuery()
   const nextDueQuery = useNextDueQuery(reviewDeckId)
   const nextDueInfo = nextDueQuery.data
@@ -221,7 +231,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
 
         message.success(
           t("option:flashcards.reviewSavedWithSchedule", {
-            defaultValue: "Saved. Next review {{due}} (interval: {{interval}}).",
+            defaultValue: "Saved. Next review {{due}} (next review gap: {{interval}}).",
             due: dueLabel,
             interval: intervalLabel
           })
@@ -288,6 +298,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
       return
     }
     setShowAnswer(false)
+    setShowRatingRationale(false)
     answerStartTimeRef.current = null
   }, [activeCard?.uuid])
 
@@ -296,6 +307,103 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
     setShowAnswer(true)
     answerStartTimeRef.current = Date.now()
   }, [])
+
+  const handleOpenEdit = React.useCallback(() => {
+    if (!activeCard) return
+    setEditDrawerOpen(true)
+  }, [activeCard])
+
+  const handleSaveEdit = React.useCallback(
+    async (values: FlashcardUpdate) => {
+      if (!activeCard) return
+      try {
+        await updateMutation.mutateAsync({
+          uuid: activeCard.uuid,
+          update: values
+        })
+        message.success(
+          t("option:flashcards.cardUpdated", {
+            defaultValue: "Card updated."
+          })
+        )
+        setEditDrawerOpen(false)
+      } catch (error: unknown) {
+        message.error(
+          error instanceof Error
+            ? error.message
+            : t("option:flashcards.cardUpdateFailed", {
+                defaultValue: "Failed to update card."
+              })
+        )
+      }
+    },
+    [activeCard, updateMutation, message, t]
+  )
+
+  const handleDeleteFromReview = React.useCallback(async () => {
+    if (!activeCard) return
+    try {
+      await deleteMutation.mutateAsync({
+        uuid: activeCard.uuid,
+        version: activeCard.version
+      })
+      message.success(
+        t("option:flashcards.cardDeleted", {
+          defaultValue: "Card deleted."
+        })
+      )
+      setEditDrawerOpen(false)
+      setShowAnswer(false)
+      setShowRatingRationale(false)
+      answerStartTimeRef.current = null
+      if (reviewOverrideCard) {
+        onClearOverride?.()
+      }
+      if (localOverrideCard?.uuid === activeCard.uuid) {
+        setLocalOverrideCard(null)
+      }
+    } catch (error: unknown) {
+      message.error(
+        error instanceof Error
+          ? error.message
+          : t("option:flashcards.cardDeleteFailed", {
+              defaultValue: "Failed to delete card."
+            })
+      )
+    }
+  }, [
+    activeCard,
+    deleteMutation,
+    message,
+    t,
+    reviewOverrideCard,
+    onClearOverride,
+    localOverrideCard?.uuid
+  ])
+
+  const handleResetSchedulingFromReview = React.useCallback(async () => {
+    if (!activeCard) return
+    try {
+      await resetSchedulingMutation.mutateAsync({
+        uuid: activeCard.uuid,
+        expectedVersion: activeCard.version
+      })
+      message.success(
+        t("option:flashcards.schedulingResetSuccess", {
+          defaultValue: "Scheduling reset to new-card defaults."
+        })
+      )
+      setEditDrawerOpen(false)
+    } catch (error: unknown) {
+      message.error(
+        error instanceof Error
+          ? error.message
+          : t("option:flashcards.schedulingResetFailed", {
+              defaultValue: "Failed to reset scheduling."
+            })
+      )
+    }
+  }, [activeCard, resetSchedulingMutation, message, t])
 
   // Reset reviewed count when deck changes
   React.useEffect(() => {
@@ -318,6 +426,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
     showingAnswer: showAnswer,
     onFlip: handleShowAnswer,
     onRate: onSubmitReview,
+    onEdit: handleOpenEdit,
     onUndo: showUndoButton ? handleUndoReview : undefined
   })
 
@@ -363,6 +472,12 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         </Button>
       </div>
 
+      <ReviewAnalyticsSummary
+        summary={analyticsSummaryQuery.data}
+        isLoading={analyticsSummaryQuery.isLoading}
+        selectedDeckId={reviewDeckId ?? null}
+      />
+
       {dueCountsQuery.data && dueCountsQuery.data.total > 0 && (
         <ReviewProgress
           dueCount={dueCountsQuery.data.total}
@@ -375,10 +490,21 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         <Card>
           <div className="flex flex-col gap-3">
             <div>
-              <Tag>{formatCardType(activeCard, t)}</Tag>
-              {activeCard.tags?.map((tag) => (
-                <Tag key={tag}>{tag}</Tag>
-              ))}
+              <div className="flex flex-wrap items-center gap-2">
+                <Tag>{formatCardType(activeCard, t)}</Tag>
+                {activeCard.tags?.map((tag) => (
+                  <Tag key={tag}>{tag}</Tag>
+                ))}
+                <Button
+                  size="small"
+                  onClick={handleOpenEdit}
+                  data-testid="flashcards-review-edit-card"
+                >
+                  {t("option:flashcards.editCardAction", {
+                    defaultValue: "Edit"
+                  })}
+                </Button>
+              </div>
             </div>
 
             <div>
@@ -435,6 +561,11 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                       defaultValue: "Press Space to flip"
                     })}
                   </Text>
+                  <Text type="secondary" className="text-xs">
+                    {t("option:flashcards.shortcutEdit", {
+                      defaultValue: "Press E to edit this card"
+                    })}
+                  </Text>
                 </div>
               ) : (
                 <>
@@ -477,9 +608,54 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                         )
                       })}
                     </div>
+                    <Text type="secondary" className="text-xs text-center">
+                      {t("option:flashcards.ratingIntervalsMeaning", {
+                        defaultValue:
+                          "Again = shortest gap, Hard = short gap, Good = medium gap, Easy = longest gap."
+                      })}
+                    </Text>
+                    <Button
+                      type="link"
+                      size="small"
+                      className="self-start !px-0"
+                      onClick={() => setShowRatingRationale((prev) => !prev)}
+                    >
+                      {t("option:flashcards.whyTheseRatings", {
+                        defaultValue: "Why these ratings?"
+                      })}
+                    </Button>
+                    {showRatingRationale && (
+                      <div className="rounded border border-border bg-surface p-2 text-xs text-text-muted">
+                        <Text className="block text-xs">
+                          {t("option:flashcards.ratingMapAgain", {
+                            defaultValue: "Again = 0: forgot it, repeat very soon."
+                          })}
+                        </Text>
+                        <Text className="block text-xs">
+                          {t("option:flashcards.ratingMapHard", {
+                            defaultValue: "Hard = 2: remembered with strain, keep gap short."
+                          })}
+                        </Text>
+                        <Text className="block text-xs">
+                          {t("option:flashcards.ratingMapGood", {
+                            defaultValue: "Good = 3: normal recall, use the default schedule step."
+                          })}
+                        </Text>
+                        <Text className="block text-xs">
+                          {t("option:flashcards.ratingMapEasy", {
+                            defaultValue: "Easy = 5: effortless recall, jump to a longer gap."
+                          })}
+                        </Text>
+                      </div>
+                    )}
                     <Text type="secondary" className="text-xs">
                       {t("option:flashcards.shortcutRate", {
                         defaultValue: "Press 1-4 to rate"
+                      })}
+                    </Text>
+                    <Text type="secondary" className="text-xs">
+                      {t("option:flashcards.shortcutEdit", {
+                        defaultValue: "Press E to edit this card"
                       })}
                     </Text>
 
@@ -628,6 +804,21 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
           </Empty>
         </Card>
       )}
+      <FlashcardEditDrawer
+        open={editDrawerOpen}
+        onClose={() => setEditDrawerOpen(false)}
+        card={activeCard ?? null}
+        onSave={handleSaveEdit}
+        onDelete={handleDeleteFromReview}
+        onResetScheduling={handleResetSchedulingFromReview}
+        isLoading={
+          updateMutation.isPending ||
+          deleteMutation.isPending ||
+          resetSchedulingMutation.isPending
+        }
+        decks={decksQuery.data || []}
+        decksLoading={decksQuery.isLoading}
+      />
     </div>
   )
 }

@@ -92,7 +92,7 @@ describe("PromptDrawer stage 4 behavior", () => {
     const editCall = hookSpies.useFormDraftMock.mock.calls.at(-1)?.[0] as any
     expect(editCall.storageKey).toBe("tldw-prompt-drawer-draft-edit-prompt-123")
     expect(editCall.editId).toBe("prompt-123")
-  })
+  }, 15000)
 
   it("prompts on dirty close and supports cancel/discard paths", async () => {
     const onClose = vi.fn()

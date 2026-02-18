@@ -6,6 +6,7 @@ import {
   useDecksQuery,
   useManageQuery,
   useUpdateFlashcardMutation,
+  useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
   useCardsKeyboardNav
 } from "../../hooks"
@@ -69,6 +70,7 @@ vi.mock("../../hooks", () => ({
   useDecksQuery: vi.fn(),
   useManageQuery: vi.fn(),
   useUpdateFlashcardMutation: vi.fn(),
+  useResetFlashcardSchedulingMutation: vi.fn(),
   useDeleteFlashcardMutation: vi.fn(),
   useCardsKeyboardNav: vi.fn()
 }))
@@ -155,6 +157,10 @@ describe("ManageTab scheduling metadata visibility", () => {
       mutateAsync: vi.fn(),
       isPending: false
     } as any)
+    vi.mocked(useResetFlashcardSchedulingMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
     vi.mocked(useDeleteFlashcardMutation).mockReturnValue({
       mutateAsync: vi.fn(),
       isPending: false
@@ -171,11 +177,11 @@ describe("ManageTab scheduling metadata visibility", () => {
       />
     )
 
-    expect(screen.getByText("EF 2.70")).toBeInTheDocument()
-    expect(screen.getByText("Int 5d")).toBeInTheDocument()
-    expect(screen.getByText("Reps 3")).toBeInTheDocument()
-    expect(screen.getByText("Lapses 1")).toBeInTheDocument()
-  })
+    expect(screen.getByText("Memory 2.70")).toBeInTheDocument()
+    expect(screen.getByText("Next gap 5d")).toBeInTheDocument()
+    expect(screen.getByText("Recall runs 3")).toBeInTheDocument()
+    expect(screen.getByText("Relearns 1")).toBeInTheDocument()
+  }, 15000)
 
   it("shows scheduling metadata in expanded list rows", () => {
     render(
@@ -188,9 +194,9 @@ describe("ManageTab scheduling metadata visibility", () => {
 
     fireEvent.click(screen.getByTestId("flashcards-density-toggle"))
 
-    expect(screen.getByText("Ease 2.70")).toBeInTheDocument()
-    expect(screen.getByText("Interval 5d")).toBeInTheDocument()
-    expect(screen.getByText("Reps 3")).toBeInTheDocument()
-    expect(screen.getByText("Lapses 1")).toBeInTheDocument()
-  })
+    expect(screen.getByText("Memory strength 2.70")).toBeInTheDocument()
+    expect(screen.getByText("Next review gap 5d")).toBeInTheDocument()
+    expect(screen.getByText("Recall runs 3")).toBeInTheDocument()
+    expect(screen.getByText("Relearns 1")).toBeInTheDocument()
+  }, 15000)
 })

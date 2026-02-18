@@ -12074,6 +12074,121 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to review flashcard: {e}") from e  # noqa: TRY003
 
+    def get_flashcard_analytics_summary(self, deck_id: int | None = None) -> dict[str, Any]:
+        """Return review analytics summary and per-deck progress counts."""
+        now_dt = datetime.now(timezone.utc)
+        today_start_dt = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow_start_dt = today_start_dt + timedelta(days=1)
+        now_iso = now_dt.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+        today_start_iso = today_start_dt.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+        tomorrow_start_iso = tomorrow_start_dt.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+        normalized_deck_id = int(deck_id) if deck_id is not None else None
+        deck_filter_clause = " AND f.deck_id = ?" if normalized_deck_id is not None else ""
+        deck_filter_params: tuple[Any, ...] = ((normalized_deck_id,) if normalized_deck_id is not None else tuple())
+
+        try:
+            # Daily review metrics
+            daily_row = self.execute_query(
+                f"""
+                SELECT
+                    COUNT(*) AS reviewed_today,
+                    SUM(CASE WHEN rating < 3 THEN 1 ELSE 0 END) AS lapses_today,
+                    AVG(answer_time_ms) AS avg_answer_time_ms_today
+                FROM flashcard_reviews fr
+                JOIN flashcards f ON f.id = fr.card_id AND f.deleted = 0
+                WHERE fr.reviewed_at >= ? AND fr.reviewed_at < ?{deck_filter_clause}
+                """,
+                (today_start_iso, tomorrow_start_iso, *deck_filter_params),
+            ).fetchone()
+
+            reviewed_today = int((daily_row["reviewed_today"] if daily_row else 0) or 0)
+            lapses_today = int((daily_row["lapses_today"] if daily_row else 0) or 0)
+            avg_answer_time_ms_today = (
+                float(daily_row["avg_answer_time_ms_today"])
+                if daily_row and daily_row["avg_answer_time_ms_today"] is not None
+                else None
+            )
+            retention_rate_today = None
+            lapse_rate_today = None
+            if reviewed_today > 0:
+                lapse_rate_today = (lapses_today / reviewed_today) * 100.0
+                retention_rate_today = 100.0 - lapse_rate_today
+
+            # UTC day streak: count consecutive days ending at today with >=1 review
+            day_rows = self.execute_query(
+                f"""
+                SELECT DISTINCT substr(fr.reviewed_at, 1, 10) AS review_day
+                FROM flashcard_reviews fr
+                JOIN flashcards f ON f.id = fr.card_id AND f.deleted = 0
+                WHERE 1 = 1{deck_filter_clause}
+                ORDER BY review_day DESC
+                LIMIT 400
+                """,
+                deck_filter_params,
+            ).fetchall()
+            reviewed_days = {
+                str(row["review_day"])
+                for row in day_rows
+                if row and row["review_day"] is not None
+            }
+            streak = 0
+            cursor_day = today_start_dt.date()
+            while cursor_day.isoformat() in reviewed_days:
+                streak += 1
+                cursor_day = cursor_day - timedelta(days=1)
+
+            # Per-deck progress counts
+            deck_scope_clause = " AND d.id = ?" if normalized_deck_id is not None else ""
+            deck_scope_params: tuple[Any, ...] = ((normalized_deck_id,) if normalized_deck_id is not None else tuple())
+            deck_rows = self.execute_query(
+                f"""
+                SELECT
+                    d.id AS deck_id,
+                    d.name AS deck_name,
+                    COUNT(f.id) AS total_count,
+                    SUM(CASE WHEN f.last_reviewed_at IS NULL THEN 1 ELSE 0 END) AS new_count,
+                    SUM(CASE WHEN f.last_reviewed_at IS NOT NULL AND f.repetitions IN (1, 2) THEN 1 ELSE 0 END) AS learning_count,
+                    SUM(CASE WHEN f.due_at IS NOT NULL AND f.due_at <= ? THEN 1 ELSE 0 END) AS due_count,
+                    SUM(CASE WHEN f.repetitions >= 3 THEN 1 ELSE 0 END) AS mature_count
+                FROM decks d
+                LEFT JOIN flashcards f
+                    ON f.deck_id = d.id
+                   AND f.deleted = 0
+                WHERE d.deleted = 0{deck_scope_clause}
+                GROUP BY d.id, d.name
+                ORDER BY d.name ASC
+                """,
+                (now_iso, *deck_scope_params),
+            ).fetchall()
+
+            decks = []
+            for row in deck_rows:
+                decks.append(
+                    {
+                        "deck_id": int(row["deck_id"]),
+                        "deck_name": str(row["deck_name"] or f"Deck {row['deck_id']}"),
+                        "total": int((row["total_count"] or 0)),
+                        "new": int((row["new_count"] or 0)),
+                        "learning": int((row["learning_count"] or 0)),
+                        "due": int((row["due_count"] or 0)),
+                        "mature": int((row["mature_count"] or 0)),
+                    }
+                )
+
+            return {
+                "reviewed_today": reviewed_today,
+                "retention_rate_today": retention_rate_today,
+                "lapse_rate_today": lapse_rate_today,
+                "avg_answer_time_ms_today": avg_answer_time_ms_today,
+                "study_streak_days": streak,
+                "generated_at": now_iso,
+                "decks": decks,
+            }
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            raise CharactersRAGDBError(f"Failed to build flashcard analytics summary: {e}") from e  # noqa: TRY003
+
     def export_flashcards_csv(self,
                               deck_id: int | None = None,
                               tag: str | None = None,
@@ -12222,6 +12337,44 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return rc > 0
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to delete flashcard: {e}") from e  # noqa: TRY003
+
+    def reset_flashcard_scheduling(self, card_uuid: str, expected_version: int | None = None) -> bool:
+        """Reset scheduling fields to new-card defaults with optimistic locking."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT id, version FROM flashcards WHERE uuid = ? AND deleted = 0",
+                    (card_uuid,),
+                ).fetchone()
+                if not row:
+                    raise ConflictError("Flashcard not found", entity="flashcards", identifier=card_uuid)  # noqa: TRY003
+                card_id, current_version = int(row[0]), int(row[1])
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError(
+                        "Version mismatch resetting flashcard scheduling",
+                        entity="flashcards",
+                        identifier=card_uuid,
+                    )  # noqa: TRY003
+                rc = conn.execute(
+                    """
+                    UPDATE flashcards
+                       SET ef = 2.5,
+                           interval_days = 0,
+                           repetitions = 0,
+                           lapses = 0,
+                           due_at = ?,
+                           last_reviewed_at = NULL,
+                           last_modified = ?,
+                           version = version + 1,
+                           client_id = ?
+                     WHERE id = ? AND deleted = 0
+                    """,
+                    (now, now, self.client_id, card_id),
+                ).rowcount
+                return rc > 0
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to reset flashcard scheduling: {e}") from e  # noqa: TRY003
 
     def get_keywords_for_flashcard(self, card_uuid: str) -> list[dict[str, Any]]:
         """Return keywords linked to a flashcard."""

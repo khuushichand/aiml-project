@@ -25,6 +25,8 @@ import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
 import type { FlashcardCreate, Deck } from "@/services/flashcards"
 
 const { Text } = Typography
+const CLOZE_PATTERN = /\{\{c\d+::[\s\S]+?\}\}/
+type FlashcardModelType = NonNullable<FlashcardCreate["model_type"]>
 
 interface PreviewProps {
   content?: string
@@ -64,6 +66,9 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
 
   // Form and state
   const [form] = Form.useForm<FlashcardCreate>()
+  const selectedModelType = Form.useWatch("model_type", form) as
+    | FlashcardModelType
+    | undefined
   const [showPreview, setShowPreview] = React.useState(false)
   const frontPreview = useDebouncedFormField(form, "front")
   const backPreview = useDebouncedFormField(form, "back")
@@ -91,6 +96,26 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
 
   const createMutation = useCreateFlashcardMutation()
   const createDeckMutation = useCreateDeckMutation()
+  const isClozeTemplate = selectedModelType === "cloze"
+
+  const templateHelperText = React.useMemo(() => {
+    if (selectedModelType === "basic_reverse") {
+      return t("option:flashcards.templateReverseHelp", {
+        defaultValue:
+          "Choose Basic + Reverse when you want both directions (term -> meaning and meaning -> term)."
+      })
+    }
+    if (selectedModelType === "cloze") {
+      return t("option:flashcards.templateClozeHelp", {
+        defaultValue:
+          "Choose Cloze when you want to hide key words inside a sentence or paragraph."
+      })
+    }
+    return t("option:flashcards.templateBasicHelp", {
+      defaultValue:
+        "Choose Basic for direct question and answer cards (facts, definitions, short prompts)."
+    })
+  }, [selectedModelType, t])
 
   // Reset form when drawer opens
   React.useEffect(() => {
@@ -312,6 +337,18 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
             ]}
           />
         </Form.Item>
+        <Text type="secondary" className="block text-xs -mt-4 mb-3">
+          {templateHelperText}
+        </Text>
+        {isClozeTemplate && (
+          <Text type="secondary" className="block text-xs -mt-2 mb-3">
+            {t("option:flashcards.clozeSyntaxHelp", {
+              defaultValue:
+                "Cloze syntax: add at least one deletion like {{syntax}} in Front text.",
+              syntax: "{{c1::answer}}"
+            })}
+          </Text>
+        )}
 
         {/* Hidden fields for API compatibility */}
         <Form.Item name="reverse" hidden>
@@ -325,7 +362,34 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
         <Form.Item
           name="front"
           label={t("option:flashcards.front", { defaultValue: "Front" })}
-          rules={[{ required: true }]}
+          rules={[
+            {
+              required: true,
+              message: t("option:flashcards.frontRequired", {
+                defaultValue: "Front is required."
+              })
+            },
+            ({ getFieldValue }) => ({
+              validator(_, value) {
+                if (getFieldValue("model_type") !== "cloze") {
+                  return Promise.resolve()
+                }
+                const frontText = String(value ?? "")
+                if (CLOZE_PATTERN.test(frontText)) {
+                  return Promise.resolve()
+                }
+                return Promise.reject(
+                  new Error(
+                    t("option:flashcards.clozeValidationMessage", {
+                      defaultValue:
+                        "For Cloze cards, include at least one deletion like {{syntax}}.",
+                      syntax: "{{c1::answer}}"
+                    })
+                  )
+                )
+              }
+            })
+          ]}
         >
           <Input.TextArea
             rows={3}

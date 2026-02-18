@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AutoComplete, Button, Collapse, Divider, Drawer, Form, Input, Modal, Skeleton, Switch, Table, Tooltip, Tag, InputNumber, Select, Descriptions, Popover, Slider } from "antd"
+import { AutoComplete, Button, Collapse, Divider, Drawer, Form, Input, Modal, Skeleton, Switch, Table, Tooltip, Tag, InputNumber, Select, Descriptions, Popover, Slider, Dropdown } from "antd"
 import { useTranslation } from "react-i18next"
 import React from "react"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { Pen, Trash2, Book, Play, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, AlertTriangle, Loader2, Copy, Plus, Check, X, MessageCircle } from "lucide-react"
+import { Pen, Trash2, Book, Play, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, AlertTriangle, Loader2, Copy, Plus, Check, X, MessageCircle, MoreHorizontal } from "lucide-react"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { useServerOnline } from "@/hooks/useServerOnline"
+import { useMobile } from "@/hooks/useMediaQuery"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
@@ -277,10 +278,7 @@ export const DictionariesManager: React.FC = () => {
       ) || null
     )
   }, [data, openEntries])
-  const useMobileEntriesDrawer =
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(max-width: 767px)").matches
+  const useMobileEntriesDrawer = useMobile()
 
   const dictionariesById = React.useMemo(() => {
     const map = new Map<number, any>()
@@ -307,7 +305,13 @@ export const DictionariesManager: React.FC = () => {
       setServerChatTitle(title)
 
       try {
-        window.location.hash = "#/"
+        if (window.location.hash !== "#/") {
+          if (window.history && typeof window.history.pushState === "function") {
+            window.history.pushState(null, "", "#/")
+          } else {
+            window.location.hash = "#/"
+          }
+        }
       } catch {
         // best-effort navigation
       }
@@ -471,7 +475,9 @@ export const DictionariesManager: React.FC = () => {
 
     const version = Number(dictionary?.version)
     const payload = {
-      ...values,
+      ...normalizeDictionaryFormPayload(values, {
+        allowNullDefaultTokenBudget: true
+      }),
       ...(Number.isFinite(version) && version > 0 ? { version } : {})
     }
 
@@ -734,6 +740,117 @@ export const DictionariesManager: React.FC = () => {
     }
   }, [confirmDanger, data, importConflictResolution, notification, qc, runImportWithPreview, t])
 
+  const useCompactDictionaryActions = useMobileEntriesDrawer
+
+  const openDictionaryEditModal = React.useCallback((record: any) => {
+    setEditId(record.id)
+    editForm.setFieldsValue(record)
+    setOpenEdit(true)
+  }, [editForm])
+
+  const exportDictionaryAsJson = React.useCallback(async (record: any) => {
+    try {
+      const exp = await tldwClient.exportDictionaryJSON(record.id)
+      const blob = new Blob([JSON.stringify(exp, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${record.name || 'dictionary'}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      notification.error({ message: 'Export failed', description: e?.message })
+    }
+  }, [notification])
+
+  const exportDictionaryAsMarkdown = React.useCallback(async (record: any) => {
+    try {
+      const fullExport = await tldwClient.exportDictionaryJSON(record.id)
+      const exportedEntries = Array.isArray(fullExport?.entries) ? fullExport.entries : []
+      if (hasAdvancedDictionaryEntryFields(exportedEntries)) {
+        const proceed = await confirmDanger({
+          title: "Markdown export may lose advanced settings",
+          content:
+            "This dictionary includes advanced entry settings (for example probability, timed effects, or replacement limits). Export JSON for full fidelity.",
+          okText: "Export Markdown anyway",
+          cancelText: t("common:cancel", { defaultValue: "Cancel" })
+        })
+        if (!proceed) return
+      }
+
+      const exp = await tldwClient.exportDictionaryMarkdown(record.id)
+      const blob = new Blob([exp?.content || '' ], { type: 'text/markdown' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${record.name || 'dictionary'}.md`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      notification.error({ message: 'Export failed', description: e?.message })
+    }
+  }, [confirmDanger, notification, t])
+
+  const openDictionaryStatsModal = React.useCallback(async (record: any) => {
+    try {
+      const [stats, activity] = await Promise.all([
+        tldwClient.dictionaryStatistics(record.id),
+        tldwClient
+          .dictionaryActivity(record.id, { limit: 10, offset: 0 })
+          .catch(() => null)
+      ])
+      setStatsFor({
+        ...stats,
+        default_token_budget:
+          stats?.default_token_budget ??
+          record?.default_token_budget ??
+          null,
+        recent_activity: Array.isArray(activity?.events)
+          ? activity.events
+          : [],
+        recent_activity_total: Number(activity?.total || 0)
+      })
+    } catch (e: any) {
+      notification.error({ message: 'Stats failed', description: e?.message })
+    }
+  }, [notification])
+
+  const confirmAndDeleteDictionary = React.useCallback(async (record: any) => {
+    const confirmationCopy = buildDictionaryDeletionConfirmationCopy(record)
+    const ok = await confirmDanger({
+      title: t('common:confirmTitle', { defaultValue: 'Please confirm' }),
+      content: confirmationCopy,
+      okText: t('common:delete', { defaultValue: 'Delete' }),
+      cancelText: t('common:cancel', { defaultValue: 'Cancel' })
+    })
+    if (ok) deleteDict(record.id)
+  }, [confirmDanger, deleteDict, t])
+
+  const runDictionaryOverflowAction = React.useCallback((record: any, key: string) => {
+    switch (key) {
+      case "assign":
+        openQuickAssignModal(record)
+        return
+      case "json":
+        void exportDictionaryAsJson(record)
+        return
+      case "markdown":
+        void exportDictionaryAsMarkdown(record)
+        return
+      case "stats":
+        void openDictionaryStatsModal(record)
+        return
+      case "duplicate":
+        void duplicateDictionary(record)
+        return
+      case "delete":
+        void confirmAndDeleteDictionary(record)
+        return
+      default:
+        return
+    }
+  }, [confirmAndDeleteDictionary, duplicateDictionary, exportDictionaryAsJson, exportDictionaryAsMarkdown, openDictionaryStatsModal, openQuickAssignModal])
+
   const dictionariesUnsupported =
     !capsLoading && capabilities && !capabilities.hasChatDictionaries
 
@@ -809,6 +926,36 @@ export const DictionariesManager: React.FC = () => {
           aria-label={`Set dictionary ${record.name} ${v ? "inactive" : "active"}`}
         />
       )
+    },
+    {
+      title: 'Priority',
+      dataIndex: 'processing_priority',
+      key: 'processing_priority',
+      sorter: (a: any, b: any) => {
+        const toPriority = (record: any) => {
+          const isActive = Boolean(record?.is_active)
+          if (!isActive) return Number.POSITIVE_INFINITY
+          const priority = Number(record?.processing_priority)
+          return Number.isFinite(priority) && priority > 0
+            ? priority
+            : Number.POSITIVE_INFINITY - 1
+        }
+        return toPriority(a) - toPriority(b)
+      },
+      render: (_value: number | null | undefined, record: any) => {
+        if (!record?.is_active) {
+          return <span className="text-xs text-text-muted">inactive</span>
+        }
+        const priority = Number(record?.processing_priority)
+        if (!Number.isFinite(priority) || priority <= 0) {
+          return <span className="text-xs text-text-muted">pending</span>
+        }
+        return (
+          <Tooltip title="Processing order when multiple dictionaries are active">
+            <span className="text-xs font-mono">{`P${priority}`}</span>
+          </Tooltip>
+        )
+      }
     },
     {
       title: 'Entries',
@@ -973,11 +1120,11 @@ export const DictionariesManager: React.FC = () => {
       }
     },
     { title: 'Actions', key: 'actions', render: (_: any, record: any) => (
-      <div className="flex gap-1 flex-wrap items-center">
+      <div className="flex gap-1 items-center">
         <Tooltip title="Edit dictionary">
           <button
             className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
-            onClick={() => { setEditId(record.id); editForm.setFieldsValue(record); setOpenEdit(true) }}
+            onClick={() => openDictionaryEditModal(record)}
             aria-label={`Edit dictionary ${record.name}`}
           >
             <Pen className="w-5 h-5" />
@@ -992,115 +1139,91 @@ export const DictionariesManager: React.FC = () => {
             Entries
           </button>
         </Tooltip>
-        <Tooltip title="Quick assign to chat sessions">
-          <button
-            className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
-            onClick={() => openQuickAssignModal(record)}
-            aria-label={`Quick assign ${record.name} to chats`}
-          >
-            <MessageCircle className="w-5 h-5" />
-          </button>
-        </Tooltip>
-        <Tooltip title="Export as JSON">
-          <button
-            className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
-            onClick={async () => {
-              try {
-                const exp = await tldwClient.exportDictionaryJSON(record.id)
-                const blob = new Blob([JSON.stringify(exp, null, 2)], { type: 'application/json' })
-                const url = URL.createObjectURL(blob)
-                const a = document.createElement('a')
-                a.href = url
-                a.download = `${record.name || 'dictionary'}.json`
-                a.click()
-                URL.revokeObjectURL(url)
-              } catch (e: any) {
-                notification.error({ message: 'Export failed', description: e?.message })
+        {useCompactDictionaryActions ? (
+          <Dropdown
+            trigger={["click"]}
+            menu={{
+              items: [
+                { key: "assign", label: "Quick assign to chats", icon: <MessageCircle className="w-4 h-4" /> },
+                { key: "json", label: "Export JSON" },
+                { key: "markdown", label: "Export Markdown" },
+                { key: "stats", label: "View statistics" },
+                { key: "duplicate", label: "Duplicate dictionary", icon: <Copy className="w-4 h-4" /> },
+                { key: "delete", danger: true, label: "Delete dictionary", icon: <Trash2 className="w-4 h-4" /> }
+              ],
+              onClick: ({ key }) => {
+                runDictionaryOverflowAction(record, String(key))
               }
             }}
-            aria-label={`Export ${record.name} as JSON`}
+            placement="bottomRight"
           >
-            JSON
-          </button>
-        </Tooltip>
-        <Tooltip title="Export as Markdown">
-          <button
-            className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
-            onClick={async () => {
-              try {
-                const fullExport = await tldwClient.exportDictionaryJSON(record.id)
-                const exportedEntries = Array.isArray(fullExport?.entries) ? fullExport.entries : []
-                if (hasAdvancedDictionaryEntryFields(exportedEntries)) {
-                  const proceed = await confirmDanger({
-                    title: "Markdown export may lose advanced settings",
-                    content:
-                      "This dictionary includes advanced entry settings (for example probability, timed effects, or replacement limits). Export JSON for full fidelity.",
-                    okText: "Export Markdown anyway",
-                    cancelText: t("common:cancel", { defaultValue: "Cancel" })
-                  })
-                  if (!proceed) return
-                }
-
-                const exp = await tldwClient.exportDictionaryMarkdown(record.id)
-                const blob = new Blob([exp?.content || '' ], { type: 'text/markdown' })
-                const url = URL.createObjectURL(blob)
-                const a = document.createElement('a')
-                a.href = url
-                a.download = `${record.name || 'dictionary'}.md`
-                a.click()
-                URL.revokeObjectURL(url)
-              } catch (e: any) {
-                notification.error({ message: 'Export failed', description: e?.message })
-              }
-            }}
-            aria-label={`Export ${record.name} as Markdown`}
-          >
-            MD
-          </button>
-        </Tooltip>
-        <Tooltip title="View statistics">
-          <button
-            className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
-            onClick={async () => {
-              try {
-                const s = await tldwClient.dictionaryStatistics(record.id)
-                setStatsFor(s)
-              } catch (e: any) {
-                notification.error({ message: 'Stats failed', description: e?.message })
-              }
-            }}
-            aria-label={`View statistics for ${record.name}`}
-          >
-            Stats
-          </button>
-        </Tooltip>
-        <Tooltip title="Duplicate dictionary">
-          <button
-            className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
-            onClick={() => duplicateDictionary(record)}
-            aria-label={`Duplicate dictionary ${record.name}`}
-          >
-            <Copy className="w-5 h-5" />
-          </button>
-        </Tooltip>
-        <Tooltip title="Delete dictionary">
-          <button
-            className="min-w-[44px] min-h-[44px] flex items-center justify-center text-danger hover:bg-danger/10 rounded-md transition-colors"
-            onClick={async () => {
-              const confirmationCopy = buildDictionaryDeletionConfirmationCopy(record)
-              const ok = await confirmDanger({
-                title: t('common:confirmTitle', { defaultValue: 'Please confirm' }),
-                content: confirmationCopy,
-                okText: t('common:delete', { defaultValue: 'Delete' }),
-                cancelText: t('common:cancel', { defaultValue: 'Cancel' })
-              })
-              if (ok) deleteDict(record.id)
-            }}
-            aria-label={`Delete dictionary ${record.name}`}
-          >
-            <Trash2 className="w-5 h-5" />
-          </button>
-        </Tooltip>
+            <button
+              type="button"
+              className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+              aria-label={`More actions for ${record.name}`}
+              aria-haspopup="menu"
+            >
+              <MoreHorizontal className="w-5 h-5" />
+            </button>
+          </Dropdown>
+        ) : (
+          <>
+            <Tooltip title="Quick assign to chat sessions">
+              <button
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+                onClick={() => openQuickAssignModal(record)}
+                aria-label={`Quick assign ${record.name} to chats`}
+              >
+                <MessageCircle className="w-5 h-5" />
+              </button>
+            </Tooltip>
+            <Tooltip title="Export as JSON">
+              <button
+                className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+                onClick={() => { void exportDictionaryAsJson(record) }}
+                aria-label={`Export ${record.name} as JSON`}
+              >
+                JSON
+              </button>
+            </Tooltip>
+            <Tooltip title="Export as Markdown">
+              <button
+                className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+                onClick={() => { void exportDictionaryAsMarkdown(record) }}
+                aria-label={`Export ${record.name} as Markdown`}
+              >
+                MD
+              </button>
+            </Tooltip>
+            <Tooltip title="View statistics">
+              <button
+                className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+                onClick={() => { void openDictionaryStatsModal(record) }}
+                aria-label={`View statistics for ${record.name}`}
+              >
+                Stats
+              </button>
+            </Tooltip>
+            <Tooltip title="Duplicate dictionary">
+              <button
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+                onClick={() => duplicateDictionary(record)}
+                aria-label={`Duplicate dictionary ${record.name}`}
+              >
+                <Copy className="w-5 h-5" />
+              </button>
+            </Tooltip>
+            <Tooltip title="Delete dictionary">
+              <button
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center text-danger hover:bg-danger/10 rounded-md transition-colors"
+                onClick={() => { void confirmAndDeleteDictionary(record) }}
+                aria-label={`Delete dictionary ${record.name}`}
+              >
+                <Trash2 className="w-5 h-5" />
+              </button>
+            </Tooltip>
+          </>
+        )}
       </div>
     )}
   ]
@@ -1122,6 +1245,9 @@ export const DictionariesManager: React.FC = () => {
             New Dictionary
           </Button>
         </div>
+      </div>
+      <div className="text-xs text-text-muted">
+        Processing order for active dictionaries uses Priority (alphabetical by dictionary name), then each dictionary&apos;s entry order.
       </div>
       {status === 'pending' && <Skeleton active paragraph={{ rows: 6 }} />}
       {status === 'success' && dictionariesUnsupported && (
@@ -1294,9 +1420,27 @@ export const DictionariesManager: React.FC = () => {
       </Modal>
 
       <Modal title="Create Dictionary" open={open} onCancel={() => setOpen(false)} footer={null}>
-        <Form layout="vertical" form={createForm} onFinish={(v) => createDict(v)}>
+        <Form
+          layout="vertical"
+          form={createForm}
+          onFinish={(values) =>
+            createDict(normalizeDictionaryFormPayload(values))
+          }
+        >
           <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="description" label="Description"><Input /></Form.Item>
+          <Form.Item
+            name="default_token_budget"
+            label={(
+              <LabelWithHelp
+                label="Default Token Budget"
+                help="Optional. Used when preview or API processing calls omit token_budget."
+              />
+            )}
+            rules={[{ type: "number", min: 1, message: "Must be at least 1 token." }]}
+          >
+            <InputNumber min={1} style={{ width: "100%" }} placeholder="Optional" />
+          </Form.Item>
           <Button type="primary" htmlType="submit" loading={creating} className="w-full">Create</Button>
         </Form>
       </Modal>
@@ -1306,6 +1450,18 @@ export const DictionariesManager: React.FC = () => {
           <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="description" label="Description"><Input /></Form.Item>
           <Form.Item name="is_active" label="Active" valuePropName="checked"><Switch /></Form.Item>
+          <Form.Item
+            name="default_token_budget"
+            label={(
+              <LabelWithHelp
+                label="Default Token Budget"
+                help="Optional. Clears when empty."
+              />
+            )}
+            rules={[{ type: "number", min: 1, message: "Must be at least 1 token." }]}
+          >
+            <InputNumber min={1} style={{ width: "100%" }} placeholder="Optional" />
+          </Form.Item>
           <Button type="primary" htmlType="submit" loading={updating} className="w-full">Save</Button>
         </Form>
       </Modal>
@@ -1520,6 +1676,9 @@ export const DictionariesManager: React.FC = () => {
               <Descriptions.Item label="Average Probability">
                 {toDisplayProbabilitySummary(statsFor.average_probability)}
               </Descriptions.Item>
+              <Descriptions.Item label="Default Token Budget">
+                {toDisplayTokenBudgetSummary(statsFor.default_token_budget)}
+              </Descriptions.Item>
               <Descriptions.Item label="Created">
                 {formatRelativeTimestamp(statsFor.created_at)}
               </Descriptions.Item>
@@ -1557,6 +1716,50 @@ export const DictionariesManager: React.FC = () => {
                 </div>
               </div>
             )}
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-text">Recent activity</div>
+              {Array.isArray(statsFor.recent_activity) && statsFor.recent_activity.length > 0 ? (
+                <div className="space-y-2 rounded border border-border bg-surface2/40 p-2">
+                  {statsFor.recent_activity.map((event: any, index: number) => (
+                    <div
+                      key={`dictionary-activity-${event?.id ?? index}`}
+                      className="space-y-1 rounded border border-border/70 bg-surface p-2 text-xs"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-text">{formatRelativeTimestamp(event?.created_at)}</span>
+                        <span className="text-text-muted">
+                          {toDisplayStatNumber(event?.replacements)} replacements ·{" "}
+                          {toDisplayStatNumber(event?.iterations)} iterations
+                          {event?.token_budget_used
+                            ? ` · budget ${toDisplayStatNumber(event.token_budget_used)}`
+                            : ""}
+                        </span>
+                      </div>
+                      <div className="text-text-muted">
+                        Chat: {String(event?.chat_id || "Preview/API call")}
+                      </div>
+                      <div className="text-text-muted">
+                        Entries: {formatActivityEntriesUsed(event?.entries_used)}
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-text">
+                          <span className="font-medium">Before:</span>{" "}
+                          {String(event?.original_text_preview || "—")}
+                        </div>
+                        <div className="text-text">
+                          <span className="font-medium">After:</span>{" "}
+                          {String(event?.processed_text_preview || "—")}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-text-muted">
+                  No transformation activity recorded yet.
+                </div>
+              )}
+            </div>
             <div className="space-y-2">
               <div className="text-xs font-medium text-text">Pattern conflicts</div>
               {Array.isArray(statsFor.pattern_conflicts) && statsFor.pattern_conflicts.length > 0 ? (
@@ -1622,6 +1825,67 @@ function toDisplayProbabilitySummary(value: unknown): string {
     }
   }
   return "0.00"
+}
+
+function toDisplayTokenBudgetSummary(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return `${Math.floor(value)} tokens`
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return `${Math.floor(parsed)} tokens`
+    }
+  }
+  return "Not set"
+}
+
+function formatActivityEntriesUsed(value: unknown): string {
+  if (!Array.isArray(value)) return "—"
+  const normalized = value
+    .map((item) => Number(item))
+    .filter((item) => Number.isInteger(item) && item > 0)
+  if (!normalized.length) return "—"
+  return normalized.join(", ")
+}
+
+function toOptionalPositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value)
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed)
+    }
+  }
+  return undefined
+}
+
+function normalizeDictionaryFormPayload(
+  values: Record<string, any>,
+  options: { allowNullDefaultTokenBudget?: boolean } = {}
+): Record<string, any> {
+  const nextPayload = { ...values }
+  if (!Object.prototype.hasOwnProperty.call(nextPayload, "default_token_budget")) {
+    return nextPayload
+  }
+
+  const rawBudget = nextPayload.default_token_budget
+  if (rawBudget === null) {
+    if (!options.allowNullDefaultTokenBudget) {
+      delete nextPayload.default_token_budget
+    }
+    return nextPayload
+  }
+
+  const normalizedBudget = toOptionalPositiveInteger(rawBudget)
+  if (normalizedBudget === undefined) {
+    delete nextPayload.default_token_budget
+  } else {
+    nextPayload.default_token_budget = normalizedBudget
+  }
+  return nextPayload
 }
 
 function toPatternConflictTagColor(value: unknown): string {
@@ -2109,6 +2373,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
   form
 }) => {
   const { t } = useTranslation(["common", "option"])
+  const isMobileViewport = useMobile()
   const qc = useQueryClient()
   const confirmDanger = useConfirmDanger()
   const notification = useAntdNotification()
@@ -2459,6 +2724,66 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
       notification.error({ message: "Update failed", description: e?.message })
     }
   })
+
+  const closeEditEntryPanel = React.useCallback(() => {
+    setEditingEntry(null)
+    editEntryForm.resetFields()
+  }, [editEntryForm])
+
+  const openEditEntryPanel = React.useCallback(
+    (entry: any) => {
+      setEditingEntry(entry)
+      editEntryForm.setFieldsValue({
+        ...entry,
+        timed_effects: buildTimedEffectsPayload(entry?.timed_effects, {
+          forceObject: true
+        })
+      })
+      editEntryForm.setFields([{ name: "pattern", errors: [] }])
+    },
+    [editEntryForm]
+  )
+
+  const handleEditEntrySubmit = React.useCallback(
+    async (values: any) => {
+      if (!editingEntry?.id) return
+
+      const entryType = values?.type === "regex" ? "regex" : "literal"
+      const pattern = typeof values?.pattern === "string" ? values.pattern : ""
+      if (entryType === "regex") {
+        const regexValidationError = validateRegexPattern(pattern)
+        if (regexValidationError) {
+          editEntryForm.setFields([
+            { name: "pattern", errors: [regexValidationError] }
+          ])
+          return
+        }
+
+        const serverRegexError = await validateRegexWithServer(values)
+        if (serverRegexError) {
+          editEntryForm.setFields([{ name: "pattern", errors: [serverRegexError] }])
+          return
+        }
+      }
+
+      const payload: Record<string, any> = {
+        ...values,
+        timed_effects: buildTimedEffectsPayload(values?.timed_effects, {
+          forceObject: true
+        })
+      }
+
+      try {
+        await updateEntry({ entryId: editingEntry.id, data: payload })
+      } catch (e: any) {
+        const message = e?.message || "Update failed"
+        if (/regex|pattern|dangerous/i.test(message)) {
+          editEntryForm.setFields([{ name: "pattern", errors: [message] }])
+        }
+      }
+    },
+    [editEntryForm, editingEntry?.id, updateEntry, validateRegexWithServer]
+  )
 
   const startInlineEdit = React.useCallback(
     (entry: any, field: InlineEditableEntryField) => {
@@ -2931,6 +3256,158 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
   )
   const previewHasDiffChanges = previewDiffSegments.some(
     (segment) => segment.type !== "unchanged"
+  )
+  const editEntryFormContent = (
+    <Form layout="vertical" form={editEntryForm} onFinish={handleEditEntrySubmit}>
+      <Form.Item
+        name="pattern"
+        label={
+          <LabelWithHelp
+            label="Pattern"
+            help="The text or regex pattern to match. For regex, use /pattern/flags format."
+          />
+        }
+        rules={[{ required: true }]}>
+        <Input placeholder="e.g., KCl or /hel+o/i" className="font-mono" />
+      </Form.Item>
+      <Form.Item
+        name="replacement"
+        label={
+          <LabelWithHelp
+            label="Replacement"
+            help="The text to replace matches with."
+          />
+        }
+        rules={[{ required: true }]}>
+        <Input placeholder="e.g., Potassium Chloride" />
+      </Form.Item>
+      <Form.Item name="type" label="Type" initialValue="literal">
+        <Select
+          options={[
+            { label: "Literal (exact match)", value: "literal" },
+            { label: "Regex (pattern match)", value: "regex" }
+          ]}
+        />
+      </Form.Item>
+      <Form.Item
+        name="enabled"
+        label="Enabled"
+        valuePropName="checked"
+        initialValue={true}>
+        <Switch />
+      </Form.Item>
+      <Form.Item
+        name="probability"
+        label="Probability"
+        initialValue={1}
+        rules={[
+          {
+            type: "number",
+            min: 0,
+            max: 1,
+            message: "Probability must be between 0 and 1."
+          }
+        ]}>
+        <InputNumber min={0} max={1} step={0.01} style={{ width: "100%" }} />
+      </Form.Item>
+      <Form.Item
+        noStyle
+        shouldUpdate={(prev, current) =>
+          prev.probability !== current.probability
+        }>
+        {() => {
+          const probabilityValue = Number(
+            normalizeProbabilityValue(
+              editEntryForm.getFieldValue("probability"),
+              1
+            ).toFixed(2)
+          )
+          return (
+            <div className="mt-[-8px] mb-3">
+              <Slider
+                min={0}
+                max={1}
+                step={0.01}
+                value={probabilityValue}
+                onChange={(value) => {
+                  const nextValue = Array.isArray(value) ? value[0] : value
+                  editEntryForm.setFieldValue(
+                    "probability",
+                    Number(normalizeProbabilityValue(nextValue, 1).toFixed(2))
+                  )
+                }}
+                aria-label="Probability slider"
+              />
+              <div className="text-xs text-text-muted">
+                {formatProbabilityFrequencyHint(probabilityValue)}
+              </div>
+            </div>
+          )
+        }}
+      </Form.Item>
+      <Form.Item name="group" label="Group">
+        <AutoComplete
+          options={entryGroupOptions}
+          placeholder="e.g., medications"
+          filterOption={(inputValue, option) =>
+            String(option?.value || "")
+              .toLowerCase()
+              .includes(inputValue.toLowerCase())
+          }
+        />
+      </Form.Item>
+      <Form.Item
+        name="max_replacements"
+        label={
+          <LabelWithHelp
+            label="Max Replacements"
+            help="Probability controls whether this entry fires. Max replacements caps how many times it can apply per message."
+          />
+        }>
+        <InputNumber min={0} style={{ width: "100%" }} />
+      </Form.Item>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Form.Item
+          name={["timed_effects", "sticky"]}
+          label={
+            <LabelWithHelp
+              label="Sticky (seconds)"
+              help="Keep this replacement active for additional messages after it fires. Use 0 to disable."
+            />
+          }
+          initialValue={0}>
+          <InputNumber min={0} style={{ width: "100%" }} />
+        </Form.Item>
+        <Form.Item
+          name={["timed_effects", "cooldown"]}
+          label={
+            <LabelWithHelp
+              label="Cooldown (seconds)"
+              help="Minimum wait time before this entry can fire again. Use 0 to disable."
+            />
+          }
+          initialValue={0}>
+          <InputNumber min={0} style={{ width: "100%" }} />
+        </Form.Item>
+        <Form.Item
+          name={["timed_effects", "delay"]}
+          label={
+            <LabelWithHelp
+              label="Delay (seconds)"
+              help="Wait time before this entry becomes eligible to run. Use 0 to disable."
+            />
+          }
+          initialValue={0}>
+          <InputNumber min={0} style={{ width: "100%" }} />
+        </Form.Item>
+      </div>
+      <Form.Item name="case_sensitive" label="Case Sensitive" valuePropName="checked">
+        <Switch />
+      </Form.Item>
+      <Button type="primary" htmlType="submit" loading={updatingEntry} className="w-full">
+        Save Changes
+      </Button>
+    </Form>
   )
 
   return (
@@ -3983,17 +4460,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                     <Tooltip title="Edit entry">
                       <button
                         className="min-w-[36px] min-h-[36px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
-                        onClick={() => {
-                          setEditingEntry(r)
-                          editEntryForm.setFieldsValue({
-                            ...r,
-                            timed_effects: buildTimedEffectsPayload(
-                              r?.timed_effects,
-                              { forceObject: true }
-                            )
-                          })
-                          editEntryForm.setFields([{ name: "pattern", errors: [] }])
-                        }}
+                        onClick={() => openEditEntryPanel(r)}
                         aria-label={`Edit entry ${r.pattern}`}
                       >
                         <Pen className="w-4 h-4" />
@@ -4108,195 +4575,27 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
         )
       )}
 
-      {/* Edit Entry Modal */}
-      <Modal
-        title="Edit Entry"
-        open={!!editingEntry}
-        onCancel={() => {
-          setEditingEntry(null)
-          editEntryForm.resetFields()
-        }}
-        footer={null}
-      >
-        <Form
-          layout="vertical"
-          form={editEntryForm}
-          onFinish={async (v) => {
-            if (!editingEntry?.id) return
-
-            const entryType = v?.type === "regex" ? "regex" : "literal"
-            const pattern = typeof v?.pattern === "string" ? v.pattern : ""
-            if (entryType === "regex") {
-              const regexValidationError = validateRegexPattern(pattern)
-              if (regexValidationError) {
-                editEntryForm.setFields([
-                  { name: "pattern", errors: [regexValidationError] }
-                ])
-                return
-              }
-
-              const serverRegexError = await validateRegexWithServer(v)
-              if (serverRegexError) {
-                editEntryForm.setFields([
-                  { name: "pattern", errors: [serverRegexError] }
-                ])
-                return
-              }
-            }
-
-            const payload: Record<string, any> = {
-              ...v,
-              timed_effects: buildTimedEffectsPayload(v?.timed_effects, {
-                forceObject: true
-              })
-            }
-
-            try {
-              await updateEntry({ entryId: editingEntry.id, data: payload })
-            } catch (e: any) {
-              const message = e?.message || "Update failed"
-              if (/regex|pattern|dangerous/i.test(message)) {
-                editEntryForm.setFields([{ name: "pattern", errors: [message] }])
-              }
-            }
-          }}
-        >
-          <Form.Item
-            name="pattern"
-            label={<LabelWithHelp label="Pattern" help="The text or regex pattern to match. For regex, use /pattern/flags format." />}
-            rules={[{ required: true }]}
-          >
-            <Input placeholder="e.g., KCl or /hel+o/i" className="font-mono" />
-          </Form.Item>
-          <Form.Item
-            name="replacement"
-            label={<LabelWithHelp label="Replacement" help="The text to replace matches with." />}
-            rules={[{ required: true }]}
-          >
-            <Input placeholder="e.g., Potassium Chloride" />
-          </Form.Item>
-          <Form.Item name="type" label="Type" initialValue="literal">
-            <Select
-              options={[
-                { label: "Literal (exact match)", value: "literal" },
-                { label: "Regex (pattern match)", value: "regex" }
-              ]}
-            />
-          </Form.Item>
-          <Form.Item name="enabled" label="Enabled" valuePropName="checked" initialValue={true}>
-            <Switch />
-          </Form.Item>
-          <Form.Item
-            name="probability"
-            label="Probability"
-            initialValue={1}
-            rules={[
-              {
-                type: "number",
-                min: 0,
-                max: 1,
-                message: "Probability must be between 0 and 1."
-              }
-            ]}
-          >
-            <InputNumber min={0} max={1} step={0.01} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item noStyle shouldUpdate={(prev, current) => prev.probability !== current.probability}>
-            {() => {
-              const probabilityValue = Number(
-                normalizeProbabilityValue(editEntryForm.getFieldValue("probability"), 1).toFixed(2)
-              )
-              return (
-                <div className="mt-[-8px] mb-3">
-                  <Slider
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={probabilityValue}
-                    onChange={(value) => {
-                      const nextValue = Array.isArray(value) ? value[0] : value
-                      editEntryForm.setFieldValue(
-                        "probability",
-                        Number(normalizeProbabilityValue(nextValue, 1).toFixed(2))
-                      )
-                    }}
-                    aria-label="Probability slider"
-                  />
-                  <div className="text-xs text-text-muted">
-                    {formatProbabilityFrequencyHint(probabilityValue)}
-                  </div>
-                </div>
-              )
-            }}
-          </Form.Item>
-          <Form.Item name="group" label="Group">
-            <AutoComplete
-              options={entryGroupOptions}
-              placeholder="e.g., medications"
-              filterOption={(inputValue, option) =>
-                String(option?.value || "")
-                  .toLowerCase()
-                  .includes(inputValue.toLowerCase())
-              }
-            />
-          </Form.Item>
-          <Form.Item
-            name="max_replacements"
-            label={
-              <LabelWithHelp
-                label="Max Replacements"
-                help="Probability controls whether this entry fires. Max replacements caps how many times it can apply per message."
-              />
-            }
-          >
-            <InputNumber min={0} style={{ width: "100%" }} />
-          </Form.Item>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Form.Item
-              name={["timed_effects", "sticky"]}
-              label={
-                <LabelWithHelp
-                  label="Sticky (seconds)"
-                  help="Keep this replacement active for additional messages after it fires. Use 0 to disable."
-                />
-              }
-              initialValue={0}
-            >
-              <InputNumber min={0} style={{ width: "100%" }} />
-            </Form.Item>
-            <Form.Item
-              name={["timed_effects", "cooldown"]}
-              label={
-                <LabelWithHelp
-                  label="Cooldown (seconds)"
-                  help="Minimum wait time before this entry can fire again. Use 0 to disable."
-                />
-              }
-              initialValue={0}
-            >
-              <InputNumber min={0} style={{ width: "100%" }} />
-            </Form.Item>
-            <Form.Item
-              name={["timed_effects", "delay"]}
-              label={
-                <LabelWithHelp
-                  label="Delay (seconds)"
-                  help="Wait time before this entry becomes eligible to run. Use 0 to disable."
-                />
-              }
-              initialValue={0}
-            >
-              <InputNumber min={0} style={{ width: "100%" }} />
-            </Form.Item>
-          </div>
-          <Form.Item name="case_sensitive" label="Case Sensitive" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" loading={updatingEntry} className="w-full">
-            Save Changes
-          </Button>
-        </Form>
-      </Modal>
+      {/* Edit Entry Panel */}
+      {isMobileViewport ? (
+        <Drawer
+          title="Edit Entry"
+          open={!!editingEntry}
+          onClose={closeEditEntryPanel}
+          placement="right"
+          destroyOnClose
+          size="100vw">
+          {editEntryFormContent}
+        </Drawer>
+      ) : (
+        <Modal
+          title="Edit Entry"
+          open={!!editingEntry}
+          onCancel={closeEditEntryPanel}
+          footer={null}
+          destroyOnClose>
+          {editEntryFormContent}
+        </Modal>
+      )}
       {/* Add Entry Form */}
       <div className="border border-border rounded-lg p-4 bg-surface2/30 mt-4">
         <div className="flex items-center justify-between mb-3">

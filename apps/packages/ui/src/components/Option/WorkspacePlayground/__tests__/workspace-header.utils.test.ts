@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
-import type { SavedWorkspace } from "@/types/workspace"
+import type { SavedWorkspace, WorkspaceSource } from "@/types/workspace"
 import {
+  WORKSPACE_TEMPLATE_PRESETS,
+  buildWorkspaceBibtex,
+  createWorkspaceBibtexFilename,
   filterSavedWorkspaces,
   formatWorkspaceLastAccessed
 } from "../workspace-header.utils"
@@ -84,5 +87,56 @@ describe("workspace header utils", () => {
     expect(filterSavedWorkspaces(workspaces, "beta")).toHaveLength(1)
     expect(filterSavedWorkspaces(workspaces, "workspace:gamma")).toHaveLength(1)
     expect(filterSavedWorkspaces(workspaces, "missing")).toHaveLength(0)
+  })
+
+  it("ships at least three workspace templates", () => {
+    expect(WORKSPACE_TEMPLATE_PRESETS.length).toBeGreaterThanOrEqual(3)
+    expect(WORKSPACE_TEMPLATE_PRESETS.map((template) => template.id)).toEqual(
+      expect.arrayContaining([
+        "literature_review",
+        "interview_analysis",
+        "product_brief"
+      ])
+    )
+  })
+
+  it("builds BibTeX entries from workspace sources", () => {
+    const sources: WorkspaceSource[] = [
+      {
+        id: "source-1",
+        mediaId: 101,
+        title: "Climate Report 2026",
+        type: "pdf",
+        addedAt: new Date("2026-02-18T10:00:00.000Z"),
+        url: "https://example.com/climate-report"
+      },
+      {
+        id: "source-2",
+        mediaId: 202,
+        title: "Interview Notes",
+        type: "document",
+        addedAt: new Date("2026-02-17T12:00:00.000Z")
+      }
+    ]
+
+    const bibtex = buildWorkspaceBibtex(sources, {
+      workspaceTag: "workspace:climate-research",
+      now: new Date("2026-02-18T12:00:00.000Z")
+    })
+
+    expect(bibtex).toContain("@misc{workspaceclimateresearch202601")
+    expect(bibtex).toContain("title = {Climate Report 2026}")
+    expect(bibtex).toContain("url = {https://example.com/climate-report}")
+    expect(bibtex).toContain("urldate = {2026-02-18}")
+    expect(bibtex).toContain("note = {media_id=202; type=document}")
+  })
+
+  it("builds a deterministic BibTeX filename", () => {
+    expect(
+      createWorkspaceBibtexFilename(
+        "Alpha Research",
+        new Date("2026-02-18T12:00:00.000Z")
+      )
+    ).toBe("alpha-research-citations-20260218.bib")
   })
 })

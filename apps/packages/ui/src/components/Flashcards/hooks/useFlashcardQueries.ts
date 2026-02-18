@@ -6,9 +6,11 @@ import {
   createDeck,
   updateFlashcard,
   deleteFlashcard,
+  resetFlashcardScheduling,
   reviewFlashcard,
   getFlashcard,
   importFlashcards,
+  getFlashcardsAnalyticsSummary,
   exportFlashcards,
   exportFlashcardsFile,
   getFlashcardsImportLimits,
@@ -165,6 +167,26 @@ export function useImportLimitsQuery(options?: UseFlashcardQueriesOptions) {
 }
 
 /**
+ * Hook for fetching flashcard analytics summary
+ */
+export function useReviewAnalyticsSummaryQuery(
+  deckId?: number | null,
+  options?: UseFlashcardQueriesOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+
+  return useQuery({
+    queryKey: ["flashcards:analytics:summary", deckId ?? null],
+    queryFn: ({ signal }) =>
+      getFlashcardsAnalyticsSummary({
+        deck_id: deckId ?? undefined,
+        signal
+      }),
+    enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+/**
  * Hook for creating a flashcard
  */
 export function useCreateFlashcardMutation() {
@@ -235,6 +257,27 @@ export function useDeleteFlashcardMutation() {
     },
     onError: (error) => {
       console.error("Failed to delete flashcard:", error)
+    }
+  })
+}
+
+/**
+ * Hook for resetting flashcard scheduling metadata back to new-card defaults
+ */
+export function useResetFlashcardSchedulingMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:reset-scheduling"],
+    mutationFn: (params: { uuid: string; expectedVersion: number }) =>
+      resetFlashcardScheduling(params.uuid, {
+        expected_version: params.expectedVersion
+      }),
+    onSuccess: () => {
+      invalidateFlashcardsQueries(qc)
+    },
+    onError: (error) => {
+      console.error("Failed to reset flashcard scheduling:", error)
     }
   })
 }

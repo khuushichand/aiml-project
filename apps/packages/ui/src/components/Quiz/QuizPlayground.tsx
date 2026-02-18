@@ -65,7 +65,14 @@ export const QuizPlayground: React.FC = () => {
           {
             key: "results",
             label: t("option:quiz.results", { defaultValue: "Results" }),
-            children: <ResultsTab />
+            children: (
+              <ResultsTab
+                onRetakeQuiz={(quizId) => {
+                  setStartQuizId(quizId)
+                  setActiveTab("take")
+                }}
+              />
+            )
           }
         ]}
       />

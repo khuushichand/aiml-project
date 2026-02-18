@@ -123,6 +123,10 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake }) => {
             danger
             icon={<DeleteOutlined />}
             onClick={() => removeQuestion(question.key)}
+            aria-label={t("option:quiz.removeQuestion", {
+              defaultValue: "Remove question {{number}}",
+              number: index + 1
+            })}
           />
         }
       >

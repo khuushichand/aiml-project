@@ -200,7 +200,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       label: (
         <span className="flex items-center gap-2">
           <Rss className="h-4 w-4" />
-          {t("watchlists:tabs.sources", "Sources")}
+          {t("watchlists:tabs.sources", "Feeds")}
         </span>
       ),
       children: <SourcesTab />
@@ -210,7 +210,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       label: (
         <span className="flex items-center gap-2">
           <CalendarClock className="h-4 w-4" />
-          {t("watchlists:tabs.jobs", "Jobs")}
+          {t("watchlists:tabs.jobs", "Monitors")}
         </span>
       ),
       children: <JobsTab />
@@ -220,7 +220,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       label: (
         <span className="flex items-center gap-2">
           <Play className="h-4 w-4" />
-          {t("watchlists:tabs.runs", "Runs")}
+          {t("watchlists:tabs.runs", "Activity")}
         </span>
       ),
       children: <RunsTab />
@@ -230,7 +230,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       label: (
         <span className="flex items-center gap-2">
           <Newspaper className="h-4 w-4" />
-          {t("watchlists:tabs.items", "Items")}
+          {t("watchlists:tabs.items", "Articles")}
         </span>
       ),
       children: <ItemsTab />
@@ -240,7 +240,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       label: (
         <span className="flex items-center gap-2">
           <FileOutput className="h-4 w-4" />
-          {t("watchlists:tabs.outputs", "Outputs")}
+          {t("watchlists:tabs.outputs", "Reports")}
         </span>
       ),
       children: <OutputsTab />

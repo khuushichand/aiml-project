@@ -3345,12 +3345,35 @@ export class TldwApiClient {
     token_budget?: number
     dictionary_id?: number | string
     max_iterations?: number
+    chat_id?: string
   }): Promise<any> {
     return await bgRequest<any>({
       path: "/api/v1/chat/dictionaries/process",
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload
+    })
+  }
+
+  async dictionaryActivity(
+    dictionary_id: number | string,
+    params?: {
+      limit?: number
+      offset?: number
+    }
+  ): Promise<any> {
+    const id = String(dictionary_id)
+    const query = new URLSearchParams()
+    if (typeof params?.limit === "number" && Number.isFinite(params.limit)) {
+      query.set("limit", String(Math.max(1, Math.floor(params.limit))))
+    }
+    if (typeof params?.offset === "number" && Number.isFinite(params.offset)) {
+      query.set("offset", String(Math.max(0, Math.floor(params.offset))))
+    }
+    const qp = query.toString()
+    return await bgRequest<any>({
+      path: `/api/v1/chat/dictionaries/${id}/activity${qp ? `?${qp}` : ""}`,
+      method: "GET"
     })
   }
 

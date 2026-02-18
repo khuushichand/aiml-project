@@ -6,7 +6,8 @@
   "types": "index.ts",
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:worldbooks": "vitest run src/components/Option/WorldBooks/__tests__ --maxWorkers=1"
   },
   "exports": {
     ".": "./index.ts",

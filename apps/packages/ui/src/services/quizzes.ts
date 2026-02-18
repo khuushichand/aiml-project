@@ -276,8 +276,17 @@ export async function listAttempts(params: AttemptListParams = {}): Promise<Atte
   })
 }
 
-export async function getAttempt(attemptId: number): Promise<QuizAttempt> {
-  return await quizAttemptsClient.get<QuizAttempt>(attemptId)
+export async function getAttempt(
+  attemptId: number,
+  params?: {
+    include_questions?: boolean
+    include_answers?: boolean
+  }
+): Promise<QuizAttempt> {
+  return await quizAttemptsClient.get<QuizAttempt>(attemptId, {
+    include_questions: params?.include_questions ? true : undefined,
+    include_answers: params?.include_answers ? true : undefined
+  })
 }
 
 // --- AI Generation ---

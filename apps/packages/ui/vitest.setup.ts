@@ -1,112 +1,143 @@
 import "@testing-library/jest-dom/vitest"
 import { cleanup } from "@testing-library/react"
-import { afterEach } from "vitest"
+import { afterAll, afterEach, beforeAll } from "vitest"
 
 const originalGetComputedStyle = window.getComputedStyle.bind(window)
+const originalConsoleWarn = console.warn.bind(console)
+const originalConsoleError = console.error.bind(console)
 
-const TEXTAREA_FALLBACK_STYLE_PROPS = new Set([
-  "lineHeight",
-  "paddingTop",
-  "paddingBottom",
-  "borderTopWidth",
-  "borderBottomWidth",
-  "fontSize",
-  "letterSpacing",
-  "textIndent"
+const TEXTAREA_STYLE_FALLBACKS: Record<string, string> = {
+  "letter-spacing": "normal",
+  "line-height": "20px",
+  "padding-top": "0px",
+  "padding-bottom": "0px",
+  "padding-left": "0px",
+  "padding-right": "0px",
+  "font-family": "sans-serif",
+  "font-weight": "400",
+  "font-size": "16px",
+  "font-variant": "normal",
+  "text-rendering": "auto",
+  "text-transform": "none",
+  width: "320px",
+  "text-indent": "0px",
+  "border-width": "0px",
+  "border-top-width": "0px",
+  "border-bottom-width": "0px",
+  "box-sizing": "border-box",
+  "word-break": "break-word",
+  "white-space": "pre-wrap"
+}
+
+const TEXTAREA_NUMERIC_PROPERTIES = new Set([
+  "line-height",
+  "padding-top",
+  "padding-bottom",
+  "padding-left",
+  "padding-right",
+  "font-size",
+  "width",
+  "text-indent",
+  "border-width",
+  "border-top-width",
+  "border-bottom-width"
 ])
 
-window.getComputedStyle = ((element: Element, _pseudoElt?: string | null) => {
-  const computedStyle = originalGetComputedStyle(element)
-  if (!(element instanceof HTMLTextAreaElement)) {
-    return computedStyle
+const TO_KABAB_CASE = /[A-Z]/g
+
+const toKebabCase = (value: string): string =>
+  value.replace(TO_KABAB_CASE, (match) => `-${match.toLowerCase()}`)
+
+const normalizeTextareaStyleValue = (
+  propertyName: string,
+  value: string,
+  element: Element
+): string => {
+  const fallback = TEXTAREA_STYLE_FALLBACKS[propertyName]
+  if (!fallback) return value
+
+  if (value && !value.includes("var(")) {
+    if (!TEXTAREA_NUMERIC_PROPERTIES.has(propertyName)) return value
+    if (!Number.isNaN(Number.parseFloat(value))) return value
   }
 
-  return new Proxy(computedStyle, {
+  if (propertyName === "width") {
+    const width = element instanceof HTMLElement ? element.clientWidth : 0
+    return `${Math.max(width || 320, 1)}px`
+  }
+
+  return fallback
+}
+
+const withTextareaStyleFallback = (
+  element: Element,
+  style: CSSStyleDeclaration
+): CSSStyleDeclaration => {
+  if (!(element instanceof HTMLTextAreaElement)) return style
+
+  const getPropertyValue = style.getPropertyValue.bind(style)
+
+  return new Proxy(style, {
     get(target, prop, receiver) {
-      const value = Reflect.get(target, prop, receiver)
-      if (typeof prop !== "string") {
-        return value
+      if (prop === "getPropertyValue") {
+        return (name: string) =>
+          normalizeTextareaStyleValue(name, getPropertyValue(name), element)
       }
 
-      if (prop === "lineHeight" && (value === "" || value === "normal")) {
-        return "16px"
+      if (typeof prop === "string") {
+        const raw = Reflect.get(target, prop, receiver)
+        if (typeof raw === "string") {
+          const propertyName = toKebabCase(prop)
+          return normalizeTextareaStyleValue(propertyName, raw, element)
+        }
       }
 
-      if (
-        TEXTAREA_FALLBACK_STYLE_PROPS.has(prop) &&
-        (value === "" || value === null || value === undefined || value === "normal")
-      ) {
-        return "0px"
-      }
-
-      return value
+      return Reflect.get(target, prop, receiver)
     }
-  }) as CSSStyleDeclaration
-}) as typeof window.getComputedStyle
+  })
+}
 
-const IGNORED_TEST_WARNING_PATTERNS = [
+const SUPPRESSED_WARNING_PATTERNS = [
   /Could not parse CSS stylesheet/i,
-  /invalid value for the .* css style property/i,
-  /\[antd: List\].*deprecated/i,
-  /\[antd: Notification\].*deprecated/i,
-  /\[antd: Collapse\].*expandIconPosition.*deprecated/i,
-  /Instance created by `useForm` is not connected to any Form element/i
+  /invalid value for the `height` css style property/i,
+  /\[antd:\s*Notification\]\s+`message` is deprecated\./i,
+  /\[antd:\s*List\]\s+The `List` component is deprecated\./i,
+  /React Router Future Flag Warning/i,
+  /Instance created by `useForm` is not connected to any Form element/i,
+  /Not implemented:\s*navigation to another Document/i
 ]
 
-const stringifyConsoleArgs = (args: unknown[]): string =>
-  args
+const shouldSuppressConsoleOutput = (args: unknown[]): boolean => {
+  const combined = args
     .map((arg) => {
-      if (typeof arg === "string") {
-        return arg
-      }
-      if (arg instanceof Error) {
-        return `${arg.name}: ${arg.message}`
-      }
-      try {
-        return JSON.stringify(arg)
-      } catch {
-        return String(arg)
-      }
+      if (typeof arg === "string") return arg
+      if (arg instanceof Error) return arg.message
+      return ""
     })
     .join(" ")
 
-const shouldIgnoreTestWarning = (args: unknown[]): boolean => {
-  const message = stringifyConsoleArgs(args)
-  return IGNORED_TEST_WARNING_PATTERNS.some((pattern) => pattern.test(message))
+  return SUPPRESSED_WARNING_PATTERNS.some((pattern) => pattern.test(combined))
 }
 
-const originalConsoleWarn = console.warn.bind(console)
-const originalConsoleError = console.error.bind(console)
-const originalStderrWrite = process.stderr.write.bind(process.stderr)
+window.getComputedStyle = ((element: Element, _pseudoElt?: string | null) =>
+  withTextareaStyleFallback(element, originalGetComputedStyle(element))) as typeof window.getComputedStyle
 
-console.warn = (...args: unknown[]) => {
-  if (shouldIgnoreTestWarning(args)) {
-    return
-  }
-  originalConsoleWarn(...args)
-}
-
-console.error = (...args: unknown[]) => {
-  if (shouldIgnoreTestWarning(args)) {
-    return
-  }
-  originalConsoleError(...args)
-}
-
-process.stderr.write = ((chunk: unknown, ...rest: unknown[]) => {
-  const text =
-    typeof chunk === "string"
-      ? chunk
-      : chunk instanceof Uint8Array
-      ? Buffer.from(chunk).toString("utf8")
-      : String(chunk)
-
-  if (shouldIgnoreTestWarning([text])) {
-    return true
+beforeAll(() => {
+  console.warn = (...args: unknown[]) => {
+    if (shouldSuppressConsoleOutput(args)) return
+    originalConsoleWarn(...args)
   }
 
-  return (originalStderrWrite as (...args: unknown[]) => boolean)(chunk, ...rest)
-}) as typeof process.stderr.write
+  console.error = (...args: unknown[]) => {
+    if (shouldSuppressConsoleOutput(args)) return
+    originalConsoleError(...args)
+  }
+})
+
+afterAll(() => {
+  console.warn = originalConsoleWarn
+  console.error = originalConsoleError
+})
 
 const evaluateMediaQuery = (query: string): boolean => {
   const width = window.innerWidth || 1024

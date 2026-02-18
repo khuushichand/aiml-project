@@ -42,6 +42,7 @@ export type ArtifactType =
   | "audio_overview"
   | "mindmap"
   | "report"
+  | "compare_sources"
   | "flashcards"
   | "quiz"
   | "timeline"
@@ -56,6 +57,10 @@ export interface GeneratedArtifact {
   title: string
   status: ArtifactStatus
   previousVersionId?: string
+  estimatedTokens?: number
+  estimatedCostUsd?: number
+  totalTokens?: number
+  totalCostUsd?: number
   serverId?: number | string // ID from outputs/quizzes/data-tables/slides endpoint
   content?: string // For text-based artifacts like summary, mindmap
   audioUrl?: string // For audio_overview - object URL to audio blob
@@ -109,6 +114,13 @@ export const OUTPUT_TYPES: OutputTypeConfig[] = [
     label: "Report",
     icon: "FileSpreadsheet",
     description: "Generate a detailed report document",
+    requiresSelectedSources: true
+  },
+  {
+    type: "compare_sources",
+    label: "Compare Sources",
+    icon: "Scale",
+    description: "Compare claims, agreements, and conflicts across sources",
     requiresSelectedSources: true
   },
   {

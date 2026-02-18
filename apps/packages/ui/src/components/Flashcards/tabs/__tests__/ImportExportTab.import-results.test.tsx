@@ -99,5 +99,5 @@ describe("ImportExportTab import result details", () => {
     expect(messageSpies.warning).toHaveBeenCalledWith(
       "Imported 2 cards, skipped 1 rows (1 errors)."
     )
-  })
+  }, 15000)
 })

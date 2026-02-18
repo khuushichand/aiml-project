@@ -17,6 +17,12 @@ import type {
 import { ScopeSelector } from "./ScopeSelector"
 import { FilterBuilder } from "./FilterBuilder"
 import { SchedulePicker } from "./SchedulePicker"
+import {
+  durationToSeconds,
+  secondsToDurationInput,
+  type DurationInputValue,
+  type DurationUnit
+} from "./duration-utils"
 
 interface JobFormModalProps {
   open: boolean
@@ -34,6 +40,7 @@ interface FormValues {
 type EmailBodyFormat = "auto" | "text" | "html"
 type OutputFormat = "md" | "html"
 type OutputPresetId = "briefing_md" | "newsletter_html" | "mece_md"
+const RETENTION_UNITS: DurationUnit[] = ["minutes", "hours", "days", "weeks", "seconds"]
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -103,8 +110,14 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
   const [outputTemplateName, setOutputTemplateName] = useState<string | undefined>(undefined)
   const [outputTemplateVersion, setOutputTemplateVersion] = useState<number | null>(null)
   const [outputTemplateFormat, setOutputTemplateFormat] = useState<OutputFormat | undefined>(undefined)
-  const [retentionDefaultSeconds, setRetentionDefaultSeconds] = useState<number | null>(null)
-  const [retentionTemporarySeconds, setRetentionTemporarySeconds] = useState<number | null>(null)
+  const [retentionDefaultDuration, setRetentionDefaultDuration] = useState<DurationInputValue>({
+    value: null,
+    unit: "days"
+  })
+  const [retentionTemporaryDuration, setRetentionTemporaryDuration] = useState<DurationInputValue>({
+    value: null,
+    unit: "days"
+  })
   const [deliveryEmailEnabled, setDeliveryEmailEnabled] = useState(false)
   const [deliveryEmailRecipients, setDeliveryEmailRecipients] = useState<string[]>([])
   const [deliveryEmailSubject, setDeliveryEmailSubject] = useState("")
@@ -139,16 +152,20 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
       isOutputFormat(templateRecord.default_format) ? templateRecord.default_format : undefined
     )
     const parsedDefaultRetention = Number(retentionRecord.default_seconds)
-    setRetentionDefaultSeconds(
-      Number.isFinite(parsedDefaultRetention) && parsedDefaultRetention >= 0
-        ? Math.floor(parsedDefaultRetention)
-        : null
+    setRetentionDefaultDuration(
+      secondsToDurationInput(
+        Number.isFinite(parsedDefaultRetention) && parsedDefaultRetention >= 0
+          ? Math.floor(parsedDefaultRetention)
+          : null
+      )
     )
     const parsedTemporaryRetention = Number(retentionRecord.temporary_seconds)
-    setRetentionTemporarySeconds(
-      Number.isFinite(parsedTemporaryRetention) && parsedTemporaryRetention >= 0
-        ? Math.floor(parsedTemporaryRetention)
-        : null
+    setRetentionTemporaryDuration(
+      secondsToDurationInput(
+        Number.isFinite(parsedTemporaryRetention) && parsedTemporaryRetention >= 0
+          ? Math.floor(parsedTemporaryRetention)
+          : null
+      )
     )
 
     setDeliveryEmailEnabled(Boolean(emailRecord) && emailRecord.enabled !== false)
@@ -218,13 +235,15 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
     }
 
     const retentionPrefs = isRecord(basePrefs.retention) ? { ...basePrefs.retention } : {}
-    if (typeof retentionDefaultSeconds === "number" && retentionDefaultSeconds >= 0) {
-      retentionPrefs.default_seconds = Math.floor(retentionDefaultSeconds)
+    const defaultRetentionSeconds = durationToSeconds(retentionDefaultDuration)
+    if (typeof defaultRetentionSeconds === "number" && defaultRetentionSeconds >= 0) {
+      retentionPrefs.default_seconds = defaultRetentionSeconds
     } else {
       delete retentionPrefs.default_seconds
     }
-    if (typeof retentionTemporarySeconds === "number" && retentionTemporarySeconds >= 0) {
-      retentionPrefs.temporary_seconds = Math.floor(retentionTemporarySeconds)
+    const temporaryRetentionSeconds = durationToSeconds(retentionTemporaryDuration)
+    if (typeof temporaryRetentionSeconds === "number" && temporaryRetentionSeconds >= 0) {
+      retentionPrefs.temporary_seconds = temporaryRetentionSeconds
     } else {
       delete retentionPrefs.temporary_seconds
     }
@@ -438,7 +457,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         (scope.tags?.length ?? 0) > 0
 
       if (!hasScope) {
-        message.error(t("watchlists:jobs.form.scopeRequired", "Please select at least one source, group, or tag"))
+        message.error(t("watchlists:jobs.form.scopeRequired", "Please select at least one feed, group, or tag"))
         return
       }
 
@@ -483,12 +502,23 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
     onClose()
   }
 
+  const retentionUnitOptions = RETENTION_UNITS.map((unit) => ({
+    value: unit,
+    label: t(
+      `watchlists:jobs.form.retentionUnit.${unit}`,
+      unit.charAt(0).toUpperCase() + unit.slice(1)
+    )
+  }))
+
+  const retentionDefaultSeconds = durationToSeconds(retentionDefaultDuration)
+  const retentionTemporarySeconds = durationToSeconds(retentionTemporaryDuration)
+
   const collapseItems = [
     {
       key: "scope",
       label: (
         <span className="font-medium">
-          {t("watchlists:jobs.form.scope", "Scope")}
+          {t("watchlists:jobs.form.scope", "Feeds to Include")}
           <span className="text-danger ml-1">*</span>
         </span>
       ),
@@ -551,7 +581,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                   },
                   {
                     value: "mece_md",
-                    label: t("watchlists:jobs.form.presetMeceMd", "MECE review (Markdown)"),
+                    label: t("watchlists:jobs.form.presetMeceMd", "Structured review (Markdown)"),
                   },
                 ]}
                 placeholder={t("watchlists:jobs.form.presetPlaceholder", "Choose a preset")}
@@ -566,7 +596,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
             <div className="mt-2 text-xs text-text-muted">
               {t(
                 "watchlists:jobs.form.presetHint",
-                "Presets prefill template/delivery defaults. You can still customize fields below."
+                "Presets prefill template and delivery defaults. Structured review groups content into non-overlapping sections for easier scanning."
               )}
             </div>
           </div>
@@ -638,43 +668,84 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
                 <div className="mb-1 text-xs text-text-muted">
-                  {t("watchlists:jobs.form.retentionDefaultSeconds", "Default TTL (seconds)")}
+                  {t("watchlists:jobs.form.retentionDefault", "Default retention")}
                 </div>
-                <InputNumber
-                  min={0}
-                  precision={0}
-                  value={retentionDefaultSeconds}
-                  onChange={(value) =>
-                    setRetentionDefaultSeconds(
-                      typeof value === "number" && value >= 0 ? Math.floor(value) : null
-                    )
-                  }
-                  className="w-full"
-                  placeholder={t("watchlists:jobs.form.retentionDefaultSecondsPlaceholder", "Server default")}
-                />
+                <div className="grid grid-cols-[1fr_140px] gap-2">
+                  <InputNumber
+                    min={0}
+                    precision={0}
+                    value={retentionDefaultDuration.value}
+                    onChange={(value) =>
+                      setRetentionDefaultDuration((prev) => ({
+                        ...prev,
+                        value: typeof value === "number" && value >= 0 ? Math.floor(value) : null
+                      }))
+                    }
+                    className="w-full"
+                    placeholder={t("watchlists:jobs.form.retentionDefaultPlaceholder", "Server default")}
+                  />
+                  <Select
+                    value={retentionDefaultDuration.unit}
+                    onChange={(unit: DurationUnit) =>
+                      setRetentionDefaultDuration((prev) => ({ ...prev, unit }))
+                    }
+                    options={retentionUnitOptions}
+                  />
+                </div>
+                {typeof retentionDefaultSeconds === "number" && (
+                  <div className="mt-1 text-xs text-text-muted">
+                    {t(
+                      "watchlists:jobs.form.retentionDefaultPreview",
+                      "Stored as {{seconds}} seconds",
+                      { seconds: retentionDefaultSeconds }
+                    )}
+                  </div>
+                )}
               </div>
               <div>
                 <div className="mb-1 text-xs text-text-muted">
-                  {t("watchlists:jobs.form.retentionTemporarySeconds", "Temporary TTL (seconds)")}
+                  {t("watchlists:jobs.form.retentionTemporary", "Temporary retention")}
                 </div>
-                <InputNumber
-                  min={0}
-                  precision={0}
-                  value={retentionTemporarySeconds}
-                  onChange={(value) =>
-                    setRetentionTemporarySeconds(
-                      typeof value === "number" && value >= 0 ? Math.floor(value) : null
-                    )
-                  }
-                  className="w-full"
-                  placeholder={t("watchlists:jobs.form.retentionTemporarySecondsPlaceholder", "Server temporary default")}
-                />
+                <div className="grid grid-cols-[1fr_140px] gap-2">
+                  <InputNumber
+                    min={0}
+                    precision={0}
+                    value={retentionTemporaryDuration.value}
+                    onChange={(value) =>
+                      setRetentionTemporaryDuration((prev) => ({
+                        ...prev,
+                        value: typeof value === "number" && value >= 0 ? Math.floor(value) : null
+                      }))
+                    }
+                    className="w-full"
+                    placeholder={t(
+                      "watchlists:jobs.form.retentionTemporaryPlaceholder",
+                      "Server temporary default"
+                    )}
+                  />
+                  <Select
+                    value={retentionTemporaryDuration.unit}
+                    onChange={(unit: DurationUnit) =>
+                      setRetentionTemporaryDuration((prev) => ({ ...prev, unit }))
+                    }
+                    options={retentionUnitOptions}
+                  />
+                </div>
+                {typeof retentionTemporarySeconds === "number" && (
+                  <div className="mt-1 text-xs text-text-muted">
+                    {t(
+                      "watchlists:jobs.form.retentionTemporaryPreview",
+                      "Stored as {{seconds}} seconds",
+                      { seconds: retentionTemporarySeconds }
+                    )}
+                  </div>
+                )}
               </div>
             </div>
             <div className="mt-2 text-xs text-text-muted">
               {t(
                 "watchlists:jobs.form.retentionHint",
-                "Set 0 for no expiry. Leave blank to use server defaults."
+                "Set 0 for no expiry. Leave blank to use server defaults. Values are converted safely to seconds when saved."
               )}
             </div>
           </div>
@@ -780,8 +851,8 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
     <Modal
       title={
         isEditing
-          ? t("watchlists:jobs.editJob", "Edit Job")
-          : t("watchlists:jobs.addJob", "Add Job")
+          ? t("watchlists:jobs.editJob", "Edit Monitor")
+          : t("watchlists:jobs.addJob", "Add Monitor")
       }
       open={open}
       onOk={handleSubmit}
@@ -820,7 +891,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
           <Input.TextArea
             placeholder={t(
               "watchlists:jobs.form.descriptionPlaceholder",
-              "Optional description of what this job does"
+              "Optional description of what this monitor does"
             )}
             rows={2}
           />

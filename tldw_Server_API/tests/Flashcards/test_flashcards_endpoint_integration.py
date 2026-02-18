@@ -339,6 +339,178 @@ def test_review_missing_flashcard_returns_404(client_with_flashcards_db: TestCli
     assert r.status_code == 404
 
 
+def test_analytics_summary_returns_daily_metrics_and_deck_progress(client_with_flashcards_db: TestClient):
+    # Seed one deck and two cards
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "AnalyticsDeck"},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+    deck_id = r.json()["id"]
+
+    first = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": deck_id, "front": "Q1", "back": "A1"},
+        headers=AUTH_HEADERS,
+    )
+    second = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": deck_id, "front": "Q2", "back": "A2"},
+        headers=AUTH_HEADERS,
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_uuid = first.json()["uuid"]
+    second_uuid = second.json()["uuid"]
+
+    # One successful recall + one lapse to verify retention/lapse calculations
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": first_uuid, "rating": 3, "answer_time_ms": 2500},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": second_uuid, "rating": 1, "answer_time_ms": 4500},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+
+    # Fetch analytics summary
+    r = client_with_flashcards_db.get("/api/v1/flashcards/analytics/summary", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    payload = r.json()
+
+    assert payload["reviewed_today"] == 2
+    assert payload["study_streak_days"] >= 1
+    assert payload["avg_answer_time_ms_today"] == pytest.approx(3500.0)
+    assert payload["retention_rate_today"] == pytest.approx(50.0)
+    assert payload["lapse_rate_today"] == pytest.approx(50.0)
+    assert payload.get("generated_at")
+
+    deck = next((d for d in payload["decks"] if d["deck_id"] == deck_id), None)
+    assert deck is not None
+    assert deck["deck_name"] == "AnalyticsDeck"
+    assert deck["total"] == 2
+    assert deck["new"] == 0
+
+
+def test_analytics_summary_honors_deck_filter(client_with_flashcards_db: TestClient):
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "DeckA"},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+    deck_a = r.json()["id"]
+
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "DeckB"},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+    deck_b = r.json()["id"]
+
+    card_a = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": deck_a, "front": "A1", "back": "A1"},
+        headers=AUTH_HEADERS,
+    )
+    card_b = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": deck_b, "front": "B1", "back": "B1"},
+        headers=AUTH_HEADERS,
+    )
+    assert card_a.status_code == 200
+    assert card_b.status_code == 200
+
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": card_a.json()["uuid"], "rating": 3, "answer_time_ms": 1200},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": card_b.json()["uuid"], "rating": 1, "answer_time_ms": 3600},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+
+    scoped = client_with_flashcards_db.get(
+        "/api/v1/flashcards/analytics/summary",
+        params={"deck_id": deck_a},
+        headers=AUTH_HEADERS,
+    )
+    assert scoped.status_code == 200
+    payload = scoped.json()
+
+    assert payload["reviewed_today"] == 1
+    assert payload["avg_answer_time_ms_today"] == pytest.approx(1200.0)
+    assert payload["retention_rate_today"] == pytest.approx(100.0)
+    assert payload["lapse_rate_today"] == pytest.approx(0.0)
+    assert len(payload["decks"]) == 1
+    assert payload["decks"][0]["deck_id"] == deck_a
+    assert payload["decks"][0]["deck_name"] == "DeckA"
+
+
+def test_reset_scheduling_resets_card_to_new_defaults(client_with_flashcards_db: TestClient):
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "ResetDeck"},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 200
+    deck_id = r.json()["id"]
+
+    created = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"deck_id": deck_id, "front": "Reset Q", "back": "Reset A"},
+        headers=AUTH_HEADERS,
+    )
+    assert created.status_code == 200
+    card = created.json()
+    card_uuid = card["uuid"]
+
+    reviewed = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": card_uuid, "rating": 3, "answer_time_ms": 2100},
+        headers=AUTH_HEADERS,
+    )
+    assert reviewed.status_code == 200
+    reviewed_payload = reviewed.json()
+    assert reviewed_payload["repetitions"] >= 1
+
+    current = client_with_flashcards_db.get(f"/api/v1/flashcards/id/{card_uuid}", headers=AUTH_HEADERS)
+    assert current.status_code == 200
+    current_version = current.json()["version"]
+
+    reset = client_with_flashcards_db.post(
+        f"/api/v1/flashcards/{card_uuid}/reset-scheduling",
+        json={"expected_version": current_version},
+        headers=AUTH_HEADERS,
+    )
+    assert reset.status_code == 200
+    payload = reset.json()
+
+    assert payload["ef"] == pytest.approx(2.5)
+    assert payload["interval_days"] == 0
+    assert payload["repetitions"] == 0
+    assert payload["lapses"] == 0
+    assert payload["last_reviewed_at"] is None
+    assert payload["due_at"] is not None
+
+    conflict = client_with_flashcards_db.post(
+        f"/api/v1/flashcards/{card_uuid}/reset-scheduling",
+        json={"expected_version": current_version},
+        headers=AUTH_HEADERS,
+    )
+    assert conflict.status_code == 409
+
+
 def test_patch_partial_update_keeps_required_fields(client_with_flashcards_db: TestClient):
     r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "PatchDeck"}, headers=AUTH_HEADERS)
     deck_id = r.json()["id"]

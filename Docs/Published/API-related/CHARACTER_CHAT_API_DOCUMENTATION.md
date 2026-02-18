@@ -929,7 +929,7 @@ Import a character from various formats including V3.
 **Endpoint:** `POST /api/v1/characters/import`
 
 **Request:** Multipart form data
-- `character_file`: Character card file (supports PNG, WEBP, JSON, MD formats)
+- `character_file`: Character card file (supports PNG, WEBP, JPEG/JPG, JSON, YAML/YML, MD, TXT formats)
 
 **Response:** `201 Created`
 ```json

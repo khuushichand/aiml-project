@@ -131,6 +131,35 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
             </div>
           </div>
         ))}
+        {activeTab === "review" && (
+          <div className="rounded border border-border bg-surface p-3">
+            <Text strong className="text-sm block mb-2">
+              {t("option:flashcards.ratingScaleTitle", {
+                defaultValue: "Rating Scale (SM-2 values)"
+              })}
+            </Text>
+            <Text className="text-xs block">
+              {t("option:flashcards.ratingScaleAgain", {
+                defaultValue: "Again = 0 (forgot it, repeat very soon)"
+              })}
+            </Text>
+            <Text className="text-xs block">
+              {t("option:flashcards.ratingScaleHard", {
+                defaultValue: "Hard = 2 (remembered with strain, short gap)"
+              })}
+            </Text>
+            <Text className="text-xs block">
+              {t("option:flashcards.ratingScaleGood", {
+                defaultValue: "Good = 3 (normal recall, default step)"
+              })}
+            </Text>
+            <Text className="text-xs block">
+              {t("option:flashcards.ratingScaleEasy", {
+                defaultValue: "Easy = 5 (effortless recall, longest jump)"
+              })}
+            </Text>
+          </div>
+        )}
       </div>
     </Modal>
   )

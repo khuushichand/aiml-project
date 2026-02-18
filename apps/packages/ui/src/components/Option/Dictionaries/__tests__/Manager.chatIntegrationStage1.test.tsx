@@ -180,7 +180,7 @@ const makeUseMutationResult = (opts: any) => ({
 describe("DictionariesManager chat integration stage-1", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    window.location.hash = "#/settings/dictionaries"
+    window.history.pushState(null, "", "#/settings/dictionaries")
 
     useQueryClientMock.mockReturnValue({
       invalidateQueries: vi.fn(),
@@ -220,11 +220,6 @@ describe("DictionariesManager chat integration stage-1", () => {
                   chat_id: "chat-001",
                   title: "ER Intake",
                   state: "in-progress"
-                },
-                {
-                  chat_id: "chat-002",
-                  title: "ICU Follow-up",
-                  state: "resolved"
                 }
               ]
             }

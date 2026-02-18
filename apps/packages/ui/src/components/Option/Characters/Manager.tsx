@@ -159,7 +159,11 @@ type CharacterImportPreview = {
   tagCount: number
   fieldCount: number
   avatarUrl: string | null
-  parseError: string | null
+  parseError: {
+    key: string
+    fallback: string
+    values?: Record<string, string | number>
+  } | null
 }
 
 const IMPORT_ALLOWED_EXTENSIONS = [
@@ -289,6 +293,35 @@ const extractLooseTextCharacterFields = (text: string): Record<string, unknown> 
   return fields
 }
 
+const detectMalformedYamlPreview = (text: string): string | null => {
+  const lines = text.split(/\r?\n/)
+
+  for (const [lineIndex, rawLine] of lines.entries()) {
+    const lineNumber = lineIndex + 1
+    const trimmed = rawLine.trim()
+    if (!trimmed || trimmed.startsWith("#")) continue
+
+    if (rawLine.includes("\t")) {
+      return `Line ${lineNumber}: tabs are not supported for indentation.`
+    }
+
+    const withoutComment = rawLine.replace(/\s+#.*$/, "")
+    const openSquare = (withoutComment.match(/\[/g) || []).length
+    const closeSquare = (withoutComment.match(/\]/g) || []).length
+    if (openSquare !== closeSquare) {
+      return `Line ${lineNumber}: inline list syntax is malformed.`
+    }
+
+    const openCurly = (withoutComment.match(/\{/g) || []).length
+    const closeCurly = (withoutComment.match(/\}/g) || []).length
+    if (openCurly !== closeCurly) {
+      return `Line ${lineNumber}: inline object syntax is malformed.`
+    }
+  }
+
+  return null
+}
+
 const parseCharacterImportPreview = async (
   file: File,
   index: number
@@ -308,7 +341,15 @@ const parseCharacterImportPreview = async (
       tagCount: 0,
       fieldCount: 0,
       avatarUrl: null,
-      parseError: `Unsupported file type: ${extension || "no extension"}. Supported formats: ${allowed}`
+      parseError: {
+        key: "settings:manageCharacters.import.previewUnsupportedType",
+        fallback:
+          "Unsupported file type: {{extension}}. Supported formats: {{allowed}}",
+        values: {
+          extension: extension || "no extension",
+          allowed
+        }
+      }
     }
   }
 
@@ -345,7 +386,10 @@ const parseCharacterImportPreview = async (
       tagCount: 0,
       fieldCount: 0,
       avatarUrl: null,
-      parseError: "Unable to read file contents for preview."
+      parseError: {
+        key: "settings:manageCharacters.import.previewReadError",
+        fallback: "Unable to read file contents for preview."
+      }
     }
   }
 
@@ -368,8 +412,42 @@ const parseCharacterImportPreview = async (
         tagCount: 0,
         fieldCount: 0,
         avatarUrl: null,
-        parseError: `Invalid JSON syntax: ${message}`
+        parseError: {
+          key: "settings:manageCharacters.import.previewInvalidJson",
+          fallback: "Invalid JSON syntax: {{message}}",
+          values: { message }
+        }
       }
+    }
+  } else if (extension === ".yaml" || extension === ".yml") {
+    const yamlValidationError = detectMalformedYamlPreview(text)
+    if (yamlValidationError) {
+      return {
+        id: `${file.name}-${file.lastModified}-${index}`,
+        file,
+        fileName: file.name,
+        format,
+        name: defaultName,
+        description: "",
+        tagCount: 0,
+        fieldCount: 0,
+        avatarUrl: null,
+        parseError: {
+          key: "settings:manageCharacters.import.previewInvalidYaml",
+          fallback: "Malformed YAML content: {{message}}",
+          values: { message: yamlValidationError }
+        }
+      }
+    }
+    const trimmed = text.trim()
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      try {
+        rawPayload = JSON.parse(trimmed)
+      } catch {
+        rawPayload = extractLooseTextCharacterFields(text)
+      }
+    } else {
+      rawPayload = extractLooseTextCharacterFields(text)
     }
   } else {
     const trimmed = text.trim()
@@ -5589,7 +5667,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                     </div>
                     {item.parseError && (
                       <div className="text-xs text-danger">
-                        {item.parseError}
+                        {t(item.parseError.key, {
+                          defaultValue: item.parseError.fallback,
+                          ...(item.parseError.values || {})
+                        })}
                       </div>
                     )}
                   </div>

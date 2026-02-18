@@ -205,12 +205,22 @@ class ChatDictionaryBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Unique dictionary name")
     description: Optional[str] = Field(None, max_length=500, description="Dictionary description")
     is_active: bool = Field(True, description="Whether the dictionary is active")
+    default_token_budget: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Optional default token budget applied when processing requests omit token_budget.",
+    )
 
 
 class ChatDictionaryCreate(BaseModel):
     """Schema for creating a chat dictionary."""
     name: str = Field(..., min_length=1, max_length=100, description="Unique dictionary name")
     description: Optional[str] = Field(None, max_length=500, description="Dictionary description")
+    default_token_budget: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Optional default token budget.",
+    )
 
 
 class ChatDictionaryUpdate(BaseModel):
@@ -218,6 +228,11 @@ class ChatDictionaryUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100, description="New dictionary name")
     description: Optional[str] = Field(None, max_length=500, description="New description")
     is_active: Optional[bool] = Field(None, description="New active status")
+    default_token_budget: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Optional default token budget override.",
+    )
     version: Optional[int] = Field(
         None,
         ge=1,
@@ -240,6 +255,11 @@ class ChatDictionaryResponse(ChatDictionaryBase):
     updated_at: datetime = Field(..., description="Last update timestamp")
     version: int = Field(..., description="Version number for optimistic locking")
     entry_count: Optional[int] = Field(None, description="Number of entries in the dictionary")
+    processing_priority: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Execution priority among active dictionaries (1 = first).",
+    )
     used_by_chat_count: int = Field(0, description="Number of chat sessions linked to this dictionary")
     used_by_active_chat_count: int = Field(0, description="Number of active chat sessions linked to this dictionary")
     used_by_chat_refs: list[DictionaryUsageChatRef] = Field(
@@ -262,6 +282,10 @@ class ProcessTextRequest(BaseModel):
     group: Optional[str] = Field(None, description="Specific group to filter entries")
     max_iterations: int = Field(5, ge=1, le=20, description="Maximum processing iterations")
     token_budget: Optional[int] = Field(None, ge=1, description="Optional token limit")
+    chat_id: Optional[str] = Field(
+        None,
+        description="Optional chat session ID for activity/audit attribution.",
+    )
 
 
 class ProcessTextResponse(BaseModel):
@@ -272,7 +296,35 @@ class ProcessTextResponse(BaseModel):
     iterations: int = Field(..., description="Number of iterations performed")
     entries_used: list[int] = Field(..., description="IDs of entries that made replacements")
     token_budget_exceeded: bool = Field(False, description="Whether token budget was exceeded")
+    token_budget_used: Optional[int] = Field(
+        None,
+        description="Effective token budget used during processing (request override or dictionary default).",
+    )
     processing_time_ms: Optional[float] = Field(None, description="Processing time in milliseconds")
+
+
+class DictionaryActivityEvent(BaseModel):
+    """Single dictionary transformation activity event."""
+    id: int = Field(..., description="Activity event ID")
+    dictionary_id: int = Field(..., description="Dictionary ID")
+    chat_id: Optional[str] = Field(None, description="Associated chat session ID, if provided")
+    entries_used: list[int] = Field(default_factory=list, description="Entry IDs that fired for this event")
+    replacements: int = Field(..., ge=0, description="Number of replacements made")
+    iterations: int = Field(..., ge=0, description="Iterations performed")
+    token_budget_used: Optional[int] = Field(None, ge=1, description="Effective token budget used")
+    original_text_preview: str = Field(..., description="Original text preview snippet")
+    processed_text_preview: str = Field(..., description="Processed text preview snippet")
+    processing_time_ms: Optional[float] = Field(None, ge=0, description="Processing time in milliseconds")
+    created_at: datetime = Field(..., description="Event timestamp")
+
+
+class DictionaryActivityListResponse(BaseModel):
+    """Paginated activity events for a dictionary."""
+    dictionary_id: int = Field(..., description="Dictionary ID")
+    events: list[DictionaryActivityEvent] = Field(default_factory=list, description="Activity events")
+    total: int = Field(..., ge=0, description="Total number of matching events")
+    limit: int = Field(..., ge=1, description="Applied page size")
+    offset: int = Field(..., ge=0, description="Applied offset")
 
 
 class ImportDictionaryRequest(BaseModel):
@@ -306,6 +358,11 @@ class ExportDictionaryJSONResponse(BaseModel):
     """Response schema for JSON export of a dictionary."""
     name: str = Field(..., description="Dictionary name")
     description: Optional[str] = Field(None, description="Dictionary description")
+    default_token_budget: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Optional default token budget for processing requests without token_budget.",
+    )
     entries: list[dict[str, Any]] = Field(..., description="Entries with pattern, replacement, type, probability, etc.")
 
 

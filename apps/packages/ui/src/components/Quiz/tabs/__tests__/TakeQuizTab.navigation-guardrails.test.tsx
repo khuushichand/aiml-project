@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { TakeQuizTab } from "../TakeQuizTab"
 import {
@@ -8,6 +8,7 @@ import {
   useStartAttemptMutation,
   useSubmitAttemptMutation
 } from "../../hooks"
+import { useQuizTimer } from "../../hooks/useQuizTimer"
 
 const interpolate = (template: string, values: Record<string, unknown> | undefined) => {
   return template.replace(/\{\{\s*([^\s}]+)\s*\}\}/g, (_, key: string) => {
@@ -35,6 +36,10 @@ vi.mock("react-i18next", () => ({
       return key
     }
   })
+}))
+
+vi.mock("@/hooks/useServerOnline", () => ({
+  useServerOnline: () => true
 }))
 
 vi.mock("../../hooks", () => ({
@@ -100,8 +105,10 @@ describe("TakeQuizTab navigation and submit guardrails", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
 
     HTMLElement.prototype.scrollIntoView = vi.fn()
+    vi.mocked(useQuizTimer).mockReturnValue(null as any)
 
     vi.mocked(useAttemptsQuery).mockReturnValue({
       data: { items: [], count: 0 }
@@ -204,7 +211,7 @@ describe("TakeQuizTab navigation and submit guardrails", () => {
   const startQuizFlow = async () => {
     fireEvent.click(screen.getByRole("button", { name: /Start Quiz/i }))
     fireEvent.click(screen.getByRole("button", { name: "Begin Quiz" }))
-    await screen.findByText(/Cells are alive\./)
+    await screen.findByTestId("quiz-question-1")
   }
 
   it("shows fill-blank guidance and supports navigator jump-to-question", async () => {
@@ -259,5 +266,103 @@ describe("TakeQuizTab navigation and submit guardrails", () => {
     })
 
     expect(screen.getByTestId("quiz-question-2")).toHaveAttribute("data-highlighted", "true")
+  }, 15000)
+
+  it("queues failed submissions and allows retry from inline status", async () => {
+    const submitSpy = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Network Error"))
+      .mockResolvedValueOnce({
+        id: 123,
+        quiz_id: 7,
+        started_at: "2026-02-18T10:00:00Z",
+        completed_at: "2026-02-18T10:04:00Z",
+        score: 2,
+        total_possible: 3,
+        answers: []
+      })
+    vi.mocked(useSubmitAttemptMutation).mockReturnValue({
+      mutateAsync: submitSpy,
+      isPending: false
+    } as any)
+
+    render(
+      <TakeQuizTab
+        onNavigateToGenerate={() => {}}
+        onNavigateToCreate={() => {}}
+      />
+    )
+
+    await startQuizFlow()
+
+    fireEvent.click(screen.getByRole("radio", { name: "True" }))
+    fireEvent.click(screen.getByRole("radio", { name: "Mitochondria" }))
+    fireEvent.change(screen.getByPlaceholderText("Enter the correct answer..."), {
+      target: { value: "deoxyribonucleic acid" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Submission failed. Answers queued locally.")).toBeInTheDocument()
+    })
+
+    const retryButtons = screen.getAllByRole("button", { name: "Retry submission" })
+    const enabledRetryButton = retryButtons.find((button) => !button.hasAttribute("disabled"))
+    fireEvent.click(enabledRetryButton ?? retryButtons[0])
+
+    await waitFor(() => {
+      expect(submitSpy).toHaveBeenCalledTimes(2)
+    })
+    await waitFor(() => {
+      expect(screen.getByText("Score: 2 / 3 (67%)")).toBeInTheDocument()
+    })
+  }, 15000)
+
+  it("queues timer-expiry submissions when submission fails", async () => {
+    let expireHandler: (() => void) | null = null
+    vi.mocked(useQuizTimer).mockImplementation((params: any) => {
+      expireHandler = params.onExpire
+      return null as any
+    })
+
+    const submitSpy = vi.fn().mockRejectedValue(new Error("offline"))
+    vi.mocked(useSubmitAttemptMutation).mockReturnValue({
+      mutateAsync: submitSpy,
+      isPending: false
+    } as any)
+
+    render(
+      <TakeQuizTab
+        onNavigateToGenerate={() => {}}
+        onNavigateToCreate={() => {}}
+      />
+    )
+
+    await startQuizFlow()
+
+    fireEvent.click(screen.getByRole("radio", { name: "True" }))
+    expect(expireHandler).toBeTypeOf("function")
+
+    await act(async () => {
+      expireHandler?.()
+    })
+
+    await waitFor(() => {
+      expect(submitSpy).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(screen.getByText("Time expired. Submission pending retry.")).toBeInTheDocument()
+    })
+    expect(submitSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attemptId: 123,
+        answers: [
+          {
+            question_id: 1,
+            user_answer: "true"
+          }
+        ]
+      })
+    )
   }, 15000)
 })

@@ -303,6 +303,42 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     expect(screen.getByText("2 MB • 2m 5s")).toBeInTheDocument()
   })
 
+  it("supports source preview annotations create, edit, and delete", async () => {
+    render(<SourcesPane />)
+
+    fireEvent.click(screen.getByTestId("preview-source-s1"))
+    expect(
+      await screen.findByText("Source preview and annotations")
+    ).toBeInTheDocument()
+
+    fireEvent.change(
+      screen.getByPlaceholderText("Highlighted excerpt (optional)"),
+      {
+        target: { value: "Key highlighted excerpt" }
+      }
+    )
+    fireEvent.change(screen.getByPlaceholderText("Annotation note"), {
+      target: { value: "Initial annotation" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Add annotation" }))
+
+    expect(await screen.findByText("Initial annotation")).toBeInTheDocument()
+    expect(screen.getByText(/Key highlighted excerpt/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+    fireEvent.change(screen.getByPlaceholderText("Annotation note"), {
+      target: { value: "Edited annotation" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save annotation" }))
+
+    expect(await screen.findByText("Edited annotation")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }))
+    await waitFor(() => {
+      expect(screen.getByText("No annotations yet.")).toBeInTheDocument()
+    })
+  })
+
   it("enables virtualized rendering when source volume crosses threshold", () => {
     workspaceStoreState.sources = Array.from({ length: 70 }, (_, index) => ({
       id: `source-${index + 1}`,

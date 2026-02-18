@@ -5,9 +5,14 @@ import {
   useDecksQuery,
   useReviewQuery,
   useReviewFlashcardMutation,
+  useUpdateFlashcardMutation,
+  useResetFlashcardSchedulingMutation,
+  useDeleteFlashcardMutation,
   useFlashcardShortcuts,
+  useDebouncedFormField,
   useDueCountsQuery,
   useDeckDueCountsQuery,
+  useReviewAnalyticsSummaryQuery,
   useHasCardsQuery,
   useNextDueQuery
 } from "../../hooks"
@@ -51,9 +56,14 @@ vi.mock("../../hooks", () => ({
   useDecksQuery: vi.fn(),
   useReviewQuery: vi.fn(),
   useReviewFlashcardMutation: vi.fn(),
+  useUpdateFlashcardMutation: vi.fn(),
+  useResetFlashcardSchedulingMutation: vi.fn(),
+  useDeleteFlashcardMutation: vi.fn(),
   useFlashcardShortcuts: vi.fn(),
+  useDebouncedFormField: vi.fn(() => undefined),
   useDueCountsQuery: vi.fn(),
   useDeckDueCountsQuery: vi.fn(),
+  useReviewAnalyticsSummaryQuery: vi.fn(),
   useHasCardsQuery: vi.fn(),
   useNextDueQuery: vi.fn()
 }))
@@ -106,12 +116,29 @@ describe("ReviewTab create CTA visibility", () => {
     vi.mocked(useReviewFlashcardMutation).mockReturnValue({
       mutateAsync: vi.fn()
     } as any)
+    vi.mocked(useUpdateFlashcardMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+    vi.mocked(useResetFlashcardSchedulingMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+    vi.mocked(useDeleteFlashcardMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
     vi.mocked(useFlashcardShortcuts).mockImplementation(() => undefined)
+    vi.mocked(useDebouncedFormField).mockReturnValue(undefined as any)
     vi.mocked(useDueCountsQuery).mockReturnValue({
       data: { due: 0, new: 0, learning: 0, total: 0 }
     } as any)
     vi.mocked(useDeckDueCountsQuery).mockReturnValue({
       data: {}
+    } as any)
+    vi.mocked(useReviewAnalyticsSummaryQuery).mockReturnValue({
+      data: null,
+      isLoading: false
     } as any)
     vi.mocked(useHasCardsQuery).mockReturnValue({
       data: false

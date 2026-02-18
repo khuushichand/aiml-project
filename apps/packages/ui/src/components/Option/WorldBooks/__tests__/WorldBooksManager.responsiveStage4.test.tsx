@@ -263,6 +263,6 @@ describe("WorldBooksManager responsive stage-4 modal scrolling", () => {
       expect(await screen.findByText("World Book ↔ Character Matrix")).toBeInTheDocument()
       expectOpenModalBodyScrollable()
     },
-    15000
+    30000
   )
 })

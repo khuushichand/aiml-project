@@ -103,13 +103,13 @@ describe("FlashcardEditDrawer scheduling metadata panel", () => {
     )
 
     expect(screen.getByText("Scheduling")).toBeInTheDocument()
-    expect(screen.getByText("Ease factor")).toBeInTheDocument()
+    expect(screen.getByText("Memory strength")).toBeInTheDocument()
     expect(screen.getByText("2.50")).toBeInTheDocument()
-    expect(screen.getByText("Interval")).toBeInTheDocument()
+    expect(screen.getByText("Next review gap")).toBeInTheDocument()
     expect(screen.getByText("7d")).toBeInTheDocument()
-    expect(screen.getByText("Repetitions")).toBeInTheDocument()
+    expect(screen.getByText("Recall runs")).toBeInTheDocument()
     expect(screen.getByText("4")).toBeInTheDocument()
-    expect(screen.getByText("Lapses")).toBeInTheDocument()
+    expect(screen.getByText("Relearns")).toBeInTheDocument()
     expect(screen.getByText("2")).toBeInTheDocument()
 
     const expectedDueAbsolute = dayjs(dueAt).format("YYYY-MM-DD HH:mm")

@@ -1489,6 +1489,12 @@
       "show": "Show advanced fields",
       "hide": "Hide advanced fields"
     },
+    "import": {
+      "previewUnsupportedType": "Unsupported file type: {{extension}}. Supported formats: {{allowed}}",
+      "previewReadError": "Unable to read file contents for preview.",
+      "previewInvalidJson": "Invalid JSON syntax: {{message}}",
+      "previewInvalidYaml": "Malformed YAML content: {{message}}"
+    },
     "form": {
       "name": {
         "label": "Name",

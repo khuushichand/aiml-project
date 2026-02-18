@@ -33,6 +33,9 @@ interface ResultsListProps {
   onOpenQuickIngest?: () => void
   favorites?: Set<string>
   onToggleFavorite?: (id: string) => void
+  selectionMode?: boolean
+  selectedIds?: Set<string>
+  onToggleSelected?: (id: string | number) => void
 }
 
 export function ResultsList({
@@ -48,7 +51,10 @@ export function ResultsList({
   onClearFilters,
   onOpenQuickIngest,
   favorites,
-  onToggleFavorite
+  onToggleFavorite,
+  selectionMode = false,
+  selectedIds,
+  onToggleSelected
 }: ResultsListProps) {
   const { t } = useTranslation(['review'])
   const hasSearchQuery = searchQuery.trim().length > 0
@@ -214,16 +220,28 @@ export function ResultsList({
             const relativeDate = result.meta?.created_at
               ? formatRelativeTime(result.meta.created_at, t, { compact: true })
               : null
+            const bulkSelected = selectedIds?.has(String(result.id)) === true
+            const showSelectedStyle = selectionMode ? bulkSelected : selectedId === result.id
 
             return (
               <div
               role="button"
               tabIndex={0}
               key={result.id}
-              onClick={() => onSelect(result.id)}
+              onClick={() => {
+                if (selectionMode && onToggleSelected) {
+                  onToggleSelected(result.id)
+                  return
+                }
+                onSelect(result.id)
+              }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault()
+                  if (selectionMode && onToggleSelected) {
+                    onToggleSelected(result.id)
+                    return
+                  }
                   onSelect(result.id)
                 }
               }}
@@ -231,14 +249,28 @@ export function ResultsList({
                 type: result.kind,
                 title: result.title || `${result.kind} ${result.id}`
               })}
-              aria-selected={selectedId === result.id}
+              aria-selected={showSelectedStyle}
               className={`w-full py-2.5 text-left hover:bg-surface2 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset cursor-pointer ${
-                selectedId === result.id
+                showSelectedStyle
                   ? 'bg-surface2 border-l-4 border-l-primary px-3'
                   : 'px-4'
               }`}
             >
               <div className="flex items-start gap-2.5">
+                {selectionMode && (
+                  <input
+                    type="checkbox"
+                    checked={bulkSelected}
+                    onChange={() => onToggleSelected?.(result.id)}
+                    onClick={(event) => event.stopPropagation()}
+                    className="mt-1 h-4 w-4 rounded border-border bg-surface"
+                    aria-label={t('mediaPage.selectResultCheckbox', {
+                      defaultValue: 'Select {{title}}',
+                      title: result.title || `${result.kind} ${result.id}`
+                    })}
+                    data-testid={`results-select-${String(result.id)}`}
+                  />
+                )}
                 <div className="mt-0.5 flex flex-col items-center gap-1">
                   <FileText className="w-4 h-4 text-text-subtle" />
                   {onToggleFavorite && (

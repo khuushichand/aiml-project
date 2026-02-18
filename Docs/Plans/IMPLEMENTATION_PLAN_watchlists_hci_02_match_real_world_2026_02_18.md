@@ -21,7 +21,7 @@ Finding IDs: `H2.1` through `H2.6`
 - i18n key snapshot tests for renamed labels.
 - Component tests validating helper text presence for renamed concepts.
 - Smoke tests confirming route-to-tab mapping still works after rename.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Human-Friendly Scheduling and Retention Inputs
 **Goal**: Reduce technical parsing burden in job setup.
@@ -33,7 +33,7 @@ Finding IDs: `H2.1` through `H2.6`
 - Unit tests for duration-to-seconds conversion and round-trip edit behavior.
 - Component tests for schedule preset selection and advanced-mode guardrails.
 - Integration tests for submitted payload parity with prior API contract.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: First-Run Workflow Framing
 **Goal**: Align page structure with user mental model for first successful briefing.
@@ -45,7 +45,7 @@ Finding IDs: `H2.1` through `H2.6`
 - E2E first-run workflow test from empty state to first run creation.
 - Component tests for onboarding state persistence/dismiss behavior.
 - UX acceptance checklist verifying no unexplained jargon in first-run path.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

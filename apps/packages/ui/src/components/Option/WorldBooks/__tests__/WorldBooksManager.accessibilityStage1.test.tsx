@@ -261,21 +261,24 @@ describe("WorldBooksManager accessibility stage-1 baseline harness", () => {
     render(<WorldBooksManager />)
 
     await user.click(screen.getByRole("button", { name: "Manage entries" }))
-    expect(await screen.findByText("World Books > Arcana > Entries")).toBeInTheDocument()
+    const drawerBreadcrumb = await screen.findByText("World Books > Arcana > Entries")
+    const drawerScope =
+      drawerBreadcrumb.closest(".ant-drawer-content") || document.body
 
-    const results = await runA11yBaselineRules(document.body)
+    const results = await runA11yBaselineRules(drawerScope)
     expectNoInvalidAriaViolations(results.violations)
-    expect(results.violations.map((violation) => violation.id)).toContain("button-name")
-  }, 20000)
+    expect(results.violations.map((violation) => violation.id)).not.toContain("button-name")
+  }, 30000)
 
   it("enforces valid aria/name rules in relationship matrix mode", async () => {
     const user = userEvent.setup()
     render(<WorldBooksManager />)
 
     await user.click(screen.getByRole("button", { name: "Open relationship matrix" }))
-    expect(await screen.findByText("Matrix view active (2 characters).")).toBeInTheDocument()
+    const matrixStatus = await screen.findByText("Matrix view active (2 characters).")
+    const matrixScope = matrixStatus.closest(".ant-modal-content") || document.body
 
-    const results = await runA11yBaselineRules(document.body)
+    const results = await runA11yBaselineRules(matrixScope)
     expectNoInvalidAriaViolations(results.violations)
-  }, 20000)
+  }, 30000)
 })

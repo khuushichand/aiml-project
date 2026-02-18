@@ -293,13 +293,19 @@ export const SettingsTab: React.FC = () => {
 
           {/* Claim Clusters */}
           <Card
-            title={t("watchlists:settings.clusters.title", "Claim Clusters")}
+            title={t("watchlists:settings.clusters.title", "Related Claim Clusters")}
             className="md:col-span-2"
           >
             <div className="space-y-3">
+              <div className="text-sm text-text-muted">
+                {t(
+                  "watchlists:settings.clusters.help",
+                  "Claim clusters group similar claims detected across feeds. Subscribe a monitor to include those cluster updates in briefings."
+                )}
+              </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Select
-                  placeholder={t("watchlists:settings.clusters.jobPlaceholder", "Select job")}
+                  placeholder={t("watchlists:settings.clusters.jobPlaceholder", "Select monitor")}
                   value={selectedJobId ?? undefined}
                   onChange={(value) => setSelectedJobId(value ?? null)}
                   loading={jobsLoading}
@@ -330,7 +336,7 @@ export const SettingsTab: React.FC = () => {
                   showIcon
                   title={t(
                     "watchlists:settings.clusters.selectJob",
-                    "Select a job to manage cluster subscriptions."
+                    "Select a monitor to manage cluster subscriptions."
                   )}
                 />
               )}

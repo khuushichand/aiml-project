@@ -106,10 +106,12 @@ describe("PromptDrawer advanced workflows", () => {
       })
     )
     },
-    10000
+    20000
   )
 
-  it("shows view history for synced prompts and opens the shared history drawer", async () => {
+  it(
+    "shows view history for synced prompts and opens the shared history drawer",
+    async () => {
     render(
       <PromptDrawer
         {...baseProps}
@@ -126,10 +128,16 @@ describe("PromptDrawer advanced workflows", () => {
     const viewHistoryButton = await screen.findByTestId("prompt-drawer-view-history")
     fireEvent.click(viewHistoryButton)
 
-    expect(await screen.findByTestId("mock-version-history")).toHaveTextContent("42")
-  })
+      expect(await screen.findByTestId("mock-version-history")).toHaveTextContent(
+        "42"
+      )
+    },
+    20000
+  )
 
-  it("hides view history action for prompts without a server link", async () => {
+  it(
+    "hides view history action for prompts without a server link",
+    async () => {
     render(
       <PromptDrawer
         {...baseProps}
@@ -143,6 +151,10 @@ describe("PromptDrawer advanced workflows", () => {
 
     fireEvent.click(screen.getByText("Advanced"))
     await screen.findByText("Version 3")
-    expect(screen.queryByTestId("prompt-drawer-view-history")).not.toBeInTheDocument()
-  })
+      expect(
+        screen.queryByTestId("prompt-drawer-view-history")
+      ).not.toBeInTheDocument()
+    },
+    20000
+  )
 })

@@ -21,19 +21,19 @@
     "message": "Overview"
   },
   "tabs_sources": {
-    "message": "Sources"
+    "message": "Feeds"
   },
   "tabs_jobs": {
-    "message": "Jobs"
+    "message": "Monitors"
   },
   "tabs_runs": {
-    "message": "Runs"
+    "message": "Activity"
   },
   "tabs_items": {
-    "message": "Items"
+    "message": "Articles"
   },
   "tabs_outputs": {
-    "message": "Outputs"
+    "message": "Reports"
   },
   "tabs_templates": {
     "message": "Templates"
@@ -42,16 +42,16 @@
     "message": "Settings"
   },
   "sources_title": {
-    "message": "Sources"
+    "message": "Feeds"
   },
   "sources_addSource": {
-    "message": "Add Source"
+    "message": "Add Feed"
   },
   "sources_editSource": {
-    "message": "Edit Source"
+    "message": "Edit Feed"
   },
   "sources_searchPlaceholder": {
-    "message": "Search sources..."
+    "message": "Search feeds..."
   },
   "sources_filterByTag": {
     "message": "Filter by tag"
@@ -60,37 +60,52 @@
     "message": "Filter by type"
   },
   "sources_totalItems": {
-    "message": "{{total}} sources"
+    "message": "{{total}} feeds"
   },
   "sources_fetchError": {
-    "message": "Failed to load sources"
+    "message": "Failed to load feeds"
   },
   "sources_saveError": {
-    "message": "Failed to save source"
+    "message": "Failed to save feed"
   },
   "sources_deleteError": {
-    "message": "Failed to delete source"
+    "message": "Failed to delete feed"
   },
   "sources_toggleError": {
-    "message": "Failed to update source"
+    "message": "Failed to update feed"
   },
   "sources_created": {
-    "message": "Source created"
+    "message": "Feed created"
   },
   "sources_updated": {
-    "message": "Source updated"
+    "message": "Feed updated"
   },
   "sources_deleted": {
-    "message": "Source deleted"
+    "message": "Feed deleted"
+  },
+  "sources_undoDeleteTitle": {
+    "message": "Feed deleted"
+  },
+  "sources_undoDeleteDescription": {
+    "message": "Undo restores this feed for {{seconds}} seconds."
+  },
+  "sources_undoBulkDeleteTitle": {
+    "message": "{{count}} feeds deleted"
+  },
+  "sources_undoBulkDeleteDescription": {
+    "message": "Undo restores deleted feeds for {{seconds}} seconds."
+  },
+  "sources_undoBulkRestorePartialError": {
+    "message": "{{restored}} restored, {{failed}} failed to restore"
   },
   "sources_enabled": {
-    "message": "Source enabled"
+    "message": "Feed enabled"
   },
   "sources_disabled": {
-    "message": "Source disabled"
+    "message": "Feed disabled"
   },
   "sources_deleteConfirm": {
-    "message": "Delete this source?"
+    "message": "Delete this feed?"
   },
   "sources_checkNow": {
     "message": "Check Now"
@@ -201,49 +216,55 @@
     "message": "Add tags to organize and filter your sources"
   },
   "jobs_title": {
-    "message": "Jobs"
+    "message": "Monitors"
   },
   "jobs_description": {
-    "message": "Create scheduled jobs to automatically fetch and process content from your sources."
+    "message": "Create monitors that automatically fetch and process updates from your feeds."
   },
   "jobs_addJob": {
-    "message": "Add Job"
+    "message": "Add Monitor"
   },
   "jobs_editJob": {
-    "message": "Edit Job"
+    "message": "Edit Monitor"
   },
   "jobs_totalItems": {
-    "message": "{{total}} jobs"
+    "message": "{{total}} monitors"
   },
   "jobs_fetchError": {
-    "message": "Failed to load jobs"
+    "message": "Failed to load monitors"
   },
   "jobs_saveError": {
-    "message": "Failed to save job"
+    "message": "Failed to save monitor"
   },
   "jobs_deleteError": {
-    "message": "Failed to delete job"
+    "message": "Failed to delete monitor"
   },
   "jobs_toggleError": {
-    "message": "Failed to update job"
+    "message": "Failed to update monitor"
   },
   "jobs_runError": {
     "message": "Failed to trigger run"
   },
   "jobs_created": {
-    "message": "Job created"
+    "message": "Monitor created"
   },
   "jobs_updated": {
-    "message": "Job updated"
+    "message": "Monitor updated"
   },
   "jobs_deleted": {
-    "message": "Job deleted"
+    "message": "Monitor deleted"
+  },
+  "jobs_undoDeleteTitle": {
+    "message": "Monitor deleted"
+  },
+  "jobs_undoDeleteDescription": {
+    "message": "Undo restores this monitor for {{seconds}} seconds."
   },
   "jobs_enabled": {
-    "message": "Job enabled"
+    "message": "Monitor enabled"
   },
   "jobs_disabled": {
-    "message": "Job disabled"
+    "message": "Monitor disabled"
   },
   "jobs_runTriggered": {
     "message": "Run triggered"
@@ -270,7 +291,7 @@
     "message": "Schedule"
   },
   "jobs_columns_scope": {
-    "message": "Scope"
+    "message": "Feeds"
   },
   "jobs_columns_filters": {
     "message": "Filters"
@@ -303,16 +324,16 @@
     "message": "Description"
   },
   "jobs_form_descriptionPlaceholder": {
-    "message": "Optional description of what this job does"
+    "message": "Optional description of what this monitor does"
   },
   "jobs_form_active": {
     "message": "Active"
   },
   "jobs_form_scope": {
-    "message": "Scope"
+    "message": "Feeds to Include"
   },
   "jobs_form_scopeRequired": {
-    "message": "Please select at least one source, group, or tag"
+    "message": "Please select at least one feed, group, or tag"
   },
   "jobs_form_schedule": {
     "message": "Schedule"
@@ -320,8 +341,41 @@
   "jobs_form_filters": {
     "message": "Filters"
   },
+  "jobs_form_retentionDefault": {
+    "message": "Default retention"
+  },
+  "jobs_form_retentionTemporary": {
+    "message": "Temporary retention"
+  },
+  "jobs_form_retentionDefaultPlaceholder": {
+    "message": "Server default"
+  },
+  "jobs_form_retentionTemporaryPlaceholder": {
+    "message": "Server temporary default"
+  },
+  "jobs_form_retentionDefaultPreview": {
+    "message": "Stored as {{seconds}} seconds"
+  },
+  "jobs_form_retentionTemporaryPreview": {
+    "message": "Stored as {{seconds}} seconds"
+  },
+  "jobs_form_retentionUnit_seconds": {
+    "message": "Seconds"
+  },
+  "jobs_form_retentionUnit_minutes": {
+    "message": "Minutes"
+  },
+  "jobs_form_retentionUnit_hours": {
+    "message": "Hours"
+  },
+  "jobs_form_retentionUnit_days": {
+    "message": "Days"
+  },
+  "jobs_form_retentionUnit_weeks": {
+    "message": "Weeks"
+  },
   "jobs_scope_sources": {
-    "message": "Sources"
+    "message": "Feeds"
   },
   "jobs_scope_groups": {
     "message": "Groups"
@@ -330,7 +384,7 @@
     "message": "Tags"
   },
   "jobs_scope_selectSources": {
-    "message": "Select sources to include"
+    "message": "Select feeds to include"
   },
   "jobs_scope_selectGroups": {
     "message": "Select groups to include"
@@ -339,13 +393,13 @@
     "message": "Select tags to include"
   },
   "jobs_scope_sourcesHelp": {
-    "message": "Job will fetch from selected sources directly"
+    "message": "Monitor will fetch directly from selected feeds"
   },
   "jobs_scope_groupsHelp": {
-    "message": "Job will fetch from all sources in selected groups"
+    "message": "Monitor will fetch from all feeds in selected groups"
   },
   "jobs_scope_tagsHelp": {
-    "message": "Job will fetch from all sources with selected tags"
+    "message": "Monitor will fetch from all feeds with selected tags"
   },
   "filters_noFilters": {
     "message": "No filters configured. All items will be included."
@@ -390,7 +444,7 @@
     "message": "Filters determine which items are included, excluded, or flagged during job runs. Include filters require at least one match."
   },
   "schedule_presets": {
-    "message": "Quick Presets"
+    "message": "Schedule presets"
   },
   "schedule_custom": {
     "message": "Custom Schedule"
@@ -410,11 +464,77 @@
   "schedule_timezone": {
     "message": "Timezone"
   },
+  "schedule_hour": {
+    "message": "Hour"
+  },
+  "schedule_minute": {
+    "message": "Minute"
+  },
+  "schedule_weekday": {
+    "message": "Weekday"
+  },
+  "schedule_weekdayOption_MON": {
+    "message": "Monday"
+  },
+  "schedule_weekdayOption_TUE": {
+    "message": "Tuesday"
+  },
+  "schedule_weekdayOption_WED": {
+    "message": "Wednesday"
+  },
+  "schedule_weekdayOption_THU": {
+    "message": "Thursday"
+  },
+  "schedule_weekdayOption_FRI": {
+    "message": "Friday"
+  },
+  "schedule_weekdayOption_SAT": {
+    "message": "Saturday"
+  },
+  "schedule_weekdayOption_SUN": {
+    "message": "Sunday"
+  },
+  "schedule_preset_hourly_label": {
+    "message": "Every hour"
+  },
+  "schedule_preset_hourly_description": {
+    "message": "Runs once each hour at the selected minute."
+  },
+  "schedule_preset_every6hours_label": {
+    "message": "Every 6 hours"
+  },
+  "schedule_preset_every6hours_description": {
+    "message": "Runs four times each day at the selected minute."
+  },
+  "schedule_preset_daily_label": {
+    "message": "Daily"
+  },
+  "schedule_preset_daily_description": {
+    "message": "Runs every day at the selected time."
+  },
+  "schedule_preset_weekly_label": {
+    "message": "Weekly"
+  },
+  "schedule_preset_weekly_description": {
+    "message": "Runs once a week on the selected weekday and time."
+  },
+  "schedule_advancedLabel": {
+    "message": "Advanced cron expression"
+  },
+  "schedule_advancedHint": {
+    "message": "Enable only if presets cannot express the cadence you need."
+  },
+  "schedule_helpSimple": {
+    "message": "Pick a schedule preset above. You can switch to Advanced cron for uncommon timing patterns."
+  },
+  "schedule_helpAdvanced": {
+    "message": "Cron format: minute hour day-of-month month day-of-week. Example: 0 9 * * MON runs every Monday at 09:00."
+  },
   "schedule_help": {
     "message": "Cron format: minute hour day-of-month month day-of-week. Use * for any, */N for every N intervals."
   },
   "runs_title": {
-    "message": "Runs"
+    "message": "Activity"
   },
   "runs_description": {
     "message": "View execution history and logs for your watchlist jobs."
@@ -698,14 +818,29 @@
   "sources_bulkUpdated": {
     "message": "{{count}} sources updated"
   },
+  "sources_bulkUpdatePartial": {
+    "message": "Updated {{success}} feeds, {{failed}} failed"
+  },
   "sources_bulkDeleted": {
     "message": "{{count}} sources deleted"
+  },
+  "sources_bulkDeletePartial": {
+    "message": "Deleted {{success}} feeds, {{failed}} failed"
   },
   "sources_bulkDeleteError": {
     "message": "Bulk delete failed"
   },
   "sources_bulkError": {
     "message": "Bulk update failed"
+  },
+  "sources_undoBulkToggleTitle": {
+    "message": "Updated {{count}} feeds"
+  },
+  "sources_undoBulkToggleDescription": {
+    "message": "Undo restores previous feed states for {{seconds}} seconds."
+  },
+  "sources_undoBulkTogglePartialError": {
+    "message": "{{restored}} restored, {{failed}} failed to restore"
   },
   "sources_columns_url": {
     "message": "URL"
@@ -1049,8 +1184,53 @@
   "overview_health_degradedDescription": {
     "message": "Some sources or recent runs show failures. Open failed runs to investigate."
   },
+  "overview_onboarding_title": {
+    "message": "Quick setup"
+  },
+  "overview_onboarding_pipeline": {
+    "message": "Add Feed -> Create Monitor -> Review Results"
+  },
+  "overview_onboarding_steps_addFeed_title": {
+    "message": "Add your first feed"
+  },
+  "overview_onboarding_steps_addFeed_description": {
+    "message": "Start by adding an RSS/site source in Feeds."
+  },
+  "overview_onboarding_steps_createMonitor_title": {
+    "message": "Create your first monitor"
+  },
+  "overview_onboarding_steps_createMonitor_description": {
+    "message": "Pick feeds, then set a schedule with presets."
+  },
+  "overview_onboarding_steps_reviewResults_title": {
+    "message": "Review results"
+  },
+  "overview_onboarding_steps_reviewResults_description": {
+    "message": "Open Articles for content and Activity for run diagnostics."
+  },
+  "overview_onboarding_cta_addFeed": {
+    "message": "Add first feed"
+  },
+  "overview_onboarding_cta_createMonitor": {
+    "message": "Create first monitor"
+  },
+  "overview_onboarding_cta_reviewArticles": {
+    "message": "Open Articles"
+  },
+  "overview_setupComplete_title": {
+    "message": "Setup complete"
+  },
+  "overview_setupComplete_nextRunDescription": {
+    "message": "Your next monitor run is {{time}}. New content will appear in Articles and Activity."
+  },
+  "overview_setupComplete_runNowDescription": {
+    "message": "Run a monitor from Monitors to generate your first Articles and Activity entries."
+  },
+  "overview_setupComplete_openActivity": {
+    "message": "Open Activity"
+  },
   "overview_cards_sources_title": {
-    "message": "Sources"
+    "message": "Feeds"
   },
   "overview_cards_sources_total": {
     "message": "Total"
@@ -1065,7 +1245,7 @@
     "message": "Inactive {{count}}"
   },
   "overview_cards_jobs_title": {
-    "message": "Jobs"
+    "message": "Monitors"
   },
   "overview_cards_jobs_active": {
     "message": "Active"
@@ -1077,7 +1257,7 @@
     "message": "No upcoming schedules"
   },
   "overview_cards_items_title": {
-    "message": "Items"
+    "message": "Articles"
   },
   "overview_cards_items_unread": {
     "message": "Unread"
@@ -1149,16 +1329,19 @@
     "message": "TTL values are configured on the server."
   },
   "settings_clusters_title": {
-    "message": "Claim Clusters"
+    "message": "Related Claim Clusters"
+  },
+  "settings_clusters_help": {
+    "message": "Claim clusters group similar claims detected across feeds. Subscribe a monitor to include those cluster updates in briefings."
   },
   "settings_clusters_jobPlaceholder": {
-    "message": "Select job"
+    "message": "Select monitor"
   },
   "settings_clusters_searchPlaceholder": {
     "message": "Search clusters"
   },
   "settings_clusters_selectJob": {
-    "message": "Select a job to manage cluster subscriptions."
+    "message": "Select a monitor to manage cluster subscriptions."
   },
   "settings_clusters_fetchError": {
     "message": "Failed to load claim clusters"

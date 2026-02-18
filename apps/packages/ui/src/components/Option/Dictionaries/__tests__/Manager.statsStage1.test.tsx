@@ -52,7 +52,8 @@ const {
   tldwClientMock: {
     initialize: vi.fn(async () => undefined),
     listDictionaries: vi.fn(async () => ({ dictionaries: [] })),
-    dictionaryStatistics: vi.fn(async () => ({}))
+    dictionaryStatistics: vi.fn(async () => ({})),
+    dictionaryActivity: vi.fn(async () => ({ events: [], total: 0 }))
   }
 }))
 

@@ -10,6 +10,7 @@ const RATING_MAP: Record<string, number> = {
 type FlashcardShortcutAction =
   | { type: "flip" }
   | { type: "rate"; rating: number }
+  | { type: "edit" }
   | { type: "undo" }
 
 export type FlashcardShortcutResult = {
@@ -37,6 +38,13 @@ export function getFlashcardShortcutResult(
     }
   }
 
+  if (key.toLowerCase() === "e") {
+    return {
+      preventDefault: true,
+      action: { type: "edit" }
+    }
+  }
+
   if (showingAnswer && key in RATING_MAP) {
     return {
       preventDefault: true,
@@ -56,6 +64,8 @@ interface FlashcardShortcutsOptions {
   onFlip: () => void
   /** Callback to submit a rating (0=Again, 2=Hard, 3=Good, 5=Easy) */
   onRate: (rating: number) => void
+  /** Callback to open edit drawer for the current card */
+  onEdit?: () => void
   /** Callback to undo last rating (Ctrl/Cmd+Z) */
   onUndo?: () => void
 }
@@ -69,6 +79,7 @@ interface FlashcardShortcutsOptions {
  * - 2: Rate Hard (2)
  * - 3: Rate Good (3)
  * - 4: Rate Easy (5)
+ * - E: Edit current card
  * - Ctrl/Cmd+Z: Undo last rating
  */
 export function useFlashcardShortcuts({
@@ -76,6 +87,7 @@ export function useFlashcardShortcuts({
   showingAnswer,
   onFlip,
   onRate,
+  onEdit,
   onUndo
 }: FlashcardShortcutsOptions) {
   const handleKeyDown = useCallback(
@@ -105,9 +117,13 @@ export function useFlashcardShortcuts({
         onUndo?.()
         return
       }
+      if (result.action.type === "edit") {
+        onEdit?.()
+        return
+      }
       onRate(result.action.rating)
     },
-    [showingAnswer, onFlip, onRate, onUndo]
+    [showingAnswer, onFlip, onRate, onEdit, onUndo]
   )
 
   useEffect(() => {

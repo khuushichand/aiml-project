@@ -75,6 +75,10 @@ export type FlashcardUpdate = {
   reverse?: boolean | null
 }
 
+export type FlashcardResetSchedulingRequest = {
+  expected_version: number
+}
+
 export type FlashcardListResponse = {
   items: Flashcard[]
   count: number
@@ -129,6 +133,26 @@ export type FlashcardsExportParams = {
   delimiter?: string | null
   include_header?: boolean | null
   extended_header?: boolean | null
+}
+
+export type FlashcardDeckProgress = {
+  deck_id: number
+  deck_name: string
+  total: number
+  new: number
+  learning: number
+  due: number
+  mature: number
+}
+
+export type FlashcardAnalyticsSummary = {
+  reviewed_today: number
+  retention_rate_today?: number | null
+  lapse_rate_today?: number | null
+  avg_answer_time_ms_today?: number | null
+  study_streak_days: number
+  generated_at: string
+  decks: FlashcardDeckProgress[]
 }
 
 // Decks
@@ -191,6 +215,18 @@ export async function deleteFlashcard(card_uuid: string, expected_version: numbe
   })
 }
 
+export async function resetFlashcardScheduling(
+  card_uuid: string,
+  input: FlashcardResetSchedulingRequest
+): Promise<Flashcard> {
+  return await bgRequest<Flashcard, AllowedPath, "POST">({
+    path: `/api/v1/flashcards/${card_uuid}/reset-scheduling` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input
+  })
+}
+
 // Review
 export async function reviewFlashcard(input: FlashcardReviewRequest): Promise<FlashcardReviewResponse> {
   return await bgRequest<FlashcardReviewResponse, AllowedPath, "POST">({
@@ -225,6 +261,21 @@ export async function importFlashcards(payload: FlashcardsImportRequest, overrid
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: payload
+  })
+}
+
+export async function getFlashcardsAnalyticsSummary(params?: {
+  deck_id?: number | null
+  signal?: AbortSignal
+}): Promise<FlashcardAnalyticsSummary> {
+  const query = buildQuery({
+    deck_id: params?.deck_id
+  })
+  const path = `/api/v1/flashcards/analytics/summary${query}` as AllowedPath
+  return await bgRequest<FlashcardAnalyticsSummary, AllowedPath, "GET">({
+    path,
+    method: "GET",
+    abortSignal: params?.signal
   })
 }
 

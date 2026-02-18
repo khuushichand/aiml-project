@@ -1,7 +1,17 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { ChevronDown, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  CheckSquare,
+  Square,
+  Download,
+  Tags,
+  Trash2,
+  X
+} from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { Storage } from '@plasmohq/storage'
 import { useStorage } from '@plasmohq/storage/hook'
@@ -26,6 +36,11 @@ import { Pagination } from '@/components/Media/Pagination'
 import { JumpToNavigator } from '@/components/Media/JumpToNavigator'
 import { KeyboardShortcutsOverlay } from '@/components/Media/KeyboardShortcutsOverlay'
 import { FilterChips } from '@/components/Media/FilterChips'
+import { MediaIngestJobsPanel } from '@/components/Media/MediaIngestJobsPanel'
+import {
+  MediaLibraryStatsPanel,
+  type MediaLibraryStorageUsage
+} from '@/components/Media/MediaLibraryStatsPanel'
 import type { MediaResultItem } from '@/components/Media/types'
 import {
   useMediaNavigation
@@ -55,7 +70,8 @@ import { normalizeRequestedMediaRenderMode } from '@/utils/media-render-mode'
 import { clearSetting, getSetting, setSetting } from '@/services/settings/registry'
 import {
   DISCUSS_MEDIA_PROMPT_SETTING,
-  LAST_MEDIA_ID_SETTING
+  LAST_MEDIA_ID_SETTING,
+  MEDIA_REVIEW_SELECTION_SETTING
 } from '@/services/settings/ui-settings'
 import {
   buildMediaSearchPayload,
@@ -86,6 +102,7 @@ import {
   getMediaPermalinkIdFromSearch,
   normalizeMediaPermalinkId
 } from '@/components/Review/mediaPermalink'
+import { downloadBlob } from '@/utils/download-blob'
 import {
   getImmediateCachedMediaTypes,
   isMediaTypesCacheFresh,
@@ -101,6 +118,15 @@ const MEDIA_NAVIGATION_GENERATED_FALLBACK_STORAGE_KEY =
   'media:navigation:includeGeneratedFallback'
 const MEDIA_SIDEBAR_COLLAPSED_STORAGE_KEY = 'media:sidebar:collapsed'
 export const MEDIA_STALE_CHECK_INTERVAL_MS = 30_000
+const MEDIA_COLLECTIONS_STORAGE_KEY = 'media:collections:v1'
+
+type MediaCollectionRecord = {
+  id: string
+  name: string
+  itemIds: string[]
+  createdAt: string
+  updatedAt: string
+}
 
 const ViewMediaPage: React.FC = () => {
   const { t } = useTranslation(['review', 'common', 'settings'])
@@ -298,6 +324,24 @@ const getErrorStatusCode = (error: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+const toNonNegativeFiniteNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed
+  }
+  return null
+}
+
+const DEFAULT_MEDIA_LIBRARY_STORAGE_USAGE: MediaLibraryStorageUsage = {
+  loading: true,
+  error: null,
+  totalMb: null,
+  quotaMb: null,
+  usagePercentage: null,
+  warning: null
+}
+
 const MediaPageContent: React.FC = () => {
   const { t } = useTranslation(['review', 'common'])
   const navigate = useNavigate()
@@ -411,6 +455,21 @@ const MediaPageContent: React.FC = () => {
       includeGeneratedFallbackDefault
     )
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
+  const [bulkSelectionMode, setBulkSelectionMode] = useState(false)
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<string[]>([])
+  const [bulkKeywordsDraft, setBulkKeywordsDraft] = useState('')
+  const [bulkExportFormat, setBulkExportFormat] = useState<'json' | 'markdown' | 'text'>(
+    'json'
+  )
+  const [mediaCollections, setMediaCollections] = useStorage<MediaCollectionRecord[]>(
+    MEDIA_COLLECTIONS_STORAGE_KEY,
+    []
+  )
+  const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null)
+  const [collectionDraftName, setCollectionDraftName] = useState('')
+  const [libraryStorageUsage, setLibraryStorageUsage] = useState<MediaLibraryStorageUsage>(
+    DEFAULT_MEDIA_LIBRARY_STORAGE_USAGE
+  )
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const sidebarCollapsedValue = sidebarCollapsed === true
   const contentDivRef = React.useRef<HTMLDivElement | null>(null)
@@ -1449,7 +1508,8 @@ const MediaPageContent: React.FC = () => {
     enableBoostFields ||
     searchMode === 'metadata' ||
     normalizeMetadataSearchFilters(metadataFilters).length > 0 ||
-    showFavoritesOnly
+    showFavoritesOnly ||
+    Boolean(activeCollectionId)
 
   useEffect(() => {
     if (searchMode !== 'metadata') {
@@ -1462,10 +1522,114 @@ const MediaPageContent: React.FC = () => {
 
   // Filter results by favorites if enabled
   const displayResults = useMemo(() => {
-    if (!showFavoritesOnly) return results
-    return results.filter(r => favoritesSet.has(String(r.id)))
-  }, [results, showFavoritesOnly, favoritesSet])
+    let nextResults = results
+    if (showFavoritesOnly) {
+      nextResults = nextResults.filter((item) => favoritesSet.has(String(item.id)))
+    }
+    if (activeCollectionId) {
+      const collection = mediaCollections.find((entry) => entry.id === activeCollectionId)
+      if (!collection) {
+        return []
+      }
+      const allowedIdSet = new Set(collection.itemIds.map((id) => String(id)))
+      nextResults = nextResults.filter((item) => allowedIdSet.has(String(item.id)))
+    }
+    return nextResults
+  }, [
+    activeCollectionId,
+    favoritesSet,
+    mediaCollections,
+    results,
+    showFavoritesOnly
+  ])
   const hasJumpTo = displayResults.length > 5
+  const activeCollection = useMemo(
+    () => mediaCollections.find((entry) => entry.id === activeCollectionId) || null,
+    [activeCollectionId, mediaCollections]
+  )
+  const bulkSelectedIdSet = useMemo(
+    () => new Set(bulkSelectedIds),
+    [bulkSelectedIds]
+  )
+  const bulkSelectedItems = useMemo(
+    () => displayResults.filter((item) => bulkSelectedIdSet.has(String(item.id))),
+    [bulkSelectedIdSet, displayResults]
+  )
+  const bulkSelectedMediaItems = useMemo(
+    () => bulkSelectedItems.filter((item) => item.kind === 'media'),
+    [bulkSelectedItems]
+  )
+  const bulkSelectedNoteCount = bulkSelectedItems.length - bulkSelectedMediaItems.length
+
+  useEffect(() => {
+    if (bulkSelectedIds.length === 0) return
+    const visibleIdSet = new Set(displayResults.map((item) => String(item.id)))
+    setBulkSelectedIds((prev) => {
+      const next = prev.filter((id) => visibleIdSet.has(id))
+      return next.length === prev.length ? prev : next
+    })
+  }, [bulkSelectedIds.length, displayResults])
+
+  useEffect(() => {
+    if (bulkSelectionMode || bulkSelectedIds.length === 0) return
+    setBulkSelectedIds([])
+  }, [bulkSelectedIds.length, bulkSelectionMode])
+
+  useEffect(() => {
+    if (!activeCollectionId) return
+    const exists = mediaCollections.some((entry) => entry.id === activeCollectionId)
+    if (!exists) {
+      setActiveCollectionId(null)
+    }
+  }, [activeCollectionId, mediaCollections])
+
+  const refreshLibraryStorageUsage = useCallback(async () => {
+    setLibraryStorageUsage((prev) => ({
+      ...prev,
+      loading: true,
+      error: null
+    }))
+
+    try {
+      const response = await bgRequest<any>({
+        path: '/api/v1/storage/usage' as any,
+        method: 'GET' as any
+      })
+      const totalMb = toNonNegativeFiniteNumber(
+        response?.usage?.total_mb ?? response?.usage?.totalMb
+      )
+      const quotaMb = toNonNegativeFiniteNumber(response?.quota_mb ?? response?.quotaMb)
+      const usagePercentage = toNonNegativeFiniteNumber(
+        response?.usage_percentage ?? response?.usagePercentage
+      )
+      const warning =
+        typeof response?.warning === 'string' && response.warning.trim().length > 0
+          ? response.warning.trim()
+          : null
+
+      setLibraryStorageUsage({
+        loading: false,
+        error: null,
+        totalMb,
+        quotaMb,
+        usagePercentage,
+        warning
+      })
+    } catch {
+      setLibraryStorageUsage({
+        loading: false,
+        error: 'Unable to load storage usage.',
+        totalMb: null,
+        quotaMb: null,
+        usagePercentage: null,
+        warning: null
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshLibraryStorageUsage()
+  }, [refreshLibraryStorageUsage])
 
   useEffect(() => {
     if (!permalinkMediaId) return
@@ -1492,13 +1656,13 @@ const MediaPageContent: React.FC = () => {
   }, [permalinkMediaId, selected?.id, selected?.kind])
 
   // Compute total pages for pagination
-  const totalPages = Math.ceil(
-    (kinds.media && kinds.notes
+  const activeTotalCount =
+    kinds.media && kinds.notes
       ? combinedTotal
       : kinds.notes
         ? notesTotal
-        : mediaTotal) / pageSize
-  )
+        : mediaTotal
+  const totalPages = Math.ceil(activeTotalCount / pageSize)
 
   // Auto-refetch when debounced query changes (including clearing to empty)
   useEffect(() => {
@@ -2086,6 +2250,396 @@ const MediaPageContent: React.FC = () => {
     refetch()
   }
 
+  const handleToggleBulkSelectionMode = useCallback(() => {
+    setBulkSelectionMode((prev) => !prev)
+    setBulkKeywordsDraft('')
+  }, [])
+
+  const toggleBulkItemSelection = useCallback((id: string | number) => {
+    const idStr = String(id)
+    setBulkSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(idStr)) {
+        next.delete(idStr)
+      } else {
+        next.add(idStr)
+      }
+      return Array.from(next)
+    })
+  }, [])
+
+  const handleSelectAllVisibleItems = useCallback(() => {
+    setBulkSelectedIds(displayResults.map((item) => String(item.id)))
+  }, [displayResults])
+
+  const handleClearBulkSelection = useCallback(() => {
+    setBulkSelectedIds([])
+  }, [])
+
+  const handleBulkAddKeywords = useCallback(async () => {
+    const keywordsToAdd = bulkKeywordsDraft
+      .split(',')
+      .map((keyword) => keyword.trim())
+      .filter((keyword, index, all) => keyword.length > 0 && all.indexOf(keyword) === index)
+
+    if (keywordsToAdd.length === 0) {
+      message.warning(
+        t('review:mediaPage.bulkAddKeywordsMissing', {
+          defaultValue: 'Enter at least one keyword.'
+        })
+      )
+      return
+    }
+
+    if (bulkSelectedMediaItems.length === 0) {
+      message.warning(
+        t('review:mediaPage.bulkAddKeywordsNoMedia', {
+          defaultValue: 'Select at least one media item to tag.'
+        })
+      )
+      return
+    }
+
+    let updatedCount = 0
+    let failedCount = 0
+    const updatedKeywordMap = new Map<string, string[]>()
+
+    for (const item of bulkSelectedMediaItems) {
+      const currentKeywords = Array.isArray(item.keywords) ? item.keywords : []
+      const mergedKeywords = Array.from(new Set([...currentKeywords, ...keywordsToAdd]))
+      try {
+        await bgRequest({
+          path: `/api/v1/media/${item.id}` as any,
+          method: 'PUT' as any,
+          headers: { 'Content-Type': 'application/json' },
+          body: { keywords: mergedKeywords }
+        })
+        updatedKeywordMap.set(String(item.id), mergedKeywords)
+        updatedCount += 1
+      } catch {
+        failedCount += 1
+      }
+    }
+
+    if (updatedKeywordMap.size > 0) {
+      setSelected((prev) => {
+        if (!prev) return prev
+        const nextKeywords = updatedKeywordMap.get(String(prev.id))
+        if (!nextKeywords) return prev
+        return { ...prev, keywords: nextKeywords }
+      })
+      await refetch()
+    }
+
+    if (failedCount > 0) {
+      message.warning(
+        t('review:mediaPage.bulkAddKeywordsPartial', {
+          defaultValue: 'Updated {{updated}} item(s), {{failed}} failed.',
+          updated: updatedCount,
+          failed: failedCount
+        })
+      )
+    } else {
+      message.success(
+        t('review:mediaPage.bulkAddKeywordsSuccess', {
+          defaultValue: 'Updated keywords for {{count}} item(s).',
+          count: updatedCount
+        })
+      )
+    }
+
+    if (bulkSelectedNoteCount > 0) {
+      message.warning(
+        t('review:mediaPage.bulkAddKeywordsSkippedNotes', {
+          defaultValue: 'Skipped {{count}} note item(s).',
+          count: bulkSelectedNoteCount
+        })
+      )
+    }
+  }, [
+    bulkKeywordsDraft,
+    bulkSelectedMediaItems,
+    bulkSelectedNoteCount,
+    message,
+    refetch,
+    t
+  ])
+
+  const handleBulkDelete = useCallback(async () => {
+    if (bulkSelectedItems.length === 0) {
+      message.warning(
+        t('review:mediaPage.bulkDeleteNothingSelected', {
+          defaultValue: 'Select items to delete.'
+        })
+      )
+      return
+    }
+
+    const parseVersion = (value: unknown): number | null => {
+      if (typeof value === 'number' && Number.isFinite(value)) return value
+      if (typeof value === 'string') {
+        const trimmed = value.trim()
+        if (/^\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10)
+      }
+      return null
+    }
+
+    let deletedCount = 0
+    let failedCount = 0
+    const deletedIdSet = new Set<string>()
+
+    for (const item of bulkSelectedItems) {
+      try {
+        if (item.kind === 'note') {
+          const latest = await bgRequest<any>({
+            path: `/api/v1/notes/${item.id}` as any,
+            method: 'GET' as any
+          })
+          const expectedVersion =
+            parseVersion(latest?.version) ?? parseVersion(latest?.metadata?.version)
+          if (expectedVersion == null) {
+            throw new Error('Missing expected version')
+          }
+          await bgRequest({
+            path: `/api/v1/notes/${item.id}` as any,
+            method: 'DELETE' as any,
+            headers: { 'expected-version': String(expectedVersion) }
+          })
+        } else {
+          await bgRequest({
+            path: `/api/v1/media/${item.id}` as any,
+            method: 'DELETE' as any
+          })
+        }
+        deletedIdSet.add(String(item.id))
+        deletedCount += 1
+      } catch {
+        failedCount += 1
+      }
+    }
+
+    if (deletedIdSet.size > 0) {
+      setFavorites((prev: string[] | undefined) =>
+        (prev || []).filter((favoriteId) => !deletedIdSet.has(String(favoriteId)))
+      )
+      setSelected((prev) => {
+        if (!prev) return prev
+        if (!deletedIdSet.has(String(prev.id))) return prev
+        return null
+      })
+      setBulkSelectedIds((prev) => prev.filter((id) => !deletedIdSet.has(id)))
+      setSelectedContent('')
+      setSelectedDetail(null)
+      setLastFetchedId(null)
+      await refetch()
+      void refreshLibraryStorageUsage()
+    }
+
+    if (failedCount > 0) {
+      message.warning(
+        t('review:mediaPage.bulkDeletePartial', {
+          defaultValue: 'Deleted {{deleted}} item(s), {{failed}} failed.',
+          deleted: deletedCount,
+          failed: failedCount
+        })
+      )
+      return
+    }
+
+    message.success(
+      t('review:mediaPage.bulkDeleteSuccess', {
+        defaultValue: 'Deleted {{count}} item(s).',
+        count: deletedCount
+      })
+    )
+  }, [
+    bulkSelectedItems,
+    message,
+    refetch,
+    refreshLibraryStorageUsage,
+    setFavorites,
+    t
+  ])
+
+  const handleBulkExport = useCallback(() => {
+    if (bulkSelectedItems.length === 0) {
+      message.warning(
+        t('review:mediaPage.bulkExportNothingSelected', {
+          defaultValue: 'Select items to export.'
+        })
+      )
+      return
+    }
+
+    const exportPayload = {
+      exported_at: new Date().toISOString(),
+      items: bulkSelectedItems.map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        title: item.title || `${item.kind} ${item.id}`,
+        snippet: item.snippet || '',
+        keywords: Array.isArray(item.keywords) ? item.keywords : [],
+        type: item.meta?.type || null,
+        source: item.meta?.source || null
+      }))
+    }
+
+    let fileContent = ''
+    let extension = 'json'
+    let mimeType = 'application/json'
+
+    if (bulkExportFormat === 'markdown') {
+      extension = 'md'
+      mimeType = 'text/markdown'
+      const lines: string[] = ['# Media Bulk Export', '']
+      for (const item of exportPayload.items) {
+        lines.push(`## ${item.title}`)
+        lines.push(`- ID: ${item.id}`)
+        lines.push(`- Kind: ${item.kind}`)
+        if (item.type) lines.push(`- Type: ${item.type}`)
+        if (item.source) lines.push(`- Source: ${item.source}`)
+        if (item.keywords.length > 0) {
+          lines.push(`- Keywords: ${item.keywords.join(', ')}`)
+        }
+        if (item.snippet) {
+          lines.push('', item.snippet)
+        }
+        lines.push('')
+      }
+      fileContent = lines.join('\n')
+    } else if (bulkExportFormat === 'text') {
+      extension = 'txt'
+      mimeType = 'text/plain'
+      const lines: string[] = []
+      for (const item of exportPayload.items) {
+        lines.push(`${item.title} [${item.kind} #${item.id}]`)
+        if (item.type) lines.push(`Type: ${item.type}`)
+        if (item.source) lines.push(`Source: ${item.source}`)
+        if (item.keywords.length > 0) lines.push(`Keywords: ${item.keywords.join(', ')}`)
+        if (item.snippet) lines.push(`Snippet: ${item.snippet}`)
+        lines.push('')
+      }
+      fileContent = lines.join('\n')
+    } else {
+      fileContent = JSON.stringify(exportPayload, null, 2)
+    }
+
+    const blob = new Blob([fileContent], { type: mimeType })
+    downloadBlob(blob, `media-bulk-export-${Date.now()}.${extension}`)
+    message.success(
+      t('review:mediaPage.bulkExportReady', {
+        defaultValue: 'Bulk export ready.'
+      })
+    )
+  }, [bulkExportFormat, bulkSelectedItems, message, t])
+
+  const handleAddSelectionToCollection = useCallback(() => {
+    if (bulkSelectedItems.length === 0) {
+      message.warning(
+        t('review:mediaPage.collectionRequiresSelection', {
+          defaultValue: 'Select at least one item first.'
+        })
+      )
+      return
+    }
+
+    const targetCollectionName =
+      collectionDraftName.trim() || activeCollection?.name?.trim() || ''
+    if (!targetCollectionName) {
+      message.warning(
+        t('review:mediaPage.collectionNameRequired', {
+          defaultValue: 'Enter a collection name.'
+        })
+      )
+      return
+    }
+
+    const selectedItemIds = bulkSelectedItems.map((item) => String(item.id))
+    const now = new Date().toISOString()
+    const normalizedName = targetCollectionName.toLowerCase()
+    const existing = mediaCollections.find(
+      (entry) => entry.name.trim().toLowerCase() === normalizedName
+    )
+    if (existing) {
+      setMediaCollections((prevCollections) => {
+        const collections = Array.isArray(prevCollections) ? prevCollections : []
+        return collections.map((entry) => {
+          if (entry.id !== existing.id) return entry
+          const mergedIds = Array.from(
+            new Set([...entry.itemIds.map((id) => String(id)), ...selectedItemIds])
+          )
+          return {
+            ...entry,
+            itemIds: mergedIds,
+            updatedAt: now
+          }
+        })
+      })
+      setActiveCollectionId(existing.id)
+    } else {
+      const slug =
+        targetCollectionName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '') || 'collection'
+      const created: MediaCollectionRecord = {
+        id: `${slug}-${Date.now()}`,
+        name: targetCollectionName,
+        itemIds: Array.from(new Set(selectedItemIds)),
+        createdAt: now,
+        updatedAt: now
+      }
+      setMediaCollections((prevCollections) => {
+        const collections = Array.isArray(prevCollections) ? prevCollections : []
+        return [...collections, created]
+      })
+      setActiveCollectionId(created.id)
+    }
+    setCollectionDraftName('')
+    message.success(
+      t('review:mediaPage.collectionSaved', {
+        defaultValue: 'Saved selection to collection.'
+      })
+    )
+  }, [
+    activeCollection?.name,
+    bulkSelectedItems,
+    collectionDraftName,
+    mediaCollections,
+    message,
+    setMediaCollections,
+    t
+  ])
+
+  const handleOpenSelectionInMultiReview = useCallback(async () => {
+    if (bulkSelectedIds.length === 0) {
+      message.warning(
+        t('review:mediaPage.bulkOpenInMultiReviewNone', {
+          defaultValue: 'Select items to open in multi-review.'
+        })
+      )
+      return
+    }
+    await setSetting(MEDIA_REVIEW_SELECTION_SETTING, bulkSelectedIds)
+    await setSetting(LAST_MEDIA_ID_SETTING, String(bulkSelectedIds[0]))
+    navigate('/media-multi')
+  }, [bulkSelectedIds, message, navigate, t])
+
+  const handleOpenCollectionInMultiReview = useCallback(async () => {
+    if (!activeCollection || activeCollection.itemIds.length === 0) {
+      message.warning(
+        t('review:mediaPage.collectionEmpty', {
+          defaultValue: 'No items in this collection.'
+        })
+      )
+      return
+    }
+    const collectionIds = activeCollection.itemIds.map((id) => String(id))
+    await setSetting(MEDIA_REVIEW_SELECTION_SETTING, collectionIds)
+    await setSetting(LAST_MEDIA_ID_SETTING, String(collectionIds[0]))
+    navigate('/media-multi')
+  }, [activeCollection, message, navigate, t])
+
   const handleKindChange = useCallback((nextKind: 'media' | 'notes') => {
     if (searchMode === 'metadata' && nextKind === 'notes') {
       return
@@ -2237,6 +2791,7 @@ const MediaPageContent: React.FC = () => {
       }
 
       void refetch()
+      void refreshLibraryStorageUsage()
 
       // Show undo notification for both media and notes
       showUndoNotification({
@@ -2270,6 +2825,7 @@ const MediaPageContent: React.FC = () => {
             })
           }
           const refreshed = await refetch()
+          void refreshLibraryStorageUsage()
           const restoredItem = refreshed.data?.find(
             (r: MediaResultItem) => String(r.id) === idStr
           )
@@ -2283,7 +2839,15 @@ const MediaPageContent: React.FC = () => {
         }
       })
     },
-    [displayResults, favoritesSet, refetch, setFavorites, showUndoNotification, t]
+    [
+      displayResults,
+      favoritesSet,
+      refetch,
+      refreshLibraryStorageUsage,
+      setFavorites,
+      showUndoNotification,
+      t
+    ]
   )
 
   // Keyboard shortcuts for navigation (j/k for items, arrows for pages, ? for help)
@@ -2568,6 +3132,24 @@ const MediaPageContent: React.FC = () => {
                   <Trash2 className="h-3.5 w-3.5" />
                   {t('review:mediaPage.openTrash', { defaultValue: 'Trash' })}
                 </button>
+                <button
+                  type="button"
+                  onClick={handleToggleBulkSelectionMode}
+                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
+                    bulkSelectionMode
+                      ? 'border-primary bg-primary/10 text-primaryStrong'
+                      : 'border-border text-text-muted hover:bg-surface2 hover:text-text'
+                  }`}
+                  data-testid="media-bulk-mode-toggle"
+                  aria-pressed={bulkSelectionMode}
+                >
+                  {bulkSelectionMode ? (
+                    <CheckSquare className="h-3.5 w-3.5" />
+                  ) : (
+                    <Square className="h-3.5 w-3.5" />
+                  )}
+                  {t('review:mediaPage.bulkMode', { defaultValue: 'Bulk' })}
+                </button>
               </div>
             </div>
 
@@ -2653,6 +3235,7 @@ const MediaPageContent: React.FC = () => {
                     setMetadataMatchMode('all')
                     setMetadataValidationError(null)
                     setShowFavoritesOnly(false)
+                    setActiveCollectionId(null)
                   }}
                 />
                 <button
@@ -2734,6 +3317,69 @@ const MediaPageContent: React.FC = () => {
                   onShowFavoritesOnlyChange={setShowFavoritesOnly}
                   favoritesCount={favoritesSet.size}
                 />
+                <div className="rounded-md border border-border bg-surface2 px-2 py-2 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <label
+                      htmlFor="media-collection-filter"
+                      className="text-xs font-medium text-text-muted"
+                    >
+                      {t('review:mediaPage.collectionFilterLabel', {
+                        defaultValue: 'Collection'
+                      })}
+                    </label>
+                    <select
+                      id="media-collection-filter"
+                      value={activeCollectionId || ''}
+                      onChange={(event) => {
+                        const nextValue = event.target.value.trim()
+                        setActiveCollectionId(nextValue || null)
+                        setPage(1)
+                      }}
+                      className="h-7 flex-1 rounded border border-border bg-surface px-2 text-xs text-text"
+                      data-testid="media-collection-filter"
+                    >
+                      <option value="">
+                        {t('review:mediaPage.collectionAll', {
+                          defaultValue: 'All items'
+                        })}
+                      </option>
+                      {mediaCollections.map((collection) => (
+                        <option key={collection.id} value={collection.id}>
+                          {collection.name} ({collection.itemIds.length})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {activeCollection ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] text-text-muted">
+                        {t('review:mediaPage.collectionItemsVisible', {
+                          defaultValue: '{{count}} item(s) in this collection.',
+                          count: activeCollection.itemIds.length
+                        })}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleOpenCollectionInMultiReview()
+                        }}
+                        className="rounded border border-border px-2 py-1 text-[11px] text-text hover:bg-surface"
+                        data-testid="media-collection-open-multi"
+                      >
+                        {t('review:mediaPage.collectionOpenMultiReview', {
+                          defaultValue: 'Open in multi-review'
+                        })}
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-text-muted">
+                      {t('review:mediaPage.collectionHint', {
+                        defaultValue:
+                          'Create collections from bulk selection to organize related items.'
+                      })}
+                    </p>
+                  )}
+                </div>
               </div>
             )}
             {/* Jump To Navigator */}
@@ -2795,7 +3441,160 @@ const MediaPageContent: React.FC = () => {
               setMetadataMatchMode('all')
               setMetadataValidationError(null)
               setShowFavoritesOnly(false)
+              setActiveCollectionId(null)
             }}
+          />
+
+          {bulkSelectionMode && (
+            <div
+              className="border-b border-border bg-surface2 px-4 py-3 space-y-3"
+              data-testid="media-bulk-toolbar"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-text-muted">
+                  {t('review:mediaPage.bulkSelectedCount', {
+                    defaultValue: '{{count}} selected',
+                    count: bulkSelectedItems.length
+                  })}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSelectAllVisibleItems}
+                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface"
+                    data-testid="media-bulk-select-all"
+                  >
+                    <CheckSquare className="h-3.5 w-3.5" />
+                    {t('review:mediaPage.selectAllVisible', {
+                      defaultValue: 'Select visible'
+                    })}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearBulkSelection}
+                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface"
+                    data-testid="media-bulk-clear"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    {t('review:mediaPage.clearSelection', {
+                      defaultValue: 'Clear'
+                    })}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={bulkKeywordsDraft}
+                  onChange={(event) => setBulkKeywordsDraft(event.target.value)}
+                  placeholder={t('review:mediaPage.bulkKeywordsPlaceholder', {
+                    defaultValue: 'Keywords (comma separated)'
+                  })}
+                  className="h-8 min-w-[180px] flex-1 rounded-md border border-border bg-surface px-2 text-xs text-text"
+                  data-testid="media-bulk-keywords-input"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleBulkAddKeywords()}
+                  disabled={bulkSelectedItems.length === 0}
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                  data-testid="media-bulk-tag"
+                >
+                  <Tags className="h-3.5 w-3.5" />
+                  {t('review:mediaPage.bulkAddKeywords', { defaultValue: 'Add tags' })}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleBulkDelete()}
+                  disabled={bulkSelectedItems.length === 0}
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-danger/50 px-2 text-xs text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
+                  data-testid="media-bulk-delete"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {t('review:mediaPage.bulkDelete', { defaultValue: 'Delete' })}
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  value={collectionDraftName}
+                  onChange={(event) => setCollectionDraftName(event.target.value)}
+                  placeholder={t('review:mediaPage.collectionNamePlaceholder', {
+                    defaultValue: 'Collection name'
+                  })}
+                  className="h-8 min-w-[140px] rounded-md border border-border bg-surface px-2 text-xs text-text"
+                  data-testid="media-bulk-collection-name"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddSelectionToCollection}
+                  disabled={bulkSelectedItems.length === 0}
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                  data-testid="media-bulk-add-collection"
+                >
+                  {t('review:mediaPage.collectionAddSelection', {
+                    defaultValue: 'Add to collection'
+                  })}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleOpenSelectionInMultiReview()
+                  }}
+                  disabled={bulkSelectedItems.length === 0}
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                  data-testid="media-bulk-open-multi"
+                >
+                  {t('review:mediaPage.bulkOpenMultiReview', {
+                    defaultValue: 'Open selection'
+                  })}
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <select
+                  value={bulkExportFormat}
+                  onChange={(event) =>
+                    setBulkExportFormat(event.target.value as 'json' | 'markdown' | 'text')
+                  }
+                  className="h-8 rounded-md border border-border bg-surface px-2 text-xs text-text"
+                  data-testid="media-bulk-export-format"
+                >
+                  <option value="json">
+                    {t('review:mediaPage.bulkExportJson', {
+                      defaultValue: 'JSON'
+                    })}
+                  </option>
+                  <option value="markdown">
+                    {t('review:mediaPage.bulkExportMarkdown', {
+                      defaultValue: 'Markdown'
+                    })}
+                  </option>
+                  <option value="text">
+                    {t('review:mediaPage.bulkExportText', {
+                      defaultValue: 'Plain text'
+                    })}
+                  </option>
+                </select>
+                <button
+                  type="button"
+                  onClick={handleBulkExport}
+                  disabled={bulkSelectedItems.length === 0}
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                  data-testid="media-bulk-export"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  {t('review:mediaPage.bulkExport', { defaultValue: 'Export' })}
+                </button>
+              </div>
+            </div>
+          )}
+
+          <MediaIngestJobsPanel />
+          <MediaLibraryStatsPanel
+            results={displayResults}
+            totalCount={activeTotalCount}
+            storageUsage={libraryStorageUsage}
           />
 
           {/* Results + pagination flow */}
@@ -2804,16 +3603,14 @@ const MediaPageContent: React.FC = () => {
               results={displayResults}
               selectedId={selected?.id || null}
               onSelect={(id) => {
+                if (bulkSelectionMode) {
+                  toggleBulkItemSelection(id)
+                  return
+                }
                 const item = displayResults.find((r) => r.id === id)
                 if (item) setSelected(item)
               }}
-              totalCount={
-                kinds.media && kinds.notes
-                  ? combinedTotal
-                  : kinds.notes
-                    ? notesTotal
-                    : mediaTotal
-              }
+              totalCount={activeTotalCount}
               loadedCount={displayResults.length}
               isLoading={isLoading || isFetching}
               hasActiveFilters={hasActiveFilters}
@@ -2835,6 +3632,7 @@ const MediaPageContent: React.FC = () => {
                 setMetadataMatchMode('all')
                 setMetadataValidationError(null)
                 setShowFavoritesOnly(false)
+                setActiveCollectionId(null)
               }}
               onOpenQuickIngest={() => {
                 if (typeof window !== 'undefined') {
@@ -2843,6 +3641,9 @@ const MediaPageContent: React.FC = () => {
               }}
               favorites={favoritesSet}
               onToggleFavorite={toggleFavorite}
+              selectionMode={bulkSelectionMode}
+              selectedIds={bulkSelectedIdSet}
+              onToggleSelected={toggleBulkItemSelection}
             />
             <div className="bg-surface border-t border-border">
               <Pagination

@@ -9,6 +9,7 @@ import {
   useSubmitAttemptMutation
 } from "../../hooks"
 import { useQuizAutoSave } from "../../hooks/useQuizAutoSave"
+import { useQuizTimer } from "../../hooks/useQuizTimer"
 
 const interpolate = (template: string, values: Record<string, unknown> | undefined) => {
   return template.replace(/\{\{\s*([^\s}]+)\s*\}\}/g, (_, key: string) => {
@@ -36,6 +37,10 @@ vi.mock("react-i18next", () => ({
       return key
     }
   })
+}))
+
+vi.mock("@/hooks/useServerOnline", () => ({
+  useServerOnline: () => true
 }))
 
 vi.mock("../../hooks", () => ({
@@ -99,6 +104,7 @@ describe("TakeQuizTab start flow", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
 
     vi.mocked(useAttemptsQuery).mockReturnValue({
       data: {
@@ -169,6 +175,8 @@ describe("TakeQuizTab start flow", () => {
       mutateAsync: vi.fn(),
       isPending: false
     } as any)
+
+    vi.mocked(useQuizTimer).mockReturnValue(null)
   })
 
   it("requires pre-quiz confirmation before creating an attempt", async () => {
@@ -199,7 +207,7 @@ describe("TakeQuizTab start flow", () => {
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith(7)
     })
-  })
+  }, 15000)
 
   it("renders expanded quiz metadata on list cards", () => {
     render(
@@ -215,7 +223,7 @@ describe("TakeQuizTab start flow", () => {
 
     const sourceLink = screen.getByRole("link", { name: /Source media #42/i })
     expect(sourceLink).toHaveAttribute("href", "/media?id=42")
-  })
+  }, 15000)
 
   it("shows autosave warning when local storage is unavailable", () => {
     vi.mocked(useQuizAutoSave).mockReturnValue({
@@ -239,5 +247,75 @@ describe("TakeQuizTab start flow", () => {
         "Auto-save unavailable — your progress won't be preserved if you navigate away."
       )
     ).toBeInTheDocument()
-  })
+  }, 15000)
+
+  it("does not enter attempt mode when the quiz has zero questions", async () => {
+    vi.mocked(useStartAttemptMutation).mockReturnValue({
+      mutateAsync: vi.fn(async () => ({
+        id: 777,
+        quiz_id: 7,
+        started_at: "2026-02-18T10:00:00Z",
+        total_possible: 0,
+        answers: [],
+        questions: []
+      }))
+    } as any)
+
+    render(
+      <TakeQuizTab
+        onNavigateToGenerate={() => {}}
+        onNavigateToCreate={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: /Start Quiz/i }))
+    fireEvent.click(screen.getByRole("button", { name: "Begin Quiz" }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Select a quiz to begin")).toBeInTheDocument()
+    })
+    expect(screen.queryByText("Question navigator")).not.toBeInTheDocument()
+  }, 15000)
+
+  it("adds semantic grouping for question radios and labels progress", async () => {
+    render(
+      <TakeQuizTab
+        onNavigateToGenerate={() => {}}
+        onNavigateToCreate={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: /Start Quiz/i }))
+    fireEvent.click(screen.getByRole("button", { name: "Begin Quiz" }))
+
+    expect(await screen.findByText("True or false for: Cells are alive.")).toBeInTheDocument()
+    const completionProgress = screen.getByRole("progressbar", { name: "Quiz completion progress" })
+    expect(completionProgress).toHaveAttribute("aria-valuemin", "0")
+    expect(completionProgress).toHaveAttribute("aria-valuemax", "100")
+  }, 15000)
+
+  it("announces danger-zone timer updates in assertive live region", async () => {
+    vi.mocked(useQuizTimer).mockReturnValue({
+      minutes: 0,
+      seconds: 58,
+      totalSeconds: 58,
+      isWarning: false,
+      isDanger: true,
+      isExpired: false,
+      formattedTime: "0:58"
+    })
+
+    render(
+      <TakeQuizTab
+        onNavigateToGenerate={() => {}}
+        onNavigateToCreate={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: /Start Quiz/i }))
+    fireEvent.click(screen.getByRole("button", { name: "Begin Quiz" }))
+
+    const liveRegion = await screen.findByText("58 seconds remaining")
+    expect(liveRegion).toHaveAttribute("aria-live", "assertive")
+  }, 15000)
 })

@@ -22,6 +22,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     DictionaryEntryReorderResponse,
     DictionaryEntryResponse,
     DictionaryEntryUpdate,
+    DictionaryActivityListResponse,
     DictionaryListResponse,
     DictionaryStatistics,
     EntryListResponse,
@@ -397,7 +398,11 @@ async def create_chat_dictionary(
     """
     service = ChatDictionaryService(db)
     try:
-        dict_id = service.create_dictionary(dictionary.name, dictionary.description)
+        dict_id = service.create_dictionary(
+            dictionary.name,
+            dictionary.description,
+            dictionary.default_token_budget,
+        )
         dict_data = service.get_dictionary(dict_id)
         entries = service.get_entries(dictionary_id=dict_id) if dict_data else []
     except ConflictError as e:
@@ -445,6 +450,27 @@ async def list_chat_dictionaries(
                 item["used_by_chat_count"] = int(usage.get("used_by_chat_count", 0))
                 item["used_by_active_chat_count"] = int(usage.get("used_by_active_chat_count", 0))
                 item["used_by_chat_refs"] = usage.get("used_by_chat_refs", [])
+
+        active_priority_rows = sorted(
+            (
+                row for row in dictionaries
+                if bool(row.get("is_active", True))
+            ),
+            key=lambda row: (
+                str(row.get("name") or "").strip().lower(),
+                int(row.get("id") or 0),
+            ),
+        )
+        priority_by_dictionary_id = {
+            int(row.get("id")): index + 1
+            for index, row in enumerate(active_priority_rows)
+            if row.get("id") is not None
+        }
+        for item in dictionaries:
+            dictionary_id = item.get("id")
+            if dictionary_id is None:
+                continue
+            item["processing_priority"] = priority_by_dictionary_id.get(int(dictionary_id))
 
         active_count = sum(1 for d in dictionaries if d.get("is_active", True))
         inactive_count = len(dictionaries) - active_count
@@ -519,6 +545,8 @@ async def update_chat_dictionary(
             name=update.name,
             description=update.description,
             is_active=update.is_active,
+            default_token_budget=update.default_token_budget,
+            update_default_token_budget=("default_token_budget" in update.model_fields_set),
             expected_version=update.version,
         )
 
@@ -949,6 +977,7 @@ async def process_text_with_dictionaries(
                 max_iterations=request.max_iterations,
                 token_budget=request.token_budget,
                 return_stats=True,
+                chat_id=request.chat_id,
             )
 
             token_budget_exceeded = any(issubclass(warning.category, TokenBudgetExceededWarning) for warning in caught)
@@ -964,6 +993,7 @@ async def process_text_with_dictionaries(
             iterations=stats.get("iterations", 0),
             entries_used=stats.get("entries_used", []),
             token_budget_exceeded=stats.get("token_budget_exceeded", False),
+            token_budget_used=stats.get("token_budget_used"),
             processing_time_ms=processing_time_ms,
         )
     except InputError as e:
@@ -1109,6 +1139,45 @@ async def import_dictionary_json(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error importing dictionary JSON: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.get(
+    "/dictionaries/{dictionary_id}/activity",
+    response_model=DictionaryActivityListResponse,
+    summary="List dictionary activity events",
+    description="Return recent transformation activity for a dictionary.",
+    tags=["chat-dictionaries"],
+)
+async def list_dictionary_activity(
+    dictionary_id: int,
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of events to return"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> DictionaryActivityListResponse:
+    """Return paginated recent transformation activity for a dictionary."""
+    service = ChatDictionaryService(db)
+    try:
+        dict_data = service.get_dictionary(dictionary_id)
+        if not dict_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+
+        events, total = service.list_transform_activity(
+            dictionary_id,
+            limit=limit,
+            offset=offset,
+        )
+        return DictionaryActivityListResponse(
+            dictionary_id=dictionary_id,
+            events=events,
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing dictionary activity: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 

@@ -182,5 +182,5 @@ describe("ServerAdminPage media budget diagnostics", () => {
     expect(apiMock.getSystemStats).toHaveBeenNthCalledWith(2, {
       timeoutMs: 10000
     })
-  })
+  }, 15000)
 })

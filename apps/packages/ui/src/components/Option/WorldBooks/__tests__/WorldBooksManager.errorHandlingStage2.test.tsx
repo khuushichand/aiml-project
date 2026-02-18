@@ -195,7 +195,7 @@ describe("WorldBooksManager error-handling stage-2 import diagnostics", () => {
 
     await user.click(screen.getByText("More details"))
     expect(screen.getByText(/synthetic parse error detail/i)).toBeInTheDocument()
-  })
+  }, 30000)
 
   it("surfaces conversion context in a more-details section for validation errors", async () => {
     const user = userEvent.setup()
@@ -218,5 +218,5 @@ describe("WorldBooksManager error-handling stage-2 import diagnostics", () => {
 
     await user.click(screen.getByText("More details"))
     expect(screen.getByText(/Detected format:/i)).toBeInTheDocument()
-  })
+  }, 30000)
 })

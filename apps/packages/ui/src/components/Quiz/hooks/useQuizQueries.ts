@@ -24,7 +24,8 @@ import {
   type QuizGenerateRequest,
   type QuizAnswer,
   type QuizListParams,
-  type AttemptListParams
+  type AttemptListParams,
+  type QuizAttempt
 } from "@/services/quizzes"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
@@ -212,14 +213,63 @@ export function useAttemptsQuery(params: AttemptListParams = {}, options?: UseQu
 }
 
 /**
- * Hook for fetching a single attempt
+ * Hook for fetching all attempts (auto-paginates through the attempts API)
  */
-export function useAttemptQuery(attemptId: number | null | undefined, options?: UseQuizQueriesOptions) {
+export function useAllAttemptsQuery(params: Omit<AttemptListParams, "limit" | "offset"> = {}, options?: UseQuizQueriesOptions) {
   const { quizzesEnabled } = useQuizzesEnabled()
 
   return useQuery({
-    queryKey: ["quizzes:attempt", attemptId],
-    queryFn: () => getAttempt(attemptId!),
+    queryKey: ["quizzes:attempts:all", params],
+    queryFn: async () => {
+      const pageSize = 200
+      let offset = 0
+      let total = 0
+      const items: QuizAttempt[] = []
+
+      do {
+        const page = await listAttempts({
+          ...params,
+          limit: pageSize,
+          offset
+        })
+        total = page.count
+        items.push(...page.items)
+
+        if (page.items.length === 0) {
+          break
+        }
+
+        offset += page.items.length
+      } while (items.length < total)
+
+      return {
+        items,
+        count: total
+      }
+    },
+    enabled: options?.enabled ?? quizzesEnabled
+  })
+}
+
+/**
+ * Hook for fetching a single attempt
+ */
+export function useAttemptQuery(
+  attemptId: number | null | undefined,
+  params: {
+    includeQuestions?: boolean
+    includeAnswers?: boolean
+  } = {},
+  options?: UseQuizQueriesOptions
+) {
+  const { quizzesEnabled } = useQuizzesEnabled()
+
+  return useQuery({
+    queryKey: ["quizzes:attempt", attemptId, params],
+    queryFn: () => getAttempt(attemptId!, {
+      include_questions: params.includeQuestions ? true : undefined,
+      include_answers: params.includeAnswers ? true : undefined
+    }),
     enabled: (options?.enabled ?? quizzesEnabled) && attemptId != null
   })
 }

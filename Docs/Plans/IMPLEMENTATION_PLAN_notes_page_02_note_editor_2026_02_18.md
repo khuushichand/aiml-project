@@ -59,7 +59,7 @@ Finding IDs: `2.1` through `2.12`
 - Integration tests for attachment insertion and markdown link generation when enabled.
 - Regression tests for undo behavior after toolbar actions/autosave.
 - Decision record with acceptance criteria for revision history phase.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
@@ -92,3 +92,14 @@ Finding IDs: `2.1` through `2.12`
   - Verifies toolbar markdown insertion against selected ranges.
   - Verifies metrics footer updates as content changes.
   - Verifies save/delete action ordering and destructive action grouping affordance.
+- Implemented Stage 4 in `/apps/packages/ui/src/components/Notes/NotesManagerPage.tsx`:
+  - Added revision metadata surface in editor footer (`Version N · Last saved <timestamp>`), with pending states for unsaved notes.
+  - Added attachment toolbar action with file picker and staged markdown placeholder insertion using note-scoped URL contract (`/api/v1/notes/{id}/attachments/{filename}`).
+  - Preserved native undo shortcuts by ensuring only save shortcut interception remains (`Ctrl/Cmd+S` only).
+- Added Stage 4 decision record in `/Docs/Plans/DECISION_RECORD_notes_editor_revision_history_stage4_2026_02_18.md`:
+  - Captures short-term revision strategy (native undo + optimistic locking metadata).
+  - Defines deferred attachment upload API contract and revision-history acceptance criteria.
+- Added Stage 4 test coverage in `/apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage4.revision-attachments.test.tsx`:
+  - Verifies revision metadata rendering.
+  - Verifies attachment placeholder markdown insertion for selected notes.
+  - Verifies undo shortcuts are not intercepted.

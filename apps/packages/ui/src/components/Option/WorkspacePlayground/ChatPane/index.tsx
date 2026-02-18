@@ -15,6 +15,7 @@ import { Modal, Tag, Tooltip, Input, Slider, Switch, message } from "antd"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useWorkspaceStore } from "@/store/workspace"
 import { useStoreMessageOption } from "@/store/option"
+import type { Message } from "@/store/option"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { useSmartScroll } from "@/hooks/useSmartScroll"
 import { useMobile } from "@/hooks/useMediaQuery"
@@ -22,6 +23,10 @@ import { useConnectionStore } from "@/store/connection"
 import { ConnectionPhase } from "@/types/connection"
 import { DEFAULT_RAG_SETTINGS } from "@/services/rag/unified-rag"
 import type { WorkspaceSource, WorkspaceSourceType } from "@/types/workspace"
+import {
+  applyVariantToMessage,
+  normalizeMessageVariants
+} from "@/utils/message-variants"
 import { PlaygroundMessage } from "@/components/Common/Playground/Message"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import {
@@ -675,6 +680,7 @@ export const ChatPane: React.FC = () => {
     onSubmit,
     stopStreamingRequest,
     regenerateLastMessage,
+    createChatBranch,
     deleteMessage,
     editMessage,
     historyId,
@@ -800,6 +806,57 @@ export const ChatPane: React.FC = () => {
   const handleRerankingToggle = (checked: boolean) => {
     updateRagAdvancedOptions({ enable_reranking: checked })
   }
+
+  const handleSwitchMessageVariant = React.useCallback(
+    (messageIndex: number, direction: "prev" | "next") => {
+      setMessages((previousMessages) => {
+        if (!Array.isArray(previousMessages)) return previousMessages
+        const targetMessage = previousMessages[messageIndex] as Message | undefined
+        if (!targetMessage || !targetMessage.isBot) return previousMessages
+
+        const variants = normalizeMessageVariants(targetMessage)
+        if (variants.length <= 1) return previousMessages
+
+        const resolvedIndex =
+          typeof targetMessage.activeVariantIndex === "number"
+            ? Math.max(
+                0,
+                Math.min(targetMessage.activeVariantIndex, variants.length - 1)
+              )
+            : variants.length - 1
+        const nextIndex =
+          direction === "prev"
+            ? Math.max(0, resolvedIndex - 1)
+            : Math.min(variants.length - 1, resolvedIndex + 1)
+        if (nextIndex === resolvedIndex) {
+          return previousMessages
+        }
+
+        const nextVariant = variants[nextIndex]
+        if (!nextVariant) return previousMessages
+
+        const nextMessages = [...previousMessages]
+        nextMessages[messageIndex] = applyVariantToMessage(
+          {
+            ...targetMessage,
+            variants
+          },
+          nextVariant,
+          nextIndex
+        )
+        return nextMessages
+      })
+    },
+    [setMessages]
+  )
+
+  const handleCreateChatBranch = React.useCallback(
+    (messageIndex: number) => {
+      if (!Number.isInteger(messageIndex) || messageIndex < 0) return
+      void createChatBranch(messageIndex)
+    },
+    [createChatBranch]
+  )
 
   React.useEffect(() => {
     if (!hasSelectedSources && showAdvancedRagSettings) {
@@ -1432,6 +1489,19 @@ export const ChatPane: React.FC = () => {
                         createdAt={msg.createdAt}
                         variants={msg.variants}
                         activeVariantIndex={msg.activeVariantIndex}
+                        onSwipePrev={
+                          msg.isBot
+                            ? () => handleSwitchMessageVariant(idx, "prev")
+                            : undefined
+                        }
+                        onSwipeNext={
+                          msg.isBot
+                            ? () => handleSwitchMessageVariant(idx, "next")
+                            : undefined
+                        }
+                        onNewBranch={
+                          msg.isBot ? () => handleCreateChatBranch(idx) : undefined
+                        }
                         modelName={msg.modelName}
                         modelImage={msg.modelImage}
                         onSourceClick={handleCitationSourceClick}

@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoints
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     BulkEntryOperation,
+    ChatDictionaryCreate,
     ChatDictionaryUpdate,
     DictionaryEntryCreate,
     DictionaryEntryReorderRequest,
@@ -356,6 +357,158 @@ async def test_list_chat_dictionaries_includes_usage_summary(chacha_db: Characte
 
     assert dictionary_b_payload.used_by_chat_count == 1
     assert dictionary_b_payload.used_by_active_chat_count == 1
+
+
+@pytest.mark.asyncio
+async def test_list_chat_dictionaries_includes_processing_priority(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_b = service.create_dictionary("Beta Dictionary", None)
+    dictionary_a = service.create_dictionary("Alpha Dictionary", None)
+    dictionary_inactive = service.create_dictionary("Inactive Dictionary", None)
+    service.update_dictionary(dictionary_inactive, is_active=False)
+
+    response = await chat_endpoints.list_chat_dictionaries(
+        include_inactive=True,
+        include_usage=False,
+        db=chacha_db,
+    )
+    dictionaries = {item.id: item for item in response.dictionaries}
+
+    assert dictionaries[dictionary_a].processing_priority == 1
+    assert dictionaries[dictionary_b].processing_priority == 2
+    assert dictionaries[dictionary_inactive].processing_priority is None
+
+
+@pytest.mark.asyncio
+async def test_process_text_without_dictionary_id_uses_dictionary_priority_order(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_z = service.create_dictionary("Zeta Dictionary", None)
+    dictionary_a = service.create_dictionary("Alpha Dictionary", None)
+
+    # Alphabetical dictionary order should run Alpha before Zeta.
+    service.add_entry(dictionary_a, pattern="token", replacement="A")
+    service.add_entry(dictionary_z, pattern="A", replacement="Z")
+
+    response = await chat_endpoints.process_text_with_dictionaries(
+        ProcessTextRequest(
+            text="token",
+            max_iterations=1,
+        ),
+        db=chacha_db,
+    )
+
+    assert response.processed_text == "Z"
+    assert response.replacements == 2
+
+
+@pytest.mark.asyncio
+async def test_create_and_update_dictionary_default_token_budget(
+    chacha_db: CharactersRAGDB,
+):
+    created = await chat_endpoints.create_chat_dictionary(
+        ChatDictionaryCreate(
+            name="Default Budget Dictionary",
+            description="with budget",
+            default_token_budget=640,
+        ),
+        db=chacha_db,
+    )
+    assert created.default_token_budget == 640
+
+    updated = await chat_endpoints.update_chat_dictionary(
+        created.id,
+        ChatDictionaryUpdate(default_token_budget=1200),
+        db=chacha_db,
+    )
+    assert updated.default_token_budget == 1200
+
+    cleared = await chat_endpoints.update_chat_dictionary(
+        created.id,
+        ChatDictionaryUpdate(default_token_budget=None),
+        db=chacha_db,
+    )
+    assert cleared.default_token_budget is None
+
+
+@pytest.mark.asyncio
+async def test_process_text_uses_dictionary_default_token_budget_and_records_activity(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary(
+        "Activity Dictionary",
+        "tracks activity",
+        default_token_budget=250,
+    )
+    entry_id = service.add_entry(dictionary_id, pattern="term", replacement="TERM")
+
+    response = await chat_endpoints.process_text_with_dictionaries(
+        ProcessTextRequest(
+            text="term term",
+            dictionary_id=dictionary_id,
+            chat_id="chat-activity-01",
+            max_iterations=2,
+        ),
+        db=chacha_db,
+    )
+
+    assert response.token_budget_used == 250
+    assert response.replacements >= 1
+    assert entry_id in response.entries_used
+
+    activity = await chat_endpoints.list_dictionary_activity(
+        dictionary_id,
+        limit=10,
+        offset=0,
+        db=chacha_db,
+    )
+    assert activity.dictionary_id == dictionary_id
+    assert activity.total >= 1
+    assert len(activity.events) >= 1
+
+    event = activity.events[0]
+    assert event.dictionary_id == dictionary_id
+    assert event.chat_id == "chat-activity-01"
+    assert entry_id in event.entries_used
+    assert event.replacements >= 1
+    assert event.original_text_preview.startswith("term")
+    assert event.processed_text_preview
+    assert isinstance(event.created_at, datetime.datetime)
+
+
+@pytest.mark.asyncio
+async def test_process_text_without_dictionary_id_uses_min_active_default_token_budget(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_a = service.create_dictionary(
+        "Alpha Token Budget",
+        None,
+        default_token_budget=500,
+    )
+    dictionary_b = service.create_dictionary(
+        "Beta Token Budget",
+        None,
+        default_token_budget=200,
+    )
+    service.add_entry(dictionary_a, pattern="foo", replacement="bar")
+    service.add_entry(dictionary_b, pattern="bar", replacement="baz")
+
+    response = await chat_endpoints.process_text_with_dictionaries(
+        ProcessTextRequest(
+            text="foo",
+            max_iterations=2,
+        ),
+        db=chacha_db,
+    )
+
+    assert response.token_budget_used == 200
+    assert response.processed_text == "baz"
+    assert response.replacements >= 2
 
 
 @pytest.mark.asyncio

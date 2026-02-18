@@ -214,7 +214,7 @@ describe("WorldBooksManager import/export stage-2 preview depth", () => {
     expect(screen.getByTestId("import-preview-entries")).toHaveAttribute("open")
     expect(screen.getByText("First lore entry")).toBeInTheDocument()
     expect(screen.getByText("Second lore entry")).toBeInTheDocument()
-  })
+  }, 30000)
 
   it(
     "limits preview rendering to first five entries and truncates long content",

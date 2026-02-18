@@ -14,7 +14,13 @@ vi.mock("react-i18next", () => ({
           }
     ) => {
       if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
-      if (defaultValueOrOptions?.defaultValue) return defaultValueOrOptions.defaultValue
+      if (defaultValueOrOptions?.defaultValue) {
+        return defaultValueOrOptions.defaultValue.replace(
+          /\{\{(\w+)\}\}/g,
+          (_match, token: string) =>
+            String((defaultValueOrOptions as Record<string, unknown>)[token] ?? `{{${token}}}`)
+        )
+      }
       return key
     }
   })
@@ -108,5 +114,46 @@ describe("FlashcardEditDrawer save handling", () => {
     })
 
     consoleErrorSpy.mockRestore()
+  })
+
+  it("shows actionable validation when cloze template is selected without cloze syntax", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <FlashcardEditDrawer
+        open
+        onClose={vi.fn()}
+        card={sampleCard}
+        onSave={onSave}
+        onDelete={vi.fn()}
+        decks={[
+          {
+            id: 1,
+            name: "Deck 1",
+            description: null,
+            deleted: false,
+            client_id: "1",
+            version: 1
+          }
+        ]}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText("Card template")).toBeInTheDocument()
+    })
+
+    fireEvent.mouseDown(screen.getByLabelText("Card template"))
+    fireEvent.click(screen.getByText("Cloze (Fill in the blank)"))
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "For Cloze cards, include at least one deletion like {{c1::answer}}."
+        )
+      ).toBeInTheDocument()
+    })
+    expect(onSave).not.toHaveBeenCalled()
   })
 })

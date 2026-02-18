@@ -22,7 +22,7 @@ Finding IDs: `12.1` through `12.8`
 - Automated checks (axe/lint) in component or E2E tests.
 - Manual audit checklist execution for screen reader and keyboard flows.
 - Contrast audit report for light and dark theme variants.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Strengthen Semantics for Controls and Disclosures
 **Goal**: Ensure controls convey meaning and state to assistive technologies.
@@ -34,7 +34,7 @@ Finding IDs: `12.1` through `12.8`
 - Component tests for accessible name presence on icon-only controls.
 - Accessibility tests for disclosure expanded/collapsed announcements.
 - Screen reader smoke test for switch state/meaning announcements.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Fix Focus Management and Matrix Keyboard Navigation
 **Goal**: Ensure keyboard-only users can complete end-to-end workflows.
@@ -46,7 +46,7 @@ Finding IDs: `12.1` through `12.8`
 - E2E keyboard navigation tests for drawer open/close focus behavior.
 - Keyboard tests for matrix navigation and activation.
 - Regression tests for nested modal focus handoff.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Improve Non-Visual Alerts, Validation Wiring, and Contrast
 **Goal**: Make critical state and errors perceivable beyond color-only cues.
@@ -58,7 +58,7 @@ Finding IDs: `12.1` through `12.8`
 - Component tests for conflict aria text generation.
 - Form validation tests ensuring errors are announced on focus.
 - Contrast tests validating minimum ratios across themes.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

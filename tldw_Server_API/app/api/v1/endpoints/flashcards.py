@@ -15,11 +15,13 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 from tldw_Server_API.app.api.v1.schemas.flashcards import (
     Deck,
     DeckCreate,
+    FlashcardAnalyticsSummaryResponse,
     Flashcard,
     FlashcardCreate,
     FlashcardListResponse,
     FlashcardReviewRequest,
     FlashcardReviewResponse,
+    FlashcardResetSchedulingRequest,
     FlashcardsImportRequest,
     FlashcardTagsUpdate,
     FlashcardUpdate,
@@ -284,6 +286,18 @@ def list_flashcards(
         logger.error(f"Failed to list flashcards: {e}")
         raise HTTPException(status_code=500, detail="Failed to list flashcards") from e
 
+
+@router.get("/analytics/summary", response_model=FlashcardAnalyticsSummaryResponse)
+def get_flashcard_analytics_summary(
+    deck_id: Optional[int] = Query(None, ge=1),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        return db.get_flashcard_analytics_summary(deck_id=deck_id)
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to get flashcard analytics summary: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get flashcard analytics summary") from e
+
 ## (export endpoint moved earlier)
 
 ## Note: /export endpoint is defined above to avoid path shadowing by /{card_uuid}
@@ -386,6 +400,30 @@ def delete_flashcard(card_uuid: str, expected_version: int = Query(..., ge=1), d
     except CharactersRAGDBError as e:
         logger.error(f"Failed to delete flashcard: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete flashcard") from e
+
+
+@router.post("/{card_uuid}/reset-scheduling", response_model=Flashcard)
+def reset_flashcard_scheduling(
+    card_uuid: str,
+    payload: FlashcardResetSchedulingRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        ok = db.reset_flashcard_scheduling(
+            card_uuid,
+            expected_version=payload.expected_version,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Flashcard not found or not updated")
+        card = db.get_flashcard(card_uuid)
+        if not card:
+            raise HTTPException(status_code=404, detail="Flashcard not found")
+        return card
+    except ConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to reset flashcard scheduling: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reset flashcard scheduling") from e
 
 
 @router.put("/{card_uuid}/tags", response_model=Flashcard)

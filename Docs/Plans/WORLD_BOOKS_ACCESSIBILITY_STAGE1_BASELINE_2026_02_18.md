@@ -52,3 +52,20 @@ Plan reference: `Docs/Plans/IMPLEMENTATION_PLAN_world_books_12_accessibility_202
 | `12.6` Matrix keyboard model | Open | Matrix/list views exist; grid-style keyboard model not yet implemented | Stage 3 |
 | `12.7` Contrast for muted text | Open | Contrast audit not yet captured for tokenized colors | Stage 4 |
 | `12.8` Validation aria-describedby | Open | Not yet validated with explicit test assertions | Stage 4 |
+
+## Stage 2 Delta (2026-02-18)
+
+- `12.1` strengthened: icon-only world-book row actions remain explicitly aria-labeled and now have dedicated regression test coverage.
+- `12.3` mitigated: disclosure summaries now report `aria-expanded` with explicit `aria-controls` wiring in create/edit/import and entry-authoring disclosure blocks.
+- `12.5` mitigated: switch controls now expose explicit `On`/`Off` children and include explicit labels where controls were previously ambiguous (for example, bulk add mode).
+
+## Stage 3 Delta (2026-02-18)
+
+- `12.2` mitigated: entries drawer and relationship matrix workflows now persist trigger focus targets and restore focus to the initiating control on close, with regression coverage in `WorldBooksManager.accessibilityStage3.test.tsx`.
+- `12.6` mitigated: matrix view checkboxes now expose grid metadata and arrow-key navigation (`Arrow`, `Home`, `End`) across matrix cells, with keyboard regression coverage.
+
+## Stage 4 Delta (2026-02-18)
+
+- `12.4` mitigated: keyword conflict tags now include explicit conflict-oriented `aria-label` text and a polite status announcement for aggregate conflict count.
+- `12.8` verified: required-field validation continues to expose `aria-describedby` linkage; regression assertions now verify both invalid state and resolved described-by targets.
+- `12.7` verified: token-level contrast checks for `--color-text-muted` against both light/dark backgrounds now run in `WorldBooksManager.accessibilityStage4.test.tsx`, enforcing WCAG AA threshold (>= 4.5:1) for body-sized text.

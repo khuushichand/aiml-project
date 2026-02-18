@@ -23,7 +23,7 @@ Finding IDs: `H1-1` through `H1-5`
 - Component tests for review toast/status rendering with `due_at` and interval text.
 - Integration tests for import mutation response rendering (success, partial success, failure).
 - Query hook tests for deck due counts and selector label formatting.
-**Status**: In Progress
+**Status**: Complete
 
 **Progress Notes (2026-02-18)**:
 - Implemented review success feedback that now surfaces next due timing and interval from `FlashcardReviewResponse`.
@@ -41,7 +41,15 @@ Finding IDs: `H1-1` through `H1-5`
 - Component tests for metadata visibility in compact and expanded list variants.
 - Accessibility test coverage for non-color-only status representation.
 - Snapshot/regression tests for responsive rendering breakpoints.
-**Status**: Not Started
+**Status**: Complete
+
+**Progress Notes (2026-02-18)**:
+- Added compact Cards-row scheduling metadata (`EF`, `Int`, `Reps`, `Lapses`) in `ManageTab`.
+- Added expanded Cards-row scheduling tags (`Ease`, `Interval`, `Reps`, `Lapses`) in `ManageTab`.
+- Added read-only scheduling panel in `FlashcardEditDrawer` with:
+  - `ef`, `interval_days`, `repetitions`, `lapses`
+  - `due_at` and `last_reviewed_at` absolute + relative timestamp display.
+- Added focused tests for compact/expanded list metadata visibility and edit-drawer scheduling details.
 
 ## Stage 3: Study Analytics Dashboard Baseline
 **Goal**: Add a first-class study status panel backed by review history data.
@@ -53,7 +61,25 @@ Finding IDs: `H1-1` through `H1-5`
 - Backend/API tests for aggregate statistics endpoint/query correctness.
 - Integration tests verifying dashboard values against seeded `flashcard_reviews` fixtures.
 - E2E test for first load, filter by deck, and date-range state persistence.
-**Status**: Not Started
+**Status**: Complete
+
+**Progress Notes (2026-02-18)**:
+- Added backend analytics summary endpoint: `GET /api/v1/flashcards/analytics/summary`.
+- Added DB analytics aggregation for:
+  - `reviewed_today`, `retention_rate_today`, `lapse_rate_today`, `avg_answer_time_ms_today`
+  - `study_streak_days` from distinct UTC review days
+  - per-deck counts (`total`, `new`, `learning`, `due`, `mature`).
+- Wired frontend summary fetch via `useReviewAnalyticsSummaryQuery`.
+- Added `ReviewAnalyticsSummary` panel to `ReviewTab` with top-line metrics + per-deck progress cards.
+- Added UI test coverage for analytics summary rendering in the Review tab.
+- Added backend endpoint integration test case for analytics summary response semantics.
+- Added deck-scoped analytics filtering with `deck_id` query support across DB, API, and Review tab analytics query wiring.
+- Added backend integration test coverage for deck-filtered analytics response semantics.
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run src/components/Flashcards/tabs/__tests__/ReviewTab.analytics-summary.test.tsx` (pass)
+  - `python3 -m pytest -q tldw_Server_API/tests/Flashcards/test_flashcards_endpoint_integration.py -k analytics_summary_returns_daily_metrics_and_deck_progress` (blocked in local env: Python 3.9 cannot parse `int | None` annotations; requires Python 3.10+ runtime used by backend test suite)
+  - `cd apps/packages/ui && bunx vitest run --config vitest.config.ts src/components/Flashcards/tabs/__tests__/ReviewTab.analytics-summary.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx src/components/Flashcards/tabs/__tests__/ImportExportTab.import-results.test.tsx src/components/Flashcards/tabs/__tests__/ManageTab.scheduling-metadata.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.scheduling-metadata.test.tsx` (pass: `5` files, `7` tests)
+  - `source .venv/bin/activate && python -m py_compile tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py tldw_Server_API/app/api/v1/endpoints/flashcards.py tldw_Server_API/app/api/v1/schemas/flashcards.py tldw_Server_API/tests/Flashcards/test_flashcards_endpoint_integration.py` (pass)
 
 ## Dependencies
 

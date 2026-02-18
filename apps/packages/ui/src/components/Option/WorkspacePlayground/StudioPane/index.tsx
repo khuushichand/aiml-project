@@ -7,6 +7,7 @@ import {
   FileSpreadsheet,
   Layers,
   HelpCircle,
+  Scale,
   Calendar,
   Presentation,
   Table as TableIconLucide,
@@ -56,6 +57,7 @@ const ARTIFACT_TYPE_ICONS: Record<ArtifactType, React.ElementType> = {
   summary: FileText,
   mindmap: GitBranch,
   report: FileSpreadsheet,
+  compare_sources: Scale,
   flashcards: Layers,
   quiz: HelpCircle,
   timeline: Calendar,
@@ -101,6 +103,15 @@ const OUTPUT_BUTTONS: {
       OUTPUT_TYPES.find((config) => config.type === "report")?.description ||
       "Generate a detailed report document",
     icon: FileSpreadsheet
+  },
+  {
+    type: "compare_sources",
+    label: "Compare Sources",
+    description:
+      OUTPUT_TYPES.find((config) => config.type === "compare_sources")
+        ?.description ||
+      "Compare claims, evidence, and disagreements across selected sources",
+    icon: Scale
   },
   {
     type: "flashcards",
@@ -157,7 +168,7 @@ const OUTPUT_GROUPS: Array<{
   {
     id: "analysis",
     label: "Analysis",
-    types: ["summary", "report", "timeline", "data_table"]
+    types: ["summary", "report", "compare_sources", "timeline", "data_table"]
   },
   {
     id: "creative",
@@ -274,6 +285,7 @@ export const estimateGenerationSeconds = (
   const baseSeconds: Record<ArtifactType, number> = {
     summary: 8,
     report: 16,
+    compare_sources: 18,
     timeline: 12,
     quiz: 10,
     flashcards: 10,
@@ -285,6 +297,7 @@ export const estimateGenerationSeconds = (
   const perSourceSeconds: Record<ArtifactType, number> = {
     summary: 2,
     report: 4,
+    compare_sources: 5,
     timeline: 3,
     quiz: 2,
     flashcards: 2,
@@ -296,6 +309,114 @@ export const estimateGenerationSeconds = (
   return Math.round(
     baseSeconds[type] + perSourceSeconds[type] * (normalizedSourceCount - 1)
   )
+}
+
+const ESTIMATED_COST_PER_1K_TOKENS_USD = 0.003
+
+export const estimateGenerationTokens = (
+  type: ArtifactType,
+  sourceCount: number
+): number => {
+  const normalizedSourceCount = Math.max(1, sourceCount)
+  const baseTokens: Record<ArtifactType, number> = {
+    summary: 1200,
+    report: 2200,
+    compare_sources: 2400,
+    timeline: 1500,
+    quiz: 1400,
+    flashcards: 1300,
+    mindmap: 1500,
+    audio_overview: 2600,
+    slides: 2400,
+    data_table: 1800
+  }
+  const perSourceTokens: Record<ArtifactType, number> = {
+    summary: 350,
+    report: 700,
+    compare_sources: 800,
+    timeline: 450,
+    quiz: 400,
+    flashcards: 350,
+    mindmap: 450,
+    audio_overview: 900,
+    slides: 800,
+    data_table: 550
+  }
+
+  return Math.max(
+    200,
+    Math.round(
+      baseTokens[type] + perSourceTokens[type] * (normalizedSourceCount - 1)
+    )
+  )
+}
+
+export const estimateGenerationCostUsd = (tokens: number): number => {
+  const safeTokens = Math.max(0, Number(tokens) || 0)
+  return Number(((safeTokens / 1000) * ESTIMATED_COST_PER_1K_TOKENS_USD).toFixed(4))
+}
+
+type UsageMetrics = {
+  totalTokens?: number
+  totalCostUsd?: number
+}
+
+type GenerationResult = {
+  serverId?: number | string
+  content?: string
+  audioUrl?: string
+  audioFormat?: string
+  presentationId?: string
+  presentationVersion?: number
+  totalTokens?: number
+  totalCostUsd?: number
+  data?: Record<string, unknown>
+}
+
+const extractUsageMetrics = (payload: unknown): UsageMetrics => {
+  if (!payload || typeof payload !== "object") {
+    return {}
+  }
+  const candidate = payload as Record<string, unknown>
+  const usage = (candidate.usage || candidate.generation_info || candidate.generationInfo) as
+    | Record<string, unknown>
+    | undefined
+  const usagePayload = (usage?.usage as Record<string, unknown> | undefined) || usage
+
+  const totalTokensValue =
+    usagePayload?.total_tokens ||
+    usagePayload?.totalTokens ||
+    usagePayload?.tokens ||
+    usagePayload?.token_count
+  const totalCostValue =
+    usagePayload?.total_cost_usd ||
+    usagePayload?.totalCostUsd ||
+    usagePayload?.estimated_cost_usd ||
+    usagePayload?.cost_usd
+
+  const totalTokens =
+    typeof totalTokensValue === "number"
+      ? Math.max(0, Math.round(totalTokensValue))
+      : typeof totalTokensValue === "string"
+        ? Math.max(0, Math.round(Number(totalTokensValue) || 0))
+        : undefined
+  const totalCostUsd =
+    typeof totalCostValue === "number"
+      ? Math.max(0, totalCostValue)
+      : typeof totalCostValue === "string"
+        ? Math.max(0, Number(totalCostValue) || 0)
+        : undefined
+
+  return {
+    totalTokens:
+      typeof totalTokens === "number" && Number.isFinite(totalTokens)
+        ? totalTokens
+        : undefined,
+    totalCostUsd:
+      typeof totalCostUsd === "number" && Number.isFinite(totalCostUsd)
+        ? Number(totalCostUsd.toFixed(4))
+        : undefined
+  }
 }
 
 /**
@@ -418,6 +539,19 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           Math.max(1, selectedMediaCount)
         )
       : null
+  const cumulativeUsage = React.useMemo(() => {
+    return generatedArtifacts.reduce(
+      (acc, artifact) => {
+        const tokens = artifact.totalTokens || artifact.estimatedTokens || 0
+        const cost = artifact.totalCostUsd || artifact.estimatedCostUsd || 0
+        return {
+          tokens: acc.tokens + tokens,
+          costUsd: acc.costUsd + cost
+        }
+      },
+      { tokens: 0, costUsd: 0 }
+    )
+  }, [generatedArtifacts])
 
   useEffect(() => {
     return () => {
@@ -669,12 +803,23 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
 
     const mediaIds = getSelectedMediaIds()
     if (mediaIds.length === 0) return
+    if (type === "compare_sources" && mediaIds.length < 2) {
+      messageApi.warning(
+        t(
+          "playground:studio.compareRequiresMultipleSources",
+          "Select at least two sources to compare."
+        )
+      )
+      return
+    }
 
     const activeAbort = new AbortController()
     generationAbortRef.current = activeAbort
 
     // Start generation
     setIsGeneratingOutput(true, type)
+    const estimatedTokens = estimateGenerationTokens(type, mediaIds.length)
+    const estimatedCostUsd = estimateGenerationCostUsd(estimatedTokens)
 
     let artifact: GeneratedArtifact | null = null
 
@@ -691,6 +836,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           updateArtifactStatus(existingArtifact.id, "generating", {
             createdAt: new Date(),
             completedAt: undefined,
+            estimatedTokens,
+            estimatedCostUsd,
+            totalTokens: undefined,
+            totalCostUsd: undefined,
             serverId: undefined,
             content: undefined,
             audioUrl: undefined,
@@ -705,7 +854,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           artifact = addArtifact({
             type,
             title: `${artifactLabel}`,
-            status: "generating"
+            status: "generating",
+            estimatedTokens,
+            estimatedCostUsd
           })
         }
       } else {
@@ -713,20 +864,14 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           type,
           title: `${artifactLabel}`,
           status: "generating",
+          estimatedTokens,
+          estimatedCostUsd,
           previousVersionId:
             options.mode === "new_version" ? options.targetArtifactId : undefined
         })
       }
 
-      let result: {
-        serverId?: number | string
-        content?: string
-        audioUrl?: string
-        audioFormat?: string
-        presentationId?: string
-        presentationVersion?: number
-        data?: Record<string, unknown>
-      } = {}
+      let result: GenerationResult = {}
 
       switch (type) {
         case "summary":
@@ -738,6 +883,13 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           break
         case "report":
           result = await generateReport(mediaIds, workspaceTag, activeAbort.signal)
+          break
+        case "compare_sources":
+          result = await generateCompareSources(
+            mediaIds,
+            workspaceTag,
+            activeAbort.signal
+          )
           break
         case "timeline":
           result = await generateTimeline(
@@ -797,6 +949,19 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         audioFormat: result.audioFormat,
         presentationId: result.presentationId,
         presentationVersion: result.presentationVersion,
+        totalTokens:
+          result.totalTokens ||
+          (result.content
+            ? Math.max(1, Math.round(result.content.length / 4))
+            : estimatedTokens),
+        totalCostUsd:
+          result.totalCostUsd ||
+          estimateGenerationCostUsd(
+            result.totalTokens ||
+              (result.content
+                ? Math.max(1, Math.round(result.content.length / 4))
+                : estimatedTokens)
+          ),
         data: result.data
       })
 
@@ -1178,13 +1343,21 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                   const { label, icon: Icon, description } = button
                   const isGenerating =
                     isGeneratingOutput && generatingOutputType === type
-                  const isDisabled = !hasSelectedSources || isGeneratingOutput
+                  const requiresMultipleSources =
+                    type === "compare_sources" && selectedMediaCount < 2
+                  const isDisabled =
+                    !hasSelectedSources || isGeneratingOutput || requiresMultipleSources
 
                   return (
                     <Tooltip
                       key={type}
                       title={
-                        !hasSelectedSources
+                        requiresMultipleSources
+                          ? t(
+                              "playground:studio.compareRequiresMultipleSourcesHint",
+                              "Compare Sources requires at least two selected sources."
+                            )
+                          : !hasSelectedSources
                           ? t(
                               "playground:studio.selectSourcesFirst",
                               "Select sources first"
@@ -1429,6 +1602,18 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           className="custom-scrollbar min-h-[10rem] overflow-y-auto px-4 pb-4"
           style={{ maxHeight: "40vh" }}
         >
+          {generatedArtifacts.length > 0 && (
+            <div className="mb-2 rounded border border-border bg-surface/60 px-2.5 py-2 text-[11px] text-text-muted">
+              {t(
+                "playground:studio.usageSummary",
+                "Estimated workspace usage: {{tokens}} tokens • ${{cost}}",
+                {
+                  tokens: Math.round(cumulativeUsage.tokens).toLocaleString(),
+                  cost: cumulativeUsage.costUsd.toFixed(3)
+                }
+              )}
+            </div>
+          )}
           {generatedArtifacts.length === 0 ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -1466,6 +1651,25 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                         <p className="text-xs text-text-muted">
                           {artifact.createdAt.toLocaleString()}
                         </p>
+                        {(artifact.totalTokens ||
+                          artifact.estimatedTokens ||
+                          artifact.totalCostUsd ||
+                          artifact.estimatedCostUsd) && (
+                          <p className="text-[11px] text-text-muted">
+                            {t(
+                              "playground:studio.usagePerArtifact",
+                              "Tokens: {{tokens}} • Cost: ${{cost}}",
+                              {
+                                tokens: Math.round(
+                                  artifact.totalTokens || artifact.estimatedTokens || 0
+                                ).toLocaleString(),
+                                cost: (
+                                  artifact.totalCostUsd || artifact.estimatedCostUsd || 0
+                                ).toFixed(3)
+                              }
+                            )}
+                          </p>
+                        )}
                         {artifact.status === "failed" && artifact.errorMessage && (
                           <p className="mt-1 text-xs text-error">
                             {artifact.errorMessage}
@@ -2058,7 +2262,7 @@ async function generateSummary(
   mediaIds: number[],
   workspaceTag?: string,
   abortSignal?: AbortSignal
-): Promise<{ serverId?: number; content?: string }> {
+): Promise<GenerationResult> {
   // Use RAG to get content and generate summary via chat
   const ragResponse = await tldwClient.ragSearch(
     "Provide a comprehensive summary of the key points and main ideas.",
@@ -2070,9 +2274,11 @@ async function generateSummary(
       signal: abortSignal
     }
   )
+  const usage = extractUsageMetrics(ragResponse)
 
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Summary generation failed"
+    content: ragResponse?.generation || ragResponse?.answer || "Summary generation failed",
+    ...usage
   }
 }
 
@@ -2080,7 +2286,7 @@ async function generateReport(
   mediaIds: number[],
   workspaceTag?: string,
   abortSignal?: AbortSignal
-): Promise<{ serverId?: number; content?: string }> {
+): Promise<GenerationResult> {
   const ragResponse = await tldwClient.ragSearch(
     `Generate a detailed report with the following sections:
 1. Executive Summary
@@ -2098,9 +2304,11 @@ Use the provided sources to create a comprehensive report.`,
       signal: abortSignal
     }
   )
+  const usage = extractUsageMetrics(ragResponse)
 
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Report generation failed"
+    content: ragResponse?.generation || ragResponse?.answer || "Report generation failed",
+    ...usage
   }
 }
 
@@ -2108,7 +2316,7 @@ async function generateTimeline(
   mediaIds: number[],
   workspaceTag?: string,
   abortSignal?: AbortSignal
-): Promise<{ serverId?: number; content?: string }> {
+): Promise<GenerationResult> {
   const ragResponse = await tldwClient.ragSearch(
     `Extract and organize all events, dates, and chronological information into a timeline format.
 Present the timeline as:
@@ -2123,9 +2331,48 @@ List events in chronological order.`,
       signal: abortSignal
     }
   )
+  const usage = extractUsageMetrics(ragResponse)
 
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Timeline generation failed"
+    content: ragResponse?.generation || ragResponse?.answer || "Timeline generation failed",
+    ...usage
+  }
+}
+
+async function generateCompareSources(
+  mediaIds: number[],
+  workspaceTag?: string,
+  abortSignal?: AbortSignal
+): Promise<GenerationResult> {
+  const ragResponse = await tldwClient.ragSearch(
+    `Compare the selected sources and produce:
+1. A short synthesis of where they agree.
+2. A list of key disagreements or conflicting claims.
+3. Evidence strength notes for each disagreement.
+4. Open questions that need additional verification.
+
+Use markdown headings and bullet lists. Cite source-specific evidence when possible.`,
+    {
+      media_ids: mediaIds,
+      top_k: 30,
+      enable_generation: true,
+      enable_citations: true,
+      signal: abortSignal
+    }
+  )
+  const usage = extractUsageMetrics(ragResponse)
+  const content =
+    ragResponse?.generation ||
+    ragResponse?.answer ||
+    "Compare sources generation failed"
+
+  return {
+    content,
+    ...usage,
+    data: {
+      sourceCount: mediaIds.length,
+      workspaceTag: workspaceTag || null
+    }
   }
 }
 
@@ -2133,13 +2380,17 @@ async function generateQuizFromMedia(
   mediaIds: number[],
   workspaceTag?: string,
   abortSignal?: AbortSignal
-): Promise<{ serverId?: number; content?: string; data?: Record<string, unknown> }> {
+): Promise<GenerationResult> {
   const uniqueMediaIds = Array.from(new Set(mediaIds))
   if (uniqueMediaIds.length === 0) {
     throw new Error("No media selected for quiz generation")
   }
 
-  const generationResponses: Array<{ mediaId: number; response: any }> = []
+  const generationResponses: Array<{
+    mediaId: number
+    response: any
+    usage: UsageMetrics
+  }> = []
   for (const mediaId of uniqueMediaIds) {
     const response = await generateQuiz(
       {
@@ -2151,7 +2402,11 @@ async function generateQuizFromMedia(
       },
       { signal: abortSignal }
     )
-    generationResponses.push({ mediaId, response })
+    generationResponses.push({
+      mediaId,
+      response,
+      usage: extractUsageMetrics(response)
+    })
   }
 
   const mergedQuestions = generationResponses.flatMap(({ mediaId, response }) =>
@@ -2179,9 +2434,21 @@ async function generateQuizFromMedia(
     generationResponses[0]?.response?.quiz?.name || "Workspace Quiz"
   )
 
+  const totalTokens = generationResponses.reduce(
+    (acc, item) => acc + (item.usage.totalTokens || 0),
+    0
+  )
+  const totalCostUsd = generationResponses.reduce(
+    (acc, item) => acc + (item.usage.totalCostUsd || 0),
+    0
+  )
+
   return {
     serverId: generationResponses[0]?.response?.quiz?.id,
     content,
+    totalTokens: totalTokens > 0 ? totalTokens : undefined,
+    totalCostUsd:
+      totalCostUsd > 0 ? Number(totalCostUsd.toFixed(4)) : undefined,
     data: {
       questions: limitedQuestions,
       sourceMediaIds: uniqueMediaIds
@@ -2194,7 +2461,7 @@ async function generateFlashcards(
   preferredDeckId: number | undefined,
   workspaceTag?: string,
   abortSignal?: AbortSignal
-): Promise<{ serverId?: number; content?: string; data?: Record<string, unknown> }> {
+): Promise<GenerationResult> {
   // First, get content via RAG
   const ragResponse = await tldwClient.ragSearch(
     `Extract key concepts, definitions, and important facts that would make good flashcards.
@@ -2210,6 +2477,7 @@ Generate 10-15 flashcards.`,
       signal: abortSignal
     }
   )
+  const usage = extractUsageMetrics(ragResponse)
 
   const content = ragResponse?.generation || ragResponse?.answer || ""
 
@@ -2270,6 +2538,7 @@ Generate 10-15 flashcards.`,
 
   return {
     content: `${summaryLine}\n\n${content}`,
+    ...usage,
     data: {
       flashcards,
       deckId,
@@ -2281,7 +2550,7 @@ Generate 10-15 flashcards.`,
 async function generateMindMap(
   mediaIds: number[],
   abortSignal?: AbortSignal
-): Promise<{ serverId?: number; content?: string; data?: Record<string, unknown> }> {
+): Promise<GenerationResult> {
   const ragResponse = await tldwClient.ragSearch(
     `Analyze the content and create a mind map in Mermaid format.
 Use the following structure:
@@ -2304,11 +2573,13 @@ Identify the central theme and 3-5 main branches with their sub-topics.`,
       signal: abortSignal
     }
   )
+  const usage = extractUsageMetrics(ragResponse)
 
   const content =
     ragResponse?.generation || ragResponse?.answer || "Mind map generation failed"
   return {
     content,
+    ...usage,
     data: {
       mermaid: extractMermaidCode(content)
     }
@@ -2319,7 +2590,7 @@ async function generateAudioOverview(
   mediaIds: number[],
   audioSettings: import("@/types/workspace").AudioGenerationSettings,
   abortSignal?: AbortSignal
-): Promise<{ serverId?: number; content?: string; audioUrl?: string; audioFormat?: string }> {
+): Promise<GenerationResult> {
   // First generate a spoken overview script
   const ragResponse = await tldwClient.ragSearch(
     `Create a spoken overview script (2-3 minutes when read aloud) that:
@@ -2335,6 +2606,7 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
       signal: abortSignal
     }
   )
+  const usage = extractUsageMetrics(ragResponse)
 
   const script = ragResponse?.generation || ragResponse?.answer || ""
 
@@ -2346,7 +2618,8 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
   if (audioSettings.provider === "browser") {
     return {
       content: script,
-      audioFormat: "browser"
+      audioFormat: "browser",
+      ...usage
     }
   }
 
@@ -2378,7 +2651,8 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
     return {
       content: script,
       audioUrl,
-      audioFormat: audioSettings.format
+      audioFormat: audioSettings.format,
+      ...usage
     }
   } catch (ttsError) {
     if (isAbortLikeError(ttsError)) {
@@ -2387,7 +2661,8 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
     // If TTS fails, fall back to returning just the script
     console.error("TTS generation failed:", ttsError)
     return {
-      content: `[Audio Script]\n\n${script}\n\n[Note: Audio generation failed - TTS service unavailable]`
+      content: `[Audio Script]\n\n${script}\n\n[Note: Audio generation failed - TTS service unavailable]`,
+      ...usage
     }
   }
 }
@@ -2395,17 +2670,13 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
 async function generateSlidesFromApi(
   mediaId: number,
   abortSignal?: AbortSignal
-): Promise<{
-  serverId?: number
-  content?: string
-  presentationId?: string
-  presentationVersion?: number
-}> {
+): Promise<GenerationResult> {
   try {
     // Use the Slides API to generate a real presentation
     const presentation = await tldwClient.generateSlidesFromMedia(mediaId, {
       signal: abortSignal
     })
+    const usage = extractUsageMetrics(presentation)
 
     // Format slides as readable content
     let content = `# ${presentation.title}\n\n`
@@ -2428,7 +2699,8 @@ async function generateSlidesFromApi(
     return {
       content,
       presentationId: presentation.id,
-      presentationVersion: presentation.version
+      presentationVersion: presentation.version,
+      ...usage
     }
   } catch (error) {
     if (isAbortLikeError(error)) {
@@ -2443,7 +2715,7 @@ async function generateSlidesFromApi(
 async function generateSlidesFallback(
   mediaIds: number[],
   abortSignal?: AbortSignal
-): Promise<{ serverId?: number; content?: string }> {
+): Promise<GenerationResult> {
   const ragResponse = await tldwClient.ragSearch(
     `Create a presentation outline with 8-12 slides:
 
@@ -2466,9 +2738,11 @@ Include:
       signal: abortSignal
     }
   )
+  const usage = extractUsageMetrics(ragResponse)
 
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Slides generation failed"
+    content: ragResponse?.generation || ragResponse?.answer || "Slides generation failed",
+    ...usage
   }
 }
 
@@ -2476,7 +2750,7 @@ async function generateDataTable(
   mediaIds: number[],
   workspaceTag?: string,
   abortSignal?: AbortSignal
-): Promise<{ serverId?: number; content?: string; data?: Record<string, unknown> }> {
+): Promise<GenerationResult> {
   const ragResponse = await tldwClient.ragSearch(
     `Extract structured data from the content and format it as a markdown table.
 Identify:
@@ -2495,6 +2769,7 @@ Format as:
       signal: abortSignal
     }
   )
+  const usage = extractUsageMetrics(ragResponse)
 
   const content =
     ragResponse?.generation || ragResponse?.answer || "Data table generation failed"
@@ -2502,6 +2777,7 @@ Format as:
 
   return {
     content,
+    ...usage,
     data: parsedTable ? { table: parsedTable } : undefined
   }
 }

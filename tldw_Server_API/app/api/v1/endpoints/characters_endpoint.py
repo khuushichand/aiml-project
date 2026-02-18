@@ -22,6 +22,11 @@ from starlette import status
 MAX_CHARACTER_FILE_SIZE = 10 * 1024 * 1024  # 10MB max file size
 ALLOWED_EXTENSIONS = frozenset({".png", ".webp", ".jpeg", ".jpg", ".json", ".yaml", ".yml", ".txt", ".md"})
 
+
+def _format_allowed_extensions() -> str:
+    """Return supported import extensions in stable sorted order for API errors/docs."""
+    return ", ".join(sorted(ALLOWED_EXTENSIONS))
+
 def _detect_mime_type(data: bytes) -> Optional[str]:
     """
     Detect MIME type from file magic bytes.
@@ -76,7 +81,11 @@ def _validate_file_type(data: bytes, filename: Optional[str]) -> tuple[bool, str
 
     # Check extension first
     if ext and ext not in ALLOWED_EXTENSIONS:
-        return False, f"File extension '{ext}' not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}", None
+        return (
+            False,
+            f"File extension '{ext}' not allowed. Allowed: {_format_allowed_extensions()}",
+            None,
+        )
 
     # Detect MIME type from content
     detected_mime = _detect_mime_type(data)

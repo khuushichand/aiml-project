@@ -26,6 +26,10 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
+vi.mock("@/hooks/useServerOnline", () => ({
+  useServerOnline: () => true
+}))
+
 vi.mock("../../hooks", () => ({
   useAttemptsQuery: vi.fn(),
   useQuizzesQuery: vi.fn(),
@@ -87,6 +91,7 @@ describe("TakeQuizTab empty-state guidance", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
     vi.mocked(useAttemptsQuery).mockReturnValue({
       data: { items: [], count: 0 }
     } as any)

@@ -19,7 +19,13 @@ import {
   message
 } from "antd"
 import { useTranslation } from "react-i18next"
-import { PlayCircleOutlined, ClockCircleOutlined, QuestionCircleOutlined } from "@ant-design/icons"
+import {
+  PlayCircleOutlined,
+  ClockCircleOutlined,
+  QuestionCircleOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined
+} from "@ant-design/icons"
 import {
   useAttemptsQuery,
   useQuizzesQuery,
@@ -29,7 +35,14 @@ import {
 } from "../hooks"
 import { useQuizTimer } from "../hooks/useQuizTimer"
 import { useQuizAutoSave } from "../hooks/useQuizAutoSave"
-import type { AnswerValue, QuestionPublic, Quiz, QuizAttempt } from "@/services/quizzes"
+import {
+  clearQueuedQuizSubmission,
+  readQueuedQuizSubmission,
+  writeQueuedQuizSubmission,
+  type QueuedQuizSubmission
+} from "../hooks/quizSubmissionQueue"
+import { useServerOnline } from "@/hooks/useServerOnline"
+import type { AnswerValue, QuestionPublic, Quiz, QuizAnswer, QuizAttempt } from "@/services/quizzes"
 
 interface TakeQuizTabProps {
   onNavigateToGenerate: () => void
@@ -106,9 +119,14 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
   const [result, setResult] = React.useState<QuizAttempt | null>(null)
   const [questions, setQuestions] = React.useState<QuestionPublic[]>([])
   const [answers, setAnswers] = React.useState<Record<number, AnswerValue>>({})
+  const [queuedSubmission, setQueuedSubmission] = React.useState<QueuedQuizSubmission | null>(null)
+  const [isRetryingQueuedSubmission, setIsRetryingQueuedSubmission] = React.useState(false)
+  const [submissionQueueStorageUnavailable, setSubmissionQueueStorageUnavailable] = React.useState(false)
   const lastAutoStartId = React.useRef<number | null>(null)
   const hasInitializedSearchRef = React.useRef(false)
   const questionRefs = React.useRef<Map<number, HTMLDivElement | null>>(new Map())
+  const isOnline = useServerOnline()
+  const wasOnlineRef = React.useRef(isOnline)
   const offset = (page - 1) * pageSize
 
   const normalizedSearchQuery = searchQuery.trim()
@@ -157,11 +175,139 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     }
   })
 
+  const timerAnnouncement = React.useMemo(() => {
+    if (!timerState || timerState.isExpired || timerState.totalSeconds <= 0) return ""
+    if (timerState.totalSeconds <= 60) {
+      return t("option:quiz.timerSecondsRemaining", {
+        defaultValue: "{{count}} seconds remaining",
+        count: timerState.totalSeconds
+      })
+    }
+    if (timerState.totalSeconds % 60 === 0) {
+      return t("option:quiz.timerMinutesRemaining", {
+        defaultValue: "{{count}} minutes remaining",
+        count: Math.floor(timerState.totalSeconds / 60)
+      })
+    }
+    return ""
+  }, [timerState, t])
+
+  const statusAnnouncement = React.useMemo(() => {
+    if (result) {
+      const total = result.total_possible || 0
+      const score = result.score ?? 0
+      const percentage = total > 0 ? Math.round((score / total) * 100) : 0
+      return t("option:quiz.resultAnnouncement", {
+        defaultValue: "Quiz submitted. Score {{score}} out of {{total}} ({{percent}} percent).",
+        score,
+        total,
+        percent: percentage
+      })
+    }
+    if (queuedSubmission) {
+      return queuedSubmission.allowPartial
+        ? t("option:quiz.queueAnnouncementTimer", {
+            defaultValue:
+              "Time expired and submission is queued. We will retry when connection is restored."
+          })
+        : t("option:quiz.queueAnnouncement", {
+            defaultValue: "Submission failed and is queued locally. Retry is available."
+          })
+    }
+    return ""
+  }, [queuedSubmission, result, t])
+
+  const getSubmissionErrorMessage = React.useCallback((error: unknown) => {
+    if (error instanceof Error && error.message.trim().length > 0) {
+      return error.message
+    }
+    const messageCandidate = (error as { message?: unknown } | null)?.message
+    if (typeof messageCandidate === "string" && messageCandidate.trim().length > 0) {
+      return messageCandidate
+    }
+    return t("option:quiz.submitErrorUnknown", {
+      defaultValue: "Unknown submission error"
+    })
+  }, [t])
+
+  const persistQueuedSubmission = React.useCallback(async (next: QueuedQuizSubmission) => {
+    const saved = await writeQueuedQuizSubmission(next)
+    setQueuedSubmission(next)
+    setSubmissionQueueStorageUnavailable(!saved)
+    return saved
+  }, [])
+
+  const clearCurrentQueuedSubmission = React.useCallback(async (attemptId: number | null | undefined) => {
+    if (attemptId == null) return
+    await clearQueuedQuizSubmission(attemptId)
+    setQueuedSubmission((current) => (current?.attemptId === attemptId ? null : current))
+    setSubmissionQueueStorageUnavailable(false)
+  }, [])
+
+  const retryQueuedSubmission = React.useCallback(async (source: "manual" | "online") => {
+    if (!queuedSubmission || submitAttemptMutation.isPending || isRetryingQueuedSubmission) return
+    setIsRetryingQueuedSubmission(true)
+    try {
+      const submission = await submitAttemptMutation.mutateAsync({
+        attemptId: queuedSubmission.attemptId,
+        answers: queuedSubmission.answers
+      })
+      await clearCurrentQueuedSubmission(queuedSubmission.attemptId)
+      if (attempt?.id === queuedSubmission.attemptId) {
+        setResult(submission)
+        setUnansweredQuestionNumbers([])
+        await clearSavedProgress()
+      }
+      messageApi.success(
+        source === "online"
+          ? t("option:quiz.submitRetryAutoSuccess", {
+              defaultValue: "Connection restored. Queued quiz submission sent."
+            })
+          : t("option:quiz.submitRetrySuccess", {
+              defaultValue: "Submission retry succeeded."
+            })
+      )
+    } catch (error) {
+      const updated: QueuedQuizSubmission = {
+        ...queuedSubmission,
+        retryCount: queuedSubmission.retryCount + 1,
+        lastAttemptedAt: Date.now(),
+        lastError: getSubmissionErrorMessage(error)
+      }
+      await persistQueuedSubmission(updated)
+      messageApi.error(
+        source === "online"
+          ? t("option:quiz.submitRetryAutoFailed", {
+              defaultValue: "Auto-retry failed. Your answers are still queued locally."
+            })
+          : t("option:quiz.submitRetryFailed", {
+              defaultValue: "Retry failed. Your answers are still queued locally."
+            })
+      )
+    } finally {
+      setIsRetryingQueuedSubmission(false)
+    }
+  }, [
+    attempt?.id,
+    clearCurrentQueuedSubmission,
+    clearSavedProgress,
+    getSubmissionErrorMessage,
+    isRetryingQueuedSubmission,
+    messageApi,
+    persistQueuedSubmission,
+    queuedSubmission,
+    submitAttemptMutation,
+    t
+  ])
+
   const resetSession = () => {
     setAttempt(null)
     setResult(null)
     setQuestions([])
     setAnswers({})
+    setQueuedSubmission(null)
+    setIsRetryingQueuedSubmission(false)
+    setSubmissionQueueStorageUnavailable(false)
     setFocusedQuestionId(null)
     setUnansweredQuestionNumbers([])
     setActiveQuizId(null)
@@ -173,11 +319,26 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
       setActiveQuizId(quizId)
       setResult(null)
       setAnswers({})
+      setQueuedSubmission(null)
+      setIsRetryingQueuedSubmission(false)
+      setSubmissionQueueStorageUnavailable(false)
       setFocusedQuestionId(null)
       setUnansweredQuestionNumbers([])
       const newAttempt = await startAttemptMutation.mutateAsync(quizId)
+      const newQuestions = newAttempt.questions ?? []
+      if (newQuestions.length === 0) {
+        setAttempt(null)
+        setQuestions([])
+        setActiveQuizId(null)
+        messageApi.error(
+          t("option:quiz.noQuestionsToStart", {
+            defaultValue: "This quiz has no questions yet."
+          })
+        )
+        return false
+      }
       setAttempt(newAttempt)
-      setQuestions(newAttempt.questions ?? [])
+      setQuestions(newQuestions)
       return true
     } catch (error) {
       messageApi.error(
@@ -193,10 +354,8 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
 
   const handleConfirmStart = async () => {
     if (pendingQuizId == null) return
-    const started = await handleStart(pendingQuizId)
-    if (started) {
-      setPendingQuizId(null)
-    }
+    await handleStart(pendingQuizId)
+    setPendingQuizId(null)
   }
 
   React.useEffect(() => {
@@ -220,6 +379,34 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
       }
     })
   }, [attempt?.id, restoreSavedAnswers, messageApi, t])
+
+  React.useEffect(() => {
+    if (!attempt?.id) return
+    let cancelled = false
+    void readQueuedQuizSubmission(attempt.id).then((queued) => {
+      if (cancelled) return
+      if (!queued || queued.quizId !== attempt.quiz_id) {
+        setQueuedSubmission(null)
+        return
+      }
+      setQueuedSubmission(queued)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [attempt?.id, attempt?.quiz_id])
+
+  React.useEffect(() => {
+    const becameOnline = !wasOnlineRef.current && isOnline
+    wasOnlineRef.current = isOnline
+    if (!becameOnline || !queuedSubmission) return
+    messageApi.info(
+      t("option:quiz.submitRetryingWhenOnline", {
+        defaultValue: "Connection restored. Retrying queued quiz submission..."
+      })
+    )
+    void retryQueuedSubmission("online")
+  }, [isOnline, queuedSubmission, retryQueuedSubmission, messageApi, t])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -279,7 +466,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
 
   const handleSubmit = async (options?: { allowPartial?: boolean }) => {
     if (!attempt) return
-    if (submitAttemptMutation.isPending) return
+    if (submitAttemptMutation.isPending || isRetryingQueuedSubmission) return
 
     const missing = questions.filter((q) => !hasAnswer(q.id))
     if (!options?.allowPartial && missing.length > 0) {
@@ -303,21 +490,47 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
         })
       )
     }
+    const payload = questions.map((q) => ({
+      question_id: q.id,
+      user_answer: answers[q.id]
+    })).filter((entry) => entry.user_answer !== null && entry.user_answer !== undefined)
+
     try {
-      const payload = questions.map((q) => ({
-        question_id: q.id,
-        user_answer: answers[q.id]
-      })).filter((entry) => entry.user_answer !== null && entry.user_answer !== undefined)
       const submission = await submitAttemptMutation.mutateAsync({
         attemptId: attempt.id,
         answers: payload
       })
+      await clearCurrentQueuedSubmission(attempt.id)
       setResult(submission)
       setUnansweredQuestionNumbers([])
       await clearSavedProgress()
     } catch (error) {
+      const previousQueue = queuedSubmission?.attemptId === attempt.id ? queuedSubmission : null
+      const didPersist = await persistQueuedSubmission({
+        attemptId: attempt.id,
+        quizId: attempt.quiz_id,
+        answers: payload as Omit<QuizAnswer, "is_correct">[],
+        allowPartial: Boolean(options?.allowPartial),
+        queuedAt: previousQueue?.queuedAt ?? Date.now(),
+        retryCount: previousQueue ? previousQueue.retryCount + 1 : 0,
+        lastAttemptedAt: Date.now(),
+        lastError: getSubmissionErrorMessage(error)
+      })
       messageApi.error(
-        t("option:quiz.submitError", { defaultValue: "Failed to submit quiz" })
+        options?.allowPartial
+          ? t("option:quiz.submitQueuedForRetryOnTimerExpire", {
+            defaultValue:
+              "Your time expired and submission failed. We'll retry automatically when connection is restored."
+          })
+          : didPersist
+            ? t("option:quiz.submitQueuedForRetry", {
+              defaultValue:
+                "Submission failed. Your answers are saved locally. Use Retry to submit when reconnected."
+            })
+            : t("option:quiz.submitQueuedStorageUnavailable", {
+              defaultValue:
+                "Submission failed and local retry storage is unavailable. Keep this tab open and retry again."
+            })
       )
     }
   }
@@ -325,43 +538,61 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
   const renderAnswerInput = (question: QuestionPublic) => {
     if (question.question_type === "multiple_choice") {
       return (
-        <Radio.Group
-          value={answers[question.id]}
-          onChange={(e) => updateAnswer(question.id, e.target.value)}
-        >
-          <Space orientation="vertical">
-            {(question.options ?? []).map((option, index) => (
-              <Radio key={index} value={index}>
-                {option || `${t("option:quiz.option", { defaultValue: "Option" })} ${index + 1}`}
-              </Radio>
-            ))}
-          </Space>
-        </Radio.Group>
+        <fieldset className="border-0 m-0 p-0">
+          <legend className="sr-only">{question.question_text}</legend>
+          <Radio.Group
+            value={answers[question.id]}
+            onChange={(e) => updateAnswer(question.id, e.target.value)}
+            aria-label={question.question_text}
+          >
+            <Space orientation="vertical">
+              {(question.options ?? []).map((option, index) => (
+                <Radio key={index} value={index}>
+                  {option || `${t("option:quiz.option", { defaultValue: "Option" })} ${index + 1}`}
+                </Radio>
+              ))}
+            </Space>
+          </Radio.Group>
+        </fieldset>
       )
     }
     if (question.question_type === "true_false") {
+      const legendText = t("option:quiz.trueFalseLegend", {
+        defaultValue: "True or false for: {{question}}",
+        question: question.question_text
+      })
       return (
-        <Radio.Group
-          value={answers[question.id]}
-          onChange={(e) => updateAnswer(question.id, e.target.value)}
-        >
-          <Space orientation="vertical">
-            <Radio value="true">{t("option:quiz.true", { defaultValue: "True" })}</Radio>
-            <Radio value="false">{t("option:quiz.false", { defaultValue: "False" })}</Radio>
-          </Space>
-        </Radio.Group>
+        <fieldset className="border-0 m-0 p-0">
+          <legend className="sr-only">{legendText}</legend>
+          <Radio.Group
+            value={answers[question.id]}
+            onChange={(e) => updateAnswer(question.id, e.target.value)}
+            aria-label={legendText}
+          >
+            <Space orientation="vertical">
+              <Radio value="true">{t("option:quiz.true", { defaultValue: "True" })}</Radio>
+              <Radio value="false">{t("option:quiz.false", { defaultValue: "False" })}</Radio>
+            </Space>
+          </Radio.Group>
+        </fieldset>
       )
     }
+    const helperId = `fill-blank-guidance-${question.id}`
     return (
       <Space orientation="vertical" className="w-full" size={4}>
         <Input
           placeholder={t("option:quiz.correctAnswerPlaceholder", {
             defaultValue: "Enter the correct answer..."
           })}
+          aria-label={t("option:quiz.answerForQuestion", {
+            defaultValue: "Answer for question: {{question}}",
+            question: question.question_text
+          })}
+          aria-describedby={helperId}
           value={typeof answers[question.id] === "string" ? (answers[question.id] as string) : ""}
           onChange={(e) => updateAnswer(question.id, e.target.value)}
         />
-        <Typography.Text type="secondary" className="text-xs">
+        <Typography.Text id={helperId} type="secondary" className="text-xs">
           {t("option:quiz.fillBlankGuidance", {
             defaultValue: "Case-insensitive exact match. Extra spaces are ignored."
           })}
@@ -421,7 +652,10 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
                     <div className="font-medium">
                       {index + 1}. {question.question_text}
                     </div>
-                    <Tag color={isCorrect ? "green" : "red"}>
+                    <Tag
+                      color={isCorrect ? "green" : "red"}
+                      icon={isCorrect ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
+                    >
                       {isCorrect
                         ? t("option:quiz.correct", { defaultValue: "Correct" })
                         : t("option:quiz.incorrect", { defaultValue: "Incorrect" })}
@@ -590,10 +824,100 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     )
   }
 
+  const renderSubmissionQueueAlert = () => {
+    if (!queuedSubmission) return null
+    const queuedAtLabel = new Date(queuedSubmission.queuedAt).toLocaleTimeString()
+    return (
+      <Alert
+        type="error"
+        showIcon
+        title={queuedSubmission.allowPartial
+          ? t("option:quiz.submitQueueTitleTimer", {
+            defaultValue: "Time expired. Submission pending retry."
+          })
+          : t("option:quiz.submitQueueTitle", {
+            defaultValue: "Submission failed. Answers queued locally."
+          })}
+        description={(
+          <div className="space-y-2">
+            <Typography.Text className="block text-xs text-text-muted">
+              {t("option:quiz.submitQueueMeta", {
+                defaultValue:
+                  "Queued at {{time}}. Retry attempts: {{count}}.",
+                time: queuedAtLabel,
+                count: queuedSubmission.retryCount
+              })}
+            </Typography.Text>
+            {queuedSubmission.lastError && (
+              <Typography.Text className="block text-xs text-text-muted">
+                {t("option:quiz.submitQueueLastError", {
+                  defaultValue: "Last error: {{error}}",
+                  error: queuedSubmission.lastError
+                })}
+              </Typography.Text>
+            )}
+            <Typography.Text className="block text-xs text-text-muted">
+              {isOnline
+                ? t("option:quiz.submitQueueOnlineHint", {
+                  defaultValue:
+                    "You're online. Retry now to submit immediately, or we'll retry when connectivity changes."
+                })
+                : t("option:quiz.submitQueueOfflineHint", {
+                  defaultValue:
+                    "You're offline. We'll retry automatically when your connection returns."
+                })}
+            </Typography.Text>
+            {submissionQueueStorageUnavailable && (
+              <Typography.Text className="block text-xs text-text-warning">
+                {t("option:quiz.submitQueueStorageUnavailable", {
+                  defaultValue:
+                    "Local queue storage is unavailable in this browser session."
+                })}
+              </Typography.Text>
+            )}
+          </div>
+        )}
+        action={(
+          <Button
+            size="small"
+            type="primary"
+            onClick={() => {
+              void retryQueuedSubmission("manual")
+            }}
+            loading={submitAttemptMutation.isPending || isRetryingQueuedSubmission}
+            disabled={!isOnline || submitAttemptMutation.isPending || isRetryingQueuedSubmission}
+          >
+            {t("option:quiz.retrySubmission", { defaultValue: "Retry submission" })}
+          </Button>
+        )}
+      />
+    )
+  }
+
+  const renderLiveRegions = () => (
+    <>
+      {timerAnnouncement && (
+        <div
+          className="sr-only"
+          aria-live={timerState?.isDanger ? "assertive" : "polite"}
+          aria-atomic="true"
+        >
+          {timerAnnouncement}
+        </div>
+      )}
+      {statusAnnouncement && (
+        <div className="sr-only" aria-live="polite" aria-atomic="true">
+          {statusAnnouncement}
+        </div>
+      )}
+    </>
+  )
+
   if (isLoading) {
     return (
       <div className="flex justify-center py-12">
         {contextHolder}
+        {renderLiveRegions()}
         {renderStartConfirmationModal()}
         <Spin size="large" />
       </div>
@@ -604,7 +928,9 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     return (
       <div className="space-y-4">
         {contextHolder}
+        {renderLiveRegions()}
         {renderAutoSaveWarning()}
+        {renderSubmissionQueueAlert()}
         {renderStartConfirmationModal()}
         {renderResults()}
       </div>
@@ -615,7 +941,9 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     return (
       <div className="space-y-4">
         {contextHolder}
+        {renderLiveRegions()}
         {renderAutoSaveWarning()}
+        {renderSubmissionQueueAlert()}
         {renderStartConfirmationModal()}
         <Card
           title={quizDetails?.name || t("option:quiz.take", { defaultValue: "Take Quiz" })}
@@ -628,6 +956,10 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
                 <Tag
                   icon={<ClockCircleOutlined />}
                   color={timerState.isDanger ? "red" : timerState.isWarning ? "orange" : "default"}
+                  aria-label={t("option:quiz.timerDisplayAria", {
+                    defaultValue: "Time remaining: {{time}}",
+                    time: timerState.formattedTime
+                  })}
                 >
                   {timerState.formattedTime}
                 </Tag>
@@ -676,7 +1008,15 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
               />
             )}
 
-            <Progress percent={progress} />
+            <div
+              role="progressbar"
+              aria-label={t("option:quiz.progressAria", { defaultValue: "Quiz completion progress" })}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(progress)}
+            >
+              <Progress percent={progress} />
+            </div>
             <List
               dataSource={questions}
               renderItem={(question, index) => (
@@ -704,8 +1044,8 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
               <Button
                 type="primary"
                 onClick={() => handleSubmit()}
-                loading={submitAttemptMutation.isPending}
-                disabled={submitAttemptMutation.isPending}
+                loading={submitAttemptMutation.isPending || isRetryingQueuedSubmission}
+                disabled={submitAttemptMutation.isPending || isRetryingQueuedSubmission}
               >
                 {t("common:submit", { defaultValue: "Submit" })}
               </Button>
@@ -720,7 +1060,9 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
     return (
       <>
         {contextHolder}
+        {renderLiveRegions()}
         {renderAutoSaveWarning()}
+        {renderSubmissionQueueAlert()}
         {renderStartConfirmationModal()}
         <Empty
           description={
@@ -755,7 +1097,9 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
   return (
     <div className="space-y-4">
       {contextHolder}
+      {renderLiveRegions()}
       {renderAutoSaveWarning()}
+      {renderSubmissionQueueAlert()}
       {renderStartConfirmationModal()}
       <div className="text-sm text-text-muted">
         {t("option:quiz.selectQuiz", { defaultValue: "Select a quiz to begin" })}

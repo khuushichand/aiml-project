@@ -421,10 +421,10 @@ test.describe('Watchlists playground smoke', () => {
     await expect(page.getByRole('tab', { name: 'Overview' })).toBeVisible()
     await expect(page.getByText('At-a-glance watchlist health')).toBeVisible()
 
-    await page.getByRole('tab', { name: 'Sources' }).click()
+    await page.getByRole('tab', { name: 'Feeds' }).click()
     await expect(page.getByText('Tech Daily')).toBeVisible()
 
-    await page.getByRole('tab', { name: 'Jobs' }).click()
+    await page.getByRole('tab', { name: 'Monitors' }).click()
     await expect(
       page.locator('.ant-tabs-tabpane-active').getByText('Morning Brief')
     ).toBeVisible()
@@ -630,6 +630,7 @@ test.describe('Watchlists playground smoke', () => {
 
     await expect(page.getByRole('heading', { name: 'Watchlists' })).toBeVisible()
     await expect(page.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByText('Setup complete')).toBeVisible()
     await expect(page.getByText('System requires attention')).toBeVisible()
     await expect(page.getByText('Recent Failed Runs')).toBeVisible()
     await expect(page.getByText('Alert Monitor')).toBeVisible()
@@ -642,10 +643,117 @@ test.describe('Watchlists playground smoke', () => {
     await expect(failureNotice).toContainText('rate-limiting requests')
     await failureNotice.getByRole('button', { name: 'View run' }).click()
 
-    await expect(page.getByRole('tab', { name: 'Runs' })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true')
     const runDialog = page.getByRole('dialog', { name: 'Run Details' })
     await expect(runDialog).toBeVisible()
     await expect(runDialog.getByText('Rate limit exceeded while fetching source')).toBeVisible()
+
+    await context.close()
+  })
+
+  test('overview quick setup callout drives first tab transition', async () => {
+    const extPath = path.resolve('build/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtension(extPath, {
+      seedConfig: {
+        __tldw_first_run_complete: true,
+        __tldw_allow_offline: true
+      }
+    })
+
+    await context.addInitScript(() => {
+      ;(window as any).__watchlistsStubbed = true
+
+      const paginate = (list, page, size) => {
+        const current = page || 1
+        const limit = size || list.length || 1
+        const start = (current - 1) * limit
+        const end = start + limit
+        return {
+          items: list.slice(start, end),
+          total: list.length,
+          page: current,
+          size: limit,
+          has_more: end < list.length
+        }
+      }
+
+      const handleRequest = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'GET').toUpperCase()
+        const [pathname, queryString] = path.split('?')
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        if (pathname === '/api/v1/watchlists/sources' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/jobs' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/items' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/runs' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        return null
+      }
+
+      const patchRuntime = (runtime) => {
+        if (!runtime?.sendMessage) return
+        const original = runtime.sendMessage.bind(runtime)
+        const handler = async (message) => {
+          if (message?.type === 'tldw:request') {
+            try {
+              const data = handleRequest(message.payload || {})
+              if (data == null) {
+                return { ok: false, status: 404, error: 'Not found' }
+              }
+              return { ok: true, status: 200, data }
+            } catch (error) {
+              return { ok: false, status: 500, error: String(error || '') }
+            }
+          }
+          return original ? original(message) : { ok: true, status: 200, data: {} }
+        }
+        try {
+          runtime.sendMessage = handler
+          return
+        } catch {}
+        try {
+          Object.defineProperty(runtime, 'sendMessage', {
+            value: handler,
+            configurable: true,
+            writable: true
+          })
+        } catch {}
+      }
+
+      if (window.chrome?.runtime) {
+        patchRuntime(window.chrome.runtime)
+      }
+
+      if (window.browser?.runtime) {
+        patchRuntime(window.browser.runtime)
+      }
+    })
+
+    const page = await context.newPage()
+    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
+      timeout: 5_000
+    })
+    await basePage.close().catch(() => {})
+
+    await expect(page.getByText('Quick setup')).toBeVisible()
+    await expect(page.getByText('Add Feed -> Create Monitor -> Review Results')).toBeVisible()
+    await page.getByRole('button', { name: 'Add first feed' }).click()
+    await expect(page.getByRole('tab', { name: 'Feeds' })).toHaveAttribute('aria-selected', 'true')
 
     await context.close()
   })

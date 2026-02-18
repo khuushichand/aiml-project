@@ -969,6 +969,14 @@ class TestCharacterAPIIntegration:
         assert response.status_code == 400, response.text
         detail = response.json().get("detail", "")
         assert "not allowed" in detail.lower()
+        assert "allowed:" in detail.lower()
+        assert ".json" in detail
+        assert ".yaml" in detail
+        assert ".yml" in detail
+
+    def test_import_supported_extension_message_order_is_stable(self):
+        expected = ", ".join(sorted(characters_api_module.ALLOWED_EXTENSIONS))
+        assert characters_api_module._format_allowed_extensions() == expected
 
     def test_import_malformed_yaml_falls_back_to_plain_text_character(
         self,

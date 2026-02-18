@@ -19,6 +19,7 @@ interface CharacterPreviewPopupProps {
   open: boolean
   onClose: () => void
   onChat: () => void
+  onQuickChat: () => void
   onEdit: () => void
   onDuplicate: () => void
   onExport: (format?: 'json' | 'png') => void
@@ -37,6 +38,7 @@ export function CharacterPreviewPopup({
   open,
   onClose,
   onChat,
+  onQuickChat,
   onEdit,
   onDuplicate,
   onExport,
@@ -61,6 +63,9 @@ export function CharacterPreviewPopup({
 
   const chatLabel = t("settings:manageCharacters.actions.chat", {
     defaultValue: "Chat"
+  })
+  const quickChatLabel = t("settings:manageCharacters.actions.quickChat", {
+    defaultValue: "Quick chat"
   })
   const editLabel = t("settings:manageCharacters.actions.edit", {
     defaultValue: "Edit"
@@ -203,6 +208,19 @@ export function CharacterPreviewPopup({
           >
             {chatLabel}
           </Button>
+
+          <Tooltip title={quickChatLabel}>
+            <Button
+              icon={<MessageCircle className="w-4 h-4" />}
+              onClick={onQuickChat}
+              aria-label={t("settings:manageCharacters.aria.quickChatWith", {
+                defaultValue: "Quick chat with {{name}}",
+                name: displayName
+              })}
+            >
+              {quickChatLabel}
+            </Button>
+          </Tooltip>
 
           <Tooltip title={editLabel}>
             <Button

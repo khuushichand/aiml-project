@@ -206,7 +206,21 @@ type DocumentIntelligenceTab =
   | 'figures'
   | 'annotations'
 
-type MediaExportFormat = 'json' | 'markdown' | 'text'
+type MediaExportFormat = 'json' | 'markdown' | 'text' | 'bibtex'
+type MediaAnnotationColor = 'yellow' | 'green' | 'blue' | 'pink'
+type ReingestSchedulePreset = 'hourly' | 'daily' | 'weekly'
+
+interface MediaAnnotationEntry {
+  id: string
+  media_id: number
+  location: string
+  text: string
+  color: MediaAnnotationColor
+  note?: string
+  annotation_type: 'highlight' | 'page_note'
+  created_at?: string
+  updated_at?: string
+}
 
 interface DocumentIntelligencePanelState<T = any> {
   loading: boolean
@@ -229,6 +243,22 @@ const DOCUMENT_INTELLIGENCE_TABS: Array<{
   { key: 'figures', label: 'Figures' },
   { key: 'annotations', label: 'Annotations' }
 ]
+
+const ANNOTATION_COLOR_OPTIONS: Array<{
+  value: MediaAnnotationColor
+  label: string
+}> = [
+  { value: 'yellow', label: 'Yellow' },
+  { value: 'green', label: 'Green' },
+  { value: 'blue', label: 'Blue' },
+  { value: 'pink', label: 'Pink' }
+]
+
+const REINGEST_CRON_BY_PRESET: Record<ReingestSchedulePreset, string> = {
+  hourly: '0 * * * *',
+  daily: '0 9 * * *',
+  weekly: '0 9 * * MON'
+}
 
 const createDefaultDocumentIntelligencePanels =
   (): DocumentIntelligencePanelsState => ({
@@ -271,6 +301,99 @@ const toDisplayMetadataLabel = (key: string): string => {
   return key
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (match) => match.toUpperCase())
+}
+
+const sanitizeBibtexValue = (value: string): string =>
+  value
+    .replace(/\\/g, '\\\\')
+    .replace(/[{}]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const toCitationFieldString = (value: unknown): string => {
+  if (value == null) return ''
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((entry) => {
+        if (typeof entry === 'string') return [entry.trim()]
+        if (entry && typeof entry === 'object' && 'name' in entry) {
+          const name = (entry as { name?: unknown }).name
+          return typeof name === 'string' ? [name.trim()] : []
+        }
+        return []
+      })
+      .filter(Boolean)
+      .join(' and ')
+  }
+  return ''
+}
+
+const toCitationKey = (
+  selectedMedia: MediaResultItem,
+  safeMetadata: Record<string, unknown>
+): string => {
+  const doi = toCitationFieldString(safeMetadata.doi)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  if (doi.length > 0) return doi
+
+  const titleSlug = String(selectedMedia.title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  if (titleSlug.length > 0) {
+    const year = toCitationFieldString(
+      safeMetadata.year ?? safeMetadata.publication_year ?? safeMetadata.published_year
+    )
+      .replace(/[^\d]/g, '')
+      .slice(0, 4)
+    return `${titleSlug}${year ? `_${year}` : ''}`
+  }
+
+  return `media_${String(selectedMedia.id).replace(/[^a-z0-9]+/gi, '_')}`
+}
+
+const buildBibtexExport = (
+  selectedMedia: MediaResultItem,
+  exportPayload: {
+    title: string
+    source: string
+    exported_at: string
+  },
+  safeMetadata: Record<string, unknown>
+): string => {
+  const entryType = 'article'
+  const entryKey = toCitationKey(selectedMedia, safeMetadata)
+  const yearField = toCitationFieldString(
+    safeMetadata.year ??
+      safeMetadata.publication_year ??
+      safeMetadata.published_year ??
+      safeMetadata.published_at
+  )
+    .replace(/[^\d]/g, '')
+    .slice(0, 4)
+  const fieldTuples: Array<[string, string]> = [
+    ['title', exportPayload.title || `Media ${selectedMedia.id}`],
+    ['author', toCitationFieldString(safeMetadata.authors ?? safeMetadata.author)],
+    ['journal', toCitationFieldString(safeMetadata.journal)],
+    ['year', yearField],
+    ['doi', toCitationFieldString(safeMetadata.doi)],
+    ['url', toCitationFieldString(safeMetadata.url) || exportPayload.source],
+    ['pmid', toCitationFieldString(safeMetadata.pmid)],
+    ['eprint', toCitationFieldString(safeMetadata.arxiv_id ?? safeMetadata.arxiv)]
+  ].filter(([, value]) => value.trim().length > 0)
+
+  const body = fieldTuples
+    .map(([field, value], index) => {
+      const suffix = index === fieldTuples.length - 1 ? '' : ','
+      return `  ${field} = {${sanitizeBibtexValue(value)}}${suffix}`
+    })
+    .join('\n')
+
+  return [`@${entryType}{${entryKey},`, body, '}'].join('\n')
 }
 
 const normalizeVectorProcessingStatus = (value: unknown): string | null => {
@@ -676,6 +799,10 @@ export function ContentViewer({
   const [editingContentText, setEditingContentText] = useState('')
   const [exportModalOpen, setExportModalOpen] = useState(false)
   const [exportFormat, setExportFormat] = useState<MediaExportFormat>('json')
+  const [scheduleRefreshModalOpen, setScheduleRefreshModalOpen] = useState(false)
+  const [scheduleRefreshPreset, setScheduleRefreshPreset] =
+    useState<ReingestSchedulePreset>('daily')
+  const [scheduleRefreshSubmitting, setScheduleRefreshSubmitting] = useState(false)
   const [metadataDetailsExpanded, setMetadataDetailsExpanded] = useState(false)
   const [activeIntelligenceTab, setActiveIntelligenceTab] =
     useState<DocumentIntelligenceTab>('outline')
@@ -685,6 +812,16 @@ export function ContentViewer({
     )
   const [loadedDocumentIntelligenceMediaId, setLoadedDocumentIntelligenceMediaId] =
     useState<string | null>(null)
+  const [annotationSelectionText, setAnnotationSelectionText] = useState('')
+  const [annotationSelectionLocation, setAnnotationSelectionLocation] = useState('')
+  const [annotationManualText, setAnnotationManualText] = useState('')
+  const [annotationDraftNote, setAnnotationDraftNote] = useState('')
+  const [annotationDraftColor, setAnnotationDraftColor] =
+    useState<MediaAnnotationColor>('yellow')
+  const [annotationCreating, setAnnotationCreating] = useState(false)
+  const [annotationUpdatingId, setAnnotationUpdatingId] = useState<string | null>(null)
+  const [annotationDeletingId, setAnnotationDeletingId] = useState<string | null>(null)
+  const [annotationSyncing, setAnnotationSyncing] = useState(false)
   const [showBackToTop, setShowBackToTop] = useState(false)
   const [visiblePlainContentChars, setVisiblePlainContentChars] = useState(
     () => content.length
@@ -1746,6 +1883,17 @@ export function ContentViewer({
   const confirmExportMedia = () => {
     if (isNote || !selectedMedia) return
 
+    const citationSafeMetadata =
+      mediaDetail?.safe_metadata &&
+      typeof mediaDetail.safe_metadata === 'object' &&
+      !Array.isArray(mediaDetail.safe_metadata)
+        ? (mediaDetail.safe_metadata as Record<string, unknown>)
+        : selectedMedia?.raw?.safe_metadata &&
+            typeof selectedMedia.raw.safe_metadata === 'object' &&
+            !Array.isArray(selectedMedia.raw.safe_metadata)
+          ? (selectedMedia.raw.safe_metadata as Record<string, unknown>)
+          : {}
+
     const exportPayload = {
       id: selectedMedia.id,
       title: selectedMedia.title || '',
@@ -1765,6 +1913,10 @@ export function ContentViewer({
       output = JSON.stringify(exportPayload, null, 2)
       extension = 'json'
       mimeType = 'application/json;charset=utf-8'
+    } else if (exportFormat === 'bibtex') {
+      output = buildBibtexExport(selectedMedia, exportPayload, citationSafeMetadata)
+      extension = 'bib'
+      mimeType = 'application/x-bibtex;charset=utf-8'
     } else if (exportFormat === 'markdown') {
       output = [
         `# ${exportPayload.title || `Media ${exportPayload.id}`}`,
@@ -2019,6 +2171,11 @@ export function ContentViewer({
     setActiveIntelligenceTab('outline')
     setDocumentIntelligencePanels(createDefaultDocumentIntelligencePanels())
     setLoadedDocumentIntelligenceMediaId(null)
+    setAnnotationSelectionText('')
+    setAnnotationSelectionLocation('')
+    setAnnotationManualText('')
+    setAnnotationDraftNote('')
+    setAnnotationDraftColor('yellow')
   }, [selectedMediaId, selectedMedia?.kind])
 
   useEffect(() => {
@@ -2327,6 +2484,244 @@ export function ContentViewer({
     processingStatusBadges.length > 0 || safeMetadataEntries.length > 0
   const activeDocumentIntelligencePanel =
     documentIntelligencePanels[activeIntelligenceTab]
+  const annotationPanelEntries = useMemo(
+    () =>
+      Array.isArray(documentIntelligencePanels.annotations.data)
+        ? (documentIntelligencePanels.annotations.data as MediaAnnotationEntry[])
+        : [],
+    [documentIntelligencePanels.annotations.data]
+  )
+
+  const setAnnotationPanelEntries = useCallback(
+    (
+      updater:
+        | MediaAnnotationEntry[]
+        | ((prev: MediaAnnotationEntry[]) => MediaAnnotationEntry[])
+    ) => {
+      setDocumentIntelligencePanels((prev) => {
+        const previousRows = Array.isArray(prev.annotations.data)
+          ? (prev.annotations.data as MediaAnnotationEntry[])
+          : []
+        const nextRows =
+          typeof updater === 'function'
+            ? (updater as (prev: MediaAnnotationEntry[]) => MediaAnnotationEntry[])(previousRows)
+            : updater
+        return {
+          ...prev,
+          annotations: {
+            loading: false,
+            error: null,
+            data: nextRows
+          }
+        }
+      })
+    },
+    []
+  )
+
+  const clearAnnotationDraft = useCallback(() => {
+    setAnnotationSelectionText('')
+    setAnnotationSelectionLocation('')
+    setAnnotationManualText('')
+    setAnnotationDraftNote('')
+    setAnnotationDraftColor('yellow')
+  }, [])
+
+  const handleCaptureAnnotationSelection = useCallback(() => {
+    if (!selectedMediaId || isNote) return
+    if (typeof window === 'undefined' || typeof window.getSelection !== 'function') {
+      return
+    }
+
+    const contentNode = contentBodyRef.current
+    const selection = window.getSelection()
+    if (!contentNode || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return
+    }
+
+    const range = selection.getRangeAt(0)
+    const anchorNode = range.commonAncestorContainer
+    if (!contentNode.contains(anchorNode)) {
+      return
+    }
+
+    const selectedText = selection.toString().trim()
+    if (!selectedText) return
+
+    setAnnotationSelectionText(selectedText.slice(0, 4000))
+    setAnnotationSelectionLocation(`selection:${Date.now()}`)
+    setActiveIntelligenceTab('annotations')
+    if (collapsedSections.intelligence ?? true) {
+      void setCollapsedSections((prev) => ({
+        ...prev,
+        intelligence: false
+      }))
+    }
+  }, [collapsedSections.intelligence, isNote, selectedMediaId, setCollapsedSections])
+
+  const handleCreateAnnotation = useCallback(async () => {
+    if (!selectedMediaId || isNote) return
+
+    const highlightText =
+      annotationSelectionText.trim() || annotationManualText.trim()
+    const noteText = annotationDraftNote.trim()
+    if (!highlightText && !noteText) {
+      message.warning(
+        t('review:mediaPage.annotationCreateEmpty', {
+          defaultValue: 'Select text or enter annotation text first.'
+        })
+      )
+      return
+    }
+
+    const annotationType = highlightText ? 'highlight' : 'page_note'
+    const annotationLocation =
+      annotationSelectionLocation || `manual:${Date.now()}`
+
+    setAnnotationCreating(true)
+    try {
+      const created = await bgRequest<MediaAnnotationEntry>({
+        path: `/api/v1/media/${encodeURIComponent(selectedMediaId)}/annotations` as any,
+        method: 'POST' as any,
+        headers: { 'Content-Type': 'application/json' },
+        body: {
+          location: annotationLocation,
+          text: highlightText || noteText,
+          color: annotationDraftColor,
+          note: noteText || undefined,
+          annotation_type: annotationType
+        }
+      })
+      setAnnotationPanelEntries((prev) => [...prev, created])
+      setLoadedDocumentIntelligenceMediaId(selectedMediaId)
+      clearAnnotationDraft()
+      message.success(
+        t('review:mediaPage.annotationSaved', {
+          defaultValue: 'Annotation saved.'
+        })
+      )
+    } catch (error) {
+      console.error('Failed to create annotation:', error)
+      message.error(
+        t('review:mediaPage.annotationSaveFailed', {
+          defaultValue: 'Unable to save annotation.'
+        })
+      )
+    } finally {
+      setAnnotationCreating(false)
+    }
+  }, [
+    annotationDraftColor,
+    annotationDraftNote,
+    annotationManualText,
+    annotationSelectionLocation,
+    annotationSelectionText,
+    clearAnnotationDraft,
+    isNote,
+    selectedMediaId,
+    setAnnotationPanelEntries,
+    t
+  ])
+
+  const handleUpdateAnnotationNote = useCallback(
+    async (annotation: MediaAnnotationEntry) => {
+      if (!selectedMediaId || isNote) return
+      const nextNote = window.prompt(
+        t('review:mediaPage.annotationEditPrompt', {
+          defaultValue: 'Update annotation note'
+        }),
+        annotation.note || ''
+      )
+      if (nextNote == null) return
+
+      setAnnotationUpdatingId(annotation.id)
+      try {
+        const updated = await bgRequest<MediaAnnotationEntry>({
+          path: `/api/v1/media/${encodeURIComponent(selectedMediaId)}/annotations/${encodeURIComponent(annotation.id)}` as any,
+          method: 'PUT' as any,
+          headers: { 'Content-Type': 'application/json' },
+          body: { note: nextNote }
+        })
+        setAnnotationPanelEntries((prev) =>
+          prev.map((entry) => (entry.id === annotation.id ? updated : entry))
+        )
+      } catch (error) {
+        console.error('Failed to update annotation:', error)
+        message.error(
+          t('review:mediaPage.annotationUpdateFailed', {
+            defaultValue: 'Unable to update annotation.'
+          })
+        )
+      } finally {
+        setAnnotationUpdatingId(null)
+      }
+    },
+    [isNote, selectedMediaId, setAnnotationPanelEntries, t]
+  )
+
+  const handleDeleteAnnotation = useCallback(
+    async (annotationId: string) => {
+      if (!selectedMediaId || isNote) return
+
+      setAnnotationDeletingId(annotationId)
+      try {
+        await bgRequest({
+          path: `/api/v1/media/${encodeURIComponent(selectedMediaId)}/annotations/${encodeURIComponent(annotationId)}` as any,
+          method: 'DELETE' as any
+        })
+        setAnnotationPanelEntries((prev) =>
+          prev.filter((entry) => entry.id !== annotationId)
+        )
+      } catch (error) {
+        console.error('Failed to delete annotation:', error)
+        message.error(
+          t('review:mediaPage.annotationDeleteFailed', {
+            defaultValue: 'Unable to delete annotation.'
+          })
+        )
+      } finally {
+        setAnnotationDeletingId(null)
+      }
+    },
+    [isNote, selectedMediaId, setAnnotationPanelEntries, t]
+  )
+
+  const handleSyncAnnotations = useCallback(async () => {
+    if (!selectedMediaId || isNote) return
+
+    setAnnotationSyncing(true)
+    try {
+      await bgRequest({
+        path: `/api/v1/media/${encodeURIComponent(selectedMediaId)}/annotations/sync` as any,
+        method: 'POST' as any,
+        headers: { 'Content-Type': 'application/json' },
+        body: {
+          annotations: annotationPanelEntries.map((entry) => ({
+            location: entry.location,
+            text: entry.text,
+            color: entry.color,
+            note: entry.note,
+            annotation_type: entry.annotation_type
+          })),
+          client_ids: annotationPanelEntries.map((entry) => entry.id)
+        }
+      })
+      message.success(
+        t('review:mediaPage.annotationSyncSuccess', {
+          defaultValue: 'Annotations synced.'
+        })
+      )
+    } catch (error) {
+      console.error('Failed to sync annotations:', error)
+      message.error(
+        t('review:mediaPage.annotationSyncFailed', {
+          defaultValue: 'Unable to sync annotations.'
+        })
+      )
+    } finally {
+      setAnnotationSyncing(false)
+    }
+  }, [annotationPanelEntries, isNote, selectedMediaId, t])
 
   const renderDocumentIntelligencePanel = () => {
     if (!activeDocumentIntelligencePanel) {
@@ -2364,7 +2759,11 @@ export function ContentViewer({
       )
     }
 
-    if (!Array.isArray(activeDocumentIntelligencePanel.data) || activeDocumentIntelligencePanel.data.length === 0) {
+    if (
+      activeIntelligenceTab !== 'annotations' &&
+      (!Array.isArray(activeDocumentIntelligencePanel.data) ||
+        activeDocumentIntelligencePanel.data.length === 0)
+    ) {
       return (
         <div
           className="text-xs text-text-muted"
@@ -2453,18 +2852,160 @@ export function ContentViewer({
       )
     }
 
+    const annotationEntries = Array.isArray(activeDocumentIntelligencePanel.data)
+      ? (activeDocumentIntelligencePanel.data as MediaAnnotationEntry[])
+      : []
+
     return (
-      <ul className="space-y-1 text-xs" data-testid="media-intelligence-annotations-list">
-        {activeDocumentIntelligencePanel.data.map((entry: any, index: number) => (
-          <li
-            key={`${entry?.id || 'annotation'}-${index}`}
-            className="rounded bg-surface2 px-2 py-1 text-text"
-            data-testid="media-intelligence-annotation-item"
-          >
-            {entry?.text || entry?.note || `Annotation ${index + 1}`}
-          </li>
-        ))}
-      </ul>
+      <div className="space-y-2 text-xs" data-testid="media-intelligence-annotations-panel">
+        <div className="space-y-2 rounded border border-border bg-surface2 p-2">
+          <p className="text-[11px] text-text-muted">
+            {annotationSelectionText
+              ? t('review:mediaPage.annotationSelectionCaptured', {
+                  defaultValue: 'Selection captured. Add details and save.'
+                })
+              : t('review:mediaPage.annotationManualHint', {
+                  defaultValue: 'Create an annotation from selected text or enter text manually.'
+                })}
+          </p>
+          {annotationSelectionText ? (
+            <p
+              className="max-h-20 overflow-y-auto rounded border border-border bg-surface px-2 py-1 text-text"
+              data-testid="media-annotation-selection-preview"
+            >
+              {annotationSelectionText}
+            </p>
+          ) : null}
+          <textarea
+            value={annotationManualText}
+            onChange={(event) => setAnnotationManualText(event.target.value)}
+            placeholder={t('review:mediaPage.annotationTextPlaceholder', {
+              defaultValue: 'Annotation text'
+            })}
+            className="min-h-[56px] w-full rounded border border-border bg-surface px-2 py-1 text-xs text-text"
+            data-testid="media-annotation-manual-text"
+          />
+          <input
+            value={annotationDraftNote}
+            onChange={(event) => setAnnotationDraftNote(event.target.value)}
+            placeholder={t('review:mediaPage.annotationNotePlaceholder', {
+              defaultValue: 'Optional note'
+            })}
+            className="h-8 w-full rounded border border-border bg-surface px-2 text-xs text-text"
+            data-testid="media-annotation-note-input"
+          />
+          <div className="flex items-center gap-2">
+            <select
+              value={annotationDraftColor}
+              onChange={(event) =>
+                setAnnotationDraftColor(event.target.value as MediaAnnotationColor)
+              }
+              className="h-8 rounded border border-border bg-surface px-2 text-xs text-text"
+              data-testid="media-annotation-color"
+            >
+              {ANNOTATION_COLOR_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => {
+                void handleCreateAnnotation()
+              }}
+              disabled={annotationCreating}
+              className="inline-flex h-8 items-center rounded border border-border px-2 text-xs text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+              data-testid="media-annotation-create"
+            >
+              {annotationCreating
+                ? t('review:mediaPage.annotationSaving', {
+                    defaultValue: 'Saving...'
+                  })
+                : t('review:mediaPage.annotationSave', {
+                    defaultValue: 'Save annotation'
+                  })}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void handleSyncAnnotations()
+              }}
+              disabled={annotationSyncing || annotationEntries.length === 0}
+              className="inline-flex h-8 items-center rounded border border-border px-2 text-xs text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+              data-testid="media-annotation-sync"
+            >
+              {annotationSyncing
+                ? t('review:mediaPage.annotationSyncing', {
+                    defaultValue: 'Syncing...'
+                  })
+                : t('review:mediaPage.annotationSync', {
+                    defaultValue: 'Sync now'
+                  })}
+            </button>
+            <button
+              type="button"
+              onClick={clearAnnotationDraft}
+              className="inline-flex h-8 items-center rounded border border-border px-2 text-xs text-text hover:bg-surface"
+              data-testid="media-annotation-clear-draft"
+            >
+              {t('common:clear', { defaultValue: 'Clear' })}
+            </button>
+          </div>
+        </div>
+
+        {annotationEntries.length > 0 ? (
+          <ul className="space-y-1 text-xs" data-testid="media-intelligence-annotations-list">
+            {annotationEntries.map((entry, index) => (
+              <li
+                key={`${entry?.id || 'annotation'}-${index}`}
+                className="rounded bg-surface2 px-2 py-1 text-text"
+                data-testid="media-intelligence-annotation-item"
+              >
+                <p>{entry?.text || entry?.note || `Annotation ${index + 1}`}</p>
+                {entry?.note ? (
+                  <p className="mt-1 text-[11px] text-text-muted">{entry.note}</p>
+                ) : null}
+                <div className="mt-1 flex items-center gap-2">
+                  <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] uppercase text-text-muted">
+                    {entry.color || 'yellow'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleUpdateAnnotationNote(entry)
+                    }}
+                    disabled={annotationUpdatingId === entry.id}
+                    className="rounded border border-border px-2 py-0.5 text-[11px] text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                    data-testid={`media-annotation-edit-${entry.id}`}
+                  >
+                    {annotationUpdatingId === entry.id
+                      ? t('review:mediaPage.annotationUpdating', {
+                          defaultValue: 'Updating...'
+                        })
+                      : t('common:edit', { defaultValue: 'Edit' })}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleDeleteAnnotation(entry.id)
+                    }}
+                    disabled={annotationDeletingId === entry.id}
+                    className="rounded border border-danger/50 px-2 py-0.5 text-[11px] text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
+                    data-testid={`media-annotation-delete-${entry.id}`}
+                  >
+                    {annotationDeletingId === entry.id
+                      ? t('review:mediaPage.annotationDeleting', {
+                          defaultValue: 'Deleting...'
+                        })
+                      : t('common:delete', { defaultValue: 'Delete' })}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
     )
   }
 
@@ -3097,6 +3638,8 @@ export function ContentViewer({
                   className={`text-sm text-text leading-relaxed ${
                     !contentExpanded && shouldShowExpandToggle ? 'max-h-64 overflow-hidden relative' : ''
                   }`}
+                  onMouseUp={handleCaptureAnnotationSelection}
+                  onKeyUp={handleCaptureAnnotationSelection}
                 >
                   {effectiveRenderMode === 'plain' ? (
                     hasClickableTranscriptTimestamps && !normalizedFindQuery ? (
@@ -3653,6 +4196,72 @@ export function ContentViewer({
             defaultValue: 'Back to top'
           })}
         </button>
+      )}
+
+      {/* Export Modal */}
+      {selectedMedia && !isNote && (
+        <Modal
+          open={exportModalOpen}
+          onCancel={() => setExportModalOpen(false)}
+          footer={null}
+          title={t('review:mediaPage.exportMedia', {
+            defaultValue: 'Export content'
+          })}
+          destroyOnClose
+        >
+          <div className="space-y-3" data-testid="media-export-modal">
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  ['json', 'JSON'],
+                  ['markdown', 'Markdown'],
+                  ['text', 'Plain text'],
+                  ['bibtex', 'BibTeX']
+                ] as Array<[MediaExportFormat, string]>
+              ).map(([format, label]) => {
+                const isActive = exportFormat === format
+                return (
+                  <button
+                    key={format}
+                    type="button"
+                    className={`rounded border px-2 py-1 text-xs transition-colors ${
+                      isActive
+                        ? 'border-primary bg-primary text-white'
+                        : 'border-border bg-surface2 text-text hover:bg-surface'
+                    }`}
+                    onClick={() => setExportFormat(format)}
+                    aria-pressed={isActive}
+                    data-testid={`media-export-format-${format}`}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+            <div className="text-xs text-text-muted" data-testid="media-export-hint">
+              {t('review:mediaPage.exportHint', {
+                defaultValue: 'Exports content, analysis, and key metadata for this item.'
+              })}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded border border-border px-3 py-1.5 text-xs text-text hover:bg-surface2"
+                onClick={() => setExportModalOpen(false)}
+              >
+                {t('common:cancel', { defaultValue: 'Cancel' })}
+              </button>
+              <button
+                type="button"
+                className="rounded border border-primary bg-primary px-3 py-1.5 text-xs text-white hover:bg-primaryStrong"
+                onClick={confirmExportMedia}
+                data-testid="media-export-confirm"
+              >
+                {t('review:mediaPage.exportNow', { defaultValue: 'Export' })}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Analysis Generation Modal - only for media */}

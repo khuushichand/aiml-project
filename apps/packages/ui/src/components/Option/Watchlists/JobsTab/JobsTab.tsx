@@ -12,8 +12,10 @@ import {
 import type { ColumnsType } from "antd/es/table"
 import { Edit2, Eye, Play, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
+  createWatchlistJob,
   deleteWatchlistJob,
   fetchWatchlistJobs,
   triggerWatchlistRun,
@@ -23,10 +25,12 @@ import type { WatchlistJob } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { CronDisplay, StatusTag } from "../shared"
 import { JobFormModal } from "./JobFormModal"
+import { JOB_DELETE_UNDO_WINDOW_SECONDS, toJobCreatePayload } from "./job-undo"
 import { JobPreviewModal } from "./JobPreviewModal"
 
 export const JobsTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
+  const { showUndoNotification } = useUndoNotification()
 
   // Store state
   const jobs = useWatchlistsStore((s) => s.jobs)
@@ -94,10 +98,28 @@ export const JobsTab: React.FC = () => {
 
   // Handle delete
   const handleDelete = async (jobId: number) => {
+    const deletedJob = jobs.find((job) => job.id === jobId)
     try {
       await deleteWatchlistJob(jobId)
       removeJob(jobId)
-      message.success(t("watchlists:jobs.deleted", "Job deleted"))
+      if (!deletedJob) {
+        message.success(t("watchlists:jobs.deleted", "Monitor deleted"))
+        return
+      }
+
+      showUndoNotification({
+        title: t("watchlists:jobs.undoDeleteTitle", "Monitor deleted"),
+        description: t(
+          "watchlists:jobs.undoDeleteDescription",
+          "Undo restores this monitor for {{seconds}} seconds.",
+          { seconds: JOB_DELETE_UNDO_WINDOW_SECONDS }
+        ),
+        duration: JOB_DELETE_UNDO_WINDOW_SECONDS,
+        onUndo: async () => {
+          await createWatchlistJob(toJobCreatePayload(deletedJob))
+          await loadJobs()
+        }
+      })
     } catch (err) {
       console.error("Failed to delete job:", err)
       message.error(t("watchlists:jobs.deleteError", "Failed to delete job"))
@@ -129,7 +151,7 @@ export const JobsTab: React.FC = () => {
   const renderScope = (job: WatchlistJob) => {
     const parts: string[] = []
     if (job.scope.sources?.length) {
-      parts.push(`${job.scope.sources.length} source${job.scope.sources.length > 1 ? "s" : ""}`)
+      parts.push(`${job.scope.sources.length} feed${job.scope.sources.length > 1 ? "s" : ""}`)
     }
     if (job.scope.groups?.length) {
       parts.push(`${job.scope.groups.length} group${job.scope.groups.length > 1 ? "s" : ""}`)
@@ -137,7 +159,7 @@ export const JobsTab: React.FC = () => {
     if (job.scope.tags?.length) {
       parts.push(`${job.scope.tags.length} tag${job.scope.tags.length > 1 ? "s" : ""}`)
     }
-    return parts.length > 0 ? parts.join(", ") : "No scope"
+    return parts.length > 0 ? parts.join(", ") : t("watchlists:jobs.noFeeds", "No feeds selected")
   }
 
   // Table columns
@@ -166,7 +188,7 @@ export const JobsTab: React.FC = () => {
       render: (schedule: string | null) => <CronDisplay expression={schedule} />
     },
     {
-      title: t("watchlists:jobs.columns.scope", "Scope"),
+      title: t("watchlists:jobs.columns.scope", "Feeds"),
       key: "scope",
       width: 150,
       render: (_, record) => (
@@ -305,7 +327,7 @@ export const JobsTab: React.FC = () => {
       {/* Toolbar */}
       <div className="flex items-center justify-between">
         <div className="text-sm text-text-muted">
-          {t("watchlists:jobs.description", "Create scheduled jobs to automatically fetch and process content from your sources.")}
+          {t("watchlists:jobs.description", "Create monitors that automatically fetch and process updates from your feeds.")}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -320,7 +342,7 @@ export const JobsTab: React.FC = () => {
             icon={<Plus className="h-4 w-4" />}
             onClick={() => openJobForm()}
           >
-            {t("watchlists:jobs.addJob", "Add Job")}
+            {t("watchlists:jobs.addJob", "Add Monitor")}
           </Button>
         </div>
       </div>

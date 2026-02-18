@@ -48,3 +48,10 @@ This index maps all 13 quiz-page category plans into one execution order to redu
 1. Deliver Phase 1 end-to-end before broad feature expansion.
 2. Run accessibility regression and keyboard checks at the end of each phase.
 3. Gate Phase 3 feature work on stable submission reliability and analytics correctness.
+
+## Progress Snapshot (2026-02-18)
+
+- Rank 1 (`Take Quiz Tab`): complete.
+- Rank 2 (`Error Handling & Edge Cases`): complete.
+- Rank 3 (`Results & Analytics Tab`): complete.
+- Next in order: Rank 4 (`Accessibility`).

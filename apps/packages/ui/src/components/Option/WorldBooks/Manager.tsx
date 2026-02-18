@@ -810,6 +810,8 @@ export const WorldBooksManager: React.FC = () => {
   const importErrorDetailsContentId = React.useId()
   const importPreviewEntriesContentId = React.useId()
   const confirmDanger = useConfirmDanger()
+  const entriesFocusReturnRef = React.useRef<HTMLElement | null>(null)
+  const matrixFocusReturnRef = React.useRef<HTMLElement | null>(null)
   const deleteTimersRef = React.useRef<Record<number, any>>({})
   const matrixBaselineKeysRef = React.useRef<Set<string>>(new Set())
   const matrixPulseTimersRef = React.useRef<Record<string, any>>({})
@@ -845,6 +847,22 @@ export const WorldBooksManager: React.FC = () => {
   const [entryFilterPreset, setEntryFilterPreset] = React.useState<EntryFilterPreset>(
     DEFAULT_ENTRY_FILTER_PRESET
   )
+
+  const getActiveFocusableElement = React.useCallback((): HTMLElement | null => {
+    if (typeof document === "undefined") return null
+    const activeElement = document.activeElement
+    return activeElement instanceof HTMLElement ? activeElement : null
+  }, [])
+
+  const restoreFocusToElement = React.useCallback((target: HTMLElement | null) => {
+    if (!target) return
+    window.setTimeout(() => {
+      if (!target.isConnected) return
+      if (target instanceof HTMLButtonElement && target.disabled) return
+      if (target instanceof HTMLInputElement && target.disabled) return
+      target.focus()
+    }, 0)
+  }, [])
 
   const { data, status } = useQuery({
     queryKey: ['tldw:listWorldBooks'],
@@ -1290,6 +1308,8 @@ export const WorldBooksManager: React.FC = () => {
       const isJsonFile =
         file?.type === "application/json" || String(file?.name || "").toLowerCase().endsWith(".json")
       setImportFileName(file.name)
+      setImportErrorDetailsOpen(false)
+      setImportPreviewEntriesOpen(false)
       if (!isJsonFile) {
         setImportError("Please select a .json file.")
         setImportErrorDetails(
@@ -1317,6 +1337,7 @@ export const WorldBooksManager: React.FC = () => {
         if (!conversion.payload) {
           setImportError(validationError || conversion.error || "Unsupported import format")
           setImportErrorDetails(conversionDetail || null)
+          setImportErrorDetailsOpen(false)
           setImportPreview(null)
           setImportPayload(null)
           if (conversionDetail) {
@@ -1363,9 +1384,11 @@ export const WorldBooksManager: React.FC = () => {
           },
           previewEntries
         })
+        setImportPreviewEntriesOpen(false)
         if (validationError) {
           setImportError(validationError)
           setImportErrorDetails(conversionDetail || null)
+          setImportErrorDetailsOpen(false)
           setImportPayload(null)
           if (conversionDetail) {
             console.debug("[WorldBooks] Import validation failed", conversionDetail)
@@ -1379,6 +1402,7 @@ export const WorldBooksManager: React.FC = () => {
         const rawErrorDetails = String(err?.message || err || "").trim()
         setImportError(getWorldBookImportJsonErrorMessage(err))
         setImportErrorDetails(rawErrorDetails || null)
+        setImportErrorDetailsOpen(false)
         setImportPreview(null)
         setImportPayload(null)
         if (rawErrorDetails) {
@@ -1520,14 +1544,18 @@ export const WorldBooksManager: React.FC = () => {
   }, [attachmentKeyFor, reconciledAttachmentsByBook])
 
   const handleOpenMatrix = React.useCallback(() => {
+    matrixFocusReturnRef.current = getActiveFocusableElement()
     initializeMatrixSession()
     setOpenMatrix(true)
-  }, [initializeMatrixSession])
+  }, [getActiveFocusableElement, initializeMatrixSession])
 
   const handleCloseMatrix = React.useCallback(() => {
+    const focusTarget = matrixFocusReturnRef.current
+    matrixFocusReturnRef.current = null
     setOpenMatrix(false)
     initializeMatrixSession()
-  }, [initializeMatrixSession])
+    restoreFocusToElement(focusTarget)
+  }, [initializeMatrixSession, restoreFocusToElement])
 
   const openFullMatrixFromQuickAttach = React.useCallback(() => {
     setOpenAttach(null)
@@ -1755,6 +1783,63 @@ export const WorldBooksManager: React.FC = () => {
 
   const useAttachmentListView = !screens.md || filteredCharacters.length > ATTACHMENT_MATRIX_CHARACTER_THRESHOLD
 
+  const focusMatrixCheckboxAt = React.useCallback((rowIndex: number, colIndex: number) => {
+    if (typeof document === "undefined") return false
+    const selector =
+      `input[data-matrix-checkbox="true"]` +
+      `[data-matrix-row-index="${rowIndex}"]` +
+      `[data-matrix-col-index="${colIndex}"]`
+    const target = document.querySelector<HTMLInputElement>(selector)
+    if (!target) return false
+    target.focus()
+    return true
+  }, [])
+
+  const handleMatrixCellKeyDown = React.useCallback(
+    (
+      event: React.KeyboardEvent<HTMLInputElement>,
+      rowIndex: number,
+      colIndex: number
+    ) => {
+      if (useAttachmentListView) return
+
+      const maxRow = filteredBooks.length - 1
+      const maxCol = filteredCharacters.length - 1
+      if (maxRow < 0 || maxCol < 0) return
+
+      let nextRow = rowIndex
+      let nextCol = colIndex
+
+      switch (event.key) {
+        case "ArrowLeft":
+          nextCol = Math.max(0, colIndex - 1)
+          break
+        case "ArrowRight":
+          nextCol = Math.min(maxCol, colIndex + 1)
+          break
+        case "ArrowUp":
+          nextRow = Math.max(0, rowIndex - 1)
+          break
+        case "ArrowDown":
+          nextRow = Math.min(maxRow, rowIndex + 1)
+          break
+        case "Home":
+          nextCol = 0
+          break
+        case "End":
+          nextCol = maxCol
+          break
+        default:
+          return
+      }
+
+      if (nextRow === rowIndex && nextCol === colIndex) return
+      event.preventDefault()
+      void focusMatrixCheckboxAt(nextRow, nextCol)
+    },
+    [filteredBooks.length, filteredCharacters.length, focusMatrixCheckboxAt, useAttachmentListView]
+  )
+
   React.useEffect(() => {
     setMatrixListPage(1)
   }, [matrixBookFilter, matrixCharacterFilter, useAttachmentListView])
@@ -1856,8 +1941,11 @@ export const WorldBooksManager: React.FC = () => {
       })
       if (!ok) return
     }
+    const focusTarget = entriesFocusReturnRef.current
+    entriesFocusReturnRef.current = null
     setOpenEntries(null)
     entryForm.resetFields()
+    restoreFocusToElement(focusTarget)
   }
 
   const clearListFilters = React.useCallback(() => {
@@ -1881,6 +1969,7 @@ export const WorldBooksManager: React.FC = () => {
       book: { id: number; name: string; entryCount?: number; tokenBudget?: number },
       preset: EntryFilterPreset = DEFAULT_ENTRY_FILTER_PRESET
     ) => {
+      entriesFocusReturnRef.current = getActiveFocusableElement()
       setEntryFilterPreset({ ...DEFAULT_ENTRY_FILTER_PRESET, ...(preset || {}) })
       setOpenEntries({
         id: book.id,
@@ -1889,7 +1978,7 @@ export const WorldBooksManager: React.FC = () => {
         tokenBudget: book.tokenBudget
       })
     },
-    []
+    [getActiveFocusableElement]
   )
 
   const openEntriesFromStats = React.useCallback(
@@ -1901,11 +1990,12 @@ export const WorldBooksManager: React.FC = () => {
         typeof statsFor?.total_entries === "number" ? statsFor.total_entries : undefined
       const tokenBudget =
         typeof statsFor?.token_budget === "number" ? statsFor.token_budget : undefined
+      entriesFocusReturnRef.current = getActiveFocusableElement()
       setEntryFilterPreset({ ...DEFAULT_ENTRY_FILTER_PRESET, ...(preset || {}) })
       setStatsFor(null)
       setOpenEntries({ id: worldBookId, name: worldBookName, entryCount, tokenBudget })
     },
-    [statsFor]
+    [getActiveFocusableElement, statsFor]
   )
 
   const openEntriesFromGlobalStats = React.useCallback(
@@ -1914,6 +2004,7 @@ export const WorldBooksManager: React.FC = () => {
         (book: any) => Number(book?.id) === Number(worldBookId)
       )
       if (!source) return
+      entriesFocusReturnRef.current = getActiveFocusableElement()
       setOpenGlobalStats(false)
       setEntryFilterPreset({
         ...DEFAULT_ENTRY_FILTER_PRESET,
@@ -1926,7 +2017,7 @@ export const WorldBooksManager: React.FC = () => {
         tokenBudget: typeof source.token_budget === "number" ? source.token_budget : undefined
       })
     },
-    [data]
+    [data, getActiveFocusableElement]
   )
 
   const openTestMatchingModal = React.useCallback((worldBookId?: number | null) => {
@@ -2425,7 +2516,12 @@ export const WorldBooksManager: React.FC = () => {
           </Button>
           <Button
             aria-label="Open world book import modal"
-            onClick={() => setOpenImport(true)}
+            onClick={() => {
+              setImportFormatHelpOpen(false)
+              setImportErrorDetailsOpen(false)
+              setImportPreviewEntriesOpen(false)
+              setOpenImport(true)
+            }}
           >
             Import
           </Button>
@@ -2591,6 +2687,9 @@ export const WorldBooksManager: React.FC = () => {
         open={openImport}
         onCancel={() => {
           setOpenImport(false)
+          setImportFormatHelpOpen(false)
+          setImportErrorDetailsOpen(false)
+          setImportPreviewEntriesOpen(false)
           setImportPreview(null)
           setImportPayload(null)
           setImportError(null)
@@ -2601,11 +2700,22 @@ export const WorldBooksManager: React.FC = () => {
         styles={{ body: MODAL_BODY_SCROLL_STYLE }}
       >
         <div className="space-y-3">
-          <details className="rounded border border-border px-3 py-2">
-            <summary className="cursor-pointer text-sm font-medium">
+          <details
+            className="rounded border border-border px-3 py-2"
+            open={importFormatHelpOpen}
+            onToggle={(event) => {
+              const nextOpen = (event.currentTarget as HTMLDetailsElement).open
+              setImportFormatHelpOpen(nextOpen)
+            }}
+          >
+            <summary
+              className="cursor-pointer text-sm font-medium"
+              aria-expanded={importFormatHelpOpen}
+              aria-controls={importFormatHelpContentId}
+            >
               Format help
             </summary>
-            <div className="mt-2 space-y-2 text-xs text-text-muted">
+            <div id={importFormatHelpContentId} className="mt-2 space-y-2 text-xs text-text-muted">
               <p>Expected tldw JSON shape:</p>
               <pre className="overflow-auto rounded bg-surface-secondary p-2 text-[11px] leading-5 text-text">
 {`{
@@ -2656,9 +2766,23 @@ export const WorldBooksManager: React.FC = () => {
             <details
               className="rounded border border-border px-3 py-2 text-xs text-text-muted"
               data-testid="import-error-details"
+              open={importErrorDetailsOpen}
+              onToggle={(event) => {
+                const nextOpen = (event.currentTarget as HTMLDetailsElement).open
+                setImportErrorDetailsOpen(nextOpen)
+              }}
             >
-              <summary className="cursor-pointer font-medium">More details</summary>
-              <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-text-muted">
+              <summary
+                className="cursor-pointer font-medium"
+                aria-expanded={importErrorDetailsOpen}
+                aria-controls={importErrorDetailsContentId}
+              >
+                More details
+              </summary>
+              <pre
+                id={importErrorDetailsContentId}
+                className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-text-muted"
+              >
                 {importErrorDetails}
               </pre>
             </details>
@@ -2690,11 +2814,23 @@ export const WorldBooksManager: React.FC = () => {
                 </div>
               )}
               {(importPreview.previewEntries || []).length > 0 && (
-                <details className="pt-1" data-testid="import-preview-entries">
-                  <summary className="cursor-pointer text-sm font-medium">
+                <details
+                  className="pt-1"
+                  data-testid="import-preview-entries"
+                  open={importPreviewEntriesOpen}
+                  onToggle={(event) => {
+                    const nextOpen = (event.currentTarget as HTMLDetailsElement).open
+                    setImportPreviewEntriesOpen(nextOpen)
+                  }}
+                >
+                  <summary
+                    className="cursor-pointer text-sm font-medium"
+                    aria-expanded={importPreviewEntriesOpen}
+                    aria-controls={importPreviewEntriesContentId}
+                  >
                     Preview first {importPreview.previewEntries?.length} entries
                   </summary>
-                  <div className="mt-2 space-y-2">
+                  <div id={importPreviewEntriesContentId} className="mt-2 space-y-2">
                     {(importPreview.previewEntries || []).map((entry, index) => (
                       <div
                         key={`${index}-${entry.keywords.join(",")}`}
@@ -3270,7 +3406,13 @@ export const WorldBooksManager: React.FC = () => {
             />
           </div>
         ) : (
-          <div className="overflow-x-auto border border-border rounded">
+          <div
+            className="overflow-x-auto border border-border rounded"
+            role="grid"
+            aria-label="World book attachment matrix"
+            aria-rowcount={filteredBooks.length}
+            aria-colcount={filteredCharacters.length + 1}
+          >
             <Table
               size="small"
               pagination={false}
@@ -3279,7 +3421,7 @@ export const WorldBooksManager: React.FC = () => {
               dataSource={filteredBooks}
               columns={[
                 { title: 'World Book', dataIndex: 'name', key: 'name', fixed: 'left', width: 200 },
-                ...(filteredCharacters || []).map((c: any) => ({
+                ...(filteredCharacters || []).map((c: any, characterColumnIndex: number) => ({
                   title: (
                     <Tooltip title={c.name}>
                       <a
@@ -3296,7 +3438,7 @@ export const WorldBooksManager: React.FC = () => {
                   ),
                   key: `char-${c.id}`,
                   width: 120,
-                  render: (_: any, record: any) => {
+                  render: (_: any, record: any, rowIndex: number) => {
                     const checked = isAttached(record.id, c.id)
                     const key = attachmentKeyFor(record.id, c.id)
                     const pending = !!matrixPending[key]
@@ -3328,6 +3470,12 @@ export const WorldBooksManager: React.FC = () => {
                           checked={checked}
                           disabled={pending || attachmentsLoading}
                           onChange={(e) => handleMatrixToggle(record.id, c.id, e.target.checked)}
+                          data-matrix-checkbox="true"
+                          data-matrix-row-index={rowIndex}
+                          data-matrix-col-index={characterColumnIndex}
+                          onKeyDown={(event) =>
+                            handleMatrixCellKeyDown(event, rowIndex, characterColumnIndex)
+                          }
                         />
                         {checked && (
                           <>
@@ -4692,10 +4840,24 @@ const EntryManager: React.FC<{
               Keyword Index{keywordConflictCount > 0 ? ` (${keywordConflictCount} conflicts)` : ""}
             </summary>
             <div id={keywordIndexContentId} className="mt-2 flex flex-wrap gap-1">
+              <span className="sr-only" role="status" aria-live="polite">
+                {keywordConflictCount > 0
+                  ? `${keywordConflictCount} keyword conflicts detected.`
+                  : "No keyword conflicts detected."}
+              </span>
               {keywordIndex.length === 0 && <span className="text-sm text-text-muted">No keywords yet</span>}
               {keywordIndex.map((k) => (
                 <Tooltip key={k.keyword} title={k.conflict ? `Conflict: ${k.variantCount} content variations` : `${k.count} entries`}>
-                  <Tag color={k.conflict ? "red" : undefined}>{k.keyword} ({k.count})</Tag>
+                  <Tag
+                    color={k.conflict ? "red" : undefined}
+                    aria-label={
+                      k.conflict
+                        ? `${k.keyword}: conflict - ${k.variantCount} content variations`
+                        : `${k.keyword}: ${k.count} entries`
+                    }
+                  >
+                    {k.keyword} ({k.count})
+                  </Tag>
                 </Tooltip>
               ))}
             </div>

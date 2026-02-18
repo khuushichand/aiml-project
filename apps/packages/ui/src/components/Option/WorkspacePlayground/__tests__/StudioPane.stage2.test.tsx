@@ -89,14 +89,31 @@ const {
 })
 let isMobile = false
 
+const interpolate = (
+  template: string,
+  values: Record<string, unknown> | undefined
+) =>
+  template.replace(/\{\{\s*([^\s}]+)\s*\}\}/g, (_match, key: string) => {
+    const value = values?.[key]
+    return value == null ? "" : String(value)
+  })
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (
       key: string,
-      defaultValueOrOptions?: string | { defaultValue?: string }
+      defaultValueOrOptions?:
+        | string
+        | {
+            defaultValue?: string
+            [key: string]: unknown
+          }
     ) => {
       if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
-      if (defaultValueOrOptions?.defaultValue) return defaultValueOrOptions.defaultValue
+      const defaultValue = defaultValueOrOptions?.defaultValue
+      if (typeof defaultValue === "string") {
+        return interpolate(defaultValue, defaultValueOrOptions)
+      }
       return key
     }
   })
@@ -594,6 +611,96 @@ describe("StudioPane Stage 2 workflows", () => {
     )
   }, 15000)
 
+  it("disables compare sources generation when fewer than two sources are selected", () => {
+    workspaceStoreState.selectedSourceIds = ["source-1"]
+    workspaceStoreState.getSelectedMediaIds = () => [101]
+
+    render(<StudioPane />)
+
+    const compareButton = screen.getByRole("button", { name: "Compare Sources" })
+    expect(compareButton).toBeDisabled()
+  })
+
+  it("generates compare sources output with usage metrics", async () => {
+    workspaceStoreState.selectedSourceIds = ["source-1", "source-2"]
+    workspaceStoreState.getSelectedMediaIds = () => [101, 202]
+    mockRagSearch.mockResolvedValue({
+      generation: "Compared sources output",
+      usage: {
+        total_tokens: 321,
+        total_cost_usd: 0.12
+      }
+    })
+
+    render(<StudioPane />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Compare Sources" }))
+
+    await waitFor(() => {
+      expect(mockRagSearch).toHaveBeenCalledWith(
+        expect.stringContaining("Compare the selected sources"),
+        expect.objectContaining({
+          media_ids: [101, 202],
+          top_k: 30,
+          enable_generation: true,
+          enable_citations: true
+        })
+      )
+    })
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        expect.stringMatching(/^artifact-/),
+        "completed",
+        expect.objectContaining({
+          content: "Compared sources output",
+          totalTokens: 321,
+          totalCostUsd: 0.12
+        })
+      )
+    })
+  })
+
+  it("renders cumulative workspace usage and per-artifact usage", async () => {
+    Modal.destroyAll()
+    workspaceStoreState.generatedArtifacts = [
+      {
+        id: "artifact-usage-a",
+        type: "summary",
+        title: "Summary",
+        status: "completed",
+        content: "A",
+        totalTokens: 150,
+        totalCostUsd: 0.045,
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      },
+      {
+        id: "artifact-usage-b",
+        type: "report",
+        title: "Report",
+        status: "completed",
+        content: "B",
+        estimatedTokens: 250,
+        estimatedCostUsd: 0.075,
+        createdAt: new Date("2026-02-18T10:01:00.000Z")
+      }
+    ]
+
+    render(<StudioPane />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByText((content) => content.includes("Estimated workspace usage:"))
+      ).toBeInTheDocument()
+      expect(
+        screen.getAllByText(/Tokens:/).length
+      ).toBeGreaterThanOrEqual(1)
+      expect(
+        screen.getAllByText(/Cost:/).length
+      ).toBeGreaterThanOrEqual(1)
+    })
+  })
+
   it("requests voice preview audio from TTS provider", async () => {
     render(<StudioPane />)
 
@@ -653,5 +760,5 @@ describe("StudioPane Stage 2 workflows", () => {
     )
 
     modalInfoSpy.mockRestore()
-  })
+  }, 15000)
 })

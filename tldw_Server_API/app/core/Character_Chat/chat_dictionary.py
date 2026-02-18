@@ -93,7 +93,7 @@ _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS = (
 
 # Whitelisted field names for dynamic UPDATE statements (SQL injection prevention)
 _DICTIONARY_UPDATE_FIELDS = frozenset({
-    "name", "description", "is_active", "updated_at", "version"
+    "name", "description", "is_active", "default_token_budget", "updated_at", "version"
 })
 _ENTRY_UPDATE_FIELDS = frozenset({
     "key", "content", "is_regex", "probability", "max_replacements",
@@ -527,6 +527,7 @@ class ChatDictionaryService:
                             name TEXT NOT NULL UNIQUE,
                             description TEXT,
                             is_active BOOLEAN DEFAULT TRUE,
+                            default_token_budget INTEGER NULL,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             usage_count INTEGER DEFAULT 0,
@@ -560,6 +561,25 @@ class ChatDictionaryService:
                         )
                         """
                     )
+
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS dictionary_transform_activity (
+                            id SERIAL PRIMARY KEY,
+                            dictionary_id INTEGER NOT NULL,
+                            chat_id TEXT NULL,
+                            entries_used TEXT NOT NULL,
+                            replacements INTEGER DEFAULT 0,
+                            iterations INTEGER DEFAULT 0,
+                            token_budget_used INTEGER NULL,
+                            original_text_preview TEXT NOT NULL,
+                            processed_text_preview TEXT NOT NULL,
+                            processing_time_ms REAL NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (dictionary_id) REFERENCES chat_dictionaries(id) ON DELETE CASCADE
+                        )
+                        """
+                    )
                 else:
                     conn.execute(
                         """
@@ -568,6 +588,7 @@ class ChatDictionaryService:
                             name TEXT NOT NULL UNIQUE,
                             description TEXT,
                             is_active BOOLEAN DEFAULT 1,
+                            default_token_budget INTEGER,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             usage_count INTEGER DEFAULT 0,
@@ -602,6 +623,25 @@ class ChatDictionaryService:
                         """
                     )
 
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS dictionary_transform_activity (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            dictionary_id INTEGER NOT NULL,
+                            chat_id TEXT,
+                            entries_used TEXT NOT NULL,
+                            replacements INTEGER DEFAULT 0,
+                            iterations INTEGER DEFAULT 0,
+                            token_budget_used INTEGER,
+                            original_text_preview TEXT NOT NULL,
+                            processed_text_preview TEXT NOT NULL,
+                            processing_time_ms REAL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (dictionary_id) REFERENCES chat_dictionaries(id) ON DELETE CASCADE
+                        )
+                        """
+                    )
+
                 # Create indexes
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_dict_entries_dict_id ON dictionary_entries(dictionary_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_dict_entries_group ON dictionary_entries(group_name)")
@@ -609,10 +649,15 @@ class ChatDictionaryService:
                     "CREATE INDEX IF NOT EXISTS idx_dict_entries_sort_order "
                     "ON dictionary_entries(dictionary_id, sort_order)"
                 )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_dict_transform_activity_dictionary "
+                    "ON dictionary_transform_activity(dictionary_id, created_at)"
+                )
 
                 self._ensure_entry_sort_order_column(conn)
                 self._ensure_entry_usage_columns(conn)
                 self._ensure_dictionary_usage_columns(conn)
+                self._ensure_dictionary_default_token_budget_column(conn)
                 self._normalize_all_entry_sort_orders(conn)
 
                 conn.commit()
@@ -764,6 +809,47 @@ class ChatDictionaryService:
                 return
             raise
 
+    def _ensure_dictionary_default_token_budget_column(self, conn: Any) -> None:
+        """Ensure chat_dictionaries has default_token_budget for fallback processing."""
+        try:
+            if self.db.backend_type == BackendType.POSTGRESQL:
+                row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'chat_dictionaries'
+                      AND column_name = 'default_token_budget'
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if not row:
+                    conn.execute(
+                        "ALTER TABLE chat_dictionaries ADD COLUMN default_token_budget INTEGER NULL"
+                    )
+                return
+
+            rows = conn.execute("PRAGMA table_info(chat_dictionaries)").fetchall()
+            column_names: set[str] = set()
+            for row in rows:
+                if isinstance(row, dict):
+                    name = row.get("name")
+                elif hasattr(row, "_mapping"):
+                    name = row._mapping.get("name")
+                else:
+                    name = row[1] if len(row) > 1 else None
+                if isinstance(name, str):
+                    column_names.add(name)
+
+            if "default_token_budget" not in column_names:
+                conn.execute(
+                    "ALTER TABLE chat_dictionaries ADD COLUMN default_token_budget INTEGER"
+                )
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
+            message = str(e).lower()
+            if "duplicate column" in message or "already exists" in message:
+                return
+            raise
+
     def _normalize_all_entry_sort_orders(self, conn: Any) -> None:
         """Normalize sort_order values to a contiguous 1..N sequence per dictionary."""
         dict_rows = conn.execute("SELECT id FROM chat_dictionaries").fetchall()
@@ -810,7 +896,12 @@ class ChatDictionaryService:
 
     # --- Dictionary CRUD Operations ---
 
-    def create_dictionary(self, name: str, description: Optional[str] = None) -> int:
+    def create_dictionary(
+        self,
+        name: str,
+        description: Optional[str] = None,
+        default_token_budget: Optional[int] = None,
+    ) -> int:
         """
         Create a new chat dictionary for the user.
 
@@ -827,10 +918,10 @@ class ChatDictionaryService:
         try:
             with self.db.get_connection() as conn:
                 insert_sql = """
-                    INSERT INTO chat_dictionaries (name, description)
-                    VALUES (?, ?)
+                    INSERT INTO chat_dictionaries (name, description, default_token_budget)
+                    VALUES (?, ?, ?)
                 """
-                params = (name, description)
+                params = (name, description, self._coerce_positive_int(default_token_budget))
                 if self.db.backend_type == BackendType.POSTGRESQL:
                     insert_sql += " RETURNING id"
 
@@ -990,6 +1081,24 @@ class ChatDictionaryService:
                 return parsed if parsed > 0 else None
         return None
 
+    @staticmethod
+    def _coerce_positive_int(value: Any) -> Optional[int]:
+        """Best-effort coercion for optional positive integers."""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value > 0 else None
+        if isinstance(value, float):
+            if value.is_integer() and value > 0:
+                return int(value)
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.isdigit():
+                parsed = int(stripped)
+                return parsed if parsed > 0 else None
+        return None
+
     @classmethod
     def _extract_dictionary_ids_from_value(cls, value: Any) -> set[int]:
         """Extract dictionary IDs from known scalar/list/object setting value shapes."""
@@ -1144,6 +1253,8 @@ class ChatDictionaryService:
         name: Optional[str] = None,
         description: Optional[str] = None,
         is_active: Optional[bool] = None,
+        default_token_budget: Optional[int] = None,
+        update_default_token_budget: bool = False,
         expected_version: Optional[int] = None,
         **kwargs,
     ) -> bool:
@@ -1181,6 +1292,9 @@ class ChatDictionaryService:
             if is_active is not None:
                 updates.append("is_active = ?")
                 params.append(bool(is_active))
+            if update_default_token_budget:
+                updates.append("default_token_budget = ?")
+                params.append(self._coerce_positive_int(default_token_budget))
 
             if not updates:
                 return True
@@ -1457,7 +1571,11 @@ class ChatDictionaryService:
                 if group:
                     query += " AND e.group_name = ?"
                     params.append(group)
-                query += " ORDER BY COALESCE(e.sort_order, e.id), e.id"
+                # Deterministic multi-dictionary order:
+                # 1) dictionary name (alphabetical), 2) entry sort order, 3) entry id.
+                query += (
+                    " ORDER BY LOWER(d.name), d.id, COALESCE(e.sort_order, e.id), e.id"
+                )
 
                 cursor = conn.execute(query, tuple(params))
                 result: list[dict[str, Any]] = []
@@ -1557,12 +1675,19 @@ class ChatDictionaryService:
                 if group:
                     query += " AND e.group_name = ?"
                     params.append(group)
-                query += " ORDER BY COALESCE(e.sort_order, e.id), e.id"
+                # Keep runtime processing order aligned with list semantics.
+                query += (
+                    " ORDER BY LOWER(d.name), d.id, COALESCE(e.sort_order, e.id), e.id"
+                )
 
                 cursor = conn.execute(query, tuple(params))
                 entries: list[ChatDictionaryEntry] = []
                 for row in cursor.fetchall():
-                    entry = ChatDictionaryEntry.from_dict(dict(row))
+                    row_dict = dict(row)
+                    entry = ChatDictionaryEntry.from_dict(row_dict)
+                    dictionary_id_for_entry = self._coerce_dictionary_id(row_dict.get("dictionary_id"))
+                    if dictionary_id_for_entry is not None:
+                        setattr(entry, "dictionary_id", dictionary_id_for_entry)
                     entries.append(entry)
 
                 # Update cache (no lock needed - request-scoped)
@@ -1831,6 +1956,275 @@ class ChatDictionaryService:
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
             return
 
+    def _resolve_default_token_budget(
+        self,
+        dictionary_id: Optional[int],
+    ) -> Optional[int]:
+        """Resolve fallback token budget from dictionary metadata when request omits it."""
+        try:
+            with self.db.get_connection() as conn:
+                if dictionary_id is not None:
+                    row = conn.execute(
+                        """
+                        SELECT default_token_budget
+                        FROM chat_dictionaries
+                        WHERE id = ? AND deleted = ? AND is_active = ?
+                        LIMIT 1
+                        """,
+                        (int(dictionary_id), False, True),
+                    ).fetchone()
+                    if row is None:
+                        return None
+                    if isinstance(row, dict):
+                        raw_budget = row.get("default_token_budget")
+                    elif hasattr(row, "_mapping"):
+                        raw_budget = row._mapping.get("default_token_budget")
+                    else:
+                        raw_budget = row[0] if len(row) > 0 else None
+                    return self._coerce_positive_int(raw_budget)
+
+                rows = conn.execute(
+                    """
+                    SELECT default_token_budget
+                    FROM chat_dictionaries
+                    WHERE deleted = ? AND is_active = ?
+                      AND default_token_budget IS NOT NULL
+                    """,
+                    (False, True),
+                ).fetchall()
+                budgets: list[int] = []
+                for row in rows:
+                    if isinstance(row, dict):
+                        raw_budget = row.get("default_token_budget")
+                    elif hasattr(row, "_mapping"):
+                        raw_budget = row._mapping.get("default_token_budget")
+                    else:
+                        raw_budget = row[0] if len(row) > 0 else None
+                    coerced = self._coerce_positive_int(raw_budget)
+                    if coerced is not None:
+                        budgets.append(coerced)
+                if not budgets:
+                    return None
+                # Conservative fallback for multi-dictionary processing.
+                return min(budgets)
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
+            return None
+
+    def record_transform_activity(
+        self,
+        dictionary_id: int,
+        *,
+        original_text: str,
+        processed_text: str,
+        entries_used: list[int],
+        replacements: int,
+        iterations: int,
+        token_budget_used: Optional[int],
+        processing_time_ms: Optional[float],
+        chat_id: Optional[str] = None,
+    ) -> None:
+        """Persist a dictionary transformation event for recent activity views."""
+        if dictionary_id <= 0:
+            return
+        try:
+            entries_payload: list[int] = []
+            seen: set[int] = set()
+            for entry_id in entries_used:
+                coerced_entry_id = self._coerce_positive_int(entry_id)
+                if coerced_entry_id is None or coerced_entry_id in seen:
+                    continue
+                entries_payload.append(coerced_entry_id)
+                seen.add(coerced_entry_id)
+            original_preview = original_text[:280]
+            processed_preview = processed_text[:280]
+            with self.db.get_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO dictionary_transform_activity (
+                        dictionary_id,
+                        chat_id,
+                        entries_used,
+                        replacements,
+                        iterations,
+                        token_budget_used,
+                        original_text_preview,
+                        processed_text_preview,
+                        processing_time_ms
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        int(dictionary_id),
+                        str(chat_id).strip() if isinstance(chat_id, str) and chat_id.strip() else None,
+                        json.dumps(entries_payload),
+                        max(0, int(replacements)),
+                        max(0, int(iterations)),
+                        self._coerce_positive_int(token_budget_used),
+                        original_preview,
+                        processed_preview,
+                        float(processing_time_ms) if processing_time_ms is not None else None,
+                    ),
+                )
+                conn.commit()
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
+            return
+
+    def _record_transform_activity_snapshot(
+        self,
+        *,
+        dictionary_id: Optional[int],
+        original_text: str,
+        processed_text: str,
+        stats: dict[str, Any],
+        dictionary_replacements: dict[int, int],
+        dictionary_entries_used: dict[int, set[int]],
+        token_budget_used: Optional[int],
+        chat_id: Optional[str],
+    ) -> None:
+        """Record per-dictionary activity events derived from a processing result."""
+        target_dictionary_ids: set[int] = set()
+        explicit_dictionary_id = self._coerce_dictionary_id(dictionary_id)
+        if explicit_dictionary_id is not None:
+            target_dictionary_ids.add(explicit_dictionary_id)
+        else:
+            target_dictionary_ids.update(
+                dictionary_key
+                for dictionary_key in dictionary_replacements.keys()
+                if dictionary_key > 0
+            )
+            target_dictionary_ids.update(
+                dictionary_key
+                for dictionary_key in dictionary_entries_used.keys()
+                if dictionary_key > 0
+            )
+
+        if not target_dictionary_ids:
+            return
+
+        total_replacements = max(0, int(stats.get("replacements") or 0))
+        total_entries_used = [
+            int(entry_id)
+            for entry_id in stats.get("entries_used", [])
+            if isinstance(entry_id, (int, float, str))
+            and self._coerce_positive_int(entry_id) is not None
+        ]
+        iterations = max(0, int(stats.get("iterations") or 0))
+
+        for target_dictionary_id in sorted(target_dictionary_ids):
+            replacements = max(0, int(dictionary_replacements.get(target_dictionary_id, 0) or 0))
+            entries_used = sorted(dictionary_entries_used.get(target_dictionary_id, set()))
+            if explicit_dictionary_id is not None:
+                if replacements <= 0 and total_replacements > 0:
+                    replacements = total_replacements
+                if not entries_used and total_entries_used:
+                    entries_used = total_entries_used
+
+            self.record_transform_activity(
+                target_dictionary_id,
+                original_text=original_text,
+                processed_text=processed_text,
+                entries_used=entries_used,
+                replacements=replacements,
+                iterations=iterations,
+                token_budget_used=token_budget_used,
+                processing_time_ms=None,
+                chat_id=chat_id,
+            )
+
+    def list_transform_activity(
+        self,
+        dictionary_id: int,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return paginated transformation activity for a dictionary."""
+        safe_dictionary_id = int(dictionary_id)
+        safe_limit = max(1, int(limit))
+        safe_offset = max(0, int(offset))
+        with self.db.get_connection() as conn:
+            count_row = conn.execute(
+                """
+                SELECT COUNT(1)
+                FROM dictionary_transform_activity
+                WHERE dictionary_id = ?
+                """,
+                (safe_dictionary_id,),
+            ).fetchone()
+            if count_row is None:
+                total = 0
+            elif isinstance(count_row, dict):
+                total = int(next(iter(count_row.values()), 0))
+            elif hasattr(count_row, "_mapping"):
+                total = int(next(iter(count_row._mapping.values()), 0))
+            else:
+                total = int(count_row[0] if len(count_row) > 0 else 0)
+
+            rows = conn.execute(
+                """
+                SELECT
+                    id,
+                    dictionary_id,
+                    chat_id,
+                    entries_used,
+                    replacements,
+                    iterations,
+                    token_budget_used,
+                    original_text_preview,
+                    processed_text_preview,
+                    processing_time_ms,
+                    created_at
+                FROM dictionary_transform_activity
+                WHERE dictionary_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (safe_dictionary_id, safe_limit, safe_offset),
+            ).fetchall()
+
+            events: list[dict[str, Any]] = []
+            for row in rows:
+                row_data = dict(row)
+                entries_used: list[int] = []
+                raw_entries_payload = row_data.get("entries_used")
+                parsed_entries: Any = []
+                if isinstance(raw_entries_payload, str):
+                    try:
+                        parsed_entries = json.loads(raw_entries_payload)
+                    except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
+                        parsed_entries = []
+                elif isinstance(raw_entries_payload, list):
+                    parsed_entries = raw_entries_payload
+                if isinstance(parsed_entries, list):
+                    seen_entries: set[int] = set()
+                    for item in parsed_entries:
+                        coerced = self._coerce_positive_int(item)
+                        if coerced is None or coerced in seen_entries:
+                            continue
+                        entries_used.append(coerced)
+                        seen_entries.add(coerced)
+
+                events.append(
+                    {
+                        "id": int(row_data.get("id")),
+                        "dictionary_id": int(row_data.get("dictionary_id")),
+                        "chat_id": row_data.get("chat_id"),
+                        "entries_used": entries_used,
+                        "replacements": int(row_data.get("replacements") or 0),
+                        "iterations": int(row_data.get("iterations") or 0),
+                        "token_budget_used": self._coerce_positive_int(row_data.get("token_budget_used")),
+                        "original_text_preview": str(row_data.get("original_text_preview") or ""),
+                        "processed_text_preview": str(row_data.get("processed_text_preview") or ""),
+                        "processing_time_ms": (
+                            float(row_data.get("processing_time_ms"))
+                            if row_data.get("processing_time_ms") is not None
+                            else None
+                        ),
+                        "created_at": row_data.get("created_at"),
+                    }
+                )
+
+            return events, total
+
     def process_text(
         self,
         text: str,
@@ -1860,36 +2254,58 @@ class ChatDictionaryService:
         # Support alias max_tokens
         if token_budget is None and "max_tokens" in kwargs:
             token_budget = kwargs.get("max_tokens")
+        effective_token_budget = self._coerce_positive_int(token_budget)
+        if effective_token_budget is None:
+            effective_token_budget = self._resolve_default_token_budget(dictionary_id)
+
+        raw_chat_id = kwargs.get("chat_id")
+        chat_id = str(raw_chat_id).strip() if isinstance(raw_chat_id, str) and raw_chat_id.strip() else None
 
         if len(text) > MAX_CHAT_DICTIONARY_TEXT_LENGTH:
             raise InputError(
                 f"Input text exceeds maximum length ({len(text)} > {MAX_CHAT_DICTIONARY_TEXT_LENGTH})"
             )
 
+        original_text = text
         # Get applicable entries as objects
         entries = self.get_entry_objects(dictionary_id, group, active_only=True)
 
         if not entries:
+            empty_stats = {
+                "replacements": 0,
+                "iterations": 0,
+                "entries_used": [],
+                "token_budget_exceeded": False,
+                "token_budget_used": effective_token_budget,
+            }
+            explicit_dictionary_id = self._coerce_dictionary_id(dictionary_id)
+            if explicit_dictionary_id is not None:
+                self.record_transform_activity(
+                    explicit_dictionary_id,
+                    original_text=original_text,
+                    processed_text=text,
+                    entries_used=[],
+                    replacements=0,
+                    iterations=0,
+                    token_budget_used=effective_token_budget,
+                    processing_time_ms=None,
+                    chat_id=chat_id,
+                )
             if return_stats:
-                return text, {
-                    "replacements": 0,
-                    "iterations": 0,
-                    "entries_used": [],
-                    "token_budget_exceeded": False,
-                }
+                return text, empty_stats
             # Return a string-like result that also supports ['processed_text'] access
-            return _ProcessedTextResult(
-                text,
-                {
-                    "replacements": 0,
-                    "iterations": 0,
-                    "entries_used": [],
-                    "token_budget_exceeded": False,
-                },
-            )
+            return _ProcessedTextResult(text, empty_stats)
 
-        stats = {"replacements": 0, "iterations": 0, "entries_used": [], "token_budget_exceeded": False}
+        stats = {
+            "replacements": 0,
+            "iterations": 0,
+            "entries_used": [],
+            "token_budget_exceeded": False,
+            "token_budget_used": effective_token_budget,
+        }
         entry_usage_increments: dict[int, int] = {}
+        dictionary_replacements: dict[int, int] = {}
+        dictionary_entries_used: dict[int, set[int]] = {}
 
         # Track usage
         if dictionary_id is not None:
@@ -1905,9 +2321,10 @@ class ChatDictionaryService:
 
             for entry in entries:
                 if entry.matches(text):
+                    entry_dictionary_id = self._coerce_dictionary_id(getattr(entry, "dictionary_id", None))
                     # If enforcing a token budget, replace incrementally (one per entry per pass)
                     original_max = entry.max_replacements
-                    if token_budget is not None and original_max == 0:
+                    if effective_token_budget is not None and original_max == 0:
                         entry.max_replacements = 1
                     try:
                         new_text, count = entry.apply_replacement(text)
@@ -1924,15 +2341,34 @@ class ChatDictionaryService:
                             entry_usage_increments[entry.entry_id] = (
                                 entry_usage_increments.get(entry.entry_id, 0) + count
                             )
+                            if entry_dictionary_id is not None:
+                                dictionary_entries_used.setdefault(entry_dictionary_id, set()).add(entry.entry_id)
+                        if entry_dictionary_id is not None:
+                            dictionary_replacements[entry_dictionary_id] = (
+                                dictionary_replacements.get(entry_dictionary_id, 0) + count
+                            )
 
                         # Check token budget
-                        if token_budget and self.count_tokens(text) > token_budget:
+                        if effective_token_budget and self.count_tokens(text) > effective_token_budget:
                             warnings.warn(
-                                f"Token budget ({token_budget}) exceeded after {stats['replacements']} replacements",
+                                (
+                                    f"Token budget ({effective_token_budget}) exceeded "
+                                    f"after {stats['replacements']} replacements"
+                                ),
                                 TokenBudgetExceededWarning, stacklevel=2,
                             )
                             stats["token_budget_exceeded"] = True
                             self._record_entry_usage_counts(entry_usage_increments)
+                            self._record_transform_activity_snapshot(
+                                dictionary_id=dictionary_id,
+                                original_text=original_text,
+                                processed_text=text,
+                                stats=stats,
+                                dictionary_replacements=dictionary_replacements,
+                                dictionary_entries_used=dictionary_entries_used,
+                                token_budget_used=effective_token_budget,
+                                chat_id=chat_id,
+                            )
                             if return_stats:
                                 return text, stats
                             return _ProcessedTextResult(text, stats)
@@ -1943,6 +2379,16 @@ class ChatDictionaryService:
             if iteration_replacements == 0:
                 break
         self._record_entry_usage_counts(entry_usage_increments)
+        self._record_transform_activity_snapshot(
+            dictionary_id=dictionary_id,
+            original_text=original_text,
+            processed_text=text,
+            stats=stats,
+            dictionary_replacements=dictionary_replacements,
+            dictionary_entries_used=dictionary_entries_used,
+            token_budget_used=effective_token_budget,
+            chat_id=chat_id,
+        )
         if return_stats:
             return text, stats
         return _ProcessedTextResult(text, stats)
@@ -2417,12 +2863,22 @@ class ChatDictionaryService:
         if not info:
             raise InputError(f"Dictionary {dictionary_id} not found")
         entries = self.get_entries(dictionary_id, active_only=False)
-        return {"name": info["name"], "description": info.get("description"), "entries": entries}
+        return {
+            "name": info["name"],
+            "description": info.get("description"),
+            "default_token_budget": self._coerce_positive_int(info.get("default_token_budget")),
+            "entries": entries,
+        }
 
     def import_from_json(self, data: dict[str, Any]) -> int:
         name = data.get("name") or "Imported Dictionary"
         description = data.get("description")
-        dict_id = self.create_dictionary(name=name, description=description)
+        default_token_budget = self._coerce_positive_int(data.get("default_token_budget"))
+        dict_id = self.create_dictionary(
+            name=name,
+            description=description,
+            default_token_budget=default_token_budget,
+        )
         try:
             for e in data.get("entries", []):
                 self.add_entry(

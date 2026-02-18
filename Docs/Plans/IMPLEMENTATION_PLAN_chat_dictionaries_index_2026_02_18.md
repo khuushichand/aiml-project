@@ -66,6 +66,9 @@ This index coordinates execution and reporting across all 11 category plans crea
 - Exit Criteria:
   - Dictionary-to-chat relationships are visible and manageable.
   - Deactivation warnings, ordering clarity, and usage insights are functional.
+**Completion Note (2026-02-18)**:
+- Plan `07` reached stage-complete with token-budget defaults and recent activity audit trail.
+- Plan `06` remains complete; together these close the milestone’s runtime visibility objectives.
 
 ### Milestone D: Quality Hardening and Strategic Expansion
 - Plans: `09`, `10`, `11`
@@ -83,9 +86,9 @@ This index coordinates execution and reporting across all 11 category plans crea
 | 04 | Validation & Testing | P1 | Complete | 3/3 (All stages complete) | Unassigned | None | 2026-02-18 |
 | 05 | Import / Export | P1 | Complete | 3/3 (All stages complete) | Unassigned | None | 2026-02-18 |
 | 06 | Statistics & Usage Insights | P2 | Complete | 3/3 (All stages complete) | Unassigned | None | 2026-02-18 |
-| 07 | Connection to Character Chat | P0 | Not Started | 0/3 | Unassigned | 01, 02 | 2026-02-18 |
+| 07 | Connection to Character Chat | P0 | Complete | 3/3 (All stages complete) | Unassigned | 01, 02 | 2026-02-18 |
 | 08 | Error Handling & Edge Cases | P0 | Complete | 3/3 (All stages complete) | Unassigned | 01 | 2026-02-18 |
-| 09 | Responsive & Mobile | P2 | Not Started | 0/3 | Unassigned | 02, 04 | 2026-02-18 |
+| 09 | Responsive & Mobile | P2 | In Progress | 1/3 (Stage 1 complete) | Unassigned | 02, 04 | 2026-02-18 |
 | 10 | Accessibility | P1 | Not Started | 0/3 | Unassigned | 01, 02, 04, 09 | 2026-02-18 |
 | 11 | Information Gaps / Missing Functionality | P2 | Not Started | 0/4 | Unassigned | 01-10 | 2026-02-18 |
 
@@ -98,7 +101,7 @@ This index coordinates execution and reporting across all 11 category plans crea
 **Tests**:
 - Manual audit each sprint/checkpoint: no stale `Last Update` older than 7 days.
 - Manual audit: any `In Progress` item has concrete test evidence in PR notes.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 3: Integration Verification and Closeout
 **Goal**: Validate cross-plan behavior and formally close the remediation program.

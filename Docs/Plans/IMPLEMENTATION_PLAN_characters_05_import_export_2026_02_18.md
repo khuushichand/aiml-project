@@ -33,7 +33,7 @@ Finding IDs: `C-16` through `C-18`
 - Unit tests for parser-to-preview model mapping.
 - Component tests for confirm/cancel paths.
 - Integration tests for preview confirm -> persisted record consistency.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Resolve YAML Support Contract
 **Goal**: Align UI and documentation with actual supported formats.
@@ -45,7 +45,7 @@ Finding IDs: `C-16` through `C-18`
 - Unit tests for format detection and rejection messaging.
 - Integration tests for YAML path if implemented, including malformed YAML handling.
 - Documentation checklist confirming support matrix alignment.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Export/Import Parity Validation
 **Goal**: Ensure import enhancements do not break existing export compatibility.
@@ -56,7 +56,7 @@ Finding IDs: `C-16` through `C-18`
 **Tests**:
 - Round-trip integration tests: export -> import -> field parity assertion.
 - Regression tests for existing single-file import behaviors.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
