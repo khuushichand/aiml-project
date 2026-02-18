@@ -77,27 +77,34 @@ vi.mock("antd", async () => {
           <div data-testid="table-selected-count">{selectedRowKeys.length}</div>
           {rows.map((row: any, index: number) => {
             const rowId = row?.id || row?.key || `row-${index}`
+            const rowProps =
+              typeof props?.onRow === "function" ? props.onRow(row, index) || {} : {}
             return (
-            <div key={rowId} data-testid={`table-row-${rowId}`}>
-              <div data-testid="table-row-name">{row?.name || row?.title || row?.key}</div>
-              {columns.map((column: any, columnIndex: number) => {
-                const columnKey = column?.key || column?.dataIndex || columnIndex
-                const value = column?.dataIndex ? row?.[column.dataIndex] : undefined
-                if (typeof column?.render === "function") {
+              <div
+                key={rowId}
+                {...rowProps}
+                data-testid={rowProps?.["data-testid"] || `table-row-${rowId}`}
+              >
+                <div data-testid="table-row-name">{row?.name || row?.title || row?.key}</div>
+                {columns.map((column: any, columnIndex: number) => {
+                  const columnKey = column?.key || column?.dataIndex || columnIndex
+                  const value = column?.dataIndex ? row?.[column.dataIndex] : undefined
+                  if (typeof column?.render === "function") {
+                    return (
+                      <div key={`col-${columnKey}`} data-testid={`table-cell-${columnKey}`}>
+                        {column.render(value, row, index)}
+                      </div>
+                    )
+                  }
                   return (
                     <div key={`col-${columnKey}`} data-testid={`table-cell-${columnKey}`}>
-                      {column.render(value, row, index)}
+                      {value}
                     </div>
                   )
-                }
-                return (
-                  <div key={`col-${columnKey}`} data-testid={`table-cell-${columnKey}`}>
-                    {value}
-                  </div>
-                )
-              })}
-            </div>
-          )})}
+                })}
+              </div>
+            )
+          })}
           <button
             type="button"
             data-testid="table-next-page"
@@ -388,6 +395,30 @@ describe("PromptBody server search and pagination", () => {
 
   afterEach(() => {
     vi.clearAllMocks()
+  })
+
+  it("exposes the screen-reader status live region", async () => {
+    renderPromptBody()
+
+    const announcer = await screen.findByRole("status")
+    expect(announcer).toHaveAttribute("id", "prompts-status-announcer")
+    expect(announcer).toHaveAttribute("aria-live", "polite")
+    expect(announcer).toHaveAttribute("aria-atomic", "true")
+  })
+
+  it("preserves favorite toggle semantics and keyboard row activation", async () => {
+    renderPromptBody()
+
+    const favoriteButton = await screen.findByTestId("prompt-favorite-local-1")
+    expect(favoriteButton).toHaveAttribute("aria-pressed", "false")
+
+    const firstRow = screen.getByTestId("prompt-row-local-1")
+    expect(firstRow).toHaveAttribute("tabindex", "0")
+    fireEvent.keyDown(firstRow, { key: "Enter", code: "Enter" })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mock-prompt-drawer")).toHaveTextContent("Alpha One")
+    })
   })
 
   it("debounces online server search and requests next page", async () => {
@@ -1306,5 +1337,39 @@ describe("PromptBody server search and pagination", () => {
         }
       ])
     })
+  })
+
+  it("keeps copilot edit control focus styles and minimum touch target classes", async () => {
+    state.privateMode = false
+    mocks.getAllCopilotPrompts.mockResolvedValue([
+      { key: "custom", prompt: "Prompt with {text}" }
+    ])
+
+    renderPromptBody(["/prompts?tab=copilot"])
+
+    const editButton = await screen.findByTestId("copilot-action-edit-custom")
+    expect(editButton.className).toContain("focus:ring-2")
+    expect(editButton.className).toContain("focus:ring-primary")
+    expect(editButton.className).toContain("min-h-8")
+    expect(editButton.className).toContain("min-w-8")
+  })
+
+  it("opens keyboard shortcuts help from button and from '?' shortcut", async () => {
+    renderPromptBody()
+
+    fireEvent.click(screen.getByTestId("prompts-shortcuts-help-button"))
+    expect(
+      await screen.findByText("Keyboard shortcuts")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Create new prompt")).toBeInTheDocument()
+    expect(screen.getByText("Open shortcut help")).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" })
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    })
+
+    fireEvent.keyDown(document, { key: "?", code: "Slash", shiftKey: true })
+    expect(await screen.findByText("Keyboard shortcuts")).toBeInTheDocument()
   })
 })

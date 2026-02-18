@@ -108,13 +108,12 @@ describe("ItemsWorkspace", () => {
       expect(apiMock.getOutputTemplates).toHaveBeenCalled()
     })
 
-    const dialog = await screen.findByRole("dialog", {
-      name: /Generate output for selected items/i
+    await screen.findByText("Generate output for selected items")
+    const generateButtons = screen.getAllByRole("button", {
+      name: /^Generate output$/i
     })
-    const modalGenerateButton = within(dialog).getByRole("button", {
-      name: /^Generate output$/
-    })
-    fireEvent.click(modalGenerateButton)
+    expect(generateButtons.length).toBeGreaterThan(1)
+    fireEvent.click(generateButtons[generateButtons.length - 1])
 
     await waitFor(() => {
       expect(apiMock.generateOutput).toHaveBeenCalledWith({

@@ -35,7 +35,8 @@ const testState = {
   >,
   focusSourceById: vi.fn(),
   focusChatMessageById: vi.fn(),
-  focusWorkspaceNote: vi.fn()
+  focusWorkspaceNote: vi.fn(),
+  setSourceStatusByMediaId: vi.fn()
 }
 
 vi.mock("react-i18next", () => ({
@@ -100,6 +101,11 @@ vi.mock("@/store/workspace", () => ({
       focusSourceById: (id: string) => boolean
       focusChatMessageById: (messageId: string) => boolean
       focusWorkspaceNote: (field?: "title" | "content") => void
+      setSourceStatusByMediaId: (
+        mediaId: number,
+        status: "processing" | "ready" | "error",
+        statusMessage?: string
+      ) => void
     }) => unknown
   ) =>
     selector({
@@ -120,13 +126,20 @@ vi.mock("@/store/workspace", () => ({
       workspaceChatSessions: testState.workspaceChatSessions,
       focusSourceById: testState.focusSourceById,
       focusChatMessageById: testState.focusChatMessageById,
-      focusWorkspaceNote: testState.focusWorkspaceNote
+      focusWorkspaceNote: testState.focusWorkspaceNote,
+      setSourceStatusByMediaId: testState.setSourceStatusByMediaId
     })
 }))
 
 vi.mock("@/utils/workspace-playground-prefill", () => ({
   consumeWorkspacePlaygroundPrefill: vi.fn().mockResolvedValue(null),
   buildKnowledgeQaSeedNote: vi.fn().mockReturnValue(""),
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    getMediaDetails: vi.fn().mockResolvedValue({})
+  }
 }))
 
 vi.mock("../WorkspaceHeader", () => ({
@@ -198,6 +211,7 @@ describe("WorkspacePlayground desktop layout guardrails", () => {
       isDirty: false
     }
     testState.workspaceChatSessions = {}
+    testState.setSourceStatusByMediaId = vi.fn()
   })
 
   it("renders the desktop three-panel structure with sources, chat, and studio panes", () => {

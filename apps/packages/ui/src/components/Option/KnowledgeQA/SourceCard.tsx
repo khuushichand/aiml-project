@@ -146,11 +146,11 @@ export function SourceCard({
       )}
     >
       {/* Header */}
-      <div className="flex items-start gap-3 p-4 pb-2">
+      <div className="flex items-start gap-2.5 p-3 pb-2 sm:gap-3 sm:p-4 sm:pb-2">
         {/* Index badge */}
         <div
           className={cn(
-            "flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center text-sm font-medium",
+            "flex-shrink-0 h-6 w-6 rounded-md flex items-center justify-center text-xs font-medium sm:h-7 sm:w-7 sm:text-sm",
             isCited ? "bg-primary text-white dark:text-slate-900" : "bg-muted text-text"
           )}
         >
@@ -165,7 +165,7 @@ export function SourceCard({
               <h4 className="font-medium text-sm truncate" title={title}>
                 {title}
               </h4>
-              <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-text-muted">
+              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-text-muted sm:gap-2 sm:text-xs">
                 {relevanceDescriptor && (
                   <span
                     className={cn(
@@ -193,8 +193,8 @@ export function SourceCard({
       </div>
 
       {/* Content excerpt */}
-      <div className="px-4 pb-3">
-        <p className="text-sm text-text-muted leading-relaxed whitespace-pre-wrap">
+      <div className="px-3 pb-2 sm:px-4 sm:pb-3">
+        <p className="text-xs text-text-muted leading-relaxed whitespace-pre-wrap sm:text-sm">
           {excerpt}
         </p>
         {canExpand && (
@@ -209,7 +209,7 @@ export function SourceCard({
       </div>
 
       {/* Actions */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-t border-border/50 bg-muted/20">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 bg-muted/20 px-3 py-2 sm:px-4">
         <div className="flex flex-wrap items-center gap-1">
           <button
             type="button"

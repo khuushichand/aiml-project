@@ -11,7 +11,15 @@ const {
   useMutationMock,
   useQueryClientMock,
   useNavigateMock,
+  useCharacterShortcutsMock,
+  generateFullCharacterMock,
+  generateFieldMock,
+  cancelGenerationMock,
+  clearGenerationErrorMock,
   useStorageMock,
+  exportCharacterToJSONMock,
+  exportCharacterToPNGMock,
+  exportCharactersToJSONMock,
   confirmDangerMock,
   navigateMock,
   setSelectedCharacterMock,
@@ -24,7 +32,15 @@ const {
   useMutationMock: vi.fn(),
   useQueryClientMock: vi.fn(),
   useNavigateMock: vi.fn(),
+  useCharacterShortcutsMock: vi.fn(),
+  generateFullCharacterMock: vi.fn(),
+  generateFieldMock: vi.fn(async () => "Generated value"),
+  cancelGenerationMock: vi.fn(),
+  clearGenerationErrorMock: vi.fn(),
   useStorageMock: vi.fn(),
+  exportCharacterToJSONMock: vi.fn(),
+  exportCharacterToPNGMock: vi.fn(),
+  exportCharactersToJSONMock: vi.fn(),
   confirmDangerMock: vi.fn(async () => true),
   navigateMock: vi.fn(),
   setSelectedCharacterMock: vi.fn(),
@@ -125,7 +141,7 @@ vi.mock("@/components/Common/confirm-danger", () => ({
 }))
 
 vi.mock("@/hooks/useCharacterShortcuts", () => ({
-  useCharacterShortcuts: () => undefined
+  useCharacterShortcuts: (options: any) => useCharacterShortcutsMock(options)
 }))
 
 vi.mock("@/hooks/useCharacterGeneration", () => ({
@@ -133,10 +149,10 @@ vi.mock("@/hooks/useCharacterGeneration", () => ({
     isGenerating: false,
     generatingField: null,
     error: null,
-    generateFullCharacter: vi.fn(),
-    generateField: vi.fn(),
-    cancel: vi.fn(),
-    clearError: vi.fn()
+    generateFullCharacter: generateFullCharacterMock,
+    generateField: generateFieldMock,
+    cancel: cancelGenerationMock,
+    clearError: clearGenerationErrorMock
   })
 }))
 
@@ -185,6 +201,12 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
 
 vi.mock("@/services/tldw-server", () => ({
   fetchChatModels: vi.fn(async () => [])
+}))
+
+vi.mock("@/utils/character-export", () => ({
+  exportCharacterToJSON: (...args: any[]) => exportCharacterToJSONMock(...args),
+  exportCharacterToPNG: (...args: any[]) => exportCharacterToPNGMock(...args),
+  exportCharactersToJSON: (...args: any[]) => exportCharactersToJSONMock(...args)
 }))
 
 vi.mock("@/data/character-templates", () => ({
@@ -1054,6 +1076,162 @@ describe("CharactersManager first-use onboarding", () => {
     expect(navigateMock).toHaveBeenCalledWith("/")
     expect(focusComposerMock).toHaveBeenCalled()
   }, 30000)
+
+  it("submits edit flow through the shared form component", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "char-edit-flow",
+      name: "Edit Flow Character",
+      system_prompt: "Stay helpful.",
+      greeting: "Hello",
+      description: "Original description",
+      tags: ["editing"],
+      version: 3
+    }
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /Edit character/i }))
+    const saveButton = await waitFor(() => {
+      const candidate = screen
+        .getAllByRole("button", { name: "Save changes" })
+        .find((button) => button.getAttribute("type") === "submit")
+      expect(candidate).toBeDefined()
+      return candidate as HTMLElement
+    })
+    const editFormElement = saveButton.closest("form")
+    expect(editFormElement).not.toBeNull()
+    const editScope = within(editFormElement as HTMLElement)
+
+    fireEvent.change(
+      editScope.getByPlaceholderText("Write a one-line summary to help identify this character quickly."),
+      { target: { value: "Updated description from edit flow test." } }
+    )
+
+    await user.click(editScope.getByRole("button", { name: "Save changes" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
+        "char-edit-flow",
+        expect.objectContaining({
+          description: "Updated description from edit flow test."
+        }),
+        3
+      )
+    })
+  }, 30000)
+
+  it("exports a character from row actions as JSON", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "char-export-flow",
+      name: "Export Flow Character",
+      system_prompt: "You are exportable.",
+      greeting: "Hi",
+      description: "Export me",
+      tags: ["export"],
+      version: 1
+    }
+
+    tldwClientMock.exportCharacter.mockResolvedValueOnce({
+      id: "char-export-flow",
+      name: "Export Flow Character"
+    })
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    await user.click(await screen.findByText("Export as JSON"))
+
+    await waitFor(() => {
+      expect(tldwClientMock.exportCharacter).toHaveBeenCalledWith(
+        "char-export-flow",
+        { format: "v3" }
+      )
+    })
+    expect(exportCharacterToJSONMock).toHaveBeenCalledTimes(1)
+  }, 30000)
+
+  it("keeps AI field generation affordances wired in create mode", async () => {
+    const user = userEvent.setup()
+    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => {
+      if (key === "characterGenModel") {
+        return ["mock-generation-model", vi.fn(), { isLoading: false }]
+      }
+      return [defaultValue ?? null, vi.fn(), { isLoading: false }]
+    })
+
+    render(<CharactersManager />)
+    await user.click(screen.getByRole("button", { name: "New character" }))
+
+    const createSubmitButton = await waitFor(() => {
+      const candidate = screen
+        .getAllByRole("button", { name: "Create character" })
+        .find((button) => button.getAttribute("type") === "submit")
+      expect(candidate).toBeDefined()
+      return candidate as HTMLElement
+    })
+    const createFormElement = createSubmitButton.closest("form")
+    expect(createFormElement).not.toBeNull()
+    const createScope = within(createFormElement as HTMLElement)
+
+    const generateButtons = createScope.getAllByLabelText("Generate with AI")
+    expect(generateButtons.length).toBeGreaterThan(0)
+    await user.click(generateButtons[0])
+
+    await waitFor(() => {
+      expect(generateFieldMock).toHaveBeenCalled()
+    })
+
+    const generateCall = generateFieldMock.mock.calls[0]
+    expect(generateCall?.[2]).toMatchObject({
+      model: "mock-generation-model"
+    })
+  }, 30000)
+
+  it("registers keyboard shortcut callbacks for core manager actions", async () => {
+    render(<CharactersManager />)
+
+    expect(useCharacterShortcutsMock).toHaveBeenCalled()
+    const shortcutOptions = useCharacterShortcutsMock.mock.calls[0]?.[0]
+    expect(shortcutOptions?.enabled).toBe(true)
+    expect(typeof shortcutOptions?.onNewCharacter).toBe("function")
+    expect(typeof shortcutOptions?.onFocusSearch).toBe("function")
+    expect(typeof shortcutOptions?.onEscape).toBe("function")
+  })
 
   it("imports a character file through the upload control", async () => {
     const user = userEvent.setup()

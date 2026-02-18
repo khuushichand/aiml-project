@@ -190,7 +190,7 @@ function KnowledgeQAContent() {
         {hasVisibleResultsArea && (
           <div
             data-testid="knowledge-results-shell"
-            className="flex-1 overflow-y-auto px-6 pb-6 animate-in fade-in duration-200"
+            className="flex-1 overflow-y-auto px-4 pb-24 md:px-6 md:pb-6 animate-in fade-in duration-200"
           >
             <div className="max-w-4xl mx-auto space-y-6">
               {/* Export button */}

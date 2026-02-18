@@ -370,7 +370,7 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
           {/* Format selection */}
           <div className="space-y-3">
             <label className="text-sm font-medium">Export Format</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               {[
                 {
                   value: "markdown",

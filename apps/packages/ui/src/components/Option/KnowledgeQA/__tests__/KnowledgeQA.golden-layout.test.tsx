@@ -141,6 +141,7 @@ describe("KnowledgeQA golden layout guardrails", () => {
     expect(screen.getByTestId("knowledge-results-shell").className).toContain(
       "animate-in fade-in duration-200"
     )
+    expect(screen.getByTestId("knowledge-results-shell").className).toContain("pb-24")
     expect(screen.queryByText("Knowledge QA")).not.toBeInTheDocument()
   })
 

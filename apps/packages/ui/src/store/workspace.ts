@@ -17,6 +17,7 @@ import type {
   WorkspaceConfig,
   WorkspaceNote,
   WorkspaceSource,
+  WorkspaceSourceStatus,
   WorkspaceSourceType
 } from "@/types/workspace"
 import { DEFAULT_AUDIO_SETTINGS, DEFAULT_WORKSPACE_NOTE } from "@/types/workspace"
@@ -177,6 +178,16 @@ interface SourcesActions {
   deselectAllSources: () => void
   setSelectedSourceIds: (ids: string[]) => void
   setSourceSearchQuery: (query: string) => void
+  setSourceStatusById: (
+    sourceId: string,
+    status: WorkspaceSourceStatus,
+    statusMessage?: string
+  ) => void
+  setSourceStatusByMediaId: (
+    mediaId: number,
+    status: WorkspaceSourceStatus,
+    statusMessage?: string
+  ) => void
   focusSourceById: (id: string) => boolean
   focusSourceByMediaId: (mediaId: number) => boolean
   clearSourceFocusTarget: () => void
@@ -436,8 +447,14 @@ const reviveDateOrUndefined = (
 const reviveSources = (sources: WorkspaceSource[]): WorkspaceSource[] =>
   sources.map((source) => ({
     ...source,
+    status: source.status || "ready",
+    statusMessage: source.statusMessage || undefined,
     addedAt: reviveDateOrNull(source.addedAt) || new Date()
   }))
+
+const getWorkspaceSourceStatus = (
+  source: WorkspaceSource
+): WorkspaceSourceStatus => source.status || "ready"
 
 const reviveArtifacts = (artifacts: GeneratedArtifact[]): GeneratedArtifact[] =>
   artifacts.map((artifact) => ({
@@ -782,6 +799,8 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     addSource: (sourceData) => {
       const source: WorkspaceSource = {
         ...sourceData,
+        status: sourceData.status || "ready",
+        statusMessage: sourceData.statusMessage || undefined,
         id: generateWorkspaceId(),
         addedAt: new Date()
       }
@@ -798,6 +817,8 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     addSources: (sourcesData) => {
       const newSources: WorkspaceSource[] = sourcesData.map((s) => ({
         ...s,
+        status: s.status || "ready",
+        statusMessage: s.statusMessage || undefined,
         id: generateWorkspaceId(),
         addedAt: new Date()
       }))
@@ -831,6 +852,10 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
 
     toggleSourceSelection: (id) =>
       set((state) => {
+        const source = state.sources.find((entry) => entry.id === id)
+        if (!source || getWorkspaceSourceStatus(source) !== "ready") {
+          return state
+        }
         const isSelected = state.selectedSourceIds.includes(id)
         return {
           selectedSourceIds: isSelected
@@ -841,14 +866,71 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
 
     selectAllSources: () =>
       set((state) => ({
-        selectedSourceIds: state.sources.map((s) => s.id)
+        selectedSourceIds: state.sources
+          .filter((source) => getWorkspaceSourceStatus(source) === "ready")
+          .map((source) => source.id)
       })),
 
     deselectAllSources: () => set({ selectedSourceIds: [] }),
 
-    setSelectedSourceIds: (ids) => set({ selectedSourceIds: ids }),
+    setSelectedSourceIds: (ids) =>
+      set((state) => {
+        const readySourceIds = new Set(
+          state.sources
+            .filter((source) => getWorkspaceSourceStatus(source) === "ready")
+            .map((source) => source.id)
+        )
+        return {
+          selectedSourceIds: ids.filter((id) => readySourceIds.has(id))
+        }
+      }),
 
     setSourceSearchQuery: (query) => set({ sourceSearchQuery: query }),
+
+    setSourceStatusById: (sourceId, status, statusMessage) =>
+      set((state) => {
+        const nextSources = state.sources.map((source) =>
+          source.id === sourceId
+            ? {
+                ...source,
+                status,
+                statusMessage: statusMessage || undefined
+              }
+            : source
+        )
+        return {
+          sources: nextSources,
+          selectedSourceIds:
+            status === "ready"
+              ? state.selectedSourceIds
+              : state.selectedSourceIds.filter((id) => id !== sourceId)
+        }
+      }),
+
+    setSourceStatusByMediaId: (mediaId, status, statusMessage) =>
+      set((state) => {
+        const targetSource = state.sources.find(
+          (source) => source.mediaId === mediaId
+        )
+        if (!targetSource) return state
+
+        const nextSources = state.sources.map((source) =>
+          source.mediaId === mediaId
+            ? {
+                ...source,
+                status,
+                statusMessage: statusMessage || undefined
+              }
+            : source
+        )
+        return {
+          sources: nextSources,
+          selectedSourceIds:
+            status === "ready"
+              ? state.selectedSourceIds
+              : state.selectedSourceIds.filter((id) => id !== targetSource.id)
+        }
+      }),
 
     focusSourceById: (id) => {
       const state = get()
@@ -887,14 +969,21 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     getSelectedSources: () => {
       const state = get()
       const selectedSet = new Set(state.selectedSourceIds)
-      return state.sources.filter((s) => selectedSet.has(s.id))
+      return state.sources.filter(
+        (source) =>
+          selectedSet.has(source.id) && getWorkspaceSourceStatus(source) === "ready"
+      )
     },
 
     getSelectedMediaIds: () => {
       const state = get()
       const selectedSet = new Set(state.selectedSourceIds)
       return state.sources
-        .filter((s) => selectedSet.has(s.id))
+        .filter(
+          (source) =>
+            selectedSet.has(source.id) &&
+            getWorkspaceSourceStatus(source) === "ready"
+        )
         .map((s) => s.mediaId)
     },
 
@@ -1552,6 +1641,14 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           // Ensure dates are Date objects after rehydration
           state.workspaceCreatedAt = reviveDateOrNull(state.workspaceCreatedAt)
           state.sources = reviveSources(state.sources || [])
+          const readySourceIds = new Set(
+            state.sources
+              .filter((source) => getWorkspaceSourceStatus(source) === "ready")
+              .map((source) => source.id)
+          )
+          state.selectedSourceIds = (state.selectedSourceIds || []).filter((id) =>
+            readySourceIds.has(id)
+          )
           state.generatedArtifacts = reviveArtifacts(state.generatedArtifacts || [])
 
           // Migration: ensure optional fields exist

@@ -1,6 +1,18 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { Plus, Search, FileText, Video, Headphones, Globe, File, Type, PanelLeftClose } from "lucide-react"
+import {
+  Plus,
+  Search,
+  FileText,
+  Video,
+  Headphones,
+  Globe,
+  File,
+  Type,
+  PanelLeftClose,
+  Loader2,
+  AlertTriangle
+} from "lucide-react"
 import { Input, Checkbox, Empty, Button, Tooltip } from "antd"
 import { useWorkspaceStore } from "@/store/workspace"
 import type { WorkspaceSourceType } from "@/types/workspace"
@@ -233,6 +245,10 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
               const Icon = SOURCE_TYPE_ICONS[source.type] || File
               const isSelected = selectedSourceIds.includes(source.id)
               const isHighlighted = highlightedSourceId === source.id
+              const sourceStatus = source.status || "ready"
+              const isReady = sourceStatus === "ready"
+              const isProcessing = sourceStatus === "processing"
+              const isError = sourceStatus === "error"
 
               return (
                 <div
@@ -243,8 +259,12 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
                   ref={(element) => {
                     sourceItemRefs.current[source.id] = element
                   }}
-                  draggable
+                  draggable={isReady}
                   onDragStart={(event) => {
+                    if (!isReady) {
+                      event.preventDefault()
+                      return
+                    }
                     event.dataTransfer.effectAllowed = "copyMove"
                     event.dataTransfer.setData(
                       WORKSPACE_SOURCE_DRAG_TYPE,
@@ -265,7 +285,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
                     isHighlighted
                       ? "ring-2 ring-primary/40 border-primary/40 bg-primary/15"
                       : ""
-                  } cursor-grab active:cursor-grabbing`}
+                  } ${isReady ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
                 >
                   <div
                     data-testid={`source-checkbox-hitarea-${source.id}`}
@@ -273,6 +293,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
                   >
                     <Checkbox
                       checked={isSelected}
+                      disabled={!isReady}
                       onChange={() => toggleSourceSelection(source.id)}
                     />
                   </div>
@@ -291,6 +312,25 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
                       <p className="truncate text-xs text-text-muted capitalize">
                         {source.type}
                       </p>
+                      {isProcessing && (
+                        <p className="mt-0.5 flex items-center gap-1 text-[11px] text-primary">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          {t("playground:sources.statusProcessing", "Processing")}
+                        </p>
+                      )}
+                      {isError && (
+                        <p
+                          className="mt-0.5 flex items-center gap-1 text-[11px] text-error"
+                          title={source.statusMessage || undefined}
+                        >
+                          <AlertTriangle className="h-3 w-3" />
+                          {source.statusMessage ||
+                            t(
+                              "playground:sources.statusError",
+                              "Source processing failed"
+                            )}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <button

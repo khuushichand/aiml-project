@@ -711,6 +711,34 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   })
   const [importing, setImporting] = React.useState(false)
   const [previewCharacter, setPreviewCharacter] = React.useState<any | null>(null)
+  const crossNavigationContext = React.useMemo(
+    () => {
+      if (typeof window === "undefined") {
+        return {
+          launchedFromWorldBooks: false,
+          focusCharacterId: "",
+          focusWorldBookId: null as number | null
+        }
+      }
+      const params = new URLSearchParams(window.location.search)
+      const focusWorldBookIdRaw = params.get("focusWorldBookId")
+      const parsedFocusWorldBookId = Number(focusWorldBookIdRaw)
+      return {
+        launchedFromWorldBooks: params.get("from") === "world-books",
+        focusCharacterId: params.get("focusCharacterId") || "",
+        focusWorldBookId:
+          Number.isFinite(parsedFocusWorldBookId) && parsedFocusWorldBookId > 0
+            ? parsedFocusWorldBookId
+            : null
+      }
+    },
+    []
+  )
+  const hasHandledFocusCharacterRef = React.useRef(false)
+  const previewCharacterId = React.useMemo(() => {
+    const parsed = Number(previewCharacter?.id)
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+  }, [previewCharacter?.id])
 
   // Inline editing state (M1)
   const [inlineEdit, setInlineEdit] = React.useState<{
@@ -2408,6 +2436,34 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     staleTime: 60 * 1000 // Cache for 1 minute
   })
 
+  const {
+    data: previewCharacterWorldBooks = [],
+    isFetching: previewCharacterWorldBooksLoading
+  } = useQuery<Array<{ id: number; name: string }>>({
+    queryKey: ["tldw:characterPreviewWorldBooks", previewCharacterId],
+    queryFn: async () => {
+      if (previewCharacterId == null) return []
+      await tldwClient.initialize()
+      const linkedBooks = await tldwClient.listCharacterWorldBooks(previewCharacterId)
+      const parsed = Array.isArray(linkedBooks) ? linkedBooks : []
+      return parsed
+        .map((book: any) => {
+          const worldBookId = Number(book?.world_book_id ?? book?.id)
+          if (!Number.isFinite(worldBookId) || worldBookId <= 0) return null
+          const rawName = book?.world_book_name ?? book?.name
+          const worldBookName =
+            typeof rawName === "string" && rawName.trim().length > 0
+              ? rawName
+              : `World Book ${worldBookId}`
+          return { id: worldBookId, name: worldBookName }
+        })
+        .filter((book): book is { id: number; name: string } => book !== null)
+        .sort((a, b) => a.name.localeCompare(b.name))
+    },
+    enabled: previewCharacterId != null,
+    staleTime: 30 * 1000
+  })
+
   const data = React.useMemo(
     () => {
       if (!isLegacyCharacterListResponse || !hasConversationsOnly) {
@@ -2438,6 +2494,32 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       rawData
     ]
   )
+
+  React.useEffect(() => {
+    if (hasHandledFocusCharacterRef.current) return
+    const focusCharacterId = crossNavigationContext.focusCharacterId.trim()
+    if (!focusCharacterId) {
+      hasHandledFocusCharacterRef.current = true
+      return
+    }
+    if (status !== "success") return
+
+    const matchingCharacter = (data || []).find((character: any) => {
+      const candidates = [
+        character?.id,
+        character?.slug,
+        character?.name
+      ]
+      return candidates.some(
+        (candidate) => String(candidate || "").trim() === focusCharacterId
+      )
+    })
+
+    hasHandledFocusCharacterRef.current = true
+    if (matchingCharacter) {
+      setPreviewCharacter(matchingCharacter)
+    }
+  }, [crossNavigationContext.focusCharacterId, data, status])
   const totalCharacters = React.useMemo(
     () => (isLegacyCharacterListResponse ? data.length : rawTotalCharacters),
     [data.length, isLegacyCharacterListResponse, rawTotalCharacters]
@@ -3352,13 +3434,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     // Delete the character (soft delete on backend)
     deleteCharacter({ id: characterId, expectedVersion: characterVersion }, {
       onSuccess: () => {
-        // Optimistically remove from UI
-        qc.setQueryData(
-          ["tldw:listCharacters", "all"],
-          (old: any[] | undefined) =>
-            old?.filter((c: any) => String(c.id || c.slug || c.name) !== characterId) ?? []
-        )
-
         // Create undo timeout - after 10 seconds, finalize delete
         const timeoutId = setTimeout(() => {
           setPendingDelete(null)
@@ -4470,6 +4545,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             setPreviewCharacter(null)
           }
         }}
+        attachedWorldBooks={previewCharacterWorldBooks}
+        attachedWorldBooksLoading={previewCharacterWorldBooksLoading}
+        launchedFromWorldBooks={crossNavigationContext.launchedFromWorldBooks}
+        launchedFromWorldBookId={crossNavigationContext.focusWorldBookId}
         deleting={deleting}
         exporting={!!exporting && exporting === (previewCharacter?.id || previewCharacter?.slug || previewCharacter?.name)}
       />

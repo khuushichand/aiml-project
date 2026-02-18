@@ -11,6 +11,7 @@ import {
 } from "lucide-react"
 import { useWorkspaceStore } from "@/store/workspace"
 import { useMobile } from "@/hooks/useMediaQuery"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import {
   buildKnowledgeQaSeedNote,
   consumeWorkspacePlaygroundPrefill
@@ -25,6 +26,7 @@ import {
 } from "./workspace-global-search"
 
 const WORKSPACE_SWITCH_TRANSITION_MS = 420
+const WORKSPACE_SOURCE_STATUS_POLL_INTERVAL_MS = 5000
 
 type WorkspaceTabKey = "sources" | "chat" | "studio"
 
@@ -33,6 +35,58 @@ const isDesktopLayout = (): boolean => {
     return true
   }
   return window.matchMedia("(min-width: 1024px)").matches
+}
+
+const isMediaLikelyReadyForRag = (detail: unknown): boolean => {
+  if (!detail || typeof detail !== "object") {
+    return false
+  }
+
+  const candidate = detail as Record<string, unknown>
+  const content = candidate.content as Record<string, unknown> | undefined
+  const processing = candidate.processing as Record<string, unknown> | undefined
+
+  const contentText =
+    typeof content?.text === "string" ? content.text.trim() : ""
+  if (contentText.length > 0) {
+    return true
+  }
+
+  const analysis =
+    typeof processing?.analysis === "string" ? processing.analysis.trim() : ""
+  if (analysis.length > 0) {
+    return true
+  }
+
+  const safeMetadata = processing?.safe_metadata
+  if (
+    safeMetadata &&
+    typeof safeMetadata === "object" &&
+    Object.keys(safeMetadata as Record<string, unknown>).length > 0
+  ) {
+    return true
+  }
+
+  return false
+}
+
+const isTransientSourceStatusError = (
+  error: unknown
+): { transient: boolean; message: string } => {
+  const status = (error as { status?: number } | null)?.status
+  const message =
+    error instanceof Error ? error.message : String(error ?? "Unknown error")
+  const transient =
+    status === 0 ||
+    status === 404 ||
+    status === 408 ||
+    status === 429 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    /network|timeout|abort/i.test(message)
+
+  return { transient, message }
 }
 
 const WorkspacePlaygroundSkeleton: React.FC<{ isMobile: boolean }> = ({
@@ -118,8 +172,12 @@ export const WorkspacePlayground: React.FC = () => {
   const focusSourceById = useWorkspaceStore((s) => s.focusSourceById)
   const focusChatMessageById = useWorkspaceStore((s) => s.focusChatMessageById)
   const focusWorkspaceNote = useWorkspaceStore((s) => s.focusWorkspaceNote)
+  const setSourceStatusByMediaId = useWorkspaceStore(
+    (s) => s.setSourceStatusByMediaId
+  )
   const storeHydrated = useWorkspaceStore((s) => s.storeHydrated)
   const isStoreHydrated = storeHydrated !== false
+  const sourceStatusFailureRef = React.useRef<Record<number, number>>({})
 
   const leftPaneOpen = !leftPaneCollapsed
   const rightPaneOpen = !rightPaneCollapsed
@@ -138,6 +196,14 @@ export const WorkspacePlayground: React.FC = () => {
         currentNote
       }),
     [currentNote, globalSearchQuery, sources, workspaceChatMessages]
+  )
+
+  const processingMediaIds = React.useMemo(
+    () =>
+      sources
+        .filter((source) => (source.status || "ready") === "processing")
+        .map((source) => source.mediaId),
+    [sources]
   )
 
   const closeGlobalSearch = React.useCallback(() => {
@@ -343,6 +409,55 @@ export const WorkspacePlayground: React.FC = () => {
       workspaceTransitionTimerRef.current = null
     }, WORKSPACE_SWITCH_TRANSITION_MS)
   }, [workspaceId])
+
+  useEffect(() => {
+    if (!isStoreHydrated) return
+    if (processingMediaIds.length === 0) return
+
+    let cancelled = false
+
+    const pollStatuses = async () => {
+      await Promise.all(
+        processingMediaIds.map(async (mediaId) => {
+          try {
+            const detail = await tldwClient.getMediaDetails(mediaId, {
+              include_content: true,
+              include_versions: false,
+              include_version_content: false
+            })
+            if (cancelled) return
+
+            if (isMediaLikelyReadyForRag(detail)) {
+              setSourceStatusByMediaId(mediaId, "ready")
+              delete sourceStatusFailureRef.current[mediaId]
+            }
+          } catch (error) {
+            if (cancelled) return
+
+            const nextFailureCount =
+              (sourceStatusFailureRef.current[mediaId] || 0) + 1
+            sourceStatusFailureRef.current[mediaId] = nextFailureCount
+
+            const { transient, message } = isTransientSourceStatusError(error)
+            if (!transient && nextFailureCount >= 2) {
+              setSourceStatusByMediaId(mediaId, "error", message)
+              delete sourceStatusFailureRef.current[mediaId]
+            }
+          }
+        })
+      )
+    }
+
+    void pollStatuses()
+    const timer = window.setInterval(
+      () => void pollStatuses(),
+      WORKSPACE_SOURCE_STATUS_POLL_INTERVAL_MS
+    )
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [isStoreHydrated, processingMediaIds, setSourceStatusByMediaId])
 
   useEffect(() => {
     return () => {

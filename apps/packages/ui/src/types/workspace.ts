@@ -15,11 +15,15 @@ export type WorkspaceSourceType =
   | "document"
   | "text"
 
+export type WorkspaceSourceStatus = "processing" | "ready" | "error"
+
 export interface WorkspaceSource {
   id: string
   mediaId: number // Server-side media ID
   title: string
   type: WorkspaceSourceType
+  status?: WorkspaceSourceStatus
+  statusMessage?: string
   thumbnailUrl?: string
   addedAt: Date
   // Optional metadata

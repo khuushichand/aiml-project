@@ -19,7 +19,7 @@ Finding IDs: `7.1` through `7.9`
 **Tests**:
 - Component tests validating `aria-live`, keyboard activation, and `aria-pressed`.
 - Accessibility integration test for row focus and keyboard flow.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Critical Control and Labeling Remediation
 **Goal**: Fix important screen-reader and touch/keyboard gaps.
@@ -30,7 +30,7 @@ Finding IDs: `7.1` through `7.9`
 **Tests**:
 - Component tests for focus-visible classes and minimum target sizing.
 - Accessibility tests confirming labels/disabled explanations across breakpoints.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Keyboard Shortcut Discoverability
 **Goal**: Make existing keyboard support discoverable to all users.
@@ -41,7 +41,7 @@ Finding IDs: `7.1` through `7.9`
 **Tests**:
 - Interaction tests for opening/closing shortcut help panel.
 - Accessibility tests for modal semantics, focus trap, and labels.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

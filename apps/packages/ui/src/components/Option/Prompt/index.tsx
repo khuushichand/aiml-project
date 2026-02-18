@@ -13,7 +13,7 @@ import {
   Alert,
   type InputRef
 } from "antd"
-import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers, Cloud, Clipboard, Copy } from "lucide-react"
+import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers, Cloud, Clipboard, Copy, Keyboard } from "lucide-react"
 import { PromptActionsMenu } from "./PromptActionsMenu"
 import { PromptDrawer } from "./PromptDrawer"
 import { SyncStatusBadge } from "./SyncStatusBadge"
@@ -243,6 +243,7 @@ export const PromptBody = () => {
   const [editCopilotForm] = Form.useForm()
   const [copilotSearchText, setCopilotSearchText] = useState("")
   const [copilotKeyFilter, setCopilotKeyFilter] = useState<string>("all")
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
   const copilotEditPromptValue = Form.useWatch("prompt", editCopilotForm)
 
   const { setSelectedQuickPrompt, setSelectedSystemPrompt } = useMessageOption()
@@ -1852,16 +1853,32 @@ export const PromptBody = () => {
     [t]
   )
 
-  // Keyboard shortcuts: N = new prompt, / = focus search, Esc = close drawer
+  // Keyboard shortcuts: N = new prompt, / = focus search, Esc = close drawer, ? = open shortcut help
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable
-      if (e.key === "Escape" && drawerOpen) {
-        setDrawerOpen(false)
+      if (e.key === "Escape") {
+        if (shortcutsHelpOpen) {
+          setShortcutsHelpOpen(false)
+          return
+        }
+        if (drawerOpen) {
+          setDrawerOpen(false)
+        }
         return
       }
       if (isInput) return
+      if (
+        (e.key === "?" || (e.key === "/" && e.shiftKey)) &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey
+      ) {
+        e.preventDefault()
+        setShortcutsHelpOpen(true)
+        return
+      }
       if (e.key === "n" && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault()
         openCreateDrawer()
@@ -1874,7 +1891,7 @@ export const PromptBody = () => {
     }
     document.addEventListener("keydown", handler)
     return () => document.removeEventListener("keydown", handler)
-  }, [drawerOpen, openCreateDrawer])
+  }, [drawerOpen, shortcutsHelpOpen, openCreateDrawer])
 
   const openEditDrawer = (record: any) => {
     if (guardPrivateMode()) return
@@ -2356,6 +2373,26 @@ export const PromptBody = () => {
                   popupMatchSelectWidth={false}
                 />
               </div>
+              <Tooltip
+                title={t("managePrompts.shortcuts.openHint", {
+                  defaultValue: "Keyboard shortcuts (?)"
+                })}
+              >
+                <button
+                  type="button"
+                  onClick={() => setShortcutsHelpOpen(true)}
+                  data-testid="prompts-shortcuts-help-button"
+                  aria-label={t("managePrompts.shortcuts.openLabel", {
+                    defaultValue: "Open keyboard shortcuts"
+                  })}
+                  className="inline-flex items-center gap-2 rounded-md border border-border px-2 py-2 text-md font-medium leading-4 text-text hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2"
+                >
+                  <Keyboard className="size-4" aria-hidden="true" />
+                  {t("managePrompts.shortcuts.openButton", {
+                    defaultValue: "Shortcuts"
+                  })}
+                </button>
+              </Tooltip>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -2998,7 +3035,7 @@ export const PromptBody = () => {
                               setOpenCopilotEdit(true)
                             }}
                             data-testid={`copilot-action-edit-${record.key}`}
-                            className="inline-flex items-center justify-center rounded p-2 text-text-muted hover:bg-bg-muted/70 focus:outline-none focus:ring-2 focus:ring-primary"
+                            className="inline-flex min-h-8 min-w-8 items-center justify-center rounded p-2 text-text-muted hover:bg-bg-muted/70 focus:outline-none focus:ring-2 focus:ring-primary"
                           >
                             <Pen className="size-4" />
                           </button>
@@ -3015,7 +3052,7 @@ export const PromptBody = () => {
                             })}
                             onClick={() => copyCopilotToCustom(record)}
                             data-testid={`copilot-action-copy-custom-${record.key}`}
-                            className="inline-flex items-center justify-center rounded p-2 text-text-muted hover:bg-bg-muted/70 focus:outline-none focus:ring-2 focus:ring-primary"
+                            className="inline-flex min-h-8 min-w-8 items-center justify-center rounded p-2 text-text-muted hover:bg-bg-muted/70 focus:outline-none focus:ring-2 focus:ring-primary"
                           >
                             <Copy className="size-4" />
                           </button>
@@ -3034,7 +3071,7 @@ export const PromptBody = () => {
                               void copyCopilotPromptToClipboard(record)
                             }}
                             data-testid={`copilot-action-copy-clipboard-${record.key}`}
-                            className="inline-flex items-center justify-center rounded p-2 text-text-muted hover:bg-bg-muted/70 focus:outline-none focus:ring-2 focus:ring-primary"
+                            className="inline-flex min-h-8 min-w-8 items-center justify-center rounded p-2 text-text-muted hover:bg-bg-muted/70 focus:outline-none focus:ring-2 focus:ring-primary"
                           >
                             <Clipboard className="size-4" />
                           </button>
@@ -3605,6 +3642,57 @@ export const PromptBody = () => {
           })}
           data-testid="prompts-bulk-keyword-input"
         />
+      </Modal>
+
+      <Modal
+        title={t("managePrompts.shortcuts.title", {
+          defaultValue: "Keyboard shortcuts"
+        })}
+        open={shortcutsHelpOpen}
+        onCancel={() => setShortcutsHelpOpen(false)}
+        footer={null}
+        data-testid="prompts-shortcuts-modal"
+      >
+        <p className="text-sm text-text-muted">
+          {t("managePrompts.shortcuts.description", {
+            defaultValue:
+              "Shortcuts are available when focus is not inside an input field."
+          })}
+        </p>
+        <div className="mt-3 space-y-2 text-sm">
+          <div className="flex items-center justify-between rounded border border-border p-2">
+            <span>
+              {t("managePrompts.shortcuts.newPrompt", {
+                defaultValue: "Create new prompt"
+              })}
+            </span>
+            <kbd className="rounded border border-border px-1.5 py-0.5 text-xs">N</kbd>
+          </div>
+          <div className="flex items-center justify-between rounded border border-border p-2">
+            <span>
+              {t("managePrompts.shortcuts.focusSearch", {
+                defaultValue: "Focus search"
+              })}
+            </span>
+            <kbd className="rounded border border-border px-1.5 py-0.5 text-xs">/</kbd>
+          </div>
+          <div className="flex items-center justify-between rounded border border-border p-2">
+            <span>
+              {t("managePrompts.shortcuts.closeDrawer", {
+                defaultValue: "Close drawer / modal"
+              })}
+            </span>
+            <kbd className="rounded border border-border px-1.5 py-0.5 text-xs">Esc</kbd>
+          </div>
+          <div className="flex items-center justify-between rounded border border-border p-2">
+            <span>
+              {t("managePrompts.shortcuts.openHelp", {
+                defaultValue: "Open shortcut help"
+              })}
+            </span>
+            <kbd className="rounded border border-border px-1.5 py-0.5 text-xs">?</kbd>
+          </div>
+        </div>
       </Modal>
 
       <Modal

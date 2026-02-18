@@ -8,6 +8,7 @@ const state = {
   createNewThread: vi.fn(),
   results: [{ id: "r1" }] as Array<{ id: string }>,
   answer: null as string | null,
+  isMobile: false,
 }
 
 vi.mock("../KnowledgeQAProvider", () => ({
@@ -20,12 +21,17 @@ vi.mock("../KnowledgeQAProvider", () => ({
   })
 }))
 
+vi.mock("@/hooks/useMediaQuery", () => ({
+  useMobile: () => state.isMobile,
+}))
+
 describe("FollowUpInput accessibility", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     state.isSearching = false
     state.results = [{ id: "r1" }]
     state.answer = null
+    state.isMobile = false
   })
 
   it("provides an explicit accessible name for the follow-up input", () => {
@@ -60,6 +66,20 @@ describe("FollowUpInput accessibility", () => {
     expect(input).toHaveAttribute("placeholder", "Type your next question...")
     expect(
       screen.getByText(/queue your next question while the current search completes/i)
+    ).toBeInTheDocument()
+  })
+
+  it("uses a sticky mobile layout with safe-area padding while keeping actions visible", () => {
+    state.isMobile = true
+
+    render(<FollowUpInput />)
+
+    const stickyContainer = screen.getByTestId("knowledge-followup-sticky")
+    expect(stickyContainer.className).toContain("fixed inset-x-0 bottom-0")
+    expect(stickyContainer.className).toContain("env(safe-area-inset-bottom)")
+    expect(screen.getByRole("button", { name: "Start new topic" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("textbox", { name: "Ask a follow-up question" })
     ).toBeInTheDocument()
   })
 })

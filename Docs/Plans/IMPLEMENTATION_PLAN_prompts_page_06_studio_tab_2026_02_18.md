@@ -55,7 +55,7 @@ Finding IDs: `6.1` through `6.6`
 **Tests**:
 - Integration tests for socket event handling and reconnect behavior.
 - Fallback tests validating poll-based updates when sockets fail.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

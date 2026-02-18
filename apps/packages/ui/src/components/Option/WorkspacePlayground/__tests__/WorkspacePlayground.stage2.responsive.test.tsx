@@ -4,6 +4,7 @@ import { WorkspacePlayground } from "../index"
 
 const testState = {
   isMobile: false,
+  storeHydrated: true,
   leftPaneCollapsed: false,
   rightPaneCollapsed: false,
   workspaceId: "workspace-1",
@@ -31,7 +32,8 @@ const testState = {
   workspaceChatSessions: {} as Record<string, { messages: any[] }>,
   focusSourceById: vi.fn(() => true),
   focusChatMessageById: vi.fn(() => true),
-  focusWorkspaceNote: vi.fn()
+  focusWorkspaceNote: vi.fn(),
+  setSourceStatusByMediaId: vi.fn()
 }
 
 vi.mock("react-i18next", () => ({
@@ -59,6 +61,12 @@ vi.mock("@/store/workspace", () => ({
   useWorkspaceStore: (
     selector: (state: typeof testState) => unknown
   ) => selector(testState)
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    getMediaDetails: vi.fn().mockResolvedValue({})
+  }
 }))
 
 vi.mock("@/utils/workspace-playground-prefill", () => ({
@@ -113,8 +121,10 @@ describe("WorkspacePlayground Stage 2 drawer responsiveness", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     testState.isMobile = false
+    testState.storeHydrated = true
     testState.leftPaneCollapsed = false
     testState.rightPaneCollapsed = false
+    testState.setSourceStatusByMediaId = vi.fn()
   })
 
   it("uses non-masked tablet drawers so chat remains visible", () => {

@@ -93,8 +93,8 @@ Assumption: 2-week sprints starting Monday, February 23, 2026.
 | 05 | History and Thread Management | P0 | Complete | 4/4 | Unassigned | None | 2026-02-18 |
 | 06 | RAG Settings and Configuration | P1 | Complete | 3/3 | Unassigned | None | 2026-02-18 |
 | 07 | Export and Sharing | P1 | Complete | 4/4 | Unassigned | None | 2026-02-18 |
-| 08 | Responsive and Mobile Experience | P1 | Not Started | 0/3 | Unassigned | None | 2026-02-18 |
-| 09 | Performance and Perceived Speed | P1 | Not Started | 0/4 | Unassigned | 03 | 2026-02-18 |
+| 08 | Responsive and Mobile Experience | P1 | Complete | 3/3 | Unassigned | None | 2026-02-18 |
+| 09 | Performance and Perceived Speed | P1 | Complete | 4/4 | Unassigned | None | 2026-02-18 |
 | 10 | Error Handling and Edge Cases | P0 | Complete | 4/4 | Unassigned | None | 2026-02-18 |
 | 11 | Information Gaps and Missing Functionality | P0 | Complete | 5/5 | Unassigned | None | 2026-02-18 |
 | 12 | Accessibility | P0 | Complete | 4/4 | Unassigned | None | 2026-02-18 |

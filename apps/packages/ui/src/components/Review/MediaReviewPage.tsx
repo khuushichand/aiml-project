@@ -11,6 +11,7 @@ import { ChevronDown, ChevronUp } from "lucide-react"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useSetting } from "@/hooks/useSetting"
+import { DiffViewModal } from "@/components/Media/DiffViewModal"
 import {
   LAST_MEDIA_ID_SETTING,
   MEDIA_REVIEW_ORIENTATION_SETTING,
@@ -95,6 +96,11 @@ export const MediaReviewPage: React.FC = () => {
   const [focusedId, setFocusedId] = React.useState<string | number | null>(null)
   const [collapseOthers, setCollapseOthers] = React.useState<boolean>(false)
   const [pendingInitialMediaId, setPendingInitialMediaId] = React.useState<string | null>(null)
+  const [compareDiffOpen, setCompareDiffOpen] = React.useState(false)
+  const [compareLeftText, setCompareLeftText] = React.useState("")
+  const [compareRightText, setCompareRightText] = React.useState("")
+  const [compareLeftLabel, setCompareLeftLabel] = React.useState("")
+  const [compareRightLabel, setCompareRightLabel] = React.useState("")
   // Persisted filter collapse state
   const [filtersCollapsed, setFiltersCollapsed] = useSetting(MEDIA_REVIEW_FILTERS_COLLAPSED_SETTING)
   // Auto view mode setting
@@ -501,6 +507,58 @@ export const MediaReviewPage: React.FC = () => {
       )
     }
   }, [allResults, ensureDetail, openAllLimit, t])
+
+  const resolveDetailForCompare = React.useCallback(async (id: string | number): Promise<MediaDetail | null> => {
+    const existing = details[id]
+    if (existing) return existing
+    try {
+      const fetched = await bgRequest<MediaDetail>({
+        path: `/api/v1/media/${id}?include_content=true&include_versions=false` as any,
+        method: 'GET' as any
+      })
+      const base = allResults.find((item) => item.id === id)
+      const enriched = {
+        ...fetched,
+        id,
+        title: (fetched as any)?.title ?? base?.title,
+        type: (fetched as any)?.type ?? base?.type,
+        created_at: (fetched as any)?.created_at ?? base?.created_at
+      } as MediaDetail
+      setDetails((prev) => ({ ...prev, [id]: enriched }))
+      return enriched
+    } catch {
+      return null
+    }
+  }, [allResults, details])
+
+  const handleCompareContent = React.useCallback(async () => {
+    if (selectedIds.length !== 2) return
+    const [leftId, rightId] = selectedIds
+    const leftDetail = await resolveDetailForCompare(leftId)
+    const rightDetail = await resolveDetailForCompare(rightId)
+
+    if (!leftDetail || !rightDetail) {
+      message.error(
+        t('mediaPage.compareContentLoadFailed', 'Could not load both items for comparison. Retry and try again.')
+      )
+      return
+    }
+
+    const leftContent = getContent(leftDetail).trim()
+    const rightContent = getContent(rightDetail).trim()
+    if (!leftContent || !rightContent) {
+      message.error(
+        t('mediaPage.compareContentMissing', 'One or both selected items have no content to compare.')
+      )
+      return
+    }
+
+    setCompareLeftText(leftContent)
+    setCompareRightText(rightContent)
+    setCompareLeftLabel(leftDetail.title || `${t('mediaPage.media', 'Media')} ${leftId}`)
+    setCompareRightLabel(rightDetail.title || `${t('mediaPage.media', 'Media')} ${rightId}`)
+    setCompareDiffOpen(true)
+  }, [message, resolveDetailForCompare, selectedIds, t])
 
   const expandAllContent = React.useCallback(() => {
     setContentExpandedIds(new Set(visibleIds.map((id) => String(id))))
@@ -940,7 +998,10 @@ export const MediaReviewPage: React.FC = () => {
                     ? 'text-warn font-medium'
                     : 'text-text-muted'
               }`}>
-                {selectedIds.length} / {openAllLimit}
+                {t('mediaPage.selectionCount', '{{selected}} / {{limit}} selected', {
+                  selected: selectedIds.length,
+                  limit: openAllLimit
+                })}
                 {selectedIds.length >= SELECTION_WARNING_THRESHOLD && selectedIds.length < openAllLimit && (
                   <span className="ml-1">({openAllLimit - selectedIds.length} {t('mediaPage.remaining', 'left')})</span>
                 )}
@@ -1360,6 +1421,14 @@ export const MediaReviewPage: React.FC = () => {
                     <ChevronDown className="w-3 h-3 ml-1" />
                   </Button>
                 </Dropdown>
+                {selectedIds.length === 2 && (
+                  <Button
+                    size="small"
+                    onClick={() => void handleCompareContent()}
+                  >
+                    {t('mediaPage.compareContent', 'Compare content')}
+                  </Button>
+                )}
                 <Button
                   size="small"
                   shape="circle"
@@ -1551,6 +1620,15 @@ export const MediaReviewPage: React.FC = () => {
           </div>
         </div>
       </Modal>
+
+      <DiffViewModal
+        open={compareDiffOpen}
+        onClose={() => setCompareDiffOpen(false)}
+        leftText={compareLeftText}
+        rightText={compareRightText}
+        leftLabel={compareLeftLabel}
+        rightLabel={compareRightLabel}
+      />
     </div>
   )
 }

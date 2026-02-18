@@ -550,4 +550,50 @@ describe("workspace store snapshot persistence", () => {
     expect(state.currentNote.title).toBe("Initial")
     expect(state.currentNote.isDirty).toBe(true)
   })
+
+  it("keeps RAG selection limited to ready sources and updates selection on status changes", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Source Status Workspace")
+
+    const readySource = useWorkspaceStore
+      .getState()
+      .addSource({
+        mediaId: 111,
+        title: "Ready Source",
+        type: "pdf",
+        status: "ready"
+      })
+    const processingSource = useWorkspaceStore
+      .getState()
+      .addSource({
+        mediaId: 222,
+        title: "Processing Source",
+        type: "video",
+        status: "processing"
+      })
+
+    useWorkspaceStore
+      .getState()
+      .setSelectedSourceIds([readySource.id, processingSource.id])
+
+    let state = useWorkspaceStore.getState()
+    expect(state.selectedSourceIds).toEqual([readySource.id])
+    expect(state.getSelectedMediaIds()).toEqual([111])
+
+    useWorkspaceStore.getState().setSourceStatusByMediaId(222, "ready")
+    useWorkspaceStore
+      .getState()
+      .setSelectedSourceIds([readySource.id, processingSource.id])
+
+    state = useWorkspaceStore.getState()
+    expect(state.getSelectedMediaIds().sort((a, b) => a - b)).toEqual([111, 222])
+
+    useWorkspaceStore.getState().setSourceStatusByMediaId(222, "error", "Failed")
+    state = useWorkspaceStore.getState()
+    expect(state.selectedSourceIds).toEqual([readySource.id])
+    expect(state.getSelectedMediaIds()).toEqual([111])
+
+    useWorkspaceStore.getState().selectAllSources()
+    state = useWorkspaceStore.getState()
+    expect(state.selectedSourceIds).toEqual([readySource.id])
+  })
 })

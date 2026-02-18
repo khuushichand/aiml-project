@@ -334,7 +334,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
           <button
             type="button"
             onClick={() => setHistorySidebarOpen(true)}
-            className="absolute left-3 top-3 z-20 rounded-lg border border-border bg-surface p-2 shadow-sm"
+            className="fixed left-3 top-[max(0.75rem,env(safe-area-inset-top))] z-30 rounded-lg border border-border bg-surface p-2 shadow-sm"
             aria-label="Open history panel"
             title="Open history panel"
             data-testid="knowledge-history-mobile-open"

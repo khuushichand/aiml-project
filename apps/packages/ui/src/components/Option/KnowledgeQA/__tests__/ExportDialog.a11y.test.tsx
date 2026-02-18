@@ -60,6 +60,16 @@ describe("ExportDialog accessibility", () => {
     )
   })
 
+  it("stacks export format cards on small screens", () => {
+    render(<ExportDialog open onClose={vi.fn()} />)
+
+    const markdownButton = screen.getByRole("button", { name: /Markdown/i })
+    const formatGrid = markdownButton.closest("div.grid")
+    expect(formatGrid).not.toBeNull()
+    expect(formatGrid!.className).toContain("grid-cols-1")
+    expect(formatGrid!.className).toContain("sm:grid-cols-3")
+  })
+
   it("traps keyboard focus and closes on Escape", async () => {
     const onClose = vi.fn()
     render(<ExportDialog open onClose={onClose} />)

@@ -85,7 +85,10 @@ describe("HistorySidebar responsive layout", () => {
     state.historySidebarOpen = false
 
     render(<HistorySidebar />)
-    expect(screen.getByTestId("knowledge-history-mobile-open")).toBeInTheDocument()
+    const openButton = screen.getByTestId("knowledge-history-mobile-open")
+    expect(openButton).toBeInTheDocument()
+    expect(openButton.className).toContain("fixed")
+    expect(openButton.className).toContain("env(safe-area-inset-top)")
     expect(
       screen.queryByTestId("knowledge-history-mobile-overlay")
     ).not.toBeInTheDocument()
@@ -148,6 +151,26 @@ describe("HistorySidebar responsive layout", () => {
     const deleteButton = await screen.findByLabelText("Delete from history")
     expect(deleteButton.className).toContain("focus-visible:opacity-100")
     expect(deleteButton.className).toContain("group-focus-within:opacity-100")
+  })
+
+  it("keeps delete actions visible on touch/mobile without hover dependency", async () => {
+    state.isMobile = true
+    state.historySidebarOpen = true
+    state.searchHistory = [
+      {
+        id: "h2-mobile",
+        query: "Touch delete visibility",
+        timestamp: new Date().toISOString(),
+        keywords: ["__knowledge_QA__"],
+        sourcesCount: 1,
+        hasAnswer: true,
+      },
+    ]
+
+    render(<HistorySidebar />)
+    const deleteButton = await screen.findByLabelText("Delete from history")
+    expect(deleteButton.className).toContain("opacity-100")
+    expect(deleteButton.className).not.toContain("group-hover:opacity-100")
   })
 
   it("marks the active history thread with aria-current", async () => {

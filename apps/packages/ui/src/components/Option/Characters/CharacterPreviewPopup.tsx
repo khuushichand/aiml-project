@@ -27,6 +27,7 @@ interface CharacterPreviewPopupProps {
   attachedWorldBooks?: Array<{ id: number; name: string }>
   attachedWorldBooksLoading?: boolean
   launchedFromWorldBooks?: boolean
+  launchedFromWorldBookId?: number | null
   deleting?: boolean
   exporting?: boolean
 }
@@ -44,6 +45,7 @@ export function CharacterPreviewPopup({
   attachedWorldBooks = [],
   attachedWorldBooksLoading = false,
   launchedFromWorldBooks = false,
+  launchedFromWorldBookId = null,
   deleting = false,
   exporting = false
 }: CharacterPreviewPopupProps) {
@@ -78,6 +80,12 @@ export function CharacterPreviewPopup({
       defaultValue: "View conversations"
     }
   )
+  const characterIdParam = encodeURIComponent(String(character.id || ""))
+  const worldBooksWorkspaceHref = `/world-books?from=characters&focusCharacterId=${characterIdParam}`
+  const backToWorldBooksHref =
+    launchedFromWorldBooks && launchedFromWorldBookId != null
+      ? `/world-books?focusWorldBookId=${encodeURIComponent(String(launchedFromWorldBookId))}`
+      : "/world-books"
 
   const exportMenuItems = [
     {
@@ -123,9 +131,7 @@ export function CharacterPreviewPopup({
               })}
             </div>
             <a
-              href={`/world-books?from=characters&focusCharacterId=${encodeURIComponent(
-                String(character.id || "")
-              )}`}
+              href={worldBooksWorkspaceHref}
               className="text-xs text-primary hover:underline"
               aria-label={t("settings:manageCharacters.worldBooks.openWorkspaceAria", {
                 defaultValue: "Open World Books workspace"
@@ -140,7 +146,7 @@ export function CharacterPreviewPopup({
           {launchedFromWorldBooks && (
             <div className="mt-2">
               <a
-                href="/world-books"
+                href={backToWorldBooksHref}
                 className="text-xs text-primary hover:underline"
                 aria-label={t("settings:manageCharacters.worldBooks.backAria", {
                   defaultValue: "Back to World Books"
@@ -165,9 +171,9 @@ export function CharacterPreviewPopup({
                 {attachedWorldBooks.map((worldBook) => (
                   <a
                     key={worldBook.id}
-                    href={`/world-books?from=characters&focusCharacterId=${encodeURIComponent(
-                      String(character.id || "")
-                    )}&focusWorldBookId=${encodeURIComponent(String(worldBook.id))}`}
+                    href={`${worldBooksWorkspaceHref}&focusWorldBookId=${encodeURIComponent(
+                      String(worldBook.id)
+                    )}`}
                     className="inline-flex items-center rounded border border-border px-2 py-1 text-xs text-primary hover:bg-surface2"
                     aria-label={t("settings:manageCharacters.worldBooks.openBookAria", {
                       defaultValue: "Open world book {{name}}",

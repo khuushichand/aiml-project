@@ -3,12 +3,17 @@ import { FolderKanban, FileText, TestTube, BarChart3, Sparkles } from "lucide-re
 import React, { useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { useSearchParams } from "react-router-dom"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   usePromptStudioStore,
   type StudioSubTab
 } from "@/store/prompt-studio"
 import { hasPromptStudio, getPromptStudioStatus } from "@/services/prompt-studio"
+import {
+  buildPromptStudioWebSocketUrl,
+  isPromptStudioStatusEvent
+} from "@/services/prompt-studio-stream"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
@@ -40,6 +45,7 @@ export const StudioTabContainer: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const isOnline = useServerOnline()
   const isMobile = useMobile()
+  const queryClient = useQueryClient()
 
   const activeSubTab = usePromptStudioStore((s) => s.activeSubTab)
   const setActiveSubTab = usePromptStudioStore((s) => s.setActiveSubTab)
@@ -86,6 +92,62 @@ export const StudioTabContainer: React.FC = () => {
       setActiveSubTab("projects")
     }
   }, [selectedProjectId, activeSubTab, setActiveSubTab])
+
+  useEffect(() => {
+    if (!isOnline || hasStudio !== true || typeof window === "undefined") {
+      return
+    }
+
+    let ws: WebSocket | null = null
+    let disposed = false
+
+    const openStatusStream = async () => {
+      try {
+        const config = await tldwClient.getConfig()
+        if (disposed || !config) return
+
+        const wsUrl = buildPromptStudioWebSocketUrl(config, selectedProjectId)
+        ws = new WebSocket(wsUrl)
+
+        ws.onopen = () => {
+          if (!ws || ws.readyState !== WebSocket.OPEN) return
+          const subscribePayload = selectedProjectId
+            ? { type: "subscribe", project_id: selectedProjectId }
+            : { type: "subscribe" }
+          ws.send(JSON.stringify(subscribePayload))
+        }
+
+        ws.onmessage = (event) => {
+          if (typeof event.data !== "string") return
+          try {
+            const payload = JSON.parse(event.data)
+            if (isPromptStudioStatusEvent(payload)) {
+              void queryClient.invalidateQueries({
+                queryKey: ["prompt-studio", "status"]
+              })
+            }
+          } catch {
+            // Ignore non-JSON websocket frames.
+          }
+        }
+
+        ws.onerror = () => {
+          // Polling remains active as fallback when websocket errors.
+        }
+      } catch {
+        // Polling remains active as fallback when websocket setup fails.
+      }
+    }
+
+    void openStatusStream()
+
+    return () => {
+      disposed = true
+      if (ws && ws.readyState < WebSocket.CLOSING) {
+        ws.close()
+      }
+    }
+  }, [isOnline, hasStudio, selectedProjectId, queryClient])
 
   const handleSubTabChange = (value: string | number) => {
     if (isValidSubTab(value as string)) {

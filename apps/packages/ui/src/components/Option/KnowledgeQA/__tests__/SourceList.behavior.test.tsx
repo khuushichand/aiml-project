@@ -82,6 +82,22 @@ describe("SourceList researcher workflows", () => {
     )
   })
 
+  it("uses compact source-card defaults for mobile density", () => {
+    render(<SourceList />)
+
+    const sourceCard = document.getElementById("source-card-0")
+    expect(sourceCard).not.toBeNull()
+
+    const headerRow = sourceCard!.querySelector("div.flex.items-start")
+    expect(headerRow).not.toBeNull()
+    expect(headerRow!.className).toContain("p-3")
+    expect(headerRow!.className).toContain("sm:p-4")
+
+    const excerpt = screen.getByText("Body for source 1")
+    expect(excerpt.className).toContain("text-xs")
+    expect(excerpt.className).toContain("sm:text-sm")
+  })
+
   it("adds sort modes including date and cited-first", () => {
     render(<SourceList />)
 

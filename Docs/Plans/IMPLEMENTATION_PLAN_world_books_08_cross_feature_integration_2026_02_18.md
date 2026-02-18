@@ -22,7 +22,7 @@ Finding IDs: `8.1` through `8.4`
 - Integration tests for character page attached-book rendering and deep-link navigation.
 - Integration tests for attachment-popover character links.
 - Regression tests for route params and breadcrumb/title updates.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Expose Test-Matching Workflow in World Books UI
 **Goal**: Put the highest-impact diagnostic loop directly in authoring flow.
@@ -34,7 +34,7 @@ Finding IDs: `8.1` through `8.4`
 - Integration tests for request payload, response rendering, and error handling.
 - Component tests for match list, token/budget summaries, and empty-result states.
 - UX test verifying iterative rerun flow with updated sample text.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Bridge Existing Lorebook Debug Panel Discoverability
 **Goal**: Reuse existing diagnostics and reduce hidden-feature risk.
@@ -45,7 +45,7 @@ Finding IDs: `8.1` through `8.4`
 **Tests**:
 - Component tests for discoverability links and conditional rendering.
 - Content regression test to keep metric labels consistent across both surfaces.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Surface Per-Turn Lorebook Activity in Chat Session UI
 **Goal**: Make runtime injection behavior visible without specialist tooling.
@@ -63,3 +63,60 @@ Finding IDs: `8.1` through `8.4`
 
 - Stages 2 and 4 depend on stable diagnostic API contracts and response-size handling.
 - Security review required before exposing detailed diagnostics outside existing debug contexts.
+
+## Progress Notes (2026-02-18)
+
+- Implemented Stage 1 character/world-book cross-navigation:
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/Characters/Manager.tsx`
+    - parses route query context (`from`, `focusCharacterId`, `focusWorldBookId`) from URL.
+    - auto-opens preview popup when `focusCharacterId` is present and character exists in loaded results.
+    - fetches attached world books for previewed character and passes them into preview UI.
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/Characters/CharacterPreviewPopup.tsx`
+    - renders attached world-book links with deep links back into world-books workspace.
+    - adds explicit back-link behavior when launched from world-books, preserving focused world-book context.
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorldBooks/Manager.tsx`
+    - adds character deep links in attached-character popover.
+    - adds character deep links in quick-attach modal and matrix character headers.
+- Added Stage 1 tests:
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/Characters/__tests__/Manager.crossFeatureStage1.test.tsx`
+    - verifies focused-character route params open preview and render world-book deep links + back link.
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage1.test.tsx`
+    - verifies popover/quick-attach character links target characters workspace with focus params.
+- Validation run:
+  - `bunx vitest run src/components/Option/Characters/__tests__/Manager.crossFeatureStage1.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage1.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.attachmentStage1.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.attachmentStage4.test.tsx`
+  - result: **4 passed / 4 files**, **7 passed / 7 tests**.
+- Implemented Stage 2 test-matching workflow in `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorldBooks/Manager.tsx`:
+  - added reusable `WorldBookTestMatchingModal` with:
+    - world-book selection
+    - sample text input
+    - scan depth/token budget/recursive-scanning controls
+    - `processWorldBookContext` execution + result rendering (summary, diagnostics, budget status)
+    - iterative rerun support without leaving modal
+  - exposed entry points from both:
+    - world-books toolbar (`Test Matching`)
+    - entries drawer context (`Test Keywords`)
+  - includes inline error handling for API failures.
+- Added Stage 2 tests:
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage2.test.tsx`
+    - verifies request payload shape and result rendering.
+    - verifies iterative rerun with updated sample text.
+    - verifies entries-drawer launch path and error-path UI.
+- Validation run:
+  - `bunx vitest run src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage2.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage1.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.attachmentStage1.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.attachmentStage4.test.tsx src/components/Option/Characters/__tests__/Manager.crossFeatureStage1.test.tsx`
+  - result: **5 passed / 5 files**, **9 passed / 9 tests**.
+- Implemented Stage 3 discoverability + terminology alignment in `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorldBooks/Manager.tsx`:
+  - added world-books page discoverability callout linking to chat lorebook diagnostics entry point.
+  - aligned Test Matching result terminology with Lorebook Debug metric labels:
+    - Entries matched
+    - Books used
+    - Tokens used
+    - Token budget
+  - added explicit handoff block in Test Matching results with link to live chat diagnostics (`Open Chat Debug Panel`).
+- Added Stage 3 tests:
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage3.test.tsx`
+    - verifies discoverability link visibility from world-books page.
+    - verifies handoff link appears after test run.
+    - regression-checks metric label consistency in Test Matching output.
+- Validation run:
+  - `bunx vitest run src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage3.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage2.test.tsx src/components/Option/WorldBooks/__tests__/WorldBooksManager.crossFeatureStage1.test.tsx src/components/Option/Characters/__tests__/Manager.crossFeatureStage1.test.tsx`
+  - result: **4 passed / 4 files**, **6 passed / 6 tests**.

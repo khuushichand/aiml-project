@@ -24,10 +24,22 @@ import {
 import { useWorkspaceStore } from "@/store/workspace"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import type { AddSourceTab, WorkspaceSourceType } from "@/types/workspace"
+import type {
+  AddSourceTab,
+  WorkspaceSourceStatus,
+  WorkspaceSourceType
+} from "@/types/workspace"
 
 const { TextArea } = Input
 const { Dragger } = Upload
+
+type AddSourceCandidate = {
+  mediaId: number
+  title: string
+  type: WorkspaceSourceType
+  status?: WorkspaceSourceStatus
+  statusMessage?: string
+}
 
 const toMediaId = (value: unknown): number | null => {
   const parsed = Number(value)
@@ -80,7 +92,7 @@ const extractMediaFromAddResponse = (
  * UploadTab - Upload files via drag-and-drop
  */
 const UploadTab: React.FC<{
-  onAddSources: (sources: Array<{ mediaId: number; title: string; type: WorkspaceSourceType }>) => void
+  onAddSources: (sources: AddSourceCandidate[]) => void
   setProcessing: (p: boolean) => void
   setError: (e: string | null) => void
 }> = ({ onAddSources, setProcessing, setError }) => {
@@ -112,7 +124,8 @@ const UploadTab: React.FC<{
           {
             mediaId: added.mediaId,
             title: added.title || file.name,
-            type
+            type,
+            status: "processing"
           }
         ])
       } else {
@@ -178,7 +191,7 @@ const UploadTab: React.FC<{
  * UrlTab - Add content from URL
  */
 const UrlTab: React.FC<{
-  onAddSources: (sources: Array<{ mediaId: number; title: string; type: WorkspaceSourceType }>) => void
+  onAddSources: (sources: AddSourceCandidate[]) => void
   setProcessing: (p: boolean) => void
   setError: (e: string | null) => void
 }> = ({ onAddSources, setProcessing, setError }) => {
@@ -202,7 +215,8 @@ const UrlTab: React.FC<{
           {
             mediaId: added.mediaId,
             title: added.title || url,
-            type
+            type,
+            status: "processing"
           }
         ])
         setUrl("")
@@ -256,7 +270,7 @@ const UrlTab: React.FC<{
  * PasteTab - Paste text content
  */
 const PasteTab: React.FC<{
-  onAddSources: (sources: Array<{ mediaId: number; title: string; type: WorkspaceSourceType }>) => void
+  onAddSources: (sources: AddSourceCandidate[]) => void
   setProcessing: (p: boolean) => void
   setError: (e: string | null) => void
 }> = ({ onAddSources, setProcessing, setError }) => {
@@ -289,7 +303,8 @@ const PasteTab: React.FC<{
           {
             mediaId: added.mediaId,
             title: added.title || title || "Pasted Text",
-            type: "text"
+            type: "text",
+            status: "processing"
           }
         ])
         setTitle("")
@@ -353,7 +368,7 @@ const PasteTab: React.FC<{
  * SearchTab - Web search and add results
  */
 const SearchTab: React.FC<{
-  onAddSources: (sources: Array<{ mediaId: number; title: string; type: WorkspaceSourceType }>) => void
+  onAddSources: (sources: AddSourceCandidate[]) => void
   setProcessing: (p: boolean) => void
   setError: (e: string | null) => void
 }> = ({ onAddSources, setProcessing, setError }) => {
@@ -401,7 +416,7 @@ const SearchTab: React.FC<{
 
     setProcessing(true)
     const selectedUrls = results.filter((_, idx) => selectedResults.has(idx))
-    const addedSources: Array<{ mediaId: number; title: string; type: WorkspaceSourceType }> = []
+    const addedSources: AddSourceCandidate[] = []
 
     for (const result of selectedUrls) {
       try {
@@ -411,7 +426,8 @@ const SearchTab: React.FC<{
           addedSources.push({
             mediaId: added.mediaId,
             title: added.title || result.title || result.url,
-            type: "website"
+            type: "website",
+            status: "processing"
           })
         }
       } catch {
@@ -514,7 +530,7 @@ const SearchTab: React.FC<{
  * ExistingTab - Pick from already-ingested media
  */
 const ExistingTab: React.FC<{
-  onAddSources: (sources: Array<{ mediaId: number; title: string; type: WorkspaceSourceType }>) => void
+  onAddSources: (sources: AddSourceCandidate[]) => void
   setProcessing: (p: boolean) => void
   setError: (e: string | null) => void
 }> = ({ onAddSources, setProcessing, setError }) => {
@@ -578,7 +594,8 @@ const ExistingTab: React.FC<{
     const newSources = selectedItems.map((m) => ({
       mediaId: m.media_id || m.id,
       title: m.title || m.name || "Untitled",
-      type: getSourceTypeFromMediaType(m.type || m.media_type) as WorkspaceSourceType
+      type: getSourceTypeFromMediaType(m.type || m.media_type) as WorkspaceSourceType,
+      status: "ready" as const
     }))
 
     if (newSources.length > 0) {
@@ -744,7 +761,7 @@ export const AddSourceModal: React.FC = () => {
   const workspaceTag = useWorkspaceStore((s) => s.workspaceTag)
 
   const handleAddSources = async (
-    sources: Array<{ mediaId: number; title: string; type: WorkspaceSourceType }>
+    sources: AddSourceCandidate[]
   ) => {
     // Add sources to workspace
     for (const source of sources) {

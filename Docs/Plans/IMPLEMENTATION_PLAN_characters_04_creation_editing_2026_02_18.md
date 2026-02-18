@@ -56,7 +56,7 @@ Finding IDs: `C-13` through `C-15`
 **Tests**:
 - E2E tests for create/edit/import/export critical paths.
 - Manual QA checklist for advanced fields parity across modes.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

@@ -21,7 +21,7 @@ Finding IDs: `7.1` through `7.8`
 - Component tests for selection counter rendering and threshold states.
 - Integration tests for shift-click range and counter correctness.
 - Regression tests for existing warning/error messaging behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Cross-Item Content Diff
 **Goal**: Enable direct comparison of content between two selected media items.
@@ -33,7 +33,7 @@ Finding IDs: `7.1` through `7.8`
 - Integration tests for action visibility and modal launch conditions.
 - Component tests for diff rendering with two selected items.
 - Error-state tests for missing/failed content payloads.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Regression Hardening for Existing Strengths
 **Goal**: Preserve current quality in view modes, onboarding help, and per-card actions.
@@ -45,7 +45,7 @@ Finding IDs: `7.1` through `7.8`
 - Regression tests for view-mode auto-switching thresholds.
 - Component tests for help modal trigger and keyboard shortcut handling.
 - Integration tests for copy confirmation and retry behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

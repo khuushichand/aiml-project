@@ -75,7 +75,9 @@ vi.mock("antd", () => {
       {children}
     </span>
   )
-  const Alert = ({ message: msg }: any) => <div data-testid="alert-error">{msg}</div>
+  const Alert = ({ message: msg, title }: any) => (
+    <div data-testid="alert-error">{title ?? msg}</div>
+  )
   const Space = ({ children }: any) => <>{children}</>
   const InputNumber = ({ value, onChange, ...rest }: any) => (
     <input

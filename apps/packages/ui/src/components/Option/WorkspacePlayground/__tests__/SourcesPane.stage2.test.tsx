@@ -18,6 +18,7 @@ const workspaceStoreState = {
       mediaId: 1,
       title: "Source One",
       type: "pdf" as const,
+      status: "ready" as const,
       addedAt: new Date("2026-02-18T00:00:00.000Z")
     },
     {
@@ -25,6 +26,7 @@ const workspaceStoreState = {
       mediaId: 2,
       title: "Source Two",
       type: "video" as const,
+      status: "processing" as const,
       addedAt: new Date("2026-02-18T00:00:00.000Z")
     }
   ],
@@ -160,5 +162,18 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     const removeButton = screen.getByTestId("remove-source-s1")
     expect(removeButton.className).toContain("focus-visible:opacity-100")
     expect(removeButton.className).toContain("[@media(hover:none)]:opacity-100")
+  })
+
+  it("shows processing status and disables selection for non-ready sources", () => {
+    render(<SourcesPane />)
+
+    expect(screen.getByText("Processing")).toBeInTheDocument()
+
+    const processingHitArea = screen.getByTestId("source-checkbox-hitarea-s2")
+    const checkboxInput = processingHitArea.querySelector(
+      "input[type='checkbox']"
+    ) as HTMLInputElement | null
+    expect(checkboxInput).toBeTruthy()
+    expect(checkboxInput?.disabled).toBe(true)
   })
 })

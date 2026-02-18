@@ -22,7 +22,7 @@ Finding IDs: `8.1` through `8.7`
 - Responsive component tests across 320px, 375px, 390px, and tablet breakpoints.
 - Visual regression snapshots for FAB, source cards, and export layout.
 - Existing search/settings responsive regression tests retained.
-**Status**: Not Started
+**Status**: Complete (2026-02-18)
 
 ## Stage 2: Mobile Follow-Up Reachability
 **Goal**: Keep conversational flow available without deep scroll requirements.
@@ -34,7 +34,7 @@ Finding IDs: `8.1` through `8.7`
 - Integration tests for sticky follow-up visibility while scrolling long source lists.
 - Mobile viewport tests for keyboard-open layout and safe-area behavior.
 - E2E test for follow-up submit from sticky bar.
-**Status**: Not Started
+**Status**: Complete (2026-02-18)
 
 ## Stage 3: Touch-First Delete Interaction Accessibility
 **Goal**: Ensure destructive history actions are discoverable and safe on touch devices.
@@ -46,8 +46,21 @@ Finding IDs: `8.1` through `8.7`
 - Touch interaction tests for always-visible or reveal-on-gesture delete action.
 - Accessibility tests for focus-visible delete visibility states.
 - Integration tests for two-step delete confirmation on mobile.
-**Status**: Not Started
+**Status**: Complete (2026-02-18)
 
 ## Dependencies
 
 - Touch delete behavior should be implemented jointly with History accessibility fixes (`5.7`, `12.8`).
+
+## Implementation Notes (2026-02-18)
+
+- Updated the mobile history open FAB to fixed, safe-area-aware positioning to reduce overlap risk with parent scroll/layout contexts.
+- Added compact mobile source-card density defaults (smaller spacing and excerpt typography) while preserving larger desktop spacing via `sm:` breakpoints.
+- Updated export-format card layout to stack on small screens and switch to three columns at `sm` and above.
+- Implemented a sticky mobile follow-up composer with safe-area bottom padding plus scroll-space reservation, keeping follow-up submit and New Topic reachable without deep scrolling.
+- Ensured touch/mobile history delete actions stay visible without hover dependency while preserving existing two-step delete confirmation behavior.
+
+## Verification (2026-02-18)
+
+- `bunx vitest run src/components/Option/KnowledgeQA/__tests__/FollowUpInput.accessibility.test.tsx src/components/Option/KnowledgeQA/__tests__/HistorySidebar.responsive.test.tsx src/components/Option/KnowledgeQA/__tests__/ExportDialog.a11y.test.tsx src/components/Option/KnowledgeQA/__tests__/SourceList.behavior.test.tsx src/components/Option/KnowledgeQA/__tests__/KnowledgeQA.golden-layout.test.tsx`
+- `bunx vitest run src/components/Option/KnowledgeQA/__tests__`

@@ -123,11 +123,9 @@ describe("JobFormModal template source options", () => {
 
     fireEvent.click(screen.getByText("Output & Delivery"))
 
-    const templateNameLabel = await screen.findByText("Template name")
-    const templateNameField = templateNameLabel.parentElement?.parentElement
-    const selector = templateNameField?.querySelector(".ant-select-selector")
-    expect(selector).toBeTruthy()
-    fireEvent.mouseDown(selector as Element)
+    await screen.findByText("Template name")
+    const selectorPlaceholder = await screen.findByText("Select a template")
+    fireEvent.mouseDown(selectorPlaceholder)
 
     expect(await screen.findByText("briefing_markdown (MD) · Outputs template")).toBeTruthy()
     expect(await screen.findByText("legacy_only · Legacy watchlists template")).toBeTruthy()
