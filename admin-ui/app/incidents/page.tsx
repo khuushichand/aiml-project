@@ -8,13 +8,27 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Pagination } from '@/components/ui/pagination';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
+import {
+  addIncidentActionItem,
+  buildPostmortemTimelineMessage,
+  ensureIncidentWorkflowState,
+  mergeIncidentWorkflowWithIncidents,
+  readIncidentWorkflowMap,
+  removeIncidentActionItem,
+  updateIncidentActionItem,
+  upsertIncidentWorkflowState,
+  writeIncidentWorkflowMap,
+  type IncidentWorkflowMap,
+} from '@/lib/incident-workflow';
 import { useUrlPagination } from '@/lib/use-url-state';
 import { usePagedResource } from '@/lib/use-paged-resource';
 import type { IncidentItem } from '@/types/incidents';
@@ -25,6 +39,31 @@ const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
 
 const formatIncidentDate = (value?: string | null) =>
   formatDateTime(value, { fallback: '—' });
+
+type IncidentAssignableUser = {
+  id: string;
+  label: string;
+};
+
+const normalizeAssignableUsers = (payload: unknown): IncidentAssignableUser[] => {
+  if (!Array.isArray(payload)) return [];
+  return payload
+    .map((entry): IncidentAssignableUser | null => {
+      if (!entry || typeof entry !== 'object') return null;
+      const row = entry as Record<string, unknown>;
+      const idValue = row.id ?? row.user_id;
+      if (idValue === undefined || idValue === null) return null;
+      const id = String(idValue);
+      const label = (
+        (typeof row.username === 'string' && row.username.trim() && row.username) ||
+        (typeof row.email === 'string' && row.email.trim() && row.email) ||
+        (typeof row.name === 'string' && row.name.trim() && row.name) ||
+        `User ${id}`
+      ) as string;
+      return { id, label };
+    })
+    .filter((entry): entry is IncidentAssignableUser => entry !== null);
+};
 
 function IncidentsPageContent() {
   const confirm = useConfirm();
@@ -45,6 +84,9 @@ function IncidentsPageContent() {
 
   const [updateNotes, setUpdateNotes] = useState<Record<string, string>>({});
   const [updatingIncidents, setUpdatingIncidents] = useState<Set<string>>(new Set());
+  const [assignableUsers, setAssignableUsers] = useState<IncidentAssignableUser[]>([]);
+  const [incidentWorkflow, setIncidentWorkflow] = useState<IncidentWorkflowMap>({});
+  const [workflowHydrated, setWorkflowHydrated] = useState(false);
 
   const params = useMemo(() => {
     const offset = Math.max(0, (page - 1) * pageSize);
@@ -76,6 +118,40 @@ function IncidentsPageContent() {
     resetPagination();
   }, [deferredTagFilter, resetPagination]);
 
+  useEffect(() => {
+    setIncidentWorkflow(readIncidentWorkflowMap());
+    setWorkflowHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!workflowHydrated) return;
+    writeIncidentWorkflowMap(incidentWorkflow);
+  }, [incidentWorkflow, workflowHydrated]);
+
+  useEffect(() => {
+    setIncidentWorkflow((prev) => mergeIncidentWorkflowWithIncidents(incidents, prev));
+  }, [incidents]);
+
+  useEffect(() => {
+    let active = true;
+    const loadAssignableUsers = async () => {
+      try {
+        const payload = await api.getUsers({ limit: '100' });
+        if (!active) return;
+        setAssignableUsers(normalizeAssignableUsers(payload));
+      } catch (err: unknown) {
+        if (!active) return;
+        const message = err instanceof Error && err.message ? err.message : 'Failed to load users';
+        showError(message);
+        setAssignableUsers([]);
+      }
+    };
+    void loadAssignableUsers();
+    return () => {
+      active = false;
+    };
+  }, [showError]);
+
   const setIncidentUpdating = useCallback((incidentId: string, isUpdating: boolean) => {
     setUpdatingIncidents((prev) => {
       const next = new Set(prev);
@@ -87,6 +163,18 @@ function IncidentsPageContent() {
       return next;
     });
   }, []);
+
+  const updateIncidentWorkflow = useCallback((
+    incidentId: string,
+    nextState: Parameters<typeof upsertIncidentWorkflowState>[2]
+  ) => {
+    setIncidentWorkflow((prev) => upsertIncidentWorkflowState(prev, incidentId, nextState));
+  }, []);
+
+  const getAssigneeLabel = useCallback((userId?: string) => {
+    if (!userId) return 'Unassigned';
+    return assignableUsers.find((user) => user.id === userId)?.label ?? `User ${userId}`;
+  }, [assignableUsers]);
 
   const handleCreateIncident = async () => {
     if (!title.trim()) {
@@ -164,6 +252,40 @@ function IncidentsPageContent() {
       showError(message);
     } finally {
       setIncidentUpdating(incidentId, false);
+    }
+  };
+
+  const handleAssignmentChange = async (incident: IncidentItem, assignedTo: string) => {
+    updateIncidentWorkflow(incident.id, { assignedTo: assignedTo || undefined });
+    const assigneeLabel = getAssigneeLabel(assignedTo || undefined);
+    try {
+      setIncidentUpdating(incident.id, true);
+      await api.addIncidentEvent(incident.id, {
+        message: assignedTo ? `Assigned to ${assigneeLabel}` : 'Assignment cleared',
+      });
+      await reload();
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to update assignment';
+      showError(message);
+    } finally {
+      setIncidentUpdating(incident.id, false);
+    }
+  };
+
+  const handleSavePostmortem = async (incident: IncidentItem) => {
+    const state = ensureIncidentWorkflowState(incidentWorkflow, incident.id);
+    try {
+      setIncidentUpdating(incident.id, true);
+      await api.addIncidentEvent(incident.id, {
+        message: buildPostmortemTimelineMessage(state),
+      });
+      success('Post-mortem saved');
+      await reload();
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to save post-mortem';
+      showError(message);
+    } finally {
+      setIncidentUpdating(incident.id, false);
     }
   };
 
@@ -278,8 +400,10 @@ function IncidentsPageContent() {
                     void handleCreateIncident();
                   }}
                   disabled={creating}
+                  loading={creating}
+                  loadingText="Creating..."
                 >
-                  {creating ? 'Creating...' : 'Create Incident'}
+                  Create Incident
                 </Button>
               </div>
             </CardContent>
@@ -349,7 +473,23 @@ function IncidentsPageContent() {
           {loading ? (
             <div className="py-10 text-center text-muted-foreground">Loading incidents...</div>
           ) : incidents.length === 0 ? (
-            <div className="py-10 text-center text-muted-foreground">No incidents found.</div>
+            <EmptyState
+              icon={AlertTriangle}
+              title="No incidents found."
+              description="Try changing filters or create a new incident."
+              actions={[
+                {
+                  label: 'Clear filters',
+                  onClick: () => {
+                    setStatusFilter('');
+                    setSeverityFilter('');
+                    setTagFilterInput('');
+                    resetPagination();
+                  },
+                },
+              ]}
+              className="py-10"
+            />
           ) : (
             <div className="grid gap-4">
               {incidents.map((incident) => {
@@ -395,7 +535,7 @@ function IncidentsPageContent() {
                         </Badge>
                       ))}
                     </div>
-                    <div className="grid gap-3 md:grid-cols-3">
+                    <div className="grid gap-3 md:grid-cols-4">
                       <div className="space-y-1">
                         <Label htmlFor={`status-${incident.id}`}>Status</Label>
                         <Select
@@ -436,7 +576,135 @@ function IncidentsPageContent() {
                           {incident.resolved_at ? formatIncidentDate(incident.resolved_at) : 'Not resolved'}
                         </div>
                       </div>
+                      <div className="space-y-1">
+                        <Label htmlFor={`assigned-${incident.id}`}>Assigned To</Label>
+                        <Select
+                          id={`assigned-${incident.id}`}
+                          value={ensureIncidentWorkflowState(incidentWorkflow, incident.id).assignedTo ?? ''}
+                          onChange={(event) => {
+                            void handleAssignmentChange(incident, event.target.value);
+                          }}
+                          disabled={isUpdating}
+                          data-testid={`incident-assigned-to-${incident.id}`}
+                        >
+                          <option value="">Unassigned</option>
+                          {assignableUsers.map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {user.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
                     </div>
+                    {incident.status === 'resolved' && (
+                      <div
+                        className="space-y-3 rounded-md border p-3"
+                        data-testid={`incident-postmortem-${incident.id}`}
+                      >
+                        <div className="text-sm font-medium">Post-mortem</div>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="space-y-1">
+                            <Label htmlFor={`root-cause-${incident.id}`}>Root Cause</Label>
+                            <textarea
+                              id={`root-cause-${incident.id}`}
+                              className="flex min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                              placeholder="Describe the primary root cause"
+                              value={ensureIncidentWorkflowState(incidentWorkflow, incident.id).rootCause ?? ''}
+                              onChange={(event) => {
+                                updateIncidentWorkflow(incident.id, { rootCause: event.target.value });
+                              }}
+                              data-testid={`incident-root-cause-${incident.id}`}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label htmlFor={`impact-${incident.id}`}>Impact</Label>
+                            <textarea
+                              id={`impact-${incident.id}`}
+                              className="flex min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                              placeholder="Describe user/business impact"
+                              value={ensureIncidentWorkflowState(incidentWorkflow, incident.id).impact ?? ''}
+                              onChange={(event) => {
+                                updateIncidentWorkflow(incident.id, { impact: event.target.value });
+                              }}
+                              data-testid={`incident-impact-${incident.id}`}
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <Label>Action Items</Label>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setIncidentWorkflow((prev) => addIncidentActionItem(prev, incident.id));
+                              }}
+                            >
+                              Add Action Item
+                            </Button>
+                          </div>
+                          {ensureIncidentWorkflowState(incidentWorkflow, incident.id).actionItems.length === 0 ? (
+                            <p className="text-xs text-muted-foreground">
+                              No action items added yet.
+                            </p>
+                          ) : (
+                            ensureIncidentWorkflowState(incidentWorkflow, incident.id).actionItems.map((item) => (
+                              <div key={item.id} className="grid gap-2 md:grid-cols-[auto_1fr_auto] md:items-center">
+                                <Checkbox
+                                  checked={item.done}
+                                  onCheckedChange={(checked) => {
+                                    setIncidentWorkflow((prev) =>
+                                      updateIncidentActionItem(prev, incident.id, item.id, {
+                                        done: Boolean(checked),
+                                      })
+                                    );
+                                  }}
+                                  aria-label={`Toggle action item ${item.id}`}
+                                />
+                                <Input
+                                  value={item.text}
+                                  onChange={(event) => {
+                                    setIncidentWorkflow((prev) =>
+                                      updateIncidentActionItem(prev, incident.id, item.id, {
+                                        text: event.target.value,
+                                      })
+                                    );
+                                  }}
+                                  placeholder="Describe follow-up action"
+                                  data-testid={`incident-action-item-${incident.id}-${item.id}`}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setIncidentWorkflow((prev) =>
+                                      removeIncidentActionItem(prev, incident.id, item.id)
+                                    );
+                                  }}
+                                >
+                                  Remove
+                                </Button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                        <div className="flex justify-end">
+                          <Button
+                            type="button"
+                            onClick={() => {
+                              void handleSavePostmortem(incident);
+                            }}
+                            loading={isUpdating}
+                            loadingText="Saving..."
+                            data-testid={`incident-save-postmortem-${incident.id}`}
+                          >
+                            Save Post-mortem
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                     <div className="grid gap-2 md:grid-cols-[1fr_auto]">
                       <Input
                         placeholder="Add update..."
@@ -451,8 +719,10 @@ function IncidentsPageContent() {
                           void handleAddUpdate(incident.id);
                         }}
                         disabled={isUpdating}
+                        loading={isUpdating}
+                        loadingText="Updating..."
                       >
-                        {isUpdating ? 'Updating...' : 'Add Update'}
+                        Add Update
                       </Button>
                     </div>
                     <details className="text-sm text-muted-foreground">

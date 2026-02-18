@@ -144,6 +144,18 @@ async def test_llm_usage_endpoints_sqlite(monkeypatch, tmp_path):
         assert isinstance(s.get('items'), list)
         assert any('requests' in row for row in s['items'])
 
+        # Summary by provider/day with provider filter (used by provider trend sparklines)
+        r2b = client.get("/api/v1/admin/llm-usage/summary?group_by=provider&group_by=day&provider=openai")
+        assert r2b.status_code == 200
+        s2 = r2b.json()
+        assert isinstance(s2.get('items'), list)
+        assert all(row.get('group_value') == 'openai' for row in s2['items'])
+        assert all('group_value_secondary' in row for row in s2['items'])
+
+        # Reject more than two group_by dimensions
+        r2c = client.get("/api/v1/admin/llm-usage/summary?group_by=user&group_by=provider&group_by=day")
+        assert r2c.status_code == 422
+
         # CSV export
         r3 = client.get("/api/v1/admin/llm-usage/export.csv?operation=chat&limit=5")
         assert r3.status_code == 200

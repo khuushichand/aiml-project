@@ -13,6 +13,7 @@ import type {
   ScrapedItemUpdate,
   SourceSeenResetResponse,
   SourceSeenStats,
+  SourcesCheckNowResponse,
   SourcesBulkCreateResponse,
   SourcesImportResponse,
   WatchlistClusterSubscription,
@@ -167,6 +168,16 @@ export const clearSourceSeen = async (
   return bgRequest<SourceSeenResetResponse>({
     path: `/api/v1/watchlists/sources/${sourceId}/seen${qs}` as any,
     method: "DELETE"
+  })
+}
+
+export const checkWatchlistSourcesNow = async (
+  sourceIds: number[]
+): Promise<SourcesCheckNowResponse> => {
+  return bgRequest<SourcesCheckNowResponse>({
+    path: "/api/v1/watchlists/sources/check-now" as any,
+    method: "POST",
+    body: { source_ids: sourceIds }
   })
 }
 

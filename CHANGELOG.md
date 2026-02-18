@@ -48,6 +48,12 @@ and this project adheres to Some kind of Versioning
   - Added deterministic admin smoke fixture profile/route mocks to remove skip behavior and backend-state dependency.
 - UX gate process updates:
   - Added PR checklist items for UX smoke gate, console-budget checks, and WebUI/extension parity validation.
+  - Added shared sanitized server-error message utility with correlation-ID log-hint support for user-facing error states.
+  - Added dedicated core route identity regression tests for `/`, `/setup`, and `/onboarding-test`.
+  - Added media route guard/boundary coverage for `media-multi` and `media-trash` paths.
+  - Added knowledge QA golden-layout and interaction guardrails to preserve high-quality search/history UX.
+  - Added workspace/playground positive-pattern guardrail tests (Data Tables, Evaluations, Chunking, Workspace desktop layout).
+  - Added explicit home theme-toggle control and associated unit/E2E coverage.
 
 ### Changed
 - Normalized Loguru formatting across tldw_Server_API/app from %-style placeholders to {} style.
@@ -81,6 +87,24 @@ and this project adheres to Some kind of Versioning
   - Shared `WebLayout` now defaults to collapsed rail on mobile (`<768px`) and opens navigation via header drawer toggle.
   - Shared media-query initialization now reads `matchMedia` on first client render to prevent desktop-rail flash on mobile.
   - Section 2 audited wrong-content routes now resolve to intended content or explicit “Coming Soon” placeholders instead of silent misrouting.
+  - Changed settings information architecture to be more navigable, searchable, and less badge-saturated, with tighter route-to-page mapping.
+  - Changed settings routing to restore/cover `/settings/ui`, `/settings/image-generation`, and `/settings/image-gen` behavior via proper wrappers/alias handling.
+  - Changed guardian settings behavior to show explicit unsupported-endpoint guidance instead of noisy repeated backend failures.
+  - Changed admin route behavior so admin sub-routes render route-specific content/placeholder contracts instead of collapsing to Server Admin.
+  - Changed admin diagnostics presentation to human-readable units for memory/byte and retry-window values.
+  - Changed admin error handling to sanitize implementation details and gate controls when prerequisites are missing.
+  - Changed chat disconnected-state messaging to remove redundancy and provide one clear user path.
+  - Changed chat agent empty-state/workspace affordances to clarify prerequisites and next steps.
+  - Changed chat mobile composer/toolbars to enforce 44x44 touch targets and improve control discoverability.
+  - Changed chat/persona language from jargon (`k=n`) to user-facing memory-result wording.
+  - Changed `/chat/settings` behavior to canonical redirect (`/chat/settings` -> `/settings/chat`) and aligned strict release-gate expectations.
+  - Changed audio route identity so `/tts`, `/stt`, and `/speech` have distinct intended surfaces.
+  - Changed TTS/STT/Speech loading lifecycle to include explicit timeout, actionable error states, and retry UX.
+  - Changed workspace/playground mobile copy and layout behavior, including Sources tab wording, chunking mobile order, and workflow-editor responsive drawer behavior.
+  - Changed workflow editor control semantics with improved labeling/aria clarity and consistent LLM casing.
+  - Changed flashcards/quiz/kanban/watchlists/documentation empty/content states for intent clarity and first-use correctness.
+  - Changed media/knowledge/characters/chatbooks error states to be recoverable, actionable, and sanitized.
+  - Changed core onboarding/layout behavior to improve mobile readability, hide sidebar where appropriate, and clarify ambiguous connection-status wording.
 - Accessibility and UX consistency:
   - Standardized dismissible beta-badge behavior in shared settings navigation with persisted hide state (`tldw:settings:hide-beta-badges`).
   - Added explicit labels/tooltips for previously icon-only controls in Document Workspace and Workflow Editor.
@@ -92,7 +116,10 @@ and this project adheres to Some kind of Versioning
   - Frontend UX gates workflow now runs the Stage 5 audited-route smoke gate before the broad all-pages smoke job.
 
 ### Removed
-- 
+- UI
+  - Removed `apps/tldw-frontend/pages/chat/settings.tsx` after replacing with server-side route redirect strategy.
+  - Removed duplicate chat disconnected guidance surfaces that previously showed overlapping connection messages.
+  - Removed user-visible unresolved template placeholder rendering across audited chat/audio/documentation surfaces.
 
 ### Fixed
 - Auth/API: deprecated `PUT /api/v1/users/me` now returns `404 User not found` when the backing `users` row is missing, instead of returning a false-success profile payload.
@@ -173,8 +200,17 @@ and this project adheres to Some kind of Versioning
 - Revalidated audited smoke quality gates after remediation:
   - Stage 5 gate: `11 passed`
   - Full all-pages smoke: `165 expected, 0 unexpected, 0 flaky`
-  
-
+- UI
+  - Fixed catastrophic extension-shim/runtime overlay impact on audited routes by driving closeout to `withErrorOverlay: 0` and `withChromeRuntimeErrors: 0` in final smoke artifact.
+  - Fixed wrong-content navigation defects by closing route-contract expectations across audited settings/admin/connectors/profile/config destinations.
+  - Fixed audited navigation 404 regressions (Section 2 list) to zero for in-scope UX routes.
+  - Fixed unresolved template-variable leaks (`{{...}}`) across previously affected chat, audio, and documentation surfaces (`templateLeakRoutes: 0` at closeout).
+  - Fixed max-update-depth/infinite-rerender class regressions on critical routes (`maxDepthRoutes: 0`, `maxDepthEvents: 0` in closeout artifact).
+  - Fixed permanently-loading skeleton experiences on key admin/audio surfaces via timeout + error + retry state transitions.
+  - Fixed mobile interaction issues across prioritized flows (touch-target sizing, toolbar discoverability, responsive parity gaps).
+  - Fixed core route identity duplication so home/setup/onboarding-test have distinct purpose and route contracts.
+  - Fixed release-readiness reliability with passing gate suite reruns at closeout: Stage 5 (`12 passed`), Stage 6 (`6 passed`), Stage 7 (`4 passed`).
+  - Fixed program-level UX closure criteria by completing all nine UX implementation plans and finalizing the overarching oversight plan status to complete.
 
 
 ## [0.1.20] 2026-02-07

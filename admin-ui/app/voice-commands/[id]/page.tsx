@@ -8,14 +8,20 @@ import { useRouter } from 'next/navigation';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Form, FormCheckbox, FormInput, FormSelect, FormTextarea } from '@/components/ui/form';
-import { ArrowLeft, Save, RefreshCw, Trash2, Mic, MicOff, BarChart3 } from 'lucide-react';
+import { ArrowLeft, Save, Trash2, Mic, MicOff, BarChart3 } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { parseVoiceCommandInputs } from '@/lib/voice-commands';
+import {
+  parseVoiceCommandInputs,
+  parseVoiceCommandPhrases,
+  testVoiceCommandPhraseMatch,
+  type VoiceCommandMatchResult,
+} from '@/lib/voice-commands';
 import type { VoiceCommand, VoiceActionType, VoiceCommandUsage } from '@/types';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -58,6 +64,8 @@ export default function VoiceCommandDetailPage({
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState('');
   const [saveError, setSaveError] = useState('');
+  const [testInput, setTestInput] = useState('');
+  const [testResult, setTestResult] = useState<VoiceCommandMatchResult | null>(null);
 
   const form = useForm<EditCommandFormData>({
     resolver: zodResolver(editCommandSchema),
@@ -192,6 +200,12 @@ export default function VoiceCommandDetailPage({
     }
   };
 
+  const handleTestCommand = () => {
+    const phraseInput = form.getValues('phrases');
+    const triggerPhrases = parseVoiceCommandPhrases(phraseInput);
+    setTestResult(testVoiceCommandPhraseMatch(testInput, triggerPhrases));
+  };
+
   if (loading) {
     return (
       <PermissionGuard variant="route" requireAuth role="admin">
@@ -254,13 +268,14 @@ export default function VoiceCommandDetailPage({
               </p>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={handleToggleEnabled} disabled={isToggling}>
-                {isToggling ? (
-                  <>
-                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                    {command.enabled ? 'Disabling...' : 'Enabling...'}
-                  </>
-                ) : command.enabled ? (
+              <Button
+                variant="outline"
+                onClick={handleToggleEnabled}
+                disabled={isToggling}
+                loading={isToggling}
+                loadingText={command.enabled ? 'Disabling...' : 'Enabling...'}
+              >
+                {command.enabled ? (
                   <>
                     <MicOff className="mr-2 h-4 w-4" />
                     Disable
@@ -272,18 +287,9 @@ export default function VoiceCommandDetailPage({
                   </>
                 )}
               </Button>
-              <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
-                {isDeleting ? (
-                  <>
-                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                    Deleting...
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    Delete
-                  </>
-                )}
+              <Button variant="destructive" onClick={handleDelete} disabled={isDeleting} loading={isDeleting} loadingText="Deleting...">
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete
               </Button>
             </div>
           </div>
@@ -328,6 +334,50 @@ export default function VoiceCommandDetailPage({
               <AlertDescription>{saveError}</AlertDescription>
             </Alert>
           )}
+
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Test Command</CardTitle>
+              <CardDescription>
+                Enter sample text to check whether this command&apos;s trigger phrases would match.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Input
+                  value={testInput}
+                  onChange={(event) => {
+                    setTestInput(event.target.value);
+                    setTestResult(null);
+                  }}
+                  placeholder="Try: search for engineering notes"
+                  aria-label="Sample command text"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleTestCommand}
+                  disabled={testInput.trim().length === 0}
+                >
+                  Test Command
+                </Button>
+              </div>
+              {testResult ? (
+                <Alert variant={testResult.matched ? 'success' : 'default'}>
+                  <AlertDescription>
+                    <p className="font-medium">
+                      {testResult.matched ? 'Matched' : 'No strong match'} ({Math.round(testResult.confidence * 100)}% confidence)
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {testResult.bestPhrase
+                        ? `Best phrase: "${testResult.bestPhrase}" (threshold ${Math.round(testResult.threshold * 100)}%).`
+                        : 'No trigger phrase candidates found.'}
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader>
@@ -404,9 +454,9 @@ export default function VoiceCommandDetailPage({
                       >
                         Cancel
                       </Button>
-                      <Button type="submit" disabled={saving}>
+                      <Button type="submit" disabled={saving} loading={saving} loadingText="Saving...">
                         <Save className="mr-2 h-4 w-4" />
-                        {saving ? 'Saving...' : 'Save Changes'}
+                        Save Changes
                       </Button>
                     </div>
                   </div>

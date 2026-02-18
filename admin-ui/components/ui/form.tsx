@@ -33,10 +33,12 @@ function FormField<T extends FieldValues>({
 }: FormFieldProps<T>) {
   const { formState: { errors } } = useFormContext<T>();
   const error = get(errors, name);
+  const fieldId = String(name).replace(/\./g, '-');
+  const errorId = `${fieldId}-error`;
 
   return (
     <div className="space-y-2">
-      <Label htmlFor={name} className={cn(error && 'text-destructive')}>
+      <Label htmlFor={fieldId} className={cn(error && 'text-destructive')}>
         {label}
         {required && <span className="text-destructive ml-1">*</span>}
       </Label>
@@ -45,7 +47,9 @@ function FormField<T extends FieldValues>({
         <p className="text-xs text-muted-foreground">{description}</p>
       )}
       {error && (
-        <p className="text-xs text-destructive">{error.message as string}</p>
+        <p id={errorId} role="alert" className="text-xs text-destructive">
+          {error.message as string}
+        </p>
       )}
     </div>
   );
@@ -75,14 +79,18 @@ function FormInput<T extends FieldValues>({
 }: FormInputProps<T>) {
   const { register, formState: { errors } } = useFormContext<T>();
   const error = get(errors, name);
+  const fieldId = String(name).replace(/\./g, '-');
+  const errorId = `${fieldId}-error`;
 
   return (
     <FormField<T> name={name} label={label} description={description} required={required}>
       <Input
-        id={name}
+        id={fieldId}
         type={type}
         placeholder={placeholder}
         disabled={disabled}
+        aria-invalid={error ? 'true' : undefined}
+        aria-describedby={error ? errorId : undefined}
         className={cn(error && 'border-destructive', className)}
         {...register(name)}
       />
@@ -114,14 +122,18 @@ function FormTextarea<T extends FieldValues>({
 }: FormTextareaProps<T>) {
   const { register, formState: { errors } } = useFormContext<T>();
   const error = get(errors, name);
+  const fieldId = String(name).replace(/\./g, '-');
+  const errorId = `${fieldId}-error`;
 
   return (
     <FormField<T> name={name} label={label} description={description} required={required}>
       <textarea
-        id={name}
+        id={fieldId}
         placeholder={placeholder}
         disabled={disabled}
         rows={rows}
+        aria-invalid={error ? 'true' : undefined}
+        aria-describedby={error ? errorId : undefined}
         className={cn(
           'flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
           error && 'border-destructive',
@@ -157,12 +169,16 @@ function FormSelect<T extends FieldValues>({
 }: FormSelectProps<T>) {
   const { register, formState: { errors } } = useFormContext<T>();
   const error = get(errors, name);
+  const fieldId = String(name).replace(/\./g, '-');
+  const errorId = `${fieldId}-error`;
 
   return (
     <FormField<T> name={name} label={label} description={description} required={required}>
       <select
-        id={name}
+        id={fieldId}
         disabled={disabled}
+        aria-invalid={error ? 'true' : undefined}
+        aria-describedby={error ? errorId : undefined}
         className={cn(
           'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
           error && 'border-destructive',
@@ -201,14 +217,18 @@ function FormCheckbox<T extends FieldValues>({
 }: FormCheckboxProps<T>) {
   const { register, formState: { errors } } = useFormContext<T>();
   const error = get(errors, name);
+  const fieldId = String(name).replace(/\./g, '-');
+  const errorId = `${fieldId}-error`;
 
   return (
     <div className="space-y-2">
       <div className="flex items-center space-x-2">
         <input
           type="checkbox"
-          id={name}
+          id={fieldId}
           disabled={disabled}
+          aria-invalid={error ? 'true' : undefined}
+          aria-describedby={error ? errorId : undefined}
           className={cn(
             'h-4 w-4 rounded border border-input text-primary focus:ring-primary',
             error && 'border-destructive',
@@ -216,7 +236,7 @@ function FormCheckbox<T extends FieldValues>({
           )}
           {...register(name)}
         />
-        <Label htmlFor={name} className={cn('font-normal', error && 'text-destructive')}>
+        <Label htmlFor={fieldId} className={cn('font-normal', error && 'text-destructive')}>
           {label}
         </Label>
       </div>
@@ -224,7 +244,9 @@ function FormCheckbox<T extends FieldValues>({
         <p className="text-xs text-muted-foreground ml-6">{description}</p>
       )}
       {error && (
-        <p className="text-xs text-destructive ml-6">{error.message as string}</p>
+        <p id={errorId} role="alert" className="text-xs text-destructive ml-6">
+          {error.message as string}
+        </p>
       )}
     </div>
   );

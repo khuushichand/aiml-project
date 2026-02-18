@@ -101,6 +101,30 @@ class SourceSeenResetResponse(BaseModel):
     cleared_backoff: bool
 
 
+class SourcesCheckNowRequest(BaseModel):
+    source_ids: list[int] = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="One or more source IDs to manually check now.",
+    )
+
+
+class SourceCheckNowItem(BaseModel):
+    source_id: int
+    status: Literal["ok", "error", "not_found", "inactive"]
+    detail: str | None = None
+    last_scraped_at: str | None = None
+    run_id: int | None = None
+
+
+class SourcesCheckNowResponse(BaseModel):
+    items: list[SourceCheckNowItem]
+    total: int
+    success: int
+    failed: int
+
+
 class SourcesBulkCreateRequest(BaseModel):
     sources: list[SourceCreateRequest]
 
@@ -289,6 +313,7 @@ class ScrapedItem(BaseModel):
     url: str | None = None
     title: str | None = None
     summary: str | None = None
+    content: str | None = None
     published_at: str | None = None
     tags: list[str] = []
     status: str

@@ -19,7 +19,9 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrgMembershipItem,
     TeamCreateRequest,
     TeamMemberAddRequest,
+    TeamMemberRoleUpdateRequest,
     TeamMemberRemoveResponse,
+    TeamMembershipItem,
     TeamMemberResponse,
     TeamResponse,
 )
@@ -48,6 +50,9 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     list_org_memberships_for_user as core_list_org_memberships_for_user,
 )
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
+    list_memberships_for_user as core_list_team_memberships_for_user,
+)
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     list_organizations as core_list_organizations,
 )
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
@@ -58,6 +63,9 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
 )
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     remove_team_member as core_remove_team_member,
+)
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
+    update_team_member_role as core_update_team_member_role,
 )
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     update_org_member_role as core_update_org_member_role,
@@ -527,6 +535,36 @@ async def remove_team_member(
         raise HTTPException(status_code=500, detail="Failed to remove team member") from exc
 
 
+async def update_team_member_role(
+    team_id: int,
+    user_id: int,
+    payload: TeamMemberRoleUpdateRequest,
+    request,
+    principal: AuthPrincipal,
+) -> TeamMemberResponse:
+    try:
+        team = await admin_scope_service.get_scoped_team(team_id, principal, require_admin=True)
+        row = await core_update_team_member_role(team_id=team_id, user_id=user_id, role=payload.role)
+        if not row:
+            raise HTTPException(status_code=404, detail="Team membership not found")
+        await _emit_membership_audit_event(
+            request,
+            resource_type="team",
+            resource_id=str(team_id),
+            action="team_member.update",
+            event_type_name="DATA_UPDATE",
+            metadata={"target_user_id": user_id, "new_role": payload.role},
+        )
+        response_payload = dict(row)
+        response_payload["org_id"] = team.get("org_id") if isinstance(team, dict) else None
+        return TeamMemberResponse(**response_payload)
+    except HTTPException:
+        raise
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to update team member role user_id={user_id} team_id={team_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to update team member role") from exc
+
+
 async def add_org_member(
     org_id: int,
     payload: OrgMemberAddRequest,
@@ -673,3 +711,29 @@ async def list_user_org_memberships(
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list org memberships for user {user_id}: {exc}")
         raise HTTPException(status_code=500, detail="Failed to list org memberships") from exc
+
+
+async def list_user_team_memberships(
+    user_id: int,
+    principal: AuthPrincipal,
+) -> list[TeamMembershipItem]:
+    try:
+        await admin_scope_service.enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        rows = await core_list_team_memberships_for_user(user_id)
+        results: list[TeamMembershipItem] = []
+        for row in rows:
+            payload = dict(row)
+            payload["team_id"] = int(payload.get("team_id"))
+            payload["org_id"] = int(payload.get("org_id"))
+            payload["role"] = str(payload.get("role") or "member")
+            team_name = payload.get("team_name")
+            org_name = payload.get("org_name")
+            payload["team_name"] = str(team_name) if isinstance(team_name, str) else None
+            payload["org_name"] = str(org_name) if isinstance(org_name, str) else None
+            results.append(TeamMembershipItem(**payload))
+        return results
+    except HTTPException:
+        raise
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to list team memberships for user {user_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list team memberships") from exc

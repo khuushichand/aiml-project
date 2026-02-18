@@ -537,7 +537,12 @@ async def _maybe_auto_generate_output(
     return artifact.id
 
 
-async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
+async def run_watchlist_job(
+    user_id: int,
+    job_id: int,
+    *,
+    source_ids_override: list[int] | None = None,
+) -> dict[str, Any]:
     """Run the watchlist fetch→ingest pipeline for this user/job.
 
     Returns minimal stats: { run_id, items_found, items_ingested }.
@@ -584,7 +589,23 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
         scope = json.loads(job.scope_json or "{}") if job.scope_json else {}
     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         scope = {}
-    sources = _select_sources_for_scope(db, scope or {})
+    override_ids: list[int] = []
+    if source_ids_override:
+        seen_override: set[int] = set()
+        for raw_id in source_ids_override:
+            try:
+                source_id = int(raw_id)
+            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+                continue
+            if source_id <= 0 or source_id in seen_override:
+                continue
+            seen_override.add(source_id)
+            override_ids.append(source_id)
+
+    if override_ids:
+        sources = _select_sources_for_scope(db, {"sources": override_ids})
+    else:
+        sources = _select_sources_for_scope(db, scope or {})
 
     items_found = 0
     items_ingested = 0
@@ -708,6 +729,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                     summary: str | None,
                     media_id: int | None,
                     media_uuid: str | None,
+                    content: str | None = None,
                     published_at: str | None = None,
                     _src=src,
                 ) -> None:
@@ -721,6 +743,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                             url=url,
                             title=title,
                             summary=_truncate(summary),
+                            content=_sanitize_feed_html(content) if content else None,
                             published_at=published_at,
                             tags=_keywords_for_source(_src),
                             status=status,
@@ -921,6 +944,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                         url=link,
                                         title=it.get("title"),
                                         summary=it.get("summary"),
+                                        content=(it.get("content") or it.get("summary")),
                                         media_id=None,
                                         media_uuid=None,
                                         published_at=it.get("published"),
@@ -959,6 +983,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                     url=link,
                                     title=it.get("title"),
                                     summary=it.get("summary"),
+                                    content=(it.get("content") or it.get("summary")),
                                     media_id=None,
                                     media_uuid=None,
                                     published_at=it.get("published"),
@@ -971,6 +996,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                     url=link,
                                     title=it.get("title"),
                                     summary=it.get("summary"),
+                                    content=(it.get("content") or it.get("summary")),
                                     media_id=None,
                                     media_uuid=None,
                                     published_at=it.get("published"),
@@ -1105,6 +1131,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 url=article.get("url") or link,
                                 title=article.get("title") or (it.get("title") or "Untitled"),
                                 summary=summary_text,
+                                content=content_text,
                                 media_id=ingested_media_id,
                                 media_uuid=ingested_media_uuid,
                                 published_at=it.get("published"),
@@ -1115,6 +1142,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 url=article.get("url") or link,
                                 title=article.get("title") or (it.get("title") or "Untitled"),
                                 summary=summary_text,
+                                content=content_text,
                                 media_id=ingested_media_id,
                                 media_uuid=ingested_media_uuid,
                                 published_at=it.get("published"),
@@ -1209,6 +1237,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                         url=page_url,
                                         title=(prefetch.get("title") if prefetch and prefetch.get("title") else src.name),
                                         summary=(prefetch.get("summary") if prefetch else None),
+                                        content=(prefetch.get("content") or prefetch.get("summary")) if prefetch else None,
                                         media_id=None,
                                         media_uuid=None,
                                         published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
@@ -1243,6 +1272,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 url=page_url,
                                 title=prefetch.get("title") if prefetch and prefetch.get("title") else src.name,
                                 summary=prefetch.get("summary") if prefetch else None,
+                                content=(prefetch.get("content") or prefetch.get("summary")) if prefetch else None,
                                 media_id=None,
                                 media_uuid=None,
                                 published_at=prefetch.get("published") if prefetch else None,
@@ -1288,6 +1318,11 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                     url=article.get("url") or page_url,
                                     title=article.get("title") or src.name,
                                     summary=(prefetch.get("summary") if prefetch else None),
+                                    content=(
+                                        article.get("content")
+                                        or (prefetch.get("content") if prefetch else None)
+                                        or (prefetch.get("summary") if prefetch else None)
+                                    ),
                                     media_id=None,
                                     media_uuid=None,
                                     published_at=(prefetch.get("published") if prefetch else None),
@@ -1300,6 +1335,11 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                     url=article.get("url") or page_url,
                                     title=article.get("title") or src.name,
                                     summary=(prefetch.get("summary") if prefetch else None),
+                                    content=(
+                                        article.get("content")
+                                        or (prefetch.get("content") if prefetch else None)
+                                        or (prefetch.get("summary") if prefetch else None)
+                                    ),
                                     media_id=None,
                                     media_uuid=None,
                                     published_at=(prefetch.get("published") if prefetch else None),
@@ -1399,6 +1439,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 url=article.get("url") or page_url,
                                 title=article.get("title") or src.name,
                                 summary=summary_text or (prefetch.get("summary") if prefetch else None),
+                                content=content_text,
                                 media_id=ingested_media_id,
                                 media_uuid=ingested_media_uuid,
                                 published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
@@ -1409,6 +1450,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 url=article.get("url") or page_url,
                                 title=article.get("title") or src.name,
                                 summary=summary_text or (prefetch.get("summary") if prefetch else None),
+                                content=content_text,
                                 media_id=ingested_media_id,
                                 media_uuid=ingested_media_uuid,
                                 published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,

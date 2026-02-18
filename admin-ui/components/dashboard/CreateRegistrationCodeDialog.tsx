@@ -117,8 +117,8 @@ export function CreateRegistrationCodeDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={creating}>
-              {creating ? 'Creating…' : 'Create code'}
+            <Button type="submit" loading={creating} loadingText="Creating…">
+              Create code
             </Button>
           </DialogFooter>
         </form>

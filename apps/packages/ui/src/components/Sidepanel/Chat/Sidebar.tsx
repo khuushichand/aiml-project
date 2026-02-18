@@ -1,5 +1,6 @@
 import React from "react"
 import { message, Tooltip, Modal } from "antd"
+import { useQueryClient } from "@tanstack/react-query"
 import {
   ChevronLeft,
   Circle,
@@ -35,6 +36,7 @@ import { ModeToggle } from "./ModeToggle"
 import { ConversationContextMenu } from "./ConversationContextMenu"
 import { FolderPickerModal } from "./FolderPickerModal"
 import { exportTabToJSON, exportTabToMarkdown } from "@/utils/conversation-export"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 
 const DEFAULT_SIDEBAR_WIDTH = 288
 const SIDEBAR_MIN_WIDTH = 240
@@ -212,6 +214,7 @@ export const SidepanelChatSidebar = ({
   onClose
 }: SidepanelChatSidebarProps) => {
   const { t } = useTranslation(["common", "sidepanel"])
+  const queryClient = useQueryClient()
   const togglePinned = useSidepanelChatTabsStore(
     (state) => state.togglePinned
   )
@@ -375,15 +378,9 @@ export const SidepanelChatSidebar = ({
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = React.useState(false)
   const [isBulkDeleting, setIsBulkDeleting] = React.useState(false)
 
-  const {
-    folderApiAvailable,
-    ensureKeyword,
-    addKeywordToConversation
-  } = useFolderStore(
+  const { folderApiAvailable } = useFolderStore(
     (state) => ({
-      folderApiAvailable: state.folderApiAvailable,
-      ensureKeyword: state.ensureKeyword,
-      addKeywordToConversation: state.addKeywordToConversation
+      folderApiAvailable: state.folderApiAvailable
     }),
     shallow
   )
@@ -711,12 +708,11 @@ export const SidepanelChatSidebar = ({
     () => selectedTabs.filter((tab) => !tab.serverChatId).length,
     [selectedTabs]
   )
-  const { openBulkFolderPicker, openBulkTagPicker, applyBulkTrash } =
+  const { openBulkFolderPicker, openBulkTagPicker, applyBulkDelete } =
     useBulkChatOperations({
       selectedConversationIds,
       folderApiAvailable,
-      ensureKeyword,
-      addKeywordToConversation,
+      deleteConversation: (conversationId) => tldwClient.deleteChat(conversationId),
       t,
       setBulkFolderPickerOpen,
       setBulkTagPickerOpen
@@ -771,9 +767,10 @@ export const SidepanelChatSidebar = ({
     try {
       const failedConversationIds = new Set<string>()
       if (selectedConversationIds.length > 0) {
-        const result = await applyBulkTrash()
+        const result = await applyBulkDelete()
         if (!result) return
         result.failedConversationIds.forEach((id) => failedConversationIds.add(id))
+        queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
       }
 
       const remainingSelection: string[] = []
@@ -958,11 +955,11 @@ export const SidepanelChatSidebar = ({
               onClick={openBulkDeleteConfirm}
               className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-danger hover:bg-surface2"
               disabled={selectedTabIds.length === 0}
-              aria-label={t("sidepanel:multiSelect.deleteConfirmOk", "Move to trash")}
-              title={t("sidepanel:multiSelect.deleteConfirmOk", "Move to trash")}
+              aria-label={t("common:delete", "Delete")}
+              title={t("common:delete", "Delete")}
             >
               <Trash2 className="size-3.5" />
-              {t("sidepanel:multiSelect.deleteConfirmOk", "Move to trash")}
+              {t("common:delete", "Delete")}
             </button>
           </div>
         </div>
@@ -1103,19 +1100,19 @@ export const SidepanelChatSidebar = ({
         open={bulkDeleteConfirmOpen}
         onCancel={handleBulkDeleteConfirmClose}
         onOk={handleBulkDelete}
-        okText={t("sidepanel:multiSelect.deleteConfirmOk", "Move to trash")}
+        okText={t("common:delete", "Delete")}
         cancelText={t("common:cancel", "Cancel")}
         okButtonProps={{ danger: true, loading: isBulkDeleting }}
         title={t(
           "sidepanel:multiSelect.deleteConfirmTitle",
-          "Move chats to trash?"
+          "Delete selected chats?"
         )}
         destroyOnHidden
       >
         <p>
           {t(
             "sidepanel:multiSelect.deleteConfirmBody",
-            "This will hide the selected chats by tagging them as Trash."
+            "This will delete the selected chats from the server."
           )}
         </p>
       </Modal>

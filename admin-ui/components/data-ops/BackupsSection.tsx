@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,15 +12,64 @@ import { Pagination } from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api } from '@/lib/api-client';
-import { formatBytes, formatDateTime } from '@/lib/format';
+import { formatBytes, formatDateTime, formatDuration } from '@/lib/format';
 import { useUrlPagination } from '@/lib/use-url-state';
 import { usePagedResource, type LoadOptions } from '@/lib/use-paged-resource';
 import type { BackupItem } from '@/types';
-import { Database } from 'lucide-react';
+import {
+  AlertCircle,
+  CheckCircle2,
+  Database,
+  Loader2,
+  Pause,
+  Pencil,
+  Play,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
 import { Field } from '@/components/data-ops/Field';
 
 type BackupsSectionProps = {
   refreshSignal: number;
+};
+
+type BackupsTab = 'backups' | 'schedule';
+type BackupHistoryStatusFilter = 'all' | 'success' | 'failed' | 'in_progress';
+type BackupScheduleFrequency = 'daily' | 'weekly' | 'monthly';
+
+type BackupListItem = BackupItem & {
+  duration_seconds?: number | null;
+  duration_ms?: number | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  error_message?: string | null;
+  failure_reason?: string | null;
+  status_message?: string | null;
+};
+
+type BackupSchedule = {
+  id: string;
+  dataset: string;
+  frequency: BackupScheduleFrequency;
+  time_of_day: string;
+  retention_count: number;
+  is_paused: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type BackupTrendPoint = {
+  id: string;
+  createdAt: string;
+  createdAtMs: number;
+  sizeBytes: number;
+};
+
+type BackupDatasetTrend = {
+  dataset: string;
+  points: BackupTrendPoint[];
+  maxSizeBytes: number;
+  growthRateMbPerMonth: number;
 };
 
 const DATASET_OPTIONS = [
@@ -37,6 +86,14 @@ const BACKUP_TYPES = [
   { value: 'incremental', label: 'Incremental' },
 ];
 
+const SCHEDULE_FREQUENCY_OPTIONS: Array<{ value: BackupScheduleFrequency; label: string }> = [
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+];
+
+const SCHEDULE_STORAGE_KEY = 'data_ops_backup_schedules_v1';
+
 const formatBackupDate = (value?: string | null) => formatDateTime(value, {
   fallback: '—',
   options: {
@@ -50,10 +107,173 @@ const formatBackupDate = (value?: string | null) => formatDateTime(value, {
   },
 });
 
+const isBackupScheduleFrequency = (value: string): value is BackupScheduleFrequency =>
+  value === 'daily' || value === 'weekly' || value === 'monthly';
+
+const toPositiveInteger = (value: string): number | null => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+};
+
+const parseBackupItems = (value: unknown): BackupListItem[] => {
+  if (Array.isArray(value)) {
+    return value as BackupListItem[];
+  }
+  if (value && typeof value === 'object') {
+    const payload = value as { items?: unknown };
+    if (Array.isArray(payload.items)) {
+      return payload.items as BackupListItem[];
+    }
+  }
+  return [];
+};
+
+const parseScheduleStorage = (value: unknown): BackupSchedule[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry): BackupSchedule | null => {
+      if (!entry || typeof entry !== 'object') return null;
+      const record = entry as Partial<BackupSchedule>;
+      if (typeof record.id !== 'string' || !record.id.trim()) return null;
+      if (typeof record.dataset !== 'string' || !record.dataset.trim()) return null;
+      if (typeof record.frequency !== 'string' || !isBackupScheduleFrequency(record.frequency)) return null;
+      if (typeof record.time_of_day !== 'string' || !/^\d{2}:\d{2}$/.test(record.time_of_day)) return null;
+      if (typeof record.retention_count !== 'number' || !Number.isInteger(record.retention_count) || record.retention_count <= 0) {
+        return null;
+      }
+      return {
+        id: record.id,
+        dataset: record.dataset,
+        frequency: record.frequency,
+        time_of_day: record.time_of_day,
+        retention_count: record.retention_count,
+        is_paused: Boolean(record.is_paused),
+        created_at: typeof record.created_at === 'string' ? record.created_at : new Date().toISOString(),
+        updated_at: typeof record.updated_at === 'string' ? record.updated_at : new Date().toISOString(),
+      };
+    })
+    .filter((entry): entry is BackupSchedule => entry !== null);
+};
+
+const normalizeBackupStatus = (status?: string | null): BackupHistoryStatusFilter => {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (['ready', 'success', 'succeeded', 'completed', 'complete'].includes(normalized)) {
+    return 'success';
+  }
+  if (['failed', 'error', 'errored', 'aborted'].includes(normalized)) {
+    return 'failed';
+  }
+  if (['in_progress', 'in-progress', 'running', 'processing', 'queued', 'pending', 'started'].includes(normalized)) {
+    return 'in_progress';
+  }
+  return 'success';
+};
+
+const resolveBackupDurationSeconds = (item: BackupListItem): number | null => {
+  if (typeof item.duration_seconds === 'number' && Number.isFinite(item.duration_seconds) && item.duration_seconds >= 0) {
+    return item.duration_seconds;
+  }
+  if (typeof item.duration_ms === 'number' && Number.isFinite(item.duration_ms) && item.duration_ms >= 0) {
+    return item.duration_ms / 1000;
+  }
+  if (item.started_at && item.completed_at) {
+    const startedMs = Date.parse(item.started_at);
+    const completedMs = Date.parse(item.completed_at);
+    if (Number.isFinite(startedMs) && Number.isFinite(completedMs) && completedMs >= startedMs) {
+      return (completedMs - startedMs) / 1000;
+    }
+  }
+  return null;
+};
+
+const resolveBackupError = (item: BackupListItem): string | null => {
+  const candidates = [item.error_message, item.failure_reason, item.status_message]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  if (candidates.length > 0) {
+    return candidates[0];
+  }
+  return null;
+};
+
+const buildDatasetTrends = (items: BackupListItem[]): BackupDatasetTrend[] => {
+  const byDataset = new Map<string, BackupTrendPoint[]>();
+
+  items.forEach((item) => {
+    if (!item.dataset) return;
+    const createdAtMs = Date.parse(item.created_at || '');
+    if (!Number.isFinite(createdAtMs)) return;
+    if (!Number.isFinite(item.size_bytes) || item.size_bytes < 0) return;
+    const entry: BackupTrendPoint = {
+      id: item.id,
+      createdAt: item.created_at,
+      createdAtMs,
+      sizeBytes: item.size_bytes,
+    };
+    const existing = byDataset.get(item.dataset) ?? [];
+    existing.push(entry);
+    byDataset.set(item.dataset, existing);
+  });
+
+  const monthMs = 30 * 24 * 60 * 60 * 1000;
+
+  return Array.from(byDataset.entries())
+    .map(([dataset, points]): BackupDatasetTrend | null => {
+      const sorted = points.slice().sort((a, b) => a.createdAtMs - b.createdAtMs);
+      const latestTen = sorted.slice(-10);
+      if (latestTen.length === 0) return null;
+
+      const first = latestTen[0];
+      const last = latestTen[latestTen.length - 1];
+      const elapsedMs = last.createdAtMs - first.createdAtMs;
+      const growthRateMbPerMonth = elapsedMs > 0
+        ? ((last.sizeBytes - first.sizeBytes) / (1024 * 1024)) * (monthMs / elapsedMs)
+        : 0;
+      const maxSizeBytes = Math.max(1, ...latestTen.map((point) => point.sizeBytes));
+
+      return {
+        dataset,
+        points: latestTen,
+        maxSizeBytes,
+        growthRateMbPerMonth: Number.isFinite(growthRateMbPerMonth) ? growthRateMbPerMonth : 0,
+      };
+    })
+    .filter((trend): trend is BackupDatasetTrend => trend !== null)
+    .sort((a, b) => a.dataset.localeCompare(b.dataset));
+};
+
+const BackupStatusBadge = ({ status }: { status?: string | null }) => {
+  const normalizedStatus = normalizeBackupStatus(status);
+  if (normalizedStatus === 'failed') {
+    return (
+      <span className="inline-flex items-center gap-2" data-testid="backup-status-failed">
+        <XCircle className="h-4 w-4 text-red-600" />
+        <Badge variant="destructive">Failed</Badge>
+      </span>
+    );
+  }
+  if (normalizedStatus === 'in_progress') {
+    return (
+      <span className="inline-flex items-center gap-2" data-testid="backup-status-in-progress">
+        <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+        <Badge variant="secondary">In progress</Badge>
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-2" data-testid="backup-status-success">
+      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+      <Badge variant="default">Success</Badge>
+    </span>
+  );
+};
+
 export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
   const { page, pageSize, setPage, setPageSize, resetPagination } = useUrlPagination();
   const { success, error: showError } = useToast();
   const confirm = useConfirm();
+
+  const [activeTab, setActiveTab] = useState<BackupsTab>('backups');
 
   const [listDataset, setListDataset] = useState('');
   const [listUserId, setListUserId] = useState('');
@@ -64,6 +284,20 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
   const [maxBackups, setMaxBackups] = useState('');
   const [creatingBackup, setCreatingBackup] = useState(false);
   const [restoreBusyId, setRestoreBusyId] = useState<string | null>(null);
+
+  const [historyItems, setHistoryItems] = useState<BackupListItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState('');
+  const [historyDatasetFilter, setHistoryDatasetFilter] = useState('');
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<BackupHistoryStatusFilter>('all');
+
+  const [schedules, setSchedules] = useState<BackupSchedule[]>([]);
+  const [scheduleDataset, setScheduleDataset] = useState('media');
+  const [scheduleFrequency, setScheduleFrequency] = useState('');
+  const [scheduleTimeOfDay, setScheduleTimeOfDay] = useState('');
+  const [scheduleRetentionCount, setScheduleRetentionCount] = useState('30');
+  const [scheduleError, setScheduleError] = useState('');
+  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
 
   const backupParams = useMemo(() => {
     const params: Record<string, string> = {
@@ -84,11 +318,59 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
     loading: backupLoading,
     error: backupError,
     reload,
-  } = usePagedResource<BackupItem>({
+  } = usePagedResource<BackupListItem>({
     load: loadBackups,
     deps: [refreshSignal],
     defaultError: 'Failed to load backups',
   });
+
+  const loadHistory = useCallback(async () => {
+    try {
+      setHistoryLoading(true);
+      setHistoryError('');
+      const result = await api.getBackups({
+        limit: '200',
+        offset: '0',
+      });
+      const parsed = parseBackupItems(result)
+        .slice()
+        .sort((a, b) => Date.parse(b.created_at || '') - Date.parse(a.created_at || ''));
+      setHistoryItems(parsed);
+    } catch (err: unknown) {
+      console.error('Failed to load backup history:', err);
+      setHistoryError(err instanceof Error && err.message ? err.message : 'Failed to load backup history');
+      setHistoryItems([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadHistory();
+  }, [loadHistory, refreshSignal]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(SCHEDULE_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      setSchedules(parseScheduleStorage(parsed));
+    } catch (err) {
+      console.warn('Failed to read backup schedules from local storage:', err);
+      setSchedules([]);
+    }
+  }, []);
+
+  const persistSchedules = useCallback((nextSchedules: BackupSchedule[]) => {
+    setSchedules(nextSchedules);
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(SCHEDULE_STORAGE_KEY, JSON.stringify(nextSchedules));
+    } catch (err) {
+      console.warn('Failed to persist backup schedules:', err);
+    }
+  }, []);
 
   const handleBackupFilterChange = (key: 'dataset' | 'user', value: string) => {
     if (key === 'dataset') {
@@ -126,6 +408,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
       await api.createBackup(payload);
       success('Backup created', 'Snapshot created successfully.');
       await reload();
+      await loadHistory();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to create backup';
       showError('Backup failed', message);
@@ -134,7 +417,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
     }
   };
 
-  const handleRestoreBackup = async (backup: BackupItem) => {
+  const handleRestoreBackup = async (backup: BackupListItem) => {
     const accepted = await confirm({
       title: 'Restore backup?',
       message: `Restore ${backup.dataset} from ${backup.id}? This overwrites the current dataset.`,
@@ -153,6 +436,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
       });
       success('Restore complete', 'Backup restored successfully.');
       await reload();
+      await loadHistory();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to restore backup';
       showError('Restore failed', message);
@@ -160,6 +444,118 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
       setRestoreBusyId(null);
     }
   };
+
+  const validateScheduleForm = () => {
+    if (!scheduleFrequency || !isBackupScheduleFrequency(scheduleFrequency)) {
+      return 'Frequency is required.';
+    }
+    if (!scheduleTimeOfDay || !/^\d{2}:\d{2}$/.test(scheduleTimeOfDay)) {
+      return 'Time of day is required.';
+    }
+    const retentionCount = toPositiveInteger(scheduleRetentionCount);
+    if (retentionCount === null) {
+      return 'Retention count must be a positive integer.';
+    }
+    return '';
+  };
+
+  const resetScheduleForm = () => {
+    setScheduleDataset('media');
+    setScheduleFrequency('');
+    setScheduleTimeOfDay('');
+    setScheduleRetentionCount('30');
+    setScheduleError('');
+    setEditingScheduleId(null);
+  };
+
+  const handleSubmitSchedule = () => {
+    const validationError = validateScheduleForm();
+    if (validationError) {
+      setScheduleError(validationError);
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const retentionCount = toPositiveInteger(scheduleRetentionCount) as number;
+
+    if (editingScheduleId) {
+      const nextSchedules = schedules.map((schedule) => (
+        schedule.id === editingScheduleId
+          ? {
+              ...schedule,
+              dataset: scheduleDataset,
+              frequency: scheduleFrequency as BackupScheduleFrequency,
+              time_of_day: scheduleTimeOfDay,
+              retention_count: retentionCount,
+              updated_at: nowIso,
+            }
+          : schedule
+      ));
+      persistSchedules(nextSchedules);
+      success('Schedule updated', 'Backup schedule updated locally.');
+      resetScheduleForm();
+      return;
+    }
+
+    const nextSchedule: BackupSchedule = {
+      id: `sched-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      dataset: scheduleDataset,
+      frequency: scheduleFrequency as BackupScheduleFrequency,
+      time_of_day: scheduleTimeOfDay,
+      retention_count: retentionCount,
+      is_paused: false,
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+    persistSchedules([nextSchedule, ...schedules]);
+    success('Schedule created', 'Backup schedule saved locally.');
+    resetScheduleForm();
+  };
+
+  const handleEditSchedule = (schedule: BackupSchedule) => {
+    setEditingScheduleId(schedule.id);
+    setScheduleDataset(schedule.dataset);
+    setScheduleFrequency(schedule.frequency);
+    setScheduleTimeOfDay(schedule.time_of_day);
+    setScheduleRetentionCount(String(schedule.retention_count));
+    setScheduleError('');
+  };
+
+  const handleToggleSchedulePause = (schedule: BackupSchedule) => {
+    const nextSchedules = schedules.map((entry) => (
+      entry.id === schedule.id
+        ? { ...entry, is_paused: !entry.is_paused, updated_at: new Date().toISOString() }
+        : entry
+    ));
+    persistSchedules(nextSchedules);
+    success(schedule.is_paused ? 'Schedule resumed' : 'Schedule paused', 'Schedule updated locally.');
+  };
+
+  const handleDeleteSchedule = async (scheduleId: string) => {
+    const accepted = await confirm({
+      title: 'Delete backup schedule?',
+      message: 'This removes the local schedule configuration.',
+      confirmText: 'Delete',
+      variant: 'danger',
+      icon: 'delete',
+    });
+    if (!accepted) return;
+
+    const nextSchedules = schedules.filter((schedule) => schedule.id !== scheduleId);
+    persistSchedules(nextSchedules);
+    if (editingScheduleId === scheduleId) {
+      resetScheduleForm();
+    }
+    success('Schedule deleted', 'Backup schedule removed locally.');
+  };
+
+  const filteredHistoryItems = useMemo(() => {
+    return historyItems
+      .filter((item) => (historyDatasetFilter ? item.dataset === historyDatasetFilter : true))
+      .filter((item) => (historyStatusFilter === 'all' ? true : normalizeBackupStatus(item.status) === historyStatusFilter))
+      .slice(0, 20);
+  }, [historyDatasetFilter, historyItems, historyStatusFilter]);
+  const datasetTrends = useMemo(() => buildDatasetTrends(historyItems), [historyItems]);
 
   const totalPages = Math.max(1, Math.ceil(backupTotal / pageSize));
 
@@ -170,157 +566,473 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
           <Database className="h-5 w-5" />
           Backups
         </CardTitle>
-        <CardDescription>Create, browse, and restore backup snapshots.</CardDescription>
+        <CardDescription>Create, browse, schedule, and restore backup snapshots.</CardDescription>
+        <div className="flex flex-wrap gap-2 pt-1">
+          <Button
+            variant={activeTab === 'backups' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setActiveTab('backups')}
+          >
+            Backups
+          </Button>
+          <Button
+            variant={activeTab === 'schedule' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setActiveTab('schedule')}
+          >
+            Schedule
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-6">
-        <div className="grid gap-3 md:grid-cols-4">
-          <Field id="backup-filter-dataset" label="Dataset filter">
-            <Select
-              id="backup-filter-dataset"
-              value={listDataset}
-              onChange={(event) => handleBackupFilterChange('dataset', event.target.value)}
-            >
-              <option value="">All datasets</option>
-              {DATASET_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field id="backup-filter-user" label="User ID filter">
-            <Input
-              id="backup-filter-user"
-              placeholder="Optional"
-              value={listUserId}
-              onChange={(event) => handleBackupFilterChange('user', event.target.value)}
-            />
-          </Field>
-          <div className="flex items-end">
-            <Button variant="outline" onClick={reload} disabled={backupLoading}>
-              Refresh list
-            </Button>
-          </div>
-        </div>
+        {activeTab === 'schedule' ? (
+          <>
+            <Alert>
+              <AlertDescription>
+                Backup scheduling is currently stored in browser local storage until backend schedule APIs are available.
+              </AlertDescription>
+            </Alert>
 
-        <div className="grid gap-3 md:grid-cols-5">
-          <Field id="backup-create-dataset" label="Dataset">
-            <Select
-              id="backup-create-dataset"
-              value={createDataset}
-              onChange={(event) => setCreateDataset(event.target.value)}
-            >
-              {DATASET_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field id="backup-create-user" label="User ID">
-            <Input
-              id="backup-create-user"
-              placeholder="Optional"
-              value={createUserId}
-              onChange={(event) => setCreateUserId(event.target.value)}
-            />
-          </Field>
-          <Field id="backup-create-type" label="Type">
-            <Select
-              id="backup-create-type"
-              value={backupType}
-              onChange={(event) => setBackupType(event.target.value)}
-            >
-              {BACKUP_TYPES.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field id="backup-create-max" label="Max backups">
-            <Input
-              id="backup-create-max"
-              placeholder="Optional"
-              value={maxBackups}
-              onChange={(event) => setMaxBackups(event.target.value)}
-            />
-          </Field>
-          <div className="flex items-end">
-            <Button onClick={handleCreateBackup} disabled={creatingBackup}>
-              {creatingBackup ? 'Creating...' : 'Create backup'}
-            </Button>
-          </div>
-        </div>
+            <div className="grid gap-3 md:grid-cols-5">
+              <Field id="backup-schedule-dataset" label="Dataset">
+                <Select
+                  id="backup-schedule-dataset"
+                  value={scheduleDataset}
+                  onChange={(event) => setScheduleDataset(event.target.value)}
+                >
+                  {DATASET_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field id="backup-schedule-frequency" label="Frequency">
+                <Select
+                  id="backup-schedule-frequency"
+                  value={scheduleFrequency}
+                  onChange={(event) => setScheduleFrequency(event.target.value)}
+                >
+                  <option value="">Select frequency</option>
+                  {SCHEDULE_FREQUENCY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field id="backup-schedule-time" label="Time of day">
+                <Input
+                  id="backup-schedule-time"
+                  type="time"
+                  value={scheduleTimeOfDay}
+                  onChange={(event) => setScheduleTimeOfDay(event.target.value)}
+                />
+              </Field>
+              <Field id="backup-schedule-retention" label="Retention count">
+                <Input
+                  id="backup-schedule-retention"
+                  value={scheduleRetentionCount}
+                  onChange={(event) => setScheduleRetentionCount(event.target.value)}
+                />
+              </Field>
+              <div className="flex items-end gap-2">
+                <Button onClick={handleSubmitSchedule}>
+                  {editingScheduleId ? 'Update schedule' : 'Create schedule'}
+                </Button>
+                {editingScheduleId && (
+                  <Button variant="outline" onClick={resetScheduleForm}>
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            </div>
 
-        {backupError && (
-          <Alert variant="destructive">
-            <AlertDescription>{backupError}</AlertDescription>
-          </Alert>
-        )}
-
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>ID</TableHead>
-              <TableHead>Dataset</TableHead>
-              <TableHead>User</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Size</TableHead>
-              <TableHead>Created</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {backupLoading ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-muted-foreground">
-                  Loading backups...
-                </TableCell>
-              </TableRow>
-            ) : backups.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-muted-foreground">
-                  No backups found.
-                </TableCell>
-              </TableRow>
-            ) : (
-              backups.map((backup) => (
-                <TableRow key={backup.id}>
-                  <TableCell className="font-mono text-xs">{backup.id}</TableCell>
-                  <TableCell>{backup.dataset}</TableCell>
-                  <TableCell>{backup.user_id ?? '—'}</TableCell>
-                  <TableCell>
-                    <Badge variant={backup.status === 'ready' ? 'default' : 'secondary'}>
-                      {backup.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>{formatBytes(backup.size_bytes, { fallback: '—' })}</TableCell>
-                  <TableCell>{formatBackupDate(backup.created_at)}</TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleRestoreBackup(backup)}
-                      disabled={restoreBusyId === backup.id}
-                    >
-                      {restoreBusyId === backup.id ? 'Restoring...' : 'Restore'}
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))
+            {scheduleError && (
+              <Alert variant="destructive">
+                <AlertDescription>{scheduleError}</AlertDescription>
+              </Alert>
             )}
-          </TableBody>
-        </Table>
 
-        <Pagination
-          currentPage={page}
-          totalPages={totalPages}
-          totalItems={backupTotal}
-          pageSize={pageSize}
-          onPageChange={setPage}
-          onPageSizeChange={setPageSize}
-        />
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Dataset</TableHead>
+                  <TableHead>Frequency</TableHead>
+                  <TableHead>Time</TableHead>
+                  <TableHead>Retention</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Updated</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {schedules.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-muted-foreground">
+                      No backup schedules configured.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  schedules.map((schedule) => (
+                    <TableRow key={schedule.id} data-testid={`backup-schedule-row-${schedule.id}`}>
+                      <TableCell>{schedule.dataset}</TableCell>
+                      <TableCell className="capitalize">{schedule.frequency}</TableCell>
+                      <TableCell>{schedule.time_of_day}</TableCell>
+                      <TableCell>{schedule.retention_count}</TableCell>
+                      <TableCell>
+                        <Badge variant={schedule.is_paused ? 'secondary' : 'default'}>
+                          {schedule.is_paused ? 'Paused' : 'Active'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>{formatBackupDate(schedule.updated_at)}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleEditSchedule(schedule)}
+                            aria-label="Edit schedule"
+                            title="Edit schedule"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleToggleSchedulePause(schedule)}
+                            aria-label={schedule.is_paused ? 'Resume schedule' : 'Pause schedule'}
+                            title={schedule.is_paused ? 'Resume schedule' : 'Pause schedule'}
+                            data-testid={`backup-schedule-toggle-${schedule.id}`}
+                          >
+                            {schedule.is_paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => { void handleDeleteSchedule(schedule.id); }}
+                            aria-label="Delete schedule"
+                            title="Delete schedule"
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </>
+        ) : (
+          <>
+            <div className="grid gap-3 md:grid-cols-4">
+              <Field id="backup-filter-dataset" label="Dataset filter">
+                <Select
+                  id="backup-filter-dataset"
+                  value={listDataset}
+                  onChange={(event) => handleBackupFilterChange('dataset', event.target.value)}
+                >
+                  <option value="">All datasets</option>
+                  {DATASET_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field id="backup-filter-user" label="User ID filter">
+                <Input
+                  id="backup-filter-user"
+                  placeholder="Optional"
+                  value={listUserId}
+                  onChange={(event) => handleBackupFilterChange('user', event.target.value)}
+                />
+              </Field>
+              <div className="flex items-end">
+                <Button variant="outline" onClick={reload} disabled={backupLoading}>
+                  Refresh list
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-5">
+              <Field id="backup-create-dataset" label="Dataset">
+                <Select
+                  id="backup-create-dataset"
+                  value={createDataset}
+                  onChange={(event) => setCreateDataset(event.target.value)}
+                >
+                  {DATASET_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field id="backup-create-user" label="User ID">
+                <Input
+                  id="backup-create-user"
+                  placeholder="Optional"
+                  value={createUserId}
+                  onChange={(event) => setCreateUserId(event.target.value)}
+                />
+              </Field>
+              <Field id="backup-create-type" label="Type">
+                <Select
+                  id="backup-create-type"
+                  value={backupType}
+                  onChange={(event) => setBackupType(event.target.value)}
+                >
+                  {BACKUP_TYPES.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field id="backup-create-max" label="Max backups">
+                <Input
+                  id="backup-create-max"
+                  placeholder="Optional"
+                  value={maxBackups}
+                  onChange={(event) => setMaxBackups(event.target.value)}
+                />
+              </Field>
+              <div className="flex items-end">
+                <Button onClick={handleCreateBackup} disabled={creatingBackup} loading={creatingBackup} loadingText="Creating...">
+                  Create backup
+                </Button>
+              </div>
+            </div>
+
+            {backupError && (
+              <Alert variant="destructive">
+                <AlertDescription>{backupError}</AlertDescription>
+              </Alert>
+            )}
+
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>ID</TableHead>
+                  <TableHead>Dataset</TableHead>
+                  <TableHead>User</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Size</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {backupLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-muted-foreground">
+                      Loading backups...
+                    </TableCell>
+                  </TableRow>
+                ) : backups.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-muted-foreground">
+                      No backups found.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  backups.map((backup) => {
+                    const statusKind = normalizeBackupStatus(backup.status);
+                    const backupErrorMessage = resolveBackupError(backup);
+                    return (
+                      <TableRow key={backup.id}>
+                        <TableCell className="font-mono text-xs">{backup.id}</TableCell>
+                        <TableCell>{backup.dataset}</TableCell>
+                        <TableCell>{backup.user_id ?? '—'}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <BackupStatusBadge status={backup.status} />
+                            {statusKind === 'failed' && backupErrorMessage && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => showError('Backup failed', backupErrorMessage)}
+                                title={backupErrorMessage}
+                                aria-label="View backup error"
+                              >
+                                <AlertCircle className="h-4 w-4 text-destructive" />
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>{formatBytes(backup.size_bytes, { fallback: '—' })}</TableCell>
+                        <TableCell>{formatBackupDate(backup.created_at)}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => { void handleRestoreBackup(backup); }}
+                            disabled={restoreBusyId === backup.id}
+                          >
+                            {restoreBusyId === backup.id ? 'Restoring...' : 'Restore'}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
+
+            <Pagination
+              currentPage={page}
+              totalPages={totalPages}
+              totalItems={backupTotal}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+            />
+
+            <div className="space-y-4 rounded-lg border p-4" data-testid="backup-history-section">
+              <div className="space-y-1">
+                <h3 className="text-lg font-semibold">Backup History</h3>
+                <p className="text-sm text-muted-foreground">
+                  Last 20 backups across datasets with status and duration.
+                </p>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-3">
+                <Field id="backup-history-dataset" label="Dataset">
+                  <Select
+                    id="backup-history-dataset"
+                    value={historyDatasetFilter}
+                    onChange={(event) => setHistoryDatasetFilter(event.target.value)}
+                  >
+                    <option value="">All datasets</option>
+                    {DATASET_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field id="backup-history-status" label="Status">
+                  <Select
+                    id="backup-history-status"
+                    value={historyStatusFilter}
+                    onChange={(event) => setHistoryStatusFilter(event.target.value as BackupHistoryStatusFilter)}
+                  >
+                    <option value="all">All statuses</option>
+                    <option value="success">Success</option>
+                    <option value="failed">Failed</option>
+                    <option value="in_progress">In progress</option>
+                  </Select>
+                </Field>
+                <div className="flex items-end">
+                  <Button variant="outline" onClick={() => { void loadHistory(); }} disabled={historyLoading}>
+                    Refresh history
+                  </Button>
+                </div>
+              </div>
+
+              {historyError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{historyError}</AlertDescription>
+                </Alert>
+              )}
+
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Timestamp</TableHead>
+                    <TableHead>Dataset</TableHead>
+                    <TableHead>Size</TableHead>
+                    <TableHead>Duration</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {historyLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-muted-foreground">Loading history...</TableCell>
+                    </TableRow>
+                  ) : filteredHistoryItems.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-muted-foreground">No backup history found.</TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredHistoryItems.map((item) => {
+                      const statusKind = normalizeBackupStatus(item.status);
+                      const backupErrorMessage = resolveBackupError(item);
+                      const durationSeconds = resolveBackupDurationSeconds(item);
+                      return (
+                        <TableRow key={`${item.id}-${item.created_at}`} data-testid="backup-history-row">
+                          <TableCell>{formatBackupDate(item.created_at)}</TableCell>
+                          <TableCell>{item.dataset}</TableCell>
+                          <TableCell>{formatBytes(item.size_bytes, { fallback: '—' })}</TableCell>
+                          <TableCell>{formatDuration(durationSeconds, { fallback: '—' })}</TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <BackupStatusBadge status={item.status} />
+                              {statusKind === 'failed' && backupErrorMessage && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => showError('Backup failed', backupErrorMessage)}
+                                  title={backupErrorMessage}
+                                  aria-label="View backup history error"
+                                >
+                                  <AlertCircle className="h-4 w-4 text-destructive" />
+                                </Button>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+
+              <div className="space-y-3 rounded-lg border p-4" data-testid="backup-storage-trending">
+                <div className="space-y-1">
+                  <h4 className="text-base font-semibold">Storage Trending</h4>
+                  <p className="text-sm text-muted-foreground">
+                    Backup size over time (last 10 snapshots per dataset).
+                  </p>
+                </div>
+                {datasetTrends.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Not enough backup history to render trends.</p>
+                ) : (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {datasetTrends.map((trend) => (
+                      <div key={trend.dataset} className="rounded-md border p-3 space-y-2" data-testid={`backup-trend-card-${trend.dataset}`}>
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-medium">{trend.dataset}</p>
+                          <p className="text-xs text-muted-foreground">{trend.points.length} snapshots</p>
+                        </div>
+                        <div className="flex h-20 items-end gap-1" data-testid={`backup-trend-series-${trend.dataset}`}>
+                          {trend.points.map((point, index) => {
+                            const ratio = trend.maxSizeBytes > 0 ? point.sizeBytes / trend.maxSizeBytes : 0;
+                            const barHeight = Math.max(8, Math.round(ratio * 64));
+                            return (
+                              <div
+                                key={`${point.id}-${point.createdAt}-${index}`}
+                                className="flex-1 rounded-sm bg-emerald-500/70"
+                                style={{ height: `${barHeight}px` }}
+                                title={`${formatBackupDate(point.createdAt)} • ${formatBytes(point.sizeBytes, { fallback: '0 B' })}`}
+                              />
+                            );
+                          })}
+                        </div>
+                        <p className="text-xs text-muted-foreground" data-testid={`backup-trend-growth-${trend.dataset}`}>
+                          Storage growing at {Math.max(0, trend.growthRateMbPerMonth).toFixed(1)} MB/month.
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   );

@@ -290,12 +290,13 @@ export function HeaderShortcuts({
                             key={item.to}
                             to={item.to}
                             onClick={handleShortcutNavigate}
+                            style={{ color: "rgb(var(--color-text))" }}
                             className={({ isActive }) =>
                               classNames(
                                 "flex w-full items-center gap-2 rounded-md border px-3 py-2 text-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus sm:w-auto",
                                 isActive
-                                  ? "border-border bg-surface text-text"
-                                  : "border-transparent text-text-muted hover:border-border hover:bg-surface"
+                                  ? "border-border bg-surface !text-text"
+                                  : "border-transparent !text-text hover:border-border hover:bg-surface"
                               )
                             }
                           >

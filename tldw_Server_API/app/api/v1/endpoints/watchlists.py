@@ -137,7 +137,10 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (  # noqa: E40
     ScrapedItemsListResponse,
     ScrapedItemUpdateRequest,
     Source,
+    SourceCheckNowItem,
     SourceCreateRequest,
+    SourcesCheckNowRequest,
+    SourcesCheckNowResponse,
     SourcesBulkCreateItem,
     SourcesBulkCreateRequest,
     SourcesBulkCreateResponse,
@@ -508,6 +511,7 @@ def _row_to_scraped_item(row) -> ScrapedItem:
         url=getattr(row, "url", None),
         title=getattr(row, "title", None),
         summary=getattr(row, "summary", None),
+        content=getattr(row, "content", None),
         published_at=getattr(row, "published_at", None),
         tags=tags,
         status=row.status,
@@ -1273,6 +1277,158 @@ async def import_sources_opml(
             items.append(SourcesImportItem(url=url_str, name=e.name, status="skipped", error=str(exc)))
             skipped += 1
     return SourcesImportResponse(items=items, total=(created + skipped + errors), created=created, skipped=skipped, errors=errors)
+
+
+@router.post(
+    "/sources/check-now",
+    response_model=SourcesCheckNowResponse,
+    summary="Manually check one or more sources now",
+    dependencies=[Depends(rbac_rate_limit("watchlists.run"))],
+)
+async def check_sources_now(
+    payload: SourcesCheckNowRequest = Body(...),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    source_ids: list[int] = []
+    seen_ids: set[int] = set()
+    for raw_id in payload.source_ids:
+        source_id = int(raw_id)
+        if source_id in seen_ids:
+            continue
+        seen_ids.add(source_id)
+        source_ids.append(source_id)
+
+    manual_job_name = "[System] Manual Source Refresh"
+
+    def _ensure_manual_refresh_job() -> int:
+        rows, _ = db.list_jobs(q=manual_job_name, limit=50, offset=0)
+        for row in rows:
+            if str(getattr(row, "name", "")) == manual_job_name:
+                return int(row.id)
+
+        created = db.create_job(
+            name=manual_job_name,
+            description="System-managed job created automatically for Check Now actions.",
+            scope_json=json.dumps({"sources": []}),
+            schedule_expr=None,
+            schedule_timezone="UTC",
+            active=False,
+            max_concurrency=1,
+            per_host_delay_ms=0,
+            retry_policy_json=None,
+            output_prefs_json=json.dumps({"ingest": {"persist_to_media_db": False}}),
+            job_filters_json=json.dumps({"filters": []}),
+        )
+        return int(created.id)
+
+    ordered_targets: list[tuple[int, Literal["active", "inactive", "not_found"]]] = []
+    active_source_ids: list[int] = []
+
+    for source_id in source_ids:
+        try:
+            src = db.get_source(source_id)
+        except KeyError:
+            ordered_targets.append((source_id, "not_found"))
+            continue
+
+        if int(getattr(src, "active", 0) or 0) != 1:
+            ordered_targets.append((source_id, "inactive"))
+            continue
+
+        ordered_targets.append((source_id, "active"))
+        active_source_ids.append(source_id)
+
+    active_results: dict[int, SourceCheckNowItem] = {}
+    run_id: int | None = None
+
+    if active_source_ids:
+        try:
+            manual_job_id = _ensure_manual_refresh_job()
+            run_result = await run_watchlist_job(
+                int(current_user.id),
+                manual_job_id,
+                source_ids_override=active_source_ids,
+            )
+            raw_run_id = run_result.get("run_id") if isinstance(run_result, dict) else None
+            run_id = int(raw_run_id) if raw_run_id is not None else None
+        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"watchlists.check_sources_now: run trigger failed for {active_source_ids}: {exc}")
+            for source_id in active_source_ids:
+                active_results[source_id] = SourceCheckNowItem(
+                    source_id=source_id,
+                    status="error",
+                    detail="run_trigger_failed",
+                )
+        else:
+            for source_id in active_source_ids:
+                try:
+                    refreshed = db.get_source(source_id)
+                    status_value = str(getattr(refreshed, "status", "") or "").lower()
+                    if status_value in {"error", "deferred", "forum_disabled"}:
+                        active_results[source_id] = SourceCheckNowItem(
+                            source_id=source_id,
+                            status="error",
+                            detail=status_value or "check_failed",
+                            last_scraped_at=getattr(refreshed, "last_scraped_at", None),
+                            run_id=run_id,
+                        )
+                    else:
+                        active_results[source_id] = SourceCheckNowItem(
+                            source_id=source_id,
+                            status="ok",
+                            last_scraped_at=getattr(refreshed, "last_scraped_at", None),
+                            run_id=run_id,
+                        )
+                except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+                    active_results[source_id] = SourceCheckNowItem(
+                        source_id=source_id,
+                        status="error",
+                        detail="check_failed",
+                        run_id=run_id,
+                    )
+
+    items: list[SourceCheckNowItem] = []
+    success = 0
+    failed = 0
+
+    for source_id, target_status in ordered_targets:
+        if target_status == "not_found":
+            item = SourceCheckNowItem(
+                source_id=source_id,
+                status="not_found",
+                detail="source_not_found",
+            )
+        elif target_status == "inactive":
+            item = SourceCheckNowItem(
+                source_id=source_id,
+                status="inactive",
+                detail="source_inactive",
+            )
+        else:
+            item = active_results.get(
+                source_id,
+                SourceCheckNowItem(
+                    source_id=source_id,
+                    status="error",
+                    detail="check_failed",
+                    run_id=run_id,
+                ),
+            )
+
+        items.append(item)
+        if item.status == "ok":
+            success += 1
+        else:
+            failed += 1
+
+    return SourcesCheckNowResponse(
+        items=items,
+        total=len(items),
+        success=success,
+        failed=failed,
+    )
+
 
 # (moved above /sources/{source_id})
 
@@ -3326,7 +3482,7 @@ async def list_scraped_items(
         ge=1,
         description="Admin-only: list items for another user ID.",
     ),
-    q: str | None = Query(None, description="Search by title/summary substring"),
+    q: str | None = Query(None, description="Search by title/summary/content substring"),
     since: str | None = Query(None, description="ISO date filter (created_at >= since)"),
     until: str | None = Query(None, description="ISO date filter (created_at <= until)"),
     page: int = Query(1, ge=1),

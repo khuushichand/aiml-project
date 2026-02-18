@@ -352,13 +352,19 @@ const SearchTab: React.FC<{
     try {
       const response = await tldwClient.webSearch({
         query: query.trim(),
-        engine: "searxng",
-        max_results: 10
+        engine: "searx",
+        result_count: 10
       })
 
-      if (response?.results) {
-        setResults(response.results)
-      }
+      const resultsFromResponse = Array.isArray(
+        response?.web_search_results_dict?.results
+      )
+        ? response.web_search_results_dict.results
+        : Array.isArray(response?.results)
+          ? response.results
+          : []
+
+      setResults(resultsFromResponse)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Search failed")
     } finally {

@@ -9,6 +9,7 @@
     "sources": "Sources",
     "jobs": "Jobs",
     "runs": "Runs",
+    "items": "Items",
     "outputs": "Outputs",
     "templates": "Templates",
     "settings": "Settings"
@@ -243,6 +244,43 @@
         "created": "Ingested"
       }
     }
+  },
+  "items": {
+    "description": "Browse scraped feed items and open the selected source content.",
+    "sourcesError": "Failed to load sources",
+    "fetchError": "Failed to load feed items",
+    "smartFeeds": "Smart Feeds",
+    "feeds": "Feeds",
+    "today": "Today",
+    "unread": "All Unread",
+    "reviewedOnly": "Reviewed",
+    "unreadCount": "{{count}} unread",
+    "sourceSearchPlaceholder": "Search feeds...",
+    "allFeeds": "All Feeds",
+    "allFeedsHint": "Browse items from every source",
+    "noFeeds": "No feeds found",
+    "searchPlaceholder": "Search feed items...",
+    "filters": {
+      "all": "All",
+      "ingested": "Ingested",
+      "filtered": "Filtered"
+    },
+    "empty": "No feed items found",
+    "unknownSource": "Unknown source",
+    "untitled": "Untitled item",
+    "noSummary": "No summary available",
+    "totalItems": "{{total}} items",
+    "selectPrompt": "Select an item to view its content",
+    "reviewed": "Reviewed",
+    "published": "Published: {{date}}",
+    "unknownDate": "Unknown",
+    "openOriginal": "Open Original",
+    "markReviewed": "Mark as reviewed",
+    "markUnreviewed": "Mark as unreviewed",
+    "markedReviewed": "Marked as reviewed",
+    "markedUnreviewed": "Marked as unreviewed",
+    "updateError": "Failed to update item",
+    "noUrlHint": "This item does not include an original URL."
   },
   "outputs": {
     "title": "Outputs",

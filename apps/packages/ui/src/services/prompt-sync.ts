@@ -1,8 +1,9 @@
 /**
  * Prompt Sync Service
  *
- * Provides manual sync operations between local IndexedDB prompts
- * and server-side Prompt Studio. Sync is user-initiated (no auto-sync).
+ * Provides sync operations between local IndexedDB prompts
+ * and server-side Prompt Studio. Manual sync remains available, and
+ * workspace prompt saves can auto-sync by default.
  */
 
 import { db } from '@/db/dexie/schema'
@@ -15,6 +16,7 @@ import {
   PromptModule
 } from '@/db/dexie/types'
 import {
+  createProject,
   createPrompt as createServerPrompt,
   updatePrompt as updateServerPrompt,
   getPrompt as getServerPrompt,
@@ -24,6 +26,10 @@ import {
   PromptUpdatePayload,
   Project
 } from '@/services/prompt-studio'
+import {
+  getPromptStudioDefaults,
+  setPromptStudioDefaults
+} from '@/services/prompt-studio-settings'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -45,6 +51,18 @@ export type ConflictInfo = {
 }
 
 export type ConflictResolution = 'keep_local' | 'keep_server' | 'keep_both'
+
+const AUTO_SYNC_PROJECT_NAME = 'Workspace Prompts'
+const AUTO_SYNC_PROJECT_DESCRIPTION =
+  'Auto-created project used to persist prompts saved from the Prompts workspace.'
+
+const isValidProjectId = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0
+
+const unwrapResponseData = <T>(response: unknown): T | null => {
+  const payload = response as any
+  return (payload?.data?.data || payload?.data || null) as T | null
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -133,6 +151,104 @@ function serverToNewLocalPrompt(server: ServerPrompt): LocalPrompt {
     sourceSystem: 'studio',
     lastSyncedAt: now
   }
+}
+
+export async function shouldAutoSyncWorkspacePrompts(): Promise<boolean> {
+  try {
+    const defaults = await getPromptStudioDefaults()
+    return defaults.autoSyncWorkspacePrompts !== false
+  } catch {
+    return true
+  }
+}
+
+export async function resolveAutoSyncProjectId(
+  preferredProjectId?: number | null
+): Promise<number | null> {
+  if (isValidProjectId(preferredProjectId)) {
+    return preferredProjectId
+  }
+
+  let defaults = await getPromptStudioDefaults()
+  if (isValidProjectId(defaults.defaultProjectId)) {
+    return defaults.defaultProjectId
+  }
+
+  const projects = await getAvailableProjects()
+  const firstProjectId = projects.find((project) =>
+    isValidProjectId(project.id)
+  )?.id
+
+  if (isValidProjectId(firstProjectId)) {
+    await setPromptStudioDefaults({ defaultProjectId: firstProjectId })
+    return firstProjectId
+  }
+
+  try {
+    const created = unwrapResponseData<Project>(
+      await createProject({
+        name: AUTO_SYNC_PROJECT_NAME,
+        description: AUTO_SYNC_PROJECT_DESCRIPTION
+      })
+    )
+    const createdId = created?.id
+    if (isValidProjectId(createdId)) {
+      await setPromptStudioDefaults({ defaultProjectId: createdId })
+      return createdId
+    }
+  } catch {
+    // Fall through and return null. Caller decides whether to mark pending.
+  }
+
+  // Avoid repeated failed create attempts in the same session by caching "no default".
+  defaults = await getPromptStudioDefaults()
+  if (defaults.defaultProjectId !== null && defaults.defaultProjectId !== undefined) {
+    await setPromptStudioDefaults({ defaultProjectId: null })
+  }
+  return null
+}
+
+export async function autoSyncPrompt(
+  localId: string,
+  preferredProjectId?: number | null
+): Promise<SyncResult> {
+  const local = await db.prompts.get(localId)
+  if (!local) {
+    return {
+      success: false,
+      localId,
+      error: 'Local prompt not found',
+      syncStatus: 'local'
+    }
+  }
+
+  const projectId = await resolveAutoSyncProjectId(
+    preferredProjectId ?? local.studioProjectId
+  )
+
+  if (!isValidProjectId(projectId)) {
+    await db.prompts.update(localId, {
+      syncStatus: 'pending',
+      updatedAt: Date.now()
+    })
+    return {
+      success: false,
+      localId,
+      error:
+        'No Prompt Studio project available for auto-sync. Configure a default project in Prompt Studio settings.',
+      syncStatus: 'pending'
+    }
+  }
+
+  const result = await pushToStudio(localId, projectId)
+  if (!result.success) {
+    await db.prompts.update(localId, {
+      syncStatus: 'pending',
+      studioProjectId: projectId,
+      updatedAt: Date.now()
+    })
+  }
+  return result
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

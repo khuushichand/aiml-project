@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
@@ -22,20 +22,37 @@ import { ActivitySection } from '@/components/dashboard/ActivitySection';
 import { RecentActivityCard } from '@/components/dashboard/RecentActivityCard';
 import { QuickActionsCard } from '@/components/dashboard/QuickActionsCard';
 import {
-  Building2, Clipboard, RefreshCw, Settings, Trash2, UserPlus, ShieldAlert
+  Building2, Clipboard, Settings, Trash2, UserPlus, ShieldAlert
 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
 import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, type SecurityHealthData, User } from '@/types';
 import { buildDashboardUIStats, type DashboardUIStats } from '@/lib/dashboard';
+import {
+  buildDashboardOperationalKpis,
+  DEFAULT_DASHBOARD_OPERATIONAL_KPIS,
+  type DashboardOperationalKpis,
+  type JobSnapshot,
+} from '@/lib/dashboard-kpis';
 import { resolveSecurityHealth } from '@/lib/security-health';
+import {
+  buildDashboardSystemHealth,
+  DEFAULT_DASHBOARD_SYSTEM_HEALTH,
+  type DashboardSystemHealth,
+} from '@/lib/dashboard-health';
+import {
+  buildDashboardActivityChartData,
+  getDashboardActivityQuery,
+  resolveDashboardActivityPoints,
+  type DashboardActivityPoint,
+  type DashboardActivityRange,
+} from '@/lib/dashboard-activity';
+import {
+  buildDashboardUptimeSummary,
+  DEFAULT_DASHBOARD_UPTIME_SUMMARY,
+  type DashboardUptimeSummary,
+} from '@/lib/dashboard-uptime';
 import Link from 'next/link';
-
-interface SystemHealth {
-  api: 'healthy' | 'degraded' | 'down';
-  database: 'healthy' | 'degraded' | 'down';
-  llm: 'healthy' | 'degraded' | 'down';
-}
 
 type ServerStatusState = 'online' | 'degraded' | 'offline' | 'unknown';
 
@@ -48,37 +65,7 @@ interface DashboardAlert {
 }
 
 type ProviderMap = Record<string, Partial<Omit<LLMProvider, 'name'>>>;
-
-type ActivityPoint = {
-  date: string;
-  requests: number;
-  users: number;
-};
-
-const ACTIVITY_DAYS = 7;
-
-const buildEmptyActivityPoints = (days: number): ActivityPoint[] => {
-  const today = new Date();
-  const points: ActivityPoint[] = [];
-  for (let offset = days - 1; offset >= 0; offset -= 1) {
-    const date = new Date(Date.UTC(
-      today.getUTCFullYear(),
-      today.getUTCMonth(),
-      today.getUTCDate() - offset,
-    ));
-    points.push({
-      date: date.toISOString().slice(0, 10),
-      requests: 0,
-      users: 0,
-    });
-  }
-  return points;
-};
-
-const formatActivityLabel = (dateStr: string) => {
-  const date = new Date(`${dateStr}T00:00:00Z`);
-  return date.toLocaleDateString(undefined, { weekday: 'short' });
-};
+const DEFAULT_ACTIVITY_RANGE: DashboardActivityRange = '7d';
 
 const processUsers = (result: PromiseSettledResult<unknown>): User[] => {
   if (result.status !== 'fulfilled') {
@@ -134,20 +121,6 @@ const processAlerts = (result: PromiseSettledResult<unknown>): DashboardAlert[] 
   return Array.isArray(result.value) ? result.value : [];
 };
 
-const processActivity = (
-  result: PromiseSettledResult<unknown>,
-  days: number
-): ActivityPoint[] => {
-  if (result.status !== 'fulfilled' || !result.value) {
-    return buildEmptyActivityPoints(days);
-  }
-  const points = (result.value as { points?: ActivityPoint[] } | null)?.points;
-  if (Array.isArray(points) && points.length > 0) {
-    return points;
-  }
-  return buildEmptyActivityPoints(days);
-};
-
 const processRegistrationCodes = (result: PromiseSettledResult<unknown>): RegistrationCode[] => {
   if (result.status !== 'fulfilled') {
     return [];
@@ -170,27 +143,6 @@ const computeUserStats = (users: User[]) => ({
   totalQuota: users.reduce((acc, user) => acc + (user.storage_quota_mb || 0), 0),
 });
 
-const deriveSystemHealth = (
-  usersResult: PromiseSettledResult<unknown>,
-  orgsResult: PromiseSettledResult<unknown>,
-  providersResult: PromiseSettledResult<unknown>,
-  enabledProviders: number
-): SystemHealth => {
-  const databaseStatus =
-    usersResult.status === 'fulfilled' && orgsResult.status === 'fulfilled'
-      ? 'healthy'
-      : 'degraded';
-  const llmStatus =
-    providersResult.status === 'fulfilled' && enabledProviders > 0
-      ? 'healthy'
-      : 'degraded';
-  return {
-    api: 'healthy',
-    database: databaseStatus,
-    llm: llmStatus,
-  };
-};
-
 export default function DashboardPage() {
   const router = useRouter();
   const { selectedOrg } = useOrgContext();
@@ -208,19 +160,28 @@ export default function DashboardPage() {
     storageUsedMb: 0,
     storageQuotaMb: 1000,
   });
+  const [operationalKpis, setOperationalKpis] = useState<DashboardOperationalKpis>(
+    DEFAULT_DASHBOARD_OPERATIONAL_KPIS
+  );
+  const previousJobsSnapshotRef = useRef<JobSnapshot | null>(null);
   const [recentActivity, setRecentActivity] = useState<AuditLog[]>([]);
   const [alerts, setAlerts] = useState<DashboardAlert[]>([]);
-  const [systemHealth, setSystemHealth] = useState<SystemHealth>({
-    api: 'healthy',
-    database: 'healthy',
-    llm: 'healthy',
-  });
+  const [systemHealth, setSystemHealth] = useState<DashboardSystemHealth>(
+    DEFAULT_DASHBOARD_SYSTEM_HEALTH
+  );
   const [serverStatus, setServerStatus] = useState<{
     state: ServerStatusState;
     checkedAt?: string;
   }>({ state: 'unknown' });
-  const [activityData, setActivityData] = useState<ActivityPoint[]>(
-    buildEmptyActivityPoints(ACTIVITY_DAYS)
+  const [uptimeSummary, setUptimeSummary] = useState<DashboardUptimeSummary>(
+    DEFAULT_DASHBOARD_UPTIME_SUMMARY
+  );
+  const [activityRange, setActivityRange] = useState<DashboardActivityRange>(DEFAULT_ACTIVITY_RANGE);
+  const [activityData, setActivityData] = useState<DashboardActivityPoint[]>(
+    resolveDashboardActivityPoints(
+      { status: 'rejected', reason: new Error('initial') },
+      DEFAULT_ACTIVITY_RANGE
+    )
   );
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [registrationCodes, setRegistrationCodes] = useState<RegistrationCode[]>([]);
@@ -264,7 +225,14 @@ export default function DashboardPage() {
       setSecurityHealthError('');
 
       const orgParams = selectedOrg ? { org_id: String(selectedOrg.id) } : undefined;
-      const auditParams = selectedOrg ? { limit: '5', org_id: String(selectedOrg.id) } : { limit: '5' };
+      const auditParams = selectedOrg ? { limit: '10', org_id: String(selectedOrg.id) } : { limit: '10' };
+      const usageDailyParams = selectedOrg
+        ? { limit: '200', org_id: String(selectedOrg.id) }
+        : { limit: '200' };
+      const llmUsageSummaryParams = selectedOrg
+        ? { group_by: 'day', org_id: String(selectedOrg.id) }
+        : { group_by: 'day' };
+      const activityQuery = getDashboardActivityQuery(activityRange);
 
       // Fetch all dashboard data in parallel
       const [
@@ -275,10 +243,20 @@ export default function DashboardPage() {
         auditResult,
         alertsResult,
         activityResult,
+        usageDailyResult,
+        llmUsageSummaryResult,
+        jobsStatsResult,
+        metricsTextResult,
         registrationSettingsResult,
         registrationCodesResult,
         healthResult,
+        llmHealthResult,
+        ragHealthResult,
+        ttsHealthResult,
+        sttHealthResult,
+        embeddingsHealthResult,
         securityHealthResult,
+        incidentsResult,
       ] = await Promise.allSettled([
         api.getDashboardStats(),
         api.getUsers(orgParams),
@@ -286,11 +264,23 @@ export default function DashboardPage() {
         api.getLLMProviders(),
         api.getAuditLogs(auditParams),
         api.getAlerts(),
-        api.getDashboardActivity(ACTIVITY_DAYS),
+        api.getDashboardActivity(activityQuery.days, {
+          granularity: activityQuery.granularity,
+        }),
+        api.getUsageDaily(usageDailyParams),
+        api.getLlmUsageSummary(llmUsageSummaryParams),
+        api.getJobsStats(),
+        api.getMetricsText(),
         api.getRegistrationSettings(),
         api.getRegistrationCodes(),
         api.getHealth(),
+        api.getLlmHealth(),
+        api.getRagHealth(),
+        api.getTtsHealth(),
+        api.getSttHealth(),
+        api.getEmbeddingsHealth(),
         api.getSecurityHealth(),
+        api.getIncidents({ limit: '200' }),
       ]);
 
       const users = processUsers(usersResult);
@@ -300,12 +290,12 @@ export default function DashboardPage() {
       const { providerList, enabledProviders } = processProviders(providersResult);
 
       const logs = processAuditLogs(auditResult);
-      setRecentActivity(logs.slice(0, 5));
+      setRecentActivity(logs.slice(0, 10));
 
       const alertsList = processAlerts(alertsResult);
-      setAlerts(alertsList.filter((alert) => !alert.acknowledged).slice(0, 3));
+      setAlerts(alertsList.filter((alert) => !alert.acknowledged));
 
-      setActivityData(processActivity(activityResult, ACTIVITY_DAYS));
+      setActivityData(resolveDashboardActivityPoints(activityResult, activityRange));
       setRegistrationSettings(processRegistrationSettings(registrationSettingsResult));
       setRegistrationSettingsError(
         registrationSettingsResult.status === 'rejected'
@@ -313,6 +303,18 @@ export default function DashboardPage() {
           : ''
       );
       setRegistrationCodes(processRegistrationCodes(registrationCodesResult));
+
+      const operationalKpiModel = buildDashboardOperationalKpis({
+        usageDaily: usageDailyResult.status === 'fulfilled' ? usageDailyResult.value : undefined,
+        llmUsageSummary: llmUsageSummaryResult.status === 'fulfilled' ? llmUsageSummaryResult.value : undefined,
+        jobsStats: jobsStatsResult.status === 'fulfilled' ? jobsStatsResult.value : undefined,
+        metricsText: metricsTextResult.status === 'fulfilled' ? metricsTextResult.value : undefined,
+        previousJobsSnapshot: previousJobsSnapshotRef.current,
+      });
+      setOperationalKpis(operationalKpiModel.kpis);
+      if (operationalKpiModel.jobsSnapshot) {
+        previousJobsSnapshotRef.current = operationalKpiModel.jobsSnapshot;
+      }
 
       const healthState: ServerStatusState = (() => {
         if (healthResult.status !== 'fulfilled') {
@@ -325,6 +327,11 @@ export default function DashboardPage() {
         return 'unknown';
       })();
       setServerStatus({ state: healthState, checkedAt: new Date().toISOString() });
+      setUptimeSummary(
+        incidentsResult.status === 'fulfilled'
+          ? buildDashboardUptimeSummary({ incidentsPayload: incidentsResult.value })
+          : DEFAULT_DASHBOARD_UPTIME_SUMMARY
+      );
 
       // Process security health
       const resolvedSecurityHealth = resolveSecurityHealth(securityHealthResult);
@@ -352,8 +359,33 @@ export default function DashboardPage() {
       });
       setStats(nextStats);
 
-      // Check system health (heuristic; not a live health endpoint)
-      setSystemHealth(deriveSystemHealth(usersResult, orgsResult, providersResult, nextStats.enabledProviders));
+      setSystemHealth(buildDashboardSystemHealth({
+        healthResult,
+        llmHealthResult,
+        ragHealthResult,
+        ttsHealthResult,
+        sttHealthResult,
+        embeddingsHealthResult,
+        metricsTextResult,
+      }));
+
+      const optionalHealthFailures = [
+        { key: 'llm_health', label: 'LLM health', result: llmHealthResult },
+        { key: 'rag_health', label: 'RAG health', result: ragHealthResult },
+        { key: 'tts_health', label: 'TTS health', result: ttsHealthResult },
+        { key: 'stt_health', label: 'STT health', result: sttHealthResult },
+        { key: 'embeddings_health', label: 'embeddings health', result: embeddingsHealthResult },
+      ].filter((entry): entry is {
+        key: string;
+        label: string;
+        result: PromiseRejectedResult;
+      } => entry.result.status === 'rejected');
+      if (optionalHealthFailures.length > 0) {
+        console.warn(
+          'Optional dashboard subsystem health fetch failures:',
+          optionalHealthFailures.map((entry) => ({ key: entry.key, reason: entry.result.reason }))
+        );
+      }
 
       const failures = [
         { key: 'stats', label: 'stats', result: statsResult },
@@ -363,10 +395,15 @@ export default function DashboardPage() {
         { key: 'audit', label: 'audit logs', result: auditResult },
         { key: 'alerts', label: 'alerts', result: alertsResult },
         { key: 'activity', label: 'activity', result: activityResult },
+        { key: 'usage_daily', label: 'usage daily', result: usageDailyResult },
+        { key: 'llm_usage_summary', label: 'LLM usage summary', result: llmUsageSummaryResult },
+        { key: 'jobs_stats', label: 'jobs stats', result: jobsStatsResult },
+        { key: 'metrics_text', label: 'metrics text', result: metricsTextResult },
         { key: 'registration_settings', label: 'registration settings', result: registrationSettingsResult },
         { key: 'registration_codes', label: 'registration codes', result: registrationCodesResult },
         { key: 'health', label: 'health', result: healthResult },
         { key: 'security_health', label: 'security health', result: securityHealthResult },
+        { key: 'incidents', label: 'incidents', result: incidentsResult },
       ].filter((entry): entry is {
         key: string;
         label: string;
@@ -384,10 +421,12 @@ export default function DashboardPage() {
     } catch (err: unknown) {
       console.error('Failed to load dashboard data:', err);
       setError('Failed to load dashboard statistics');
+      setOperationalKpis(DEFAULT_DASHBOARD_OPERATIONAL_KPIS);
+      setUptimeSummary(DEFAULT_DASHBOARD_UPTIME_SUMMARY);
     } finally {
       setLoading(false);
     }
-  }, [selectedOrg]);
+  }, [activityRange, selectedOrg]);
 
   useEffect(() => {
     void loadDashboardData();
@@ -608,12 +647,8 @@ export default function DashboardPage() {
   };
 
   const activityChartData = useMemo(
-    () => activityData.map((point) => ({
-      name: formatActivityLabel(point.date),
-      requests: point.requests,
-      users: point.users,
-    })),
-    [activityData]
+    () => buildDashboardActivityChartData(activityData, activityRange),
+    [activityData, activityRange]
   );
 
   const storagePercentage = stats.storageQuotaMb > 0
@@ -630,15 +665,31 @@ export default function DashboardPage() {
   const registrationEnabled = registrationSettings?.enable_registration ?? false;
   const registrationRequiresCode = registrationSettings?.require_registration_code ?? false;
   const registrationBlocked = registrationSettings?.self_registration_allowed === false && registrationEnabled;
+  const handleActivityRangeChange = (nextRange: DashboardActivityRange) => {
+    if (nextRange === activityRange) return;
+    setActivityRange(nextRange);
+  };
 
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
+          <p
+            className="sr-only"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            data-testid="dashboard-alert-count-live"
+          >
+            {alerts.length} open alert{alerts.length !== 1 ? 's' : ''} on the dashboard.
+          </p>
           <DashboardHeader
             serverStatusLabel={serverStatusLabel}
             serverStatusDotClass={serverStatusDotClass}
             checkedAtLabel={checkedAtLabel}
+            uptimePercent={uptimeSummary.uptimePercent}
+            lastIncidentAt={uptimeSummary.lastIncidentAt}
+            uptimeWindowDays={uptimeSummary.windowDays}
             loading={loading}
             onRefresh={loadDashboardData}
           />
@@ -649,17 +700,21 @@ export default function DashboardPage() {
             </Alert>
           )}
 
-          <AlertsBanner count={alerts.length} />
+          <AlertsBanner alerts={alerts} />
 
           <StatsGrid
             loading={loading}
             stats={stats}
             storagePercentage={storagePercentage}
+            operationalKpis={operationalKpis}
           />
 
           <ActivitySection
             activityChartData={activityChartData}
             systemHealth={systemHealth}
+            activityRange={activityRange}
+            onActivityRangeChange={handleActivityRangeChange}
+            loading={loading}
           />
 
           <div className="grid gap-6 lg:grid-cols-2">
@@ -722,6 +777,7 @@ export default function DashboardPage() {
                       </div>
                       <Checkbox
                         id="registration-enabled"
+                        aria-label="Toggle self-registration"
                         checked={registrationEnabled}
                         disabled={!registrationSettings || savingRegistrationSettings}
                         onCheckedChange={(checked) => {
@@ -740,6 +796,7 @@ export default function DashboardPage() {
                       </div>
                       <Checkbox
                         id="registration-requires-code"
+                        aria-label="Toggle registration code requirement"
                         checked={registrationRequiresCode}
                         disabled={!registrationSettings || savingRegistrationSettings}
                         onCheckedChange={(checked) => {
@@ -812,12 +869,13 @@ export default function DashboardPage() {
                                 onClick={() => copyToClipboard(code.code, 'Registration code')}
                               />
                               <AccessibleIconButton
-                                icon={isDeleting ? RefreshCw : Trash2}
+                                icon={Trash2}
                                 label={isDeleting ? 'Deleting registration code' : 'Delete registration code'}
                                 variant="ghost"
                                 onClick={() => handleRegistrationDelete(code)}
                                 disabled={isDeleting}
-                                iconClassName={isDeleting ? 'animate-spin text-destructive' : 'text-destructive'}
+                                loading={isDeleting}
+                                className="text-destructive hover:text-destructive"
                               />
                             </div>
                           </div>

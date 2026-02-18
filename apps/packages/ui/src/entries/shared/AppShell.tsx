@@ -46,18 +46,32 @@ export const AppShell: React.FC<AppShellProps> = ({
       ? document.visibilityState === "visible"
       : true
   )
+  const [keepMountedWhileHidden, setKeepMountedWhileHidden] = useState(false)
+
+  const hasOpenQuickIngestModal = React.useCallback(() => {
+    if (typeof document === "undefined") return false
+    return Boolean(
+      document.querySelector(".quick-ingest-modal .ant-modal-content")
+    )
+  }, [])
 
   useEffect(() => {
     if (!suspendWhenHidden || typeof document === "undefined") return
     const handleVisibilityChange = () => {
-      setIsVisible(document.visibilityState === "visible")
+      const visible = document.visibilityState === "visible"
+      setIsVisible(visible)
+      if (visible) {
+        setKeepMountedWhileHidden(false)
+        return
+      }
+      setKeepMountedWhileHidden(hasOpenQuickIngestModal())
     }
 
     document.addEventListener("visibilitychange", handleVisibilityChange)
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange)
     }
-  }, [suspendWhenHidden])
+  }, [hasOpenQuickIngestModal, suspendWhenHidden])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -78,7 +92,9 @@ export const AppShell: React.FC<AppShellProps> = ({
         <PageAssistProvider>
           <FontSizeProvider>
             <LocaleJsonDiagnostics />
-            {suspendWhenHidden && !isVisible ? null : children}
+            {suspendWhenHidden && !isVisible && !keepMountedWhileHidden
+              ? null
+              : children}
             {extras}
           </FontSizeProvider>
         </PageAssistProvider>

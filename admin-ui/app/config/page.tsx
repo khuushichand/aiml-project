@@ -1,402 +1,618 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
+import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Cpu,
+  Database,
+  Flag,
+  RefreshCw,
+  Server,
+  Shield,
+  Workflow,
+} from 'lucide-react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Settings, Save, RefreshCw, Shield, Database, Server, Key } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { api } from '@/lib/api-client';
 
-interface SetupStatus {
-  is_configured: boolean;
-  auth_mode: string;
-  database_connected: boolean;
-  version?: string;
-}
+type UnknownRecord = Record<string, unknown>;
 
-interface ConfigSection {
-  title: string;
-  icon: React.ReactNode;
-  fields: ConfigField[];
-}
-
-interface ConfigField {
-  key: string;
-  label: string;
-  type: 'text' | 'number' | 'boolean' | 'password';
-  description?: string;
-  sensitive?: boolean;
-}
-
-const maskConfigValue = (
-  value: unknown,
-  isSensitiveKey: (key: string) => boolean
-): unknown => {
-  if (Array.isArray(value)) {
-    return value.map((item) => maskConfigValue(item, isSensitiveKey));
-  }
-
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, val]) => {
-        if (isSensitiveKey(key)) {
-          if (val === null || val === undefined || val === '') {
-            return [key, val];
-          }
-          return [key, '********'];
-        }
-        return [key, maskConfigValue(val, isSensitiveKey)];
-      })
-    );
-  }
-
-  return value;
+type ProviderSummary = {
+  name: string;
+  enabled: boolean;
+  modelCount: number;
 };
 
+type FeatureFlagSummary = {
+  key: string;
+  enabled: boolean;
+  scope: string;
+  rolloutPercent: number;
+  targetUserCount: number;
+};
+
+type StatusValue = 'healthy' | 'degraded' | 'unhealthy' | 'unknown';
+
+type ConfigDataState = {
+  health: unknown | null;
+  stats: unknown | null;
+  featureFlags: unknown | null;
+  providers: unknown | null;
+};
+
+const numberFormatter = new Intl.NumberFormat('en-US', {
+  maximumFractionDigits: 1,
+});
+
+const integerFormatter = new Intl.NumberFormat('en-US', {
+  maximumFractionDigits: 0,
+});
+
+const asRecord = (value: unknown): UnknownRecord | null =>
+  typeof value === 'object' && value !== null ? (value as UnknownRecord) : null;
+
+const getString = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+
+const getNumber = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+const firstString = (...values: unknown[]): string | null => {
+  for (const value of values) {
+    const parsed = getString(value);
+    if (parsed) return parsed;
+  }
+  return null;
+};
+
+const formatError = (error: unknown): string =>
+  error instanceof Error && error.message ? error.message : 'Request failed';
+
+const formatMb = (value: number): string => `${numberFormatter.format(value)} MB`;
+
+const formatUptime = (value: unknown): string => {
+  const numeric = getNumber(value);
+  if (numeric === null) {
+    const asText = getString(value);
+    return asText ?? 'Unavailable';
+  }
+  const totalSeconds = Math.max(0, Math.floor(numeric));
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+};
+
+const normalizeStatus = (value: unknown): StatusValue => {
+  const text = getString(value)?.toLowerCase();
+  if (!text) return 'unknown';
+  if (['ok', 'healthy', 'ready', 'alive', 'enabled'].includes(text)) return 'healthy';
+  if (['degraded', 'warning', 'warn'].includes(text)) return 'degraded';
+  if (['unhealthy', 'error', 'critical', 'failed', 'not_ready'].includes(text)) return 'unhealthy';
+  return 'unknown';
+};
+
+const getStatusLabel = (status: StatusValue): string => {
+  if (status === 'healthy') return 'Healthy';
+  if (status === 'degraded') return 'Degraded';
+  if (status === 'unhealthy') return 'Unhealthy';
+  return 'Unknown';
+};
+
+const getBadgeVariant = (status: StatusValue): 'default' | 'secondary' | 'destructive' | 'outline' => {
+  if (status === 'healthy') return 'default';
+  if (status === 'degraded') return 'secondary';
+  if (status === 'unhealthy') return 'destructive';
+  return 'outline';
+};
+
+const parseProviders = (payload: unknown): ProviderSummary[] => {
+  const payloadRecord = asRecord(payload);
+  const rawProviders = payloadRecord ? payloadRecord.providers : null;
+  const results: ProviderSummary[] = [];
+
+  const parseProvider = (nameHint: string | null, rawValue: unknown): ProviderSummary | null => {
+    const record = asRecord(rawValue);
+    if (!record) return null;
+    const name = firstString(record.name, record.provider, nameHint) ?? 'Unknown';
+    const enabled = typeof record.enabled === 'boolean'
+      ? record.enabled
+      : typeof record.is_enabled === 'boolean'
+        ? record.is_enabled
+        : true;
+    const models = Array.isArray(record.models) ? record.models : [];
+    return { name, enabled, modelCount: models.length };
+  };
+
+  if (Array.isArray(rawProviders)) {
+    rawProviders.forEach((provider) => {
+      const parsed = parseProvider(null, provider);
+      if (parsed) results.push(parsed);
+    });
+    return results;
+  }
+
+  if (asRecord(rawProviders)) {
+    Object.entries(rawProviders as UnknownRecord).forEach(([providerName, providerValue]) => {
+      const parsed = parseProvider(providerName, providerValue);
+      if (parsed) results.push(parsed);
+    });
+    return results;
+  }
+
+  if (Array.isArray(payload)) {
+    payload.forEach((provider) => {
+      const parsed = parseProvider(null, provider);
+      if (parsed) results.push(parsed);
+    });
+    return results;
+  }
+
+  if (payloadRecord) {
+    const ignoredKeys = new Set(['default_provider', 'total_configured', 'message', 'diagnostics_ui']);
+    Object.entries(payloadRecord).forEach(([providerName, providerValue]) => {
+      if (ignoredKeys.has(providerName)) return;
+      const parsed = parseProvider(providerName, providerValue);
+      if (parsed) results.push(parsed);
+    });
+  }
+
+  return results;
+};
+
+const parseFeatureFlags = (payload: unknown): FeatureFlagSummary[] => {
+  const payloadRecord = asRecord(payload);
+  const items = payloadRecord && Array.isArray(payloadRecord.items)
+    ? payloadRecord.items
+    : Array.isArray(payload)
+      ? payload
+      : [];
+  return items.reduce<FeatureFlagSummary[]>((acc, item) => {
+    const record = asRecord(item);
+    if (!record) return acc;
+    const key = firstString(record.key, record.name) ?? '';
+    if (!key) return acc;
+    const enabled = record.enabled === true;
+    const scope = firstString(record.scope) ?? 'global';
+    const rolloutPercent = getNumber(record.rollout_percent) ?? 100;
+    const targetUserCount = Array.isArray(record.target_user_ids)
+      ? record.target_user_ids.length
+      : 0;
+    acc.push({ key, enabled, scope, rolloutPercent, targetUserCount });
+    return acc;
+  }, []);
+};
+
+const formatProviderName = (name: string): string =>
+  name
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const getCheckRecord = (checks: UnknownRecord | null, keys: string[]): UnknownRecord | null => {
+  if (!checks) return null;
+  for (const key of keys) {
+    const check = asRecord(checks[key]);
+    if (check) return check;
+  }
+  return null;
+};
+
+function SectionRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b pb-3 last:border-b-0 last:pb-0">
+      <dt className="text-sm font-medium text-muted-foreground">{label}</dt>
+      <dd className="text-right text-sm">{value}</dd>
+    </div>
+  );
+}
+
+function SectionLinks({ links }: { links: Array<{ href: string; label: string }> }) {
+  return (
+    <div className="mt-4 flex flex-wrap gap-4 text-sm">
+      {links.map((link) => (
+        <Link key={link.href} href={link.href} className="text-primary hover:underline">
+          {link.label}
+        </Link>
+      ))}
+    </div>
+  );
+}
+
 export default function ConfigPage() {
-  const [status, setStatus] = useState<SetupStatus | null>(null);
-  const [config, setConfig] = useState<Record<string, unknown>>({});
-  const [originalConfig, setOriginalConfig] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<string[]>([]);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [data, setData] = useState<ConfigDataState>({
+    health: null,
+    stats: null,
+    featureFlags: null,
+    providers: null,
+  });
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    setError('');
-
-    const [statusData, configData] = await Promise.allSettled([
-      api.getSetupStatus(),
-      api.getConfig(),
+    const [healthResult, statsResult, featureFlagsResult, providersResult] = await Promise.allSettled([
+      api.getHealth(),
+      api.getDashboardStats(),
+      api.getFeatureFlags(),
+      api.getLLMProviders(),
     ]);
 
-    if (statusData.status === 'fulfilled') {
-      setStatus(statusData.value as SetupStatus);
-    } else {
-      console.error('Failed to load status:', statusData.reason);
+    const nextErrors: string[] = [];
+    setData({
+      health: healthResult.status === 'fulfilled' ? healthResult.value : null,
+      stats: statsResult.status === 'fulfilled' ? statsResult.value : null,
+      featureFlags: featureFlagsResult.status === 'fulfilled' ? featureFlagsResult.value : null,
+      providers: providersResult.status === 'fulfilled' ? providersResult.value : null,
+    });
+
+    if (healthResult.status === 'rejected') {
+      nextErrors.push(`Health endpoint unavailable: ${formatError(healthResult.reason)}`);
+    }
+    if (statsResult.status === 'rejected') {
+      nextErrors.push(`Stats endpoint unavailable: ${formatError(statsResult.reason)}`);
+    }
+    if (featureFlagsResult.status === 'rejected') {
+      nextErrors.push(`Feature flags unavailable: ${formatError(featureFlagsResult.reason)}`);
+    }
+    if (providersResult.status === 'rejected') {
+      nextErrors.push(`Providers endpoint unavailable: ${formatError(providersResult.reason)}`);
     }
 
-    if (configData.status === 'fulfilled' && configData.value) {
-      setConfig(configData.value as Record<string, unknown>);
-      setOriginalConfig(configData.value as Record<string, unknown>);
-    } else if (configData.status === 'rejected') {
-      console.error('Failed to load configuration:', configData.reason);
-      setError(
-        configData.reason instanceof Error
-          ? configData.reason.message
-          : 'Failed to load configuration'
-      );
-    }
-
+    setErrors(nextErrors);
+    setLastUpdated(new Date().toISOString());
     setLoading(false);
   }, []);
 
   useEffect(() => {
-    void loadData();
+    const timerId = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+    return () => window.clearTimeout(timerId);
   }, [loadData]);
 
-  const handleSave = async () => {
-    try {
-      setSaving(true);
-      setError('');
-      setSuccess('');
+  const {
+    authMode,
+    authStatus,
+    sessionSummary,
+    mfaPolicySummary,
+    storageBackend,
+    storagePath,
+    capacitySummary,
+    featureSummary,
+    rolloutSummary,
+    defaultProviderLabel,
+    providerSummary,
+    providerItems,
+    serverVersion,
+    serverUptime,
+    pythonVersion,
+    operatingSystem,
+    deploymentMode,
+    serverTimestamp,
+    serviceStatuses,
+  } = useMemo(() => {
+    const health = asRecord(data.health);
+    const checks = asRecord(health?.checks);
+    const stats = asRecord(data.stats);
+    const storageStats = asRecord(stats?.storage);
+    const sessionStats = asRecord(stats?.sessions);
+    const featureFlags = parseFeatureFlags(data.featureFlags);
+    const providers = parseProviders(data.providers);
 
-      await api.updateConfig(config);
-      setSuccess('Configuration saved successfully. Some changes may require a server restart.');
-      setOriginalConfig(config);
-    } catch (err: unknown) {
-      console.error('Failed to save configuration:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to save configuration');
-    } finally {
-      setSaving(false);
-    }
-  };
+    const authModeValue = firstString(health?.auth_mode) ?? 'Unavailable';
+    const authStatusValue = normalizeStatus(health?.status);
+    const sessionsActive = getNumber(sessionStats?.active);
+    const sessionsUnique = getNumber(sessionStats?.unique_users);
+    const sessionSummaryValue =
+      sessionsActive !== null && sessionsUnique !== null
+        ? `${integerFormatter.format(sessionsActive)} active / ${integerFormatter.format(sessionsUnique)} unique users`
+        : 'Unavailable';
 
-  const handleReset = () => {
-    setConfig(originalConfig);
-    setError('');
-    setSuccess('');
-  };
+    const mfaFlags = featureFlags.filter((flag) => flag.key.toLowerCase().includes('mfa'));
+    const mfaPolicyValue =
+      mfaFlags.length === 0
+        ? 'No MFA policy flag found'
+        : mfaFlags.some((flag) => flag.enabled)
+          ? `Enabled by ${mfaFlags.filter((flag) => flag.enabled).length} flag(s)`
+          : 'Configured but disabled';
 
-  const updateConfigValue = (key: string, value: unknown) => {
-    setConfig((prev) => ({
-      ...prev,
-      [key]: value,
-    }));
-    setSuccess('');
-  };
+    const databaseCheck = getCheckRecord(checks, ['database']);
+    const chachaCheck = getCheckRecord(checks, ['chacha_notes']);
 
-  const hasChanges = JSON.stringify(config) !== JSON.stringify(originalConfig);
+    const storageBackendValue = firstString(
+      databaseCheck?.backend,
+      databaseCheck?.database,
+      databaseCheck?.engine
+    ) ?? 'Unavailable';
+    const storagePathValue = firstString(
+      chachaCheck?.db_path,
+      chachaCheck?.path,
+      chachaCheck?.database_path
+    ) ?? 'Unavailable';
 
-  // Define configuration sections
-  const configSections: ConfigSection[] = [
-    {
-      title: 'Authentication',
-      icon: <Shield className="h-5 w-5" />,
-      fields: [
-        { key: 'auth_mode', label: 'Auth Mode', type: 'text', description: 'single_user or multi_user' },
-        { key: 'jwt_secret_key', label: 'JWT Secret', type: 'password', sensitive: true },
-        { key: 'access_token_expire_minutes', label: 'Token Expiry (minutes)', type: 'number' },
-      ],
-    },
-    {
-      title: 'Database',
-      icon: <Database className="h-5 w-5" />,
-      fields: [
-        { key: 'database_url', label: 'Database URL', type: 'text', description: 'SQLite or PostgreSQL connection string' },
-        { key: 'media_db_path', label: 'Media DB Path', type: 'text' },
-      ],
-    },
-    {
-      title: 'Server',
-      icon: <Server className="h-5 w-5" />,
-      fields: [
-        { key: 'host', label: 'Host', type: 'text' },
-        { key: 'port', label: 'Port', type: 'number' },
-        { key: 'debug', label: 'Debug Mode', type: 'boolean' },
-        { key: 'log_level', label: 'Log Level', type: 'text', description: 'DEBUG, INFO, WARNING, ERROR' },
-      ],
-    },
-    {
-      title: 'API Keys',
-      icon: <Key className="h-5 w-5" />,
-      fields: [
-        { key: 'api_key_length', label: 'API Key Length', type: 'number' },
-        { key: 'api_key_prefix', label: 'API Key Prefix', type: 'text' },
-      ],
-    },
-  ];
+    const usedMb = getNumber(storageStats?.total_used_mb);
+    const quotaMb = getNumber(storageStats?.total_quota_mb);
+    const usagePercent = usedMb !== null && quotaMb !== null && quotaMb > 0
+      ? Math.round((usedMb / quotaMb) * 100)
+      : null;
+    const capacityValue =
+      usedMb !== null && quotaMb !== null
+        ? `${formatMb(usedMb)} / ${formatMb(quotaMb)}${usagePercent !== null ? ` (${usagePercent}%)` : ''}`
+        : 'Unavailable';
 
-  const sensitiveKeySet = new Set(
-    configSections
-      .flatMap((section) => section.fields)
-      .filter((field) => field.sensitive)
-      .map((field) => field.key.toLowerCase())
-  );
+    const enabledFlags = featureFlags.filter((flag) => flag.enabled).length;
+    const featureSummaryValue =
+      featureFlags.length > 0
+        ? `${enabledFlags} enabled of ${featureFlags.length} total`
+        : 'No feature flags configured';
+    const rolloutRules = featureFlags.filter(
+      (flag) => flag.rolloutPercent < 100 || flag.targetUserCount > 0
+    ).length;
+    const rolloutSummaryValue =
+      featureFlags.length > 0
+        ? `${rolloutRules} targeted/partial rollout rule(s)`
+        : 'No rollout rules configured';
 
-  const isSensitiveKey = (key: string) => {
-    const normalized = key.toLowerCase();
-    if (sensitiveKeySet.has(normalized)) return true;
-    if (normalized === 'api_key' || normalized.endsWith('_api_key')) return true;
-    if (normalized.includes('secret') || normalized.includes('password')) return true;
-    return false;
-  };
+    const defaultProvider = firstString(asRecord(data.providers)?.default_provider);
+    const enabledProviders = providers.filter((provider) => provider.enabled).length;
+    const providerSummaryValue =
+      providers.length > 0
+        ? `${enabledProviders} enabled of ${providers.length} configured`
+        : 'No providers configured';
+    const defaultProviderValue = defaultProvider
+      ? formatProviderName(defaultProvider)
+      : 'Not set';
 
-  const maskedConfig = maskConfigValue(config, isSensitiveKey);
+    const serviceStatusesValue: Array<{ name: string; status: StatusValue }> = [
+      { name: 'API Core', status: authStatusValue },
+      { name: 'Database', status: normalizeStatus(getCheckRecord(checks, ['database'])?.status) },
+      { name: 'Metrics', status: normalizeStatus(getCheckRecord(checks, ['metrics'])?.status) },
+      { name: 'RAG', status: normalizeStatus(getCheckRecord(checks, ['rag'])?.status) },
+      { name: 'TTS', status: normalizeStatus(getCheckRecord(checks, ['tts', 'audio_tts'])?.status) },
+      { name: 'STT', status: normalizeStatus(getCheckRecord(checks, ['stt', 'audio_stt'])?.status) },
+      { name: 'MCP', status: normalizeStatus(getCheckRecord(checks, ['mcp', 'mcp_unified'])?.status) },
+    ];
 
-  const renderField = (field: ConfigField) => {
-    const value = config[field.key];
-    const inputValue =
-      typeof value === 'string' || typeof value === 'number'
-        ? value
-        : value == null
-          ? ''
-          : String(value);
+    return {
+      authMode: authModeValue,
+      authStatus: authStatusValue,
+      sessionSummary: sessionSummaryValue,
+      mfaPolicySummary: mfaPolicyValue,
+      storageBackend: storageBackendValue,
+      storagePath: storagePathValue,
+      capacitySummary: capacityValue,
+      featureSummary: featureSummaryValue,
+      rolloutSummary: rolloutSummaryValue,
+      defaultProviderLabel: defaultProviderValue,
+      providerSummary: providerSummaryValue,
+      providerItems: providers,
+      serverVersion: firstString(health?.version, health?.app_version, health?.release) ?? 'Unavailable',
+      serverUptime: formatUptime(health?.uptime_seconds ?? health?.uptime_sec ?? health?.uptime),
+      pythonVersion: firstString(health?.python_version, health?.python) ?? 'Unavailable',
+      operatingSystem: firstString(health?.os, health?.platform) ?? 'Unavailable',
+      deploymentMode: firstString(health?.deployment_mode, health?.environment) ?? 'Unavailable',
+      serverTimestamp: firstString(health?.timestamp) ?? 'Unavailable',
+      serviceStatuses: serviceStatusesValue,
+    };
+  }, [data]);
 
-    if (field.type === 'boolean') {
-      return (
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id={field.key}
-            checked={Boolean(value)}
-            onChange={(e) => updateConfigValue(field.key, e.target.checked)}
-            className="h-4 w-4 rounded border-primary"
-          />
-          <Label htmlFor={field.key}>{field.label}</Label>
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-2">
-        <Label htmlFor={field.key}>{field.label}</Label>
-        <Input
-          id={field.key}
-          type={field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'}
-          value={inputValue}
-          onChange={(e) => {
-            if (field.type === 'number') {
-              if (e.target.value === '') {
-                updateConfigValue(field.key, '');
-                setFieldErrors((prev) => ({ ...prev, [field.key]: '' }));
-                return;
-              }
-              const parsed = parseInt(e.target.value, 10);
-              if (Number.isNaN(parsed)) {
-                setFieldErrors((prev) => ({ ...prev, [field.key]: 'Must be a valid number' }));
-                return;
-              }
-              updateConfigValue(field.key, parsed);
-              setFieldErrors((prev) => ({ ...prev, [field.key]: '' }));
-              return;
-            }
-            updateConfigValue(field.key, e.target.value);
-          }}
-          placeholder={field.sensitive ? '********' : undefined}
-        />
-        {field.description && (
-          <p className="text-xs text-muted-foreground">{field.description}</p>
-        )}
-        {fieldErrors[field.key] && (
-          <p className="text-xs text-red-600">{fieldErrors[field.key]}</p>
-        )}
-      </div>
-    );
-  };
+  const hasLoadedData = data.health !== null || data.stats !== null || data.featureFlags !== null || data.providers !== null;
 
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
-          <div className="p-4 lg:p-8">
-            <div className="mb-8 flex items-center justify-between">
-              <div>
-                <h1 className="text-3xl font-bold">Configuration</h1>
-                <p className="text-muted-foreground">
-                  Manage system settings and configuration
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={loadData} disabled={loading}>
-                  <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                  Refresh
-                </Button>
-                <Button variant="outline" onClick={handleReset} disabled={!hasChanges || saving}>
-                  Reset
-                </Button>
-                <Button onClick={handleSave} disabled={!hasChanges || saving}>
-                  <Save className="mr-2 h-4 w-4" />
-                  {saving ? 'Saving...' : 'Save Changes'}
-                </Button>
-              </div>
+        <div className="p-4 lg:p-8">
+          <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold">System Configuration Overview</h1>
+              <p className="text-muted-foreground">
+                Read-only platform configuration and subsystem status at a glance.
+              </p>
             </div>
+            <Button variant="outline" onClick={() => void loadData()} loading={loading} loadingText="Refreshing...">
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </Button>
+          </div>
 
-            {error && (
-              <Alert variant="destructive" className="mb-6">
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
+          {lastUpdated && (
+            <p className="mb-4 text-sm text-muted-foreground">
+              Last updated: {new Date(lastUpdated).toLocaleString()}
+            </p>
+          )}
 
-            {success && (
-              <Alert className="mb-6 bg-green-50 border-green-200">
-                <AlertDescription className="text-green-800">{success}</AlertDescription>
-              </Alert>
-            )}
-
-            {/* Status Card */}
-            <Card className="mb-6">
-              <CardContent className="pt-6">
-                <div className="flex items-start gap-4">
-                  <Settings className="h-8 w-8 text-primary mt-1" />
-                  <div className="flex-1">
-                    <h3 className="font-semibold">System Status</h3>
-                    <div className="flex flex-wrap gap-4 mt-2">
-                      {status ? (
-                        <>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm text-muted-foreground">Configured:</span>
-                            <Badge variant={status.is_configured ? 'default' : 'destructive'}>
-                              {status.is_configured ? 'Yes' : 'No'}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm text-muted-foreground">Auth Mode:</span>
-                            <Badge variant="outline">{status.auth_mode}</Badge>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm text-muted-foreground">Database:</span>
-                            <Badge variant={status.database_connected ? 'default' : 'destructive'}>
-                              {status.database_connected ? 'Connected' : 'Disconnected'}
-                            </Badge>
-                          </div>
-                          {status.version && (
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm text-muted-foreground">Version:</span>
-                              <Badge variant="secondary">{status.version}</Badge>
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <span className="text-sm text-muted-foreground">Loading status...</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Warning for sensitive settings */}
-            <Alert className="mb-6 bg-yellow-50 border-yellow-200">
-              <AlertDescription className="text-yellow-800">
-                <strong>Warning:</strong> Some settings contain sensitive information and may require a server restart after changes.
-                Be careful when modifying authentication or database settings.
+          {errors.length > 0 && (
+            <Alert variant="destructive" className="mb-6">
+              <AlertDescription>
+                <p className="font-medium">Some configuration data could not be loaded:</p>
+                <ul className="mt-2 list-disc pl-4">
+                  {errors.map((error) => (
+                    <li key={error}>{error}</li>
+                  ))}
+                </ul>
               </AlertDescription>
             </Alert>
+          )}
 
-            {loading ? (
+          {loading && !hasLoadedData ? (
+            <Card>
+              <CardContent className="pt-6">
+                <div className="text-center text-muted-foreground py-8">Loading configuration overview...</div>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid gap-6 lg:grid-cols-2">
               <Card>
-                <CardContent className="pt-6">
-                  <div className="text-center text-muted-foreground py-8">Loading configuration...</div>
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="grid gap-6 lg:grid-cols-2">
-                {configSections.map((section) => (
-                  <Card key={section.title}>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        {section.icon}
-                        {section.title}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      {section.fields.map((field) => (
-                        <div key={field.key}>{renderField(field)}</div>
-                      ))}
-                    </CardContent>
-                  </Card>
-                ))}
-
-                {/* Raw Config View */}
-                <Card className="lg:col-span-2">
-                  <CardHeader>
-                    <CardTitle>Raw Configuration</CardTitle>
-                    <CardDescription>
-                      View all configuration values as JSON
-                    </CardDescription>
-                  </CardHeader>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-xl">
+                    <Shield className="h-5 w-5" />
+                    Authentication
+                  </CardTitle>
+                  <CardDescription>Current authentication mode and session posture.</CardDescription>
+                </CardHeader>
                 <CardContent>
-                  <pre className="bg-muted p-4 rounded-lg overflow-x-auto text-sm">
-                      {JSON.stringify(maskedConfig, null, 2)}
-                  </pre>
+                  <dl className="space-y-3">
+                    <SectionRow label="Auth mode" value={authMode} />
+                    <SectionRow
+                      label="Auth health"
+                      value={<Badge variant={getBadgeVariant(authStatus)}>{getStatusLabel(authStatus)}</Badge>}
+                    />
+                    <SectionRow label="Active sessions" value={sessionSummary} />
+                    <SectionRow label="MFA policy" value={mfaPolicySummary} />
+                  </dl>
+                  <SectionLinks
+                    links={[
+                      { href: '/security', label: 'Manage security' },
+                      { href: '/users', label: 'Review users' },
+                    ]}
+                  />
                 </CardContent>
               </Card>
-              </div>
-            )}
 
-            {hasChanges && (
-              <div className="mt-6 p-4 bg-muted rounded-lg flex items-center justify-between">
-                <span className="text-sm">
-                  You have unsaved changes
-                </span>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={handleReset}>
-                    Discard
-                  </Button>
-                  <Button size="sm" onClick={handleSave} disabled={saving}>
-                    {saving ? 'Saving...' : 'Save Changes'}
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-xl">
+                    <Database className="h-5 w-5" />
+                    Storage
+                  </CardTitle>
+                  <CardDescription>Backend connectivity and aggregate storage utilization.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <dl className="space-y-3">
+                    <SectionRow label="Database backend" value={storageBackend} />
+                    <SectionRow label="Storage path" value={storagePath} />
+                    <SectionRow label="Capacity" value={capacitySummary} />
+                  </dl>
+                  <SectionLinks
+                    links={[
+                      { href: '/usage', label: 'View usage analytics' },
+                      { href: '/data-ops', label: 'Open Data Ops' },
+                    ]}
+                  />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-xl">
+                    <Flag className="h-5 w-5" />
+                    Features
+                  </CardTitle>
+                  <CardDescription>Feature flag state and rollout targeting summary.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <dl className="space-y-3">
+                    <SectionRow label="Feature flags" value={featureSummary} />
+                    <SectionRow label="Rollout rules" value={rolloutSummary} />
+                  </dl>
+                  <SectionLinks links={[{ href: '/flags', label: 'Manage feature flags' }]} />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-xl">
+                    <Cpu className="h-5 w-5" />
+                    Providers
+                  </CardTitle>
+                  <CardDescription>Configured LLM providers and default routing target.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <dl className="space-y-3">
+                    <SectionRow label="Provider summary" value={providerSummary} />
+                    <SectionRow label="Default provider" value={defaultProviderLabel} />
+                  </dl>
+                  <div className="mt-4 space-y-2">
+                    {providerItems.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No providers configured.</p>
+                    ) : (
+                      providerItems.map((provider) => (
+                        <div key={provider.name} className="flex items-center justify-between rounded-md border px-3 py-2">
+                          <span className="text-sm">
+                            {formatProviderName(provider.name)} ({provider.modelCount} model{provider.modelCount === 1 ? '' : 's'})
+                          </span>
+                          <Badge variant={provider.enabled ? 'default' : 'outline'}>
+                            {provider.enabled ? 'Enabled' : 'Disabled'}
+                          </Badge>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  <SectionLinks
+                    links={[
+                      { href: '/providers', label: 'Manage providers' },
+                      { href: '/byok', label: 'Manage BYOK keys' },
+                    ]}
+                  />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-xl">
+                    <Workflow className="h-5 w-5" />
+                    Services
+                  </CardTitle>
+                  <CardDescription>Subsystem health derived from the aggregate health checks.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {serviceStatuses.map((service) => (
+                      <div key={service.name} className="flex items-center justify-between rounded-md border px-3 py-2">
+                        <span className="text-sm">{service.name}</span>
+                        <Badge variant={getBadgeVariant(service.status)}>
+                          {getStatusLabel(service.status)}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                  <SectionLinks
+                    links={[
+                      { href: '/monitoring', label: 'Open monitoring' },
+                      { href: '/incidents', label: 'View incidents' },
+                    ]}
+                  />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-xl">
+                    <Server className="h-5 w-5" />
+                    Server
+                  </CardTitle>
+                  <CardDescription>Runtime metadata, versioning, and deployment context.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <dl className="space-y-3">
+                    <SectionRow label="Version" value={serverVersion} />
+                    <SectionRow label="Uptime" value={serverUptime} />
+                    <SectionRow label="Python version" value={pythonVersion} />
+                    <SectionRow label="Operating system" value={operatingSystem} />
+                    <SectionRow label="Deployment mode" value={deploymentMode} />
+                    <SectionRow label="Health timestamp" value={serverTimestamp} />
+                  </dl>
+                  <SectionLinks
+                    links={[
+                      { href: '/logs', label: 'Inspect logs' },
+                      { href: '/monitoring', label: 'Check live metrics' },
+                    ]}
+                  />
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </div>
       </ResponsiveLayout>
     </PermissionGuard>
   );

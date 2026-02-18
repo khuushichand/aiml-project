@@ -12,6 +12,7 @@ import { Link } from "react-router-dom"
 import { fetchChatModels } from "@/services/tldw-server"
 import { useStorage } from "@plasmohq/storage/hook"
 import { getProviderDisplayName } from "@/utils/provider-registry"
+import { resolveStartupSelectedModel } from "@/utils/model-startup-selection"
 import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import type { GeneratedCharacter } from "@/services/character-generation"
 
@@ -142,7 +143,7 @@ export const GenerateCharacterPanel: React.FC<GenerateCharacterPanelProps> = ({
 }) => {
   const { t } = useTranslation(["settings", "common"])
   const [concept, setConcept] = React.useState("")
-  const [selectedModel, setSelectedModel] = useStorage<string | null>(
+  const [selectedModel, setSelectedModel, selectedModelMeta] = useStorage<string | null>(
     "characterGenModel",
     null
   )
@@ -203,10 +204,15 @@ export const GenerateCharacterPanel: React.FC<GenerateCharacterPanelProps> = ({
 
   // Auto-select first model if none selected
   React.useEffect(() => {
-    if (!selectedModel && hasModels && models) {
-      setSelectedModel(models[0].model)
+    const nextModel = resolveStartupSelectedModel({
+      currentModel: selectedModel,
+      models,
+      isCurrentModelHydrating: selectedModelMeta.isLoading
+    })
+    if (nextModel) {
+      setSelectedModel(nextModel)
     }
-  }, [selectedModel, hasModels, models, setSelectedModel])
+  }, [models, selectedModel, selectedModelMeta.isLoading, setSelectedModel])
 
   const handleGenerate = () => {
     if (!concept.trim()) return

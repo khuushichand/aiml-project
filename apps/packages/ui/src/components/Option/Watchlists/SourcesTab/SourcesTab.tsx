@@ -3,6 +3,7 @@ import {
   Button,
   Empty,
   Input,
+  Modal,
   Popconfirm,
   Select,
   Space,
@@ -17,6 +18,7 @@ import { Download, Edit2, ExternalLink, Eye, Plus, RefreshCw, Trash2, UploadClou
 import { useTranslation } from "react-i18next"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
+  checkWatchlistSourcesNow,
   createWatchlistSource,
   deleteWatchlistSource,
   exportOpml,
@@ -35,6 +37,11 @@ import {
   getSourcesTableEmptyDescription,
   shouldShowUnifiedWatchlistsEmptyState
 } from "./empty-state"
+import {
+  normalizeSourceIds,
+  resolveCheckNowTargets,
+  shouldConfirmMultiSourceCheck
+} from "./check-now-utils"
 
 const { Search } = Input
 
@@ -73,6 +80,7 @@ export const SourcesTab: React.FC = () => {
   const setTags = useWatchlistsStore((s) => s.setTags)
   const setGroups = useWatchlistsStore((s) => s.setGroups)
   const setGroupsLoading = useWatchlistsStore((s) => s.setGroupsLoading)
+  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const setSelectedGroupId = useWatchlistsStore((s) => s.setSelectedGroupId)
   const setSelectedTagName = useWatchlistsStore((s) => s.setSelectedTagName)
   const openSourceForm = useWatchlistsStore((s) => s.openSourceForm)
@@ -87,12 +95,17 @@ export const SourcesTab: React.FC = () => {
   )
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [bulkWorking, setBulkWorking] = useState(false)
+  const [checkingSourceIds, setCheckingSourceIds] = useState<number[]>([])
   const [importOpen, setImportOpen] = useState(false)
   const [seenDrawerSourceId, setSeenDrawerSourceId] = useState<number | null>(null)
 
   const selectedSources = useMemo(
     () => sources.filter((source) => selectedRowKeys.includes(source.id)),
     [sources, selectedRowKeys]
+  )
+  const selectedSourceIds = useMemo(
+    () => selectedSources.map((source) => source.id),
+    [selectedSources]
   )
   const hasActiveFilters = useMemo(
     () =>
@@ -318,6 +331,105 @@ export const SourcesTab: React.FC = () => {
     }
   }
 
+  const executeCheckNow = useCallback(async (sourceIds: number[]) => {
+    const normalizedIds = normalizeSourceIds(sourceIds)
+    if (normalizedIds.length === 0) return
+
+    setCheckingSourceIds((prev) => Array.from(new Set([...prev, ...normalizedIds])))
+    try {
+      const result = await checkWatchlistSourcesNow(normalizedIds)
+      const successCount = typeof result.success === "number"
+        ? result.success
+        : (Array.isArray(result.items) ? result.items.filter((item) => item.status === "ok").length : 0)
+      const failedCount = typeof result.failed === "number"
+        ? result.failed
+        : Math.max(normalizedIds.length - successCount, 0)
+      const viewRunsAction = (
+        <Button
+          type="link"
+          size="small"
+          className="px-0"
+          onClick={() => setActiveTab("runs")}
+        >
+          {t("watchlists:sources.viewRuns", "View Runs")}
+        </Button>
+      )
+
+      if (failedCount === 0) {
+        message.success({
+          content: (
+            <span>
+              {t(
+                "watchlists:sources.checkNowSuccess",
+                "Checked {{count}} source{{plural}}",
+                {
+                  count: successCount,
+                  plural: successCount === 1 ? "" : "s"
+                }
+              )}{" "}
+              {viewRunsAction}
+            </span>
+          )
+        })
+      } else if (successCount > 0) {
+        message.warning({
+          content: (
+            <span>
+              {t(
+                "watchlists:sources.checkNowPartial",
+                "Checked {{success}} source{{successPlural}}, {{failed}} failed",
+                {
+                  success: successCount,
+                  successPlural: successCount === 1 ? "" : "s",
+                  failed: failedCount
+                }
+              )}{" "}
+              {viewRunsAction}
+            </span>
+          )
+        })
+      } else {
+        message.error(t("watchlists:sources.checkNowError", "Failed to check selected sources"))
+      }
+
+      await loadSources()
+    } catch (err) {
+      console.error("Failed to check sources now:", err)
+      message.error(t("watchlists:sources.checkNowError", "Failed to check selected sources"))
+    } finally {
+      setCheckingSourceIds((prev) => prev.filter((id) => !normalizedIds.includes(id)))
+    }
+  }, [loadSources, setActiveTab, t])
+
+  const requestCheckNow = useCallback((sourceIds: number[]) => {
+    const normalizedIds = normalizeSourceIds(sourceIds)
+    if (normalizedIds.length === 0) return
+
+    if (shouldConfirmMultiSourceCheck(normalizedIds)) {
+      Modal.confirm({
+        title: t(
+          "watchlists:sources.checkNowMultiConfirmTitle",
+          "Check {{count}} sources now?",
+          { count: normalizedIds.length }
+        ),
+        content: t(
+          "watchlists:sources.checkNowMultiConfirmDescription",
+          "This will manually force a refresh for all selected sources."
+        ),
+        okText: t("watchlists:sources.checkNow", "Check Now"),
+        cancelText: t("common:cancel", "Cancel"),
+        onOk: () => executeCheckNow(normalizedIds)
+      })
+      return
+    }
+
+    void executeCheckNow(normalizedIds)
+  }, [executeCheckNow, t])
+
+  const resolveCheckNowTargetIds = useCallback((sourceId: number): number[] => {
+    return resolveCheckNowTargets(sourceId, selectedSourceIds)
+  }, [selectedSourceIds])
+
   // Handle form submit
   const handleFormSubmit = async (
     values: { name: string; url: string; source_type: SourceType; tags: string[] }
@@ -427,17 +539,46 @@ export const SourcesTab: React.FC = () => {
       title: t("watchlists:sources.columns.lastScraped", "Last Scraped"),
       dataIndex: "last_scraped_at",
       key: "last_scraped_at",
-      width: 150,
-      render: (date: string | null) =>
-        date ? (
-          <span className="text-sm text-text-muted">
-            {formatRelativeTime(date, t)}
-          </span>
-        ) : (
-          <span className="text-sm text-text-subtle">
-            {t("watchlists:sources.never", "Never")}
-          </span>
+      width: 190,
+      render: (date: string | null, record) => {
+        const targetIds = resolveCheckNowTargetIds(record.id)
+        const checkNowLoading = targetIds.some((id) => checkingSourceIds.includes(id))
+        const checkNowTooltip = targetIds.length > 1
+          ? t(
+              "watchlists:sources.checkNowSelectedTooltip",
+              "Check now for {{count}} selected sources",
+              { count: targetIds.length }
+            )
+          : t("watchlists:sources.checkNowTooltip", "Check now")
+
+        return (
+          <div className="flex items-center gap-1.5">
+            {date ? (
+              <span className="text-sm text-text-muted">
+                {formatRelativeTime(date, t)}
+              </span>
+            ) : (
+              <span className="text-sm text-text-subtle">
+                {t("watchlists:sources.never", "Never")}
+              </span>
+            )}
+            <Tooltip title={checkNowTooltip}>
+              <Button
+                type="text"
+                size="small"
+                shape="circle"
+                icon={<RefreshCw className="h-3.5 w-3.5" />}
+                loading={checkNowLoading}
+                aria-label={checkNowTooltip}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  requestCheckNow(targetIds)
+                }}
+              />
+            </Tooltip>
+          </div>
         )
+      }
     },
     {
       title: t("watchlists:sources.columns.active", "Active"),
@@ -571,6 +712,15 @@ export const SourcesTab: React.FC = () => {
           <span className="text-text-muted">
             {t("watchlists:sources.selectedCount", "{{count}} selected", { count: selectedRowKeys.length })}
           </span>
+          <Button
+            size="small"
+            icon={<RefreshCw className="h-3.5 w-3.5" />}
+            onClick={() => requestCheckNow(selectedSourceIds)}
+            loading={selectedSourceIds.some((id) => checkingSourceIds.includes(id))}
+            disabled={bulkWorking}
+          >
+            {t("watchlists:sources.checkNow", "Check Now")}
+          </Button>
           <Button size="small" onClick={() => handleBulkToggle(true)} loading={bulkWorking}>
             {t("watchlists:sources.bulkEnable", "Enable")}
           </Button>

@@ -29,12 +29,19 @@ SUPPORTED_WEBSEARCH_ENGINES = {
     "4chan",
 }
 
+WEBSEARCH_ENGINE_ALIASES = {
+    "searxng": "searx",
+}
+
 
 class WebSearchRequest(BaseModel):
     query: str = Field(..., description="User query to search the web for")
     engine: str = Field(
         "google",
-        description="Search engine to use. Supported: google, duckduckgo, brave, kagi, tavily, searx, serper, exa, firecrawl, 4chan",
+        description=(
+            "Search engine to use. Supported: google, duckduckgo, brave, kagi, tavily, "
+            "searx (alias: searxng), serper, exa, firecrawl, 4chan"
+        ),
     )
     result_count: int = Field(10, ge=1, le=50)
     content_country: str = Field("US")
@@ -86,6 +93,7 @@ class WebSearchRequest(BaseModel):
     @classmethod
     def validate_engine(cls, value: str) -> str:
         engine = value.lower()
+        engine = WEBSEARCH_ENGINE_ALIASES.get(engine, engine)
         if engine not in SUPPORTED_WEBSEARCH_ENGINES:
             allowed = ", ".join(sorted(SUPPORTED_WEBSEARCH_ENGINES))
             raise ValueError(f"Unsupported engine '{value}'. Supported engines: {allowed}")

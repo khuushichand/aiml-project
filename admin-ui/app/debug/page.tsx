@@ -141,9 +141,9 @@ export default function DebugPage() {
                       onChange={(e) => setApiKeyInput(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleResolveApiKey()}
                     />
-                    <Button onClick={handleResolveApiKey} disabled={apiKeyLoading}>
+                    <Button onClick={handleResolveApiKey} disabled={apiKeyLoading} loading={apiKeyLoading} loadingText="Looking up...">
                       <Search className="mr-2 h-4 w-4" />
-                      {apiKeyLoading ? 'Looking up...' : 'Resolve'}
+                      Resolve
                     </Button>
                   </div>
                 </div>
@@ -211,9 +211,9 @@ export default function DebugPage() {
                       onChange={(e) => setBudgetKeyInput(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleGetBudgetSummary()}
                     />
-                    <Button onClick={handleGetBudgetSummary} disabled={budgetLoading}>
+                    <Button onClick={handleGetBudgetSummary} disabled={budgetLoading} loading={budgetLoading} loadingText="Loading...">
                       <Search className="mr-2 h-4 w-4" />
-                      {budgetLoading ? 'Loading...' : 'Check'}
+                      Check
                     </Button>
                   </div>
                 </div>

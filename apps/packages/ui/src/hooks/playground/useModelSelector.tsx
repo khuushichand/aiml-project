@@ -41,7 +41,7 @@ export function useModelSelector({
 
   const [modelDropdownOpen, setModelDropdownOpen] = React.useState(false)
   const [modelSearchQuery, setModelSearchQuery] = React.useState("")
-  const [favoriteModels, setFavoriteModels] = useStorage<string[]>(
+  const [favoriteModels, setFavoriteModels, favoriteModelsMeta] = useStorage<string[]>(
     "favoriteChatModels",
     []
   )
@@ -441,6 +441,7 @@ export function useModelSelector({
     apiModelLabel,
     modelSelectorWarning,
     favoriteModels,
+    favoriteModelsIsLoading: favoriteModelsMeta.isLoading,
     favoriteModelSet,
     toggleFavoriteModel,
     filteredModels,

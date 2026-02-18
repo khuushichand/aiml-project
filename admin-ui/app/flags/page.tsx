@@ -35,6 +35,9 @@ type FeatureFlagItem = {
   description?: string | null;
   org_id?: number | null;
   user_id?: number | null;
+  target_user_ids?: number[];
+  rollout_percent?: number;
+  variant_value?: string | null;
   updated_at?: string | null;
   updated_by?: string | null;
   history?: {
@@ -42,6 +45,24 @@ type FeatureFlagItem = {
     enabled: boolean;
     actor?: string | null;
     note?: string | null;
+    before?: {
+      scope?: 'global' | 'org' | 'user';
+      enabled?: boolean;
+      org_id?: number | null;
+      user_id?: number | null;
+      target_user_ids?: number[];
+      rollout_percent?: number;
+      variant_value?: string | null;
+    } | null;
+    after?: {
+      scope?: 'global' | 'org' | 'user';
+      enabled?: boolean;
+      org_id?: number | null;
+      user_id?: number | null;
+      target_user_ids?: number[];
+      rollout_percent?: number;
+      variant_value?: string | null;
+    } | null;
   }[];
 };
 
@@ -68,6 +89,14 @@ const parsePositiveInt = (value: string) => {
   if (!trimmed) return null;
   const parsed = Number(trimmed);
   if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+};
+
+const parseRolloutPercent = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) return null;
   return parsed;
 };
 
@@ -109,6 +138,54 @@ const parseEmailList = (value: string): ParsedList<string> => {
 const formatFlagDate = (value?: string | null) =>
   formatDateTime(value, { fallback: '—' });
 
+const formatVariant = (value?: string | null) => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : '—';
+};
+
+const formatTargetUsers = (values?: number[]) => {
+  if (!Array.isArray(values) || values.length === 0) {
+    return 'All users in scope';
+  }
+  return values.join(', ');
+};
+
+const getFlagTargetLabel = (flag: FeatureFlagItem) => {
+  if (flag.scope === 'global') return 'Global';
+  if (flag.scope === 'org') return `Org ${flag.org_id ?? '—'}`;
+  return `User ${flag.user_id ?? '—'}`;
+};
+
+const getDiffRows = (
+  historyEntry: NonNullable<FeatureFlagItem['history']>[number]
+): Array<{ field: string; before: string; after: string }> => {
+  const before = historyEntry.before;
+  const after = historyEntry.after;
+  if (!before || !after) return [];
+
+  const rows: Array<{ field: string; before: string; after: string }> = [];
+  const pushDiff = (field: string, beforeValue: string, afterValue: string) => {
+    if (beforeValue === afterValue) return;
+    rows.push({ field, before: beforeValue, after: afterValue });
+  };
+
+  pushDiff('Scope', before.scope ?? '—', after.scope ?? '—');
+  pushDiff(
+    'Target users',
+    formatTargetUsers(before.target_user_ids),
+    formatTargetUsers(after.target_user_ids)
+  );
+  pushDiff(
+    'Rollout %',
+    `${before.rollout_percent ?? 100}%`,
+    `${after.rollout_percent ?? 100}%`
+  );
+  pushDiff('Variant', formatVariant(before.variant_value), formatVariant(after.variant_value));
+  pushDiff('Enabled', before.enabled ? 'true' : 'false', after.enabled ? 'true' : 'false');
+
+  return rows;
+};
+
 const getFlagId = (flag: FeatureFlagItem) =>
   `${flag.key}:${flag.scope}:${flag.org_id ?? ''}:${flag.user_id ?? ''}`;
 
@@ -137,6 +214,9 @@ export default function FlagsPage() {
   const [flagDescription, setFlagDescription] = useState('');
   const [flagOrgId, setFlagOrgId] = useState('');
   const [flagUserId, setFlagUserId] = useState('');
+  const [flagTargetUsers, setFlagTargetUsers] = useState('');
+  const [flagRolloutPercent, setFlagRolloutPercent] = useState('100');
+  const [flagVariantValue, setFlagVariantValue] = useState('');
   const [flagNote, setFlagNote] = useState('');
   const [flagSaving, setFlagSaving] = useState(false);
   const [deletingFlagId, setDeletingFlagId] = useState<string | null>(null);
@@ -268,12 +348,25 @@ export default function FlagsPage() {
     }
     const parsedOrgId = flagOrgId.trim() ? parsePositiveInt(flagOrgId) : undefined;
     const parsedUserId = flagUserId.trim() ? parsePositiveInt(flagUserId) : undefined;
+    const parsedRolloutPercent = parseRolloutPercent(flagRolloutPercent);
+    const parsedTargetUsers = parsePositiveIntList(flagTargetUsers);
     if (flagScope === 'org' && !parsedOrgId) {
       showError('Org ID must be a positive integer');
       return;
     }
     if (flagScope === 'user' && !parsedUserId) {
       showError('User ID must be a positive integer');
+      return;
+    }
+    if (parsedRolloutPercent === null) {
+      showError('Rollout % must be an integer between 0 and 100');
+      return;
+    }
+    if (parsedTargetUsers.invalid.length > 0) {
+      showError(
+        'Target user IDs must be positive integers',
+        `Invalid values: ${formatInvalidValues(parsedTargetUsers.invalid)}`
+      );
       return;
     }
     try {
@@ -284,6 +377,9 @@ export default function FlagsPage() {
         description: flagDescription,
         org_id: flagScope === 'org' ? parsedOrgId : undefined,
         user_id: flagScope === 'user' ? parsedUserId : undefined,
+        target_user_ids: Array.from(new Set(parsedTargetUsers.values)),
+        rollout_percent: parsedRolloutPercent,
+        variant_value: flagVariantValue.trim() || undefined,
         note: flagNote,
       });
       success('Feature flag saved');
@@ -291,6 +387,9 @@ export default function FlagsPage() {
       setFlagDescription('');
       setFlagOrgId('');
       setFlagUserId('');
+      setFlagTargetUsers('');
+      setFlagRolloutPercent('100');
+      setFlagVariantValue('');
       setFlagNote('');
       await loadFlags();
     } catch (err: unknown) {
@@ -342,8 +441,8 @@ export default function FlagsPage() {
               <h1 className="text-2xl font-bold">Flags & Maintenance</h1>
               <p className="text-muted-foreground">Control runtime switches and maintenance mode.</p>
             </div>
-            <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
-              <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <Button variant="outline" onClick={handleRefresh} loading={isRefreshing} loadingText="Refreshing...">
+              <RefreshCw className="mr-2 h-4 w-4" />
               Refresh
             </Button>
           </div>
@@ -398,8 +497,10 @@ export default function FlagsPage() {
                 <Button
                   onClick={handleSaveMaintenance}
                   disabled={maintenanceSaving || maintenanceLoading || !maintenance}
+                  loading={maintenanceSaving}
+                  loadingText="Saving..."
                 >
-                  {maintenanceSaving ? 'Saving...' : 'Save Maintenance'}
+                  Save Maintenance
                 </Button>
               </div>
             </CardContent>
@@ -503,6 +604,35 @@ export default function FlagsPage() {
                     onChange={(e) => setFlagUserId(e.target.value)}
                   />
                 </div>
+                <div className="space-y-1">
+                  <Label htmlFor="flag-rollout">Rollout %</Label>
+                  <Input
+                    id="flag-rollout"
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={flagRolloutPercent}
+                    onChange={(e) => setFlagRolloutPercent(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1 md:col-span-3">
+                  <Label htmlFor="flag-target-users">Target User IDs (comma-separated)</Label>
+                  <Input
+                    id="flag-target-users"
+                    placeholder="e.g. 12, 42, 77"
+                    value={flagTargetUsers}
+                    onChange={(e) => setFlagTargetUsers(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1 md:col-span-3">
+                  <Label htmlFor="flag-variant">Variant Value (optional)</Label>
+                  <Input
+                    id="flag-variant"
+                    placeholder="e.g. experiment_a"
+                    value={flagVariantValue}
+                    onChange={(e) => setFlagVariantValue(e.target.value)}
+                  />
+                </div>
                 <div className="space-y-1 md:col-span-3">
                   <Label htmlFor="flag-description">Description</Label>
                   <Input
@@ -522,8 +652,8 @@ export default function FlagsPage() {
                   />
                 </div>
                 <div>
-                  <Button onClick={handleUpsertFlag} disabled={flagSaving}>
-                    {flagSaving ? 'Saving...' : 'Save Flag'}
+                  <Button onClick={handleUpsertFlag} loading={flagSaving} loadingText="Saving...">
+                    Save Flag
                   </Button>
                 </div>
               </div>
@@ -540,6 +670,8 @@ export default function FlagsPage() {
                       <TableHead>Scope</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Target</TableHead>
+                      <TableHead>Rollout</TableHead>
+                      <TableHead>Variant</TableHead>
                       <TableHead>Updated</TableHead>
                       <TableHead>History</TableHead>
                       <TableHead></TableHead>
@@ -565,6 +697,10 @@ export default function FlagsPage() {
                             : `flag-index-${index}`;
                       const flagId = getFlagId(flag);
                       const isDeleting = deletingFlagId === flagId;
+                      const rolloutPercent = Math.min(
+                        100,
+                        Math.max(0, Math.trunc(Number(flag.rollout_percent ?? 100)))
+                      );
                       return (
                         <TableRow key={rowKey}>
                           <TableCell className="font-medium">{flag.key}</TableCell>
@@ -575,11 +711,35 @@ export default function FlagsPage() {
                             </Badge>
                           </TableCell>
                           <TableCell>
-                            {flag.scope === 'global'
-                              ? 'Global'
-                              : flag.scope === 'org'
-                                ? `Org ${flag.org_id}`
-                                : `User ${flag.user_id}`}
+                            <div className="space-y-1">
+                              <div>{getFlagTargetLabel(flag)}</div>
+                              <div className="text-xs text-muted-foreground">
+                                Users: {formatTargetUsers(flag.target_user_ids)}
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="w-32 space-y-1">
+                              <div className="text-xs text-muted-foreground">
+                                {rolloutPercent}% rollout
+                              </div>
+                              <div
+                                role="progressbar"
+                                aria-label={`Rollout ${rolloutPercent}%`}
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={rolloutPercent}
+                                className="h-2 overflow-hidden rounded bg-muted"
+                              >
+                                <div
+                                  className="h-full bg-primary"
+                                  style={{ width: `${rolloutPercent}%` }}
+                                />
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {formatVariant(flag.variant_value)}
                           </TableCell>
                           <TableCell>{formatFlagDate(flag.updated_at)}</TableCell>
                           <TableCell>
@@ -588,18 +748,32 @@ export default function FlagsPage() {
                                 {flag.history?.length || 0} changes
                               </summary>
                               <div className="mt-2 space-y-2">
-                                {(flag.history || []).map((entry, entryIndex) => (
-                                  <div key={`${flag.key}-history-${entryIndex}`}>
-                                    <div className="font-medium text-foreground">
-                                      {entry.enabled ? 'Enabled' : 'Disabled'}
+                                {(flag.history || []).map((entry, entryIndex) => {
+                                  const diffRows = getDiffRows(entry);
+                                  return (
+                                    <div key={`${flag.key}-history-${entryIndex}`}>
+                                      <div className="font-medium text-foreground">
+                                        {entry.enabled ? 'Enabled' : 'Disabled'}
+                                      </div>
+                                      <div>
+                                        {formatFlagDate(entry.timestamp)}{' '}
+                                        {entry.actor ? `· ${entry.actor}` : ''}
+                                      </div>
+                                      {entry.note ? <div>Note: {entry.note}</div> : null}
+                                      {diffRows.length > 0 ? (
+                                        <div className="space-y-1 rounded border border-border/60 p-2">
+                                          {diffRows.map((row) => (
+                                            <div key={`${entry.timestamp}-${row.field}`}>
+                                              <span className="font-medium text-foreground">{row.field}:</span>{' '}
+                                              <span className="line-through opacity-70">{row.before}</span>{' '}
+                                              <span aria-hidden="true">→</span> <span>{row.after}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : null}
                                     </div>
-                                    <div>
-                                      {formatFlagDate(entry.timestamp)}{' '}
-                                      {entry.actor ? `· ${entry.actor}` : ''}
-                                    </div>
-                                    {entry.note ? <div>Note: {entry.note}</div> : null}
-                                  </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             </details>
                           </TableCell>
@@ -611,12 +785,9 @@ export default function FlagsPage() {
                               title={isDeleting ? 'Deleting flag' : 'Delete flag'}
                               aria-label={isDeleting ? 'Deleting flag' : 'Delete flag'}
                               disabled={isDeleting}
+                              loading={isDeleting}
                             >
-                              {isDeleting ? (
-                                <RefreshCw className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <Trash2 className="h-4 w-4" />
-                              )}
+                              <Trash2 className="h-4 w-4" />
                             </Button>
                           </TableCell>
                         </TableRow>

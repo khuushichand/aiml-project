@@ -39,7 +39,15 @@ import {
 } from "../hooks"
 import { MarkdownWithBoundary, FlashcardActionsMenu, FlashcardEditDrawer, FlashcardCreateDrawer } from "../components"
 import { formatCardType } from "../utils/model-type-labels"
-import type { Flashcard, FlashcardUpdate } from "@/services/flashcards"
+import {
+  createFlashcard,
+  deleteFlashcard,
+  getFlashcard,
+  listFlashcards,
+  updateFlashcard,
+  type Flashcard,
+  type FlashcardUpdate
+} from "@/services/flashcards"
 
 dayjs.extend(relativeTime)
 
@@ -250,7 +258,6 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   }, [page, pageSize, mDeckId, mQuery, mTag, mDue])
 
   async function fetchAllItemsAcrossFilters(): Promise<Flashcard[]> {
-    const { listFlashcards } = await import("@/services/flashcards")
     const items: Flashcard[] = []
     const maxPerPage = 1000
     const MAX_ITEMS_CAP = 10000
@@ -312,7 +319,6 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       const showProgress = options?.showProgress ?? true
       const showSuccessMessage = options?.showSuccessMessage ?? true
       const shouldClearSelection = options?.clearSelection ?? true
-      const { deleteFlashcard } = await import("@/services/flashcards")
       const total = items.length
       if (showProgress) {
         setBulkProgress({
@@ -607,7 +613,6 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   // Quick actions: duplicate
   const duplicateCard = async (card: Flashcard) => {
     try {
-      const { createFlashcard } = await import("@/services/flashcards")
       await createFlashcard({
         deck_id: card.deck_id ?? undefined,
         front: card.front,
@@ -639,7 +644,6 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   }
 
   const submitMove = async () => {
-    const { updateFlashcard, getFlashcard } = await import("@/services/flashcards")
     try {
       if (moveCard) {
         const full = await getFlashcard(moveCard.uuid)
@@ -723,14 +727,15 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   })
 
   const doUpdate = async (values: FlashcardUpdate) => {
-    const { updateFlashcard } = await import("@/services/flashcards")
     try {
       if (!editing) return
-      await updateFlashcard(editing.uuid, values)
+      await updateMutation.mutateAsync({
+        uuid: editing.uuid,
+        update: values
+      })
       message.success(t("common:updated", { defaultValue: "Updated" }))
       setEditOpen(false)
       setEditing(null)
-      await qc.invalidateQueries({ queryKey: ["flashcards:list"] })
     } catch (e: unknown) {
       if (typeof e === "object" && e && "errorFields" in e) {
         const { errorFields } = e as { errorFields?: unknown }

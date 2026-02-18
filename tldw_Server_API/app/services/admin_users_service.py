@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import json
+import secrets
+import string
 from collections.abc import Awaitable
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from fastapi import HTTPException, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
+    AdminMfaRequirementRequest,
+    AdminPasswordResetRequest,
     AdminUserCreateRequest,
     UserUpdateRequest,
 )
@@ -20,6 +26,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.core.AuthNZ.settings import get_profile
+from tldw_Server_API.app.core.AuthNZ.password_service import hash_password
 from tldw_Server_API.app.services import admin_scope_service
 from tldw_Server_API.app.services.admin_data_ops_service import (
     build_users_csv as svc_build_users_csv,
@@ -27,6 +34,33 @@ from tldw_Server_API.app.services.admin_data_ops_service import (
 from tldw_Server_API.app.services.admin_data_ops_service import (
     build_users_json as svc_build_users_json,
 )
+
+
+def _generate_temporary_password(length: int = 20) -> str:
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*()-_=+"
+    while True:
+        password = ''.join(secrets.choice(alphabet) for _ in range(length))
+        has_upper = any(char.isupper() for char in password)
+        has_lower = any(char.islower() for char in password)
+        has_digit = any(char.isdigit() for char in password)
+        has_symbol = any(char in "!@#$%^&*()-_=+" for char in password)
+        if has_upper and has_lower and has_digit and has_symbol:
+            return password
+
+
+def _parse_user_metadata(raw_metadata: Any) -> dict[str, Any]:
+    if raw_metadata is None:
+        return {}
+    if isinstance(raw_metadata, dict):
+        return dict(raw_metadata)
+    if isinstance(raw_metadata, str):
+        try:
+            parsed = json.loads(raw_metadata)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
 
 
 async def create_user(
@@ -288,6 +322,188 @@ async def update_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update user",
         ) from e
+
+
+async def reset_user_password(
+    principal: AuthPrincipal,
+    user_id: int,
+    request: AdminPasswordResetRequest,
+    db,
+    *,
+    is_pg_fn: Callable[[], Awaitable[bool]],
+) -> dict[str, Any]:
+    try:
+        await admin_scope_service.enforce_admin_user_scope(
+            principal,
+            user_id,
+            require_hierarchy=True,
+        )
+
+        temporary_password = request.temporary_password or _generate_temporary_password()
+        password_hash = hash_password(temporary_password)
+        force_password_change = bool(request.force_password_change)
+
+        is_pg = await is_pg_fn()
+        if is_pg:
+            row = await db.fetchrow("SELECT metadata FROM users WHERE id = $1", user_id)
+            if not row:
+                raise UserNotFoundError(f"User {user_id}")
+            existing_metadata = _parse_user_metadata(row.get("metadata"))
+        else:
+            cursor = await db.execute("SELECT metadata FROM users WHERE id = ?", (user_id,))
+            row = await cursor.fetchone()
+            if not row:
+                raise UserNotFoundError(f"User {user_id}")
+            if isinstance(row, (tuple, list)):
+                metadata_raw = row[0] if row else None
+            elif hasattr(row, "keys"):
+                metadata_raw = dict(row).get("metadata")
+            else:
+                metadata_raw = None
+            existing_metadata = _parse_user_metadata(metadata_raw)
+
+        existing_metadata["force_password_change"] = force_password_change
+        existing_metadata["password_reset_at"] = datetime.now(timezone.utc).isoformat()
+        metadata_json = json.dumps(existing_metadata)
+
+        if is_pg:
+            await db.execute(
+                """
+                UPDATE users
+                SET password_hash = $1,
+                    metadata = $2::jsonb,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $3
+                """,
+                password_hash,
+                metadata_json,
+                user_id,
+            )
+        else:
+            await db.execute(
+                """
+                UPDATE users
+                SET password_hash = ?,
+                    metadata = ?,
+                    updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (password_hash, metadata_json, user_id),
+            )
+            await db.commit()
+
+        logger.info("Admin reset password for user {}", user_id)
+
+        return {
+            "user_id": user_id,
+            "temporary_password": temporary_password,
+            "force_password_change": force_password_change,
+            "message": "Password reset successfully",
+        }
+
+    except UserNotFoundError as err:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {user_id} not found",
+        ) from err
+    except WeakPasswordError as err:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(err),
+        ) from err
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to reset password for user {user_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reset password",
+        ) from exc
+
+
+async def set_user_mfa_requirement(
+    principal: AuthPrincipal,
+    user_id: int,
+    request: AdminMfaRequirementRequest,
+    db,
+    *,
+    is_pg_fn: Callable[[], Awaitable[bool]],
+) -> dict[str, Any]:
+    try:
+        await admin_scope_service.enforce_admin_user_scope(
+            principal,
+            user_id,
+            require_hierarchy=True,
+        )
+
+        require_mfa = bool(request.require_mfa)
+        is_pg = await is_pg_fn()
+        if is_pg:
+            row = await db.fetchrow("SELECT metadata FROM users WHERE id = $1", user_id)
+            if not row:
+                raise UserNotFoundError(f"User {user_id}")
+            existing_metadata = _parse_user_metadata(row.get("metadata"))
+        else:
+            cursor = await db.execute("SELECT metadata FROM users WHERE id = ?", (user_id,))
+            row = await cursor.fetchone()
+            if not row:
+                raise UserNotFoundError(f"User {user_id}")
+            if isinstance(row, (tuple, list)):
+                metadata_raw = row[0] if row else None
+            elif hasattr(row, "keys"):
+                metadata_raw = dict(row).get("metadata")
+            else:
+                metadata_raw = None
+            existing_metadata = _parse_user_metadata(metadata_raw)
+
+        existing_metadata["require_mfa"] = require_mfa
+        existing_metadata["mfa_requirement_updated_at"] = datetime.now(timezone.utc).isoformat()
+        metadata_json = json.dumps(existing_metadata)
+
+        if is_pg:
+            await db.execute(
+                """
+                UPDATE users
+                SET metadata = $1::jsonb,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $2
+                """,
+                metadata_json,
+                user_id,
+            )
+        else:
+            await db.execute(
+                """
+                UPDATE users
+                SET metadata = ?,
+                    updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (metadata_json, user_id),
+            )
+            await db.commit()
+
+        logger.info("Admin updated MFA requirement for user {} to {}", user_id, require_mfa)
+
+        return {
+            "user_id": user_id,
+            "require_mfa": require_mfa,
+            "message": "MFA requirement updated successfully",
+        }
+
+    except UserNotFoundError as err:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {user_id} not found",
+        ) from err
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to update MFA requirement for user {user_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update MFA requirement",
+        ) from exc
 
 
 async def delete_user(

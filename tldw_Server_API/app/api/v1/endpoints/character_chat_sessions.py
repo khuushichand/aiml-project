@@ -3707,8 +3707,13 @@ async def character_chat_completion(
                                         return
                             # Ensure DONE if provider didn't send one
                             await stream.done()
+                        except ChatAPIError as e:
+                            await stream.error("provider_error", str(e))
                         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                             await stream.error("internal_error", f"{e}")
+                        except Exception:
+                            logger.exception("Unhandled exception in character chat streaming producer")
+                            await stream.error("internal_error", "An internal error has occurred.")
 
                     async def _generator():
                         producer = asyncio.create_task(_produce_async())
@@ -3951,6 +3956,8 @@ async def list_chat_sessions(
     character_id: Optional[int] = Query(None, description="Filter by character ID"),
     limit: int = Query(50, ge=1, le=200, description="Number of items to return"),
     offset: int = Query(0, ge=0, description="Number of items to skip"),
+    include_deleted: bool = Query(False, description="Include soft-deleted chats"),
+    deleted_only: bool = Query(False, description="Return only soft-deleted chats"),
     include_settings: bool = Query(
         False,
         description="Include per-chat settings payload for each returned chat.",
@@ -3973,19 +3980,42 @@ async def list_chat_sessions(
     """
     try:
         user_id_str = str(current_user.id)
+        include_deleted_effective = include_deleted or deleted_only
         if character_id:
             # Get conversations for specific character scoped to current user
-            conversations = db.get_conversations_for_user_and_character(user_id_str, character_id, limit=limit, offset=offset)
+            conversations = db.get_conversations_for_user_and_character(
+                user_id_str,
+                character_id,
+                limit=limit,
+                offset=offset,
+                include_deleted=include_deleted_effective,
+                deleted_only=deleted_only,
+            )
             try:
-                total_count = db.count_conversations_for_user_by_character(user_id_str, character_id)
+                total_count = db.count_conversations_for_user_by_character(
+                    user_id_str,
+                    character_id,
+                    include_deleted=include_deleted_effective,
+                    deleted_only=deleted_only,
+                )
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 # Fallback: filter by client_id in-memory if efficient count isn't available
                 total_count = len([c for c in conversations if c.get('client_id') == user_id_str])
         else:
             # Efficient path: list conversations for this user directly
-            conversations = db.get_conversations_for_user(user_id_str, limit=limit, offset=offset)
+            conversations = db.get_conversations_for_user(
+                user_id_str,
+                limit=limit,
+                offset=offset,
+                include_deleted=include_deleted_effective,
+                deleted_only=deleted_only,
+            )
             try:
-                total_count = db.count_conversations_for_user(user_id_str)
+                total_count = db.count_conversations_for_user(
+                    user_id_str,
+                    include_deleted=include_deleted_effective,
+                    deleted_only=deleted_only,
+                )
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 total_count = len(conversations)
 
@@ -4000,7 +4030,11 @@ async def list_chat_sessions(
         # Add message counts using efficient counter
         for conv in user_conversations:
             try:
-                conv['message_count'] = db.count_messages_for_conversation(conv['id'])
+                # Deleted chats don't need message counts for listing performance.
+                if conv.get("deleted"):
+                    conv['message_count'] = 0
+                else:
+                    conv['message_count'] = db.count_messages_for_conversation(conv['id'])
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 messages = db.get_messages_for_conversation(conv['id'], limit=1000)
                 conv['message_count'] = len(messages) if messages else 0
@@ -4227,6 +4261,7 @@ async def update_chat_settings(
 async def delete_chat_session(
     chat_id: str = Path(..., description="Chat session ID"),
     expected_version: Optional[int] = Query(None, description="Expected version for optimistic locking"),
+    hard_delete: bool = Query(False, description="Permanently delete a chat already in trash"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ) -> Response:
@@ -4243,9 +4278,31 @@ async def delete_chat_session(
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
-        # Get current conversation
-        conversation = db.get_conversation_by_id(chat_id)
+        # Get current conversation. Hard-delete may target already deleted rows.
+        conversation = db.get_conversation_by_id(chat_id, include_deleted=hard_delete)
         _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        if hard_delete:
+            if not conversation.get("deleted"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Chat must be in trash before permanent delete.",
+                )
+
+            if expected_version is not None and conversation.get('version', 1) != expected_version:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Version mismatch. Expected {expected_version}, found {conversation.get('version', 1)}"
+                )
+
+            deleted_ok = db.hard_delete_conversation(chat_id)
+            if not deleted_ok:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Chat session {chat_id} not found",
+                )
+            logger.info(f"Hard deleted chat session {chat_id} by user {current_user.id}")
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
 
         # Check version if provided
         if expected_version is not None and conversation.get('version', 1) != expected_version:
@@ -4326,6 +4383,57 @@ async def delete_chat_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while deleting chat session"
+        ) from e
+
+
+@router.post(
+    "/{chat_id}/restore",
+    response_model=ChatSessionResponse,
+    summary="Restore chat session from trash",
+    tags=["Chat Sessions"],
+)
+async def restore_chat_session(
+    chat_id: str = Path(..., description="Chat session ID"),
+    expected_version: Optional[int] = Query(None, description="Expected version for optimistic locking"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        conversation = db.get_conversation_by_id(chat_id, include_deleted=True)
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        # Already active: return current state as idempotent success.
+        if not conversation.get("deleted"):
+            try:
+                conversation['message_count'] = db.count_messages_for_conversation(chat_id)
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                conversation['message_count'] = 0
+            return _convert_db_conversation_to_response(conversation)
+
+        exp_ver = expected_version if expected_version is not None else conversation.get("version", 1)
+        db.restore_conversation(chat_id, exp_ver)
+
+        restored = db.get_conversation_by_id(chat_id)
+        _verify_chat_ownership(restored, current_user.id, chat_id)
+        try:
+            restored['message_count'] = db.count_messages_for_conversation(chat_id)
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            restored['message_count'] = 0
+        return _convert_db_conversation_to_response(restored)
+
+    except ConflictError as e:
+        logger.warning(f"Conflict restoring chat session {chat_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error restoring chat session {chat_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Error restoring chat session {chat_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while restoring chat session",
         ) from e
 
 

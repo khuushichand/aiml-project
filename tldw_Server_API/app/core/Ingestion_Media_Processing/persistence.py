@@ -1208,7 +1208,12 @@ def _allowed_url_extensions(media_type: str, form_data: Any) -> set[str] | None:
     if cfg:
         extensions = cfg.get("allowed_extensions")
         if isinstance(extensions, (set, list, tuple)):
-            return {str(ext).lower() for ext in extensions if ext}
+            normalized = {str(ext).lower() for ext in extensions if ext}
+            if media_key == "document":
+                # URL-based "document" ingestion is expected to accept web content
+                # and XML-like payloads handled by the document processor.
+                normalized.update({".html", ".htm", ".xml"})
+            return normalized
     return None
 
 

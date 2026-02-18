@@ -2597,9 +2597,41 @@ export class TldwApiClient {
     return this.normalizeChatSummary(res)
   }
 
-  async deleteChat(chat_id: string | number): Promise<void> {
+  async deleteChat(
+    chat_id: string | number,
+    options?: {
+      expectedVersion?: number
+      hardDelete?: boolean
+    }
+  ): Promise<void> {
     const cid = String(chat_id)
-    await bgRequest<void>({ path: `/api/v1/chats/${cid}`, method: 'DELETE' })
+    const query = this.buildQuery({
+      ...(typeof options?.expectedVersion === "number"
+        ? { expected_version: options.expectedVersion }
+        : {}),
+      ...(options?.hardDelete ? { hard_delete: true } : {})
+    })
+    await bgRequest<void>({
+      path: `/api/v1/chats/${cid}${query}`,
+      method: "DELETE"
+    })
+  }
+
+  async restoreChat(
+    chat_id: string | number,
+    options?: { expectedVersion?: number }
+  ): Promise<ServerChatSummary> {
+    const cid = String(chat_id)
+    const query = this.buildQuery(
+      typeof options?.expectedVersion === "number"
+        ? { expected_version: options.expectedVersion }
+        : {}
+    )
+    const res = await bgRequest<any>({
+      path: `/api/v1/chats/${cid}/restore${query}`,
+      method: "POST"
+    })
+    return this.normalizeChatSummary(res)
   }
 
   async listChatMessages(

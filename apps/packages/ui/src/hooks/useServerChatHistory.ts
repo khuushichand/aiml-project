@@ -146,17 +146,25 @@ export const fetchAllServerChatPages = async (
   return allChats
 }
 
+type UseServerChatHistoryOptions = {
+  enabled?: boolean
+  includeDeleted?: boolean
+  deletedOnly?: boolean
+}
+
 export const useServerChatHistory = (
   searchQuery: string,
-  options?: { enabled?: boolean }
+  options?: UseServerChatHistoryOptions
 ) => {
   const { isConnected } = useConnectionState()
   const checkConnection = useConnectionStore((state) => state.checkOnce)
   const normalizedQuery = searchQuery.trim().toLowerCase()
   const isEnabled = isConnected && (options?.enabled ?? true)
+  const includeDeleted = options?.includeDeleted ?? false
+  const deletedOnly = options?.deletedOnly ?? false
 
   const query = useQuery({
-    queryKey: ["serverChatHistory"],
+    queryKey: ["serverChatHistory", { includeDeleted, deletedOnly }],
     enabled: isEnabled,
     queryFn: async ({ signal }): Promise<ServerChatHistoryItem[]> => {
       await tldwClient.initialize().catch(() => null)
@@ -167,7 +175,9 @@ export const useServerChatHistory = (
               {
                 limit,
                 offset,
-                ordering: "-updated_at"
+                ordering: "-updated_at",
+                ...(includeDeleted ? { include_deleted: true } : {}),
+                ...(deletedOnly ? { deleted_only: true } : {})
               },
               { signal: pageSignal }
             ),

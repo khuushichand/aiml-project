@@ -1,0 +1,149 @@
+/* @vitest-environment jsdom */
+import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import TeamsPage from '../page';
+import { api } from '@/lib/api-client';
+
+const confirmMock = vi.hoisted(() => vi.fn());
+const toastSuccessMock = vi.hoisted(() => vi.fn());
+const toastErrorMock = vi.hoisted(() => vi.fn());
+const setPageMock = vi.hoisted(() => vi.fn());
+const setPageSizeMock = vi.hoisted(() => vi.fn());
+const resetPaginationMock = vi.hoisted(() => vi.fn());
+
+vi.mock('next/link', () => ({
+  default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a>,
+}));
+
+vi.mock('@/components/PermissionGuard', () => ({
+  PermissionGuard: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('@/components/ResponsiveLayout', () => ({
+  ResponsiveLayout: ({ children }: { children: ReactNode }) => (
+    <div data-testid="layout">{children}</div>
+  ),
+}));
+
+vi.mock('@/components/ui/confirm-dialog', () => ({
+  useConfirm: () => confirmMock,
+}));
+
+vi.mock('@/components/ui/toast', () => ({
+  useToast: () => ({
+    warning: vi.fn(),
+    success: toastSuccessMock,
+    error: toastErrorMock,
+  }),
+}));
+
+vi.mock('@/lib/use-url-state', () => ({
+  useUrlState: (key: string, options?: { defaultValue?: string }) => {
+    if (key === 'org') return ['10', vi.fn()];
+    return [options?.defaultValue ?? '', vi.fn()];
+  },
+  useUrlPagination: () => ({
+    page: 1,
+    pageSize: 25,
+    setPage: setPageMock,
+    setPageSize: setPageSizeMock,
+    resetPagination: resetPaginationMock,
+  }),
+}));
+
+vi.mock('@/lib/api-client', () => ({
+  api: {
+    getOrganizations: vi.fn(),
+    getTeams: vi.fn(),
+    createTeam: vi.fn(),
+    updateTeam: vi.fn(),
+    getTeamMembers: vi.fn(),
+    deleteTeam: vi.fn(),
+  },
+}));
+
+type ApiMock = {
+  getOrganizations: ReturnType<typeof vi.fn>;
+  getTeams: ReturnType<typeof vi.fn>;
+  createTeam: ReturnType<typeof vi.fn>;
+  updateTeam: ReturnType<typeof vi.fn>;
+  getTeamMembers: ReturnType<typeof vi.fn>;
+  deleteTeam: ReturnType<typeof vi.fn>;
+};
+
+const apiMock = api as unknown as ApiMock;
+
+beforeEach(() => {
+  confirmMock.mockResolvedValue(true);
+  toastSuccessMock.mockClear();
+  toastErrorMock.mockClear();
+
+  apiMock.getOrganizations.mockResolvedValue([
+    {
+      id: 10,
+      name: 'Acme',
+      slug: 'acme',
+    },
+  ]);
+  apiMock.getTeams.mockResolvedValue([
+    {
+      id: 5,
+      org_id: 10,
+      name: 'Team One',
+      description: 'Team one description',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    },
+  ]);
+  apiMock.createTeam.mockResolvedValue({});
+  apiMock.updateTeam.mockResolvedValue({});
+  apiMock.getTeamMembers.mockResolvedValue([{ user_id: 1 }, { user_id: 2 }, { user_id: 3 }]);
+  apiMock.deleteTeam.mockResolvedValue({});
+});
+
+afterEach(() => {
+  cleanup();
+  vi.resetAllMocks();
+});
+
+describe('TeamsPage edit and delete flows', () => {
+  it('updates and deletes a team with member-count acknowledgment', async () => {
+    const user = userEvent.setup();
+    render(<TeamsPage />);
+
+    const rowLabel = await screen.findByText('Team One');
+    const row = rowLabel.closest('tr');
+    expect(row).not.toBeNull();
+
+    await user.click(within(row as HTMLElement).getByRole('button', { name: 'Edit' }));
+
+    const teamNameInput = screen.getByLabelText('Team Name');
+    await user.clear(teamNameInput);
+    await user.type(teamNameInput, 'Platform Team');
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      expect(apiMock.updateTeam).toHaveBeenCalledWith('10', '5', {
+        name: 'Platform Team',
+        description: 'Team one description',
+      });
+    });
+
+    await user.click(within(row as HTMLElement).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      expect(confirmMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Delete team',
+          message: expect.stringContaining('This team has 3 members'),
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(apiMock.deleteTeam).toHaveBeenCalledWith('10', '5');
+    });
+  });
+});

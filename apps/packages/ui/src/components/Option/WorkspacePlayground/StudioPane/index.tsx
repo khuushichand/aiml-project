@@ -884,6 +884,9 @@ Generate 10-15 flashcards.`,
 
   // Parse and create flashcards
   const flashcards = parseFlashcards(content)
+  if (!flashcards.length) {
+    throw new Error("Failed to parse generated flashcards from model output")
+  }
 
   // Ensure we have a deck
   const decks = await listDecks()
@@ -897,6 +900,8 @@ Generate 10-15 flashcards.`,
   }
 
   // Create flashcards
+  let createdCount = 0
+  let firstCreateError: unknown = null
   for (const card of flashcards) {
     try {
       await createFlashcard({
@@ -906,13 +911,29 @@ Generate 10-15 flashcards.`,
         source_ref_type: "media",
         source_ref_id: String(mediaId)
       })
-    } catch {
-      // Continue with other cards
+      createdCount += 1
+    } catch (error) {
+      if (firstCreateError == null) {
+        firstCreateError = error
+      }
     }
   }
 
+  if (createdCount === 0) {
+    if (firstCreateError instanceof Error && firstCreateError.message) {
+      throw new Error(`Failed to save generated flashcards: ${firstCreateError.message}`)
+    }
+    throw new Error("Failed to save generated flashcards")
+  }
+
+  const failedCount = flashcards.length - createdCount
+  const summaryLine =
+    failedCount > 0
+      ? `Created ${createdCount} of ${flashcards.length} flashcards (${failedCount} failed)`
+      : `Created ${createdCount} flashcards`
+
   return {
-    content: `Created ${flashcards.length} flashcards\n\n${content}`
+    content: `${summaryLine}\n\n${content}`
   }
 }
 

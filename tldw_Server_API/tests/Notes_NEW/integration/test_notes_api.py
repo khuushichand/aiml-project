@@ -318,6 +318,21 @@ def test_keywords_list_pagination_and_search_limit(client_with_notes_db: TestCli
     assert len(results) <= 7
 
 
+def test_keywords_list_without_trailing_slash_does_not_hit_note_lookup(client_with_notes_db: TestClient):
+    client = client_with_notes_db
+
+    client.post("/api/v1/notes/keywords/", json={"keyword": "alpha"})
+    client.post("/api/v1/notes/keywords/", json={"keyword": "beta"})
+
+    resp = client.get("/api/v1/notes/keywords", params={"limit": 200})
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert isinstance(payload, list)
+    values = {item.get("keyword") for item in payload if isinstance(item, dict)}
+    assert "alpha" in values
+    assert "beta" in values
+
+
 def test_keyword_search_substring_behavior(client_with_notes_db: TestClient):
     client = client_with_notes_db
     # Create specific keywords to test substring behavior

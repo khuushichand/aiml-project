@@ -136,6 +136,82 @@ def test_sources_test_endpoint(client_with_user, monkeypatch):
     assert all(it["source_id"] == sid for it in data["items"])
 
 
+def test_sources_check_now_endpoint_triggers_runs_and_items(client_with_user, monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "1")
+    c = client_with_user
+    source_resp = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Check RSS",
+            "url": "https://example.com/check-rss.xml",
+            "source_type": "rss",
+        },
+    )
+    assert source_resp.status_code == 200, source_resp.text
+    source_id = int(source_resp.json()["id"])
+
+    check_resp = c.post(
+        "/api/v1/watchlists/sources/check-now",
+        json={"source_ids": [source_id, source_id]},
+    )
+    assert check_resp.status_code == 200, check_resp.text
+    payload = check_resp.json()
+    assert payload["total"] == 1
+    assert payload["success"] == 1
+    assert payload["failed"] == 0
+    assert payload["items"][0]["source_id"] == source_id
+    assert payload["items"][0]["status"] == "ok"
+    assert payload["items"][0].get("last_scraped_at")
+    run_id = payload["items"][0].get("run_id")
+    assert isinstance(run_id, int) and run_id > 0
+
+    runs_resp = c.get("/api/v1/watchlists/runs", params={"page": 1, "size": 20})
+    assert runs_resp.status_code == 200, runs_resp.text
+    run_ids = [int(run["id"]) for run in runs_resp.json().get("items", [])]
+    assert run_id in run_ids
+
+    items_resp = c.get("/api/v1/watchlists/items", params={"source_id": source_id, "page": 1, "size": 20})
+    assert items_resp.status_code == 200, items_resp.text
+    items_payload = items_resp.json()
+    assert int(items_payload.get("total", 0)) >= 1
+    assert any(int(item.get("source_id", -1)) == source_id for item in items_payload.get("items", []))
+
+
+def test_sources_check_now_reports_run_errors_and_missing_sources(client_with_user, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import watchlists as watchlists_endpoints
+
+    async def _raise_run_error(*_args, **_kwargs):
+        raise RuntimeError("run_failed")
+
+    monkeypatch.setattr(watchlists_endpoints, "run_watchlist_job", _raise_run_error)
+
+    c = client_with_user
+    src_resp = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Broken RSS",
+            "url": "https://example.com/broken-rss.xml",
+            "source_type": "rss",
+        },
+    )
+    assert src_resp.status_code == 200, src_resp.text
+    source_id = int(src_resp.json()["id"])
+
+    check_resp = c.post(
+        "/api/v1/watchlists/sources/check-now",
+        json={"source_ids": [source_id, 999999]},
+    )
+    assert check_resp.status_code == 200, check_resp.text
+    payload = check_resp.json()
+    assert payload["total"] == 2
+    assert payload["success"] == 0
+    assert payload["failed"] == 2
+
+    by_source = {int(item["source_id"]): item for item in payload["items"]}
+    assert by_source[source_id]["status"] == "error"
+    assert by_source[source_id]["detail"] == "run_trigger_failed"
+    assert by_source[999999]["status"] == "not_found"
+
 def test_source_group_validation_and_idempotent_create(client_with_user):
 
 
@@ -354,6 +430,21 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     first_item = data["items"][0]
     item_id = first_item["id"]
     assert first_item["status"] in {"ingested", "error", "duplicate"}
+    assert "content" in first_item
+
+    # Item detail should also expose content for feed-reader style rendering.
+    r = c.get(f"/api/v1/watchlists/items/{item_id}")
+    assert r.status_code == 200, r.text
+    item_detail = r.json()
+    assert "content" in item_detail
+
+    # Search should match content text as well as title/summary.
+    if item_detail.get("content"):
+        term = str(item_detail["content"]).split()[0]
+        r = c.get("/api/v1/watchlists/items", params={"run_id": run_id, "q": term})
+        assert r.status_code == 200, r.text
+        matches = r.json().get("items", [])
+        assert any(it["id"] == item_id for it in matches)
 
     # Mark reviewed
     r = c.patch(f"/api/v1/watchlists/items/{item_id}", json={"reviewed": True})

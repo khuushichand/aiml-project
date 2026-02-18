@@ -1,22 +1,26 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useForm, FormProvider } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
+import { Form, FormCheckbox, FormInput, FormSelect } from '@/components/ui/form';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
 import { parseOptionalInt } from '@/lib/number';
+import { RateLimitEvent, normalizeRateLimitEventsPayload, parseRateLimitEventsFromMetricsText } from '@/lib/rate-limit-events';
 import { RefreshCw, Trash2, Edit2, Plus, Gauge, X } from 'lucide-react';
 
 type ResourcePolicy = {
@@ -42,6 +46,58 @@ type PoliciesResponse = {
   items?: ResourcePolicy[];
 };
 
+type UsersPageResponse = {
+  items?: ScopeUser[];
+  total?: number;
+  page?: number;
+  pages?: number;
+  limit?: number;
+};
+
+type ScopeUser = {
+  id: number;
+  username?: string;
+  email?: string;
+  role?: string;
+  roles?: string[];
+};
+
+type OrgMembershipItem = {
+  org_id?: number | string;
+};
+
+type LlmUsageLogItem = {
+  user_id?: number | null;
+};
+
+type LlmUsageLogResponse = {
+  items?: LlmUsageLogItem[];
+  total?: number;
+  limit?: number;
+  page?: number;
+};
+
+type PolicySimulationResult = {
+  affectedUsers: number;
+  affectedRequests24h: number;
+  source: 'endpoint' | 'client_estimate';
+};
+
+type PolicyResolutionStep = {
+  policy: ResourcePolicy;
+  priority: number;
+  reason: string;
+};
+
+type PolicyResolutionResult = {
+  user: ScopeUser;
+  resourceType: string;
+  steps: PolicyResolutionStep[];
+  winner: PolicyResolutionStep | null;
+};
+
+type RateLimitEventsSource = 'endpoint' | 'metrics_text' | 'unavailable';
+
 const RESOURCE_TYPES = [
   'llm',
   'embedding',
@@ -53,9 +109,108 @@ const RESOURCE_TYPES = [
 ] as const;
 
 const POLICY_SCOPES = ['global', 'org', 'user', 'role'] as const;
+const USERS_PAGE_LIMIT = 100;
+const USAGE_LOOKBACK_HOURS = 24;
+
+const optionalNonNegativeIntegerString = z
+  .string()
+  .trim()
+  .refine((value) => value === '' || /^\d+$/.test(value), {
+    message: 'Enter a non-negative whole number',
+  });
+
+const policyFormSchema = z
+  .object({
+    name: z.string().trim().min(1, 'Policy name is required'),
+    scope: z.enum(POLICY_SCOPES),
+    scope_id: z.string().default(''),
+    resource_type: z.enum(RESOURCE_TYPES),
+    max_requests_per_minute: optionalNonNegativeIntegerString,
+    max_requests_per_hour: optionalNonNegativeIntegerString,
+    max_requests_per_day: optionalNonNegativeIntegerString,
+    max_tokens_per_request: optionalNonNegativeIntegerString,
+    max_concurrent_requests: optionalNonNegativeIntegerString,
+    priority: optionalNonNegativeIntegerString,
+    enabled: z.boolean(),
+    description: z.string().default(''),
+  })
+  .superRefine((data, ctx) => {
+    if (data.scope === 'global' || data.scope_id.trim()) {
+      return;
+    }
+
+    const scopeLabel = data.scope === 'org'
+      ? 'Organization'
+      : data.scope === 'user'
+        ? 'User'
+        : 'Role';
+
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['scope_id'],
+      message: `${scopeLabel} ID is required for ${data.scope} scope`,
+    });
+  });
+
+type PolicyFormData = z.infer<typeof policyFormSchema>;
+
+const defaultPolicyFormValues: PolicyFormData = {
+  name: '',
+  scope: 'global',
+  scope_id: '',
+  resource_type: 'llm',
+  max_requests_per_minute: '',
+  max_requests_per_hour: '',
+  max_requests_per_day: '',
+  max_tokens_per_request: '',
+  max_concurrent_requests: '',
+  priority: '0',
+  enabled: true,
+  description: '',
+};
 
 const formatPolicyDate = (value?: string | null) =>
   formatDateTime(value, { fallback: '—' });
+
+const toIsoHoursAgo = (hours: number) => {
+  const date = new Date(Date.now() - hours * 60 * 60 * 1000);
+  return date.toISOString();
+};
+
+const normalizeUsersPageItems = (payload: unknown): ScopeUser[] => {
+  if (Array.isArray(payload)) return payload as ScopeUser[];
+  if (payload && typeof payload === 'object' && Array.isArray((payload as UsersPageResponse).items)) {
+    return (payload as UsersPageResponse).items ?? [];
+  }
+  return [];
+};
+
+const normalizeMembershipItems = (payload: unknown): OrgMembershipItem[] => {
+  if (Array.isArray(payload)) return payload as OrgMembershipItem[];
+  if (payload && typeof payload === 'object' && Array.isArray((payload as { items?: OrgMembershipItem[] }).items)) {
+    return (payload as { items: OrgMembershipItem[] }).items;
+  }
+  return [];
+};
+
+const normalizeLlmUsageItems = (payload: unknown): LlmUsageLogItem[] => {
+  if (Array.isArray(payload)) return payload as LlmUsageLogItem[];
+  if (payload && typeof payload === 'object' && Array.isArray((payload as LlmUsageLogResponse).items)) {
+    return (payload as LlmUsageLogResponse).items ?? [];
+  }
+  return [];
+};
+
+const getPolicyPriority = (policy: ResourcePolicy) =>
+  Number.isFinite(policy.priority) ? Number(policy.priority) : 0;
+
+const policyResourceMatches = (policy: ResourcePolicy, resourceType: string) =>
+  (policy.resource_type || 'all') === 'all' || policy.resource_type === resourceType;
+
+const getPolicyRowKey = (policy: ResourcePolicy, fallbackIndex: number) => {
+  if (policy.id != null) return `policy-${policy.id}`;
+  return `policy-${policy.name}-${policy.scope}-${String(policy.scope_id ?? 'global')}-${policy.resource_type}-${fallbackIndex}`;
+};
 
 export default function ResourceGovernorPage() {
   const confirm = useConfirm();
@@ -75,20 +230,166 @@ export default function ResourceGovernorPage() {
   const [editingPolicy, setEditingPolicy] = useState<ResourcePolicy | null>(null);
   const [formSaving, setFormSaving] = useState(false);
   const [deletingPolicyId, setDeletingPolicyId] = useState<string | null>(null);
+  const [scopeUsers, setScopeUsers] = useState<ScopeUser[]>([]);
+  const [orgMembershipsByUserId, setOrgMembershipsByUserId] = useState<Record<string, Set<string>>>({});
+  const [requests24hByUserId, setRequests24hByUserId] = useState<Record<string, number>>({});
+  const [scopeContextLoading, setScopeContextLoading] = useState(false);
+  const [scopeContextError, setScopeContextError] = useState('');
+  const [simulationResult, setSimulationResult] = useState<PolicySimulationResult | null>(null);
+  const [simulationLoading, setSimulationLoading] = useState(false);
+  const [resolutionUserId, setResolutionUserId] = useState('');
+  const [resolutionResourceType, setResolutionResourceType] = useState<PolicyFormData['resource_type']>('llm');
+  const [resolutionResult, setResolutionResult] = useState<PolicyResolutionResult | null>(null);
+  const [resolutionError, setResolutionError] = useState('');
+  const [resolutionLoading, setResolutionLoading] = useState(false);
+  const [rateLimitEvents, setRateLimitEvents] = useState<RateLimitEvent[]>([]);
+  const [rateLimitEventsLoading, setRateLimitEventsLoading] = useState(false);
+  const [rateLimitEventsError, setRateLimitEventsError] = useState('');
+  const [rateLimitEventsSource, setRateLimitEventsSource] = useState<RateLimitEventsSource>('unavailable');
 
-  // Form fields
-  const [formName, setFormName] = useState('');
-  const [formScope, setFormScope] = useState<ResourcePolicy['scope']>('global');
-  const [formScopeId, setFormScopeId] = useState('');
-  const [formResourceType, setFormResourceType] = useState('llm');
-  const [formMaxRpm, setFormMaxRpm] = useState('');
-  const [formMaxRph, setFormMaxRph] = useState('');
-  const [formMaxRpd, setFormMaxRpd] = useState('');
-  const [formMaxTokens, setFormMaxTokens] = useState('');
-  const [formMaxConcurrent, setFormMaxConcurrent] = useState('');
-  const [formPriority, setFormPriority] = useState('0');
-  const [formEnabled, setFormEnabled] = useState(true);
-  const [formDescription, setFormDescription] = useState('');
+  const policyForm = useForm<PolicyFormData>({
+    resolver: zodResolver(policyFormSchema),
+    defaultValues: defaultPolicyFormValues,
+  });
+
+  const watchedScope = policyForm.watch('scope');
+
+  const fetchAllUsers = useCallback(async (): Promise<ScopeUser[]> => {
+    const users: ScopeUser[] = [];
+    let page = 1;
+    let pages = 1;
+    while (page <= pages) {
+      const payload = await api.getUsersPage({
+        page: String(page),
+        limit: String(USERS_PAGE_LIMIT),
+      });
+      const items = normalizeUsersPageItems(payload);
+      users.push(...items);
+
+      if (payload && typeof payload === 'object') {
+        const pageCount = Number((payload as UsersPageResponse).pages);
+        const total = Number((payload as UsersPageResponse).total);
+        const limit = Number((payload as UsersPageResponse).limit || USERS_PAGE_LIMIT);
+        if (Number.isFinite(pageCount) && pageCount > 0) {
+          pages = pageCount;
+        } else if (Number.isFinite(total) && total > 0) {
+          pages = Math.max(1, Math.ceil(total / Math.max(limit, 1)));
+        }
+      }
+
+      if (items.length === 0) break;
+      page += 1;
+    }
+    return users;
+  }, []);
+
+  const fetchRequests24hByUser = useCallback(async (): Promise<Record<string, number>> => {
+    const requestsByUser: Record<string, number> = {};
+    const start = toIsoHoursAgo(USAGE_LOOKBACK_HOURS);
+    let page = 1;
+    let totalPages = 1;
+    const limit = 500;
+
+    while (page <= totalPages) {
+      const payload = await api.getLlmUsage({
+        start,
+        end: new Date().toISOString(),
+        page: String(page),
+        limit: String(limit),
+      });
+      const items = normalizeLlmUsageItems(payload);
+      items.forEach((item) => {
+        if (item.user_id == null) return;
+        const userKey = String(item.user_id);
+        requestsByUser[userKey] = (requestsByUser[userKey] || 0) + 1;
+      });
+
+      let resolvedTotalPages = totalPages;
+      if (payload && typeof payload === 'object') {
+        const total = Number((payload as LlmUsageLogResponse).total);
+        const responseLimit = Number((payload as LlmUsageLogResponse).limit || limit);
+        if (Number.isFinite(total) && total > 0) {
+          resolvedTotalPages = Math.max(1, Math.ceil(total / Math.max(responseLimit, 1)));
+        }
+      }
+      totalPages = resolvedTotalPages;
+      if (items.length < limit) break;
+      page += 1;
+    }
+
+    return requestsByUser;
+  }, []);
+
+  const refreshScopeContext = useCallback(async () => {
+    try {
+      setScopeContextLoading(true);
+      setScopeContextError('');
+
+      const users = await fetchAllUsers();
+      setScopeUsers(users);
+
+      const membershipsResults = await Promise.allSettled(
+        users.map(async (user) => ({
+          userId: user.id,
+          memberships: normalizeMembershipItems(await api.getUserOrgMemberships(String(user.id))),
+        }))
+      );
+      const membershipsByUser: Record<string, Set<string>> = {};
+      membershipsResults.forEach((result) => {
+        if (result.status !== 'fulfilled') return;
+        const orgSet = new Set<string>();
+        result.value.memberships.forEach((membership) => {
+          if (membership.org_id != null) {
+            orgSet.add(String(membership.org_id));
+          }
+        });
+        membershipsByUser[String(result.value.userId)] = orgSet;
+      });
+      setOrgMembershipsByUserId(membershipsByUser);
+
+      const requests = await fetchRequests24hByUser();
+      setRequests24hByUserId(requests);
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to load scope context';
+      setScopeContextError(message);
+      setScopeUsers([]);
+      setOrgMembershipsByUserId({});
+      setRequests24hByUserId({});
+    } finally {
+      setScopeContextLoading(false);
+    }
+  }, [fetchAllUsers, fetchRequests24hByUser]);
+
+  const loadRateLimitEvents = useCallback(async () => {
+    try {
+      setRateLimitEventsLoading(true);
+      setRateLimitEventsError('');
+
+      try {
+        const endpointPayload = await api.getRateLimitEvents({
+          hours: String(USAGE_LOOKBACK_HOURS),
+        });
+        const endpointEvents = normalizeRateLimitEventsPayload(endpointPayload);
+        setRateLimitEvents(endpointEvents);
+        setRateLimitEventsSource('endpoint');
+        return;
+      } catch {
+        // Endpoint may be unavailable in older backends. Fall back to metrics parsing.
+      }
+
+      const metricsText = await api.getMetricsText();
+      const fallbackEvents = parseRateLimitEventsFromMetricsText(metricsText);
+      setRateLimitEvents(fallbackEvents);
+      setRateLimitEventsSource('metrics_text');
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to load rate limit events';
+      setRateLimitEvents([]);
+      setRateLimitEventsError(message);
+      setRateLimitEventsSource('unavailable');
+    } finally {
+      setRateLimitEventsLoading(false);
+    }
+  }, []);
 
   const loadPolicies = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -97,6 +398,10 @@ export default function ResourceGovernorPage() {
       const data = (await api.getResourceGovernorPolicy({ include_ids: true }, signal)) as PoliciesResponse;
       const items = data.policies || data.items || [];
       setAllPolicies(Array.isArray(items) ? items : []);
+      await Promise.all([
+        refreshScopeContext(),
+        loadRateLimitEvents(),
+      ]);
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') return;
       const message = err instanceof Error && err.message ? err.message : 'Failed to load policies';
@@ -105,7 +410,7 @@ export default function ResourceGovernorPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadRateLimitEvents, refreshScopeContext]);
 
   const policies = useMemo(() => {
     let filtered = allPolicies;
@@ -118,6 +423,70 @@ export default function ResourceGovernorPage() {
     return filtered;
   }, [allPolicies, scopeFilter, resourceTypeFilter]);
 
+  const doesPolicyMatchUserScope = useCallback((policy: ResourcePolicy, user: ScopeUser) => {
+    const scopeId = policy.scope_id != null ? String(policy.scope_id).trim() : '';
+    if (policy.scope === 'global') return true;
+    if (!scopeId) return false;
+    if (policy.scope === 'user') {
+      return String(user.id) === scopeId;
+    }
+    if (policy.scope === 'org') {
+      const orgIds = orgMembershipsByUserId[String(user.id)];
+      return orgIds?.has(scopeId) ?? false;
+    }
+    if (policy.scope === 'role') {
+      const normalizedScope = scopeId.toLowerCase();
+      const roles = [user.role, ...(user.roles || [])]
+        .filter((value): value is string => Boolean(value))
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean);
+      return roles.includes(normalizedScope);
+    }
+    return false;
+  }, [orgMembershipsByUserId]);
+
+  const getPolicyMatchReason = useCallback((policy: ResourcePolicy, user: ScopeUser) => {
+    const scopeId = policy.scope_id != null ? String(policy.scope_id).trim() : '';
+    if (policy.scope === 'global') {
+      return 'Global scope matches all users.';
+    }
+    if (policy.scope === 'user') {
+      return `User scope ${scopeId} matches user ${user.id}.`;
+    }
+    if (policy.scope === 'org') {
+      return `Org scope ${scopeId} matches the user organization membership.`;
+    }
+    if (policy.scope === 'role') {
+      return `Role scope ${scopeId} matches one of the user roles.`;
+    }
+    return 'Scope matched.';
+  }, []);
+
+  const getMatchingUsersForPolicy = useCallback((policy: ResourcePolicy): ScopeUser[] => {
+    return scopeUsers.filter((user) => doesPolicyMatchUserScope(policy, user));
+  }, [doesPolicyMatchUserScope, scopeUsers]);
+
+  const estimatePolicyImpact = useCallback((policy: ResourcePolicy): PolicySimulationResult => {
+    const matchedUsers = getMatchingUsersForPolicy(policy);
+    const affectedRequests24h = matchedUsers.reduce((total, user) => {
+      return total + (requests24hByUserId[String(user.id)] || 0);
+    }, 0);
+    return {
+      affectedUsers: matchedUsers.length,
+      affectedRequests24h,
+      source: 'client_estimate',
+    };
+  }, [getMatchingUsersForPolicy, requests24hByUserId]);
+
+  const affectedUsersByPolicyKey = useMemo(() => {
+    const counts: Record<string, number> = {};
+    allPolicies.forEach((policy, index) => {
+      const key = getPolicyRowKey(policy, index);
+      counts[key] = getMatchingUsersForPolicy(policy).length;
+    });
+    return counts;
+  }, [allPolicies, getMatchingUsersForPolicy]);
+
   useEffect(() => {
     const controller = new AbortController();
     void loadPolicies(controller.signal);
@@ -129,19 +498,9 @@ export default function ResourceGovernorPage() {
   }, [loadPolicies]);
 
   const resetForm = () => {
-    setFormName('');
-    setFormScope('global');
-    setFormScopeId('');
-    setFormResourceType('llm');
-    setFormMaxRpm('');
-    setFormMaxRph('');
-    setFormMaxRpd('');
-    setFormMaxTokens('');
-    setFormMaxConcurrent('');
-    setFormPriority('0');
-    setFormEnabled(true);
-    setFormDescription('');
+    policyForm.reset(defaultPolicyFormValues);
     setEditingPolicy(null);
+    setSimulationResult(null);
   };
 
   const handleNewPolicy = () => {
@@ -151,18 +510,21 @@ export default function ResourceGovernorPage() {
 
   const handleEditPolicy = (policy: ResourcePolicy) => {
     setEditingPolicy(policy);
-    setFormName(policy.name || '');
-    setFormScope(policy.scope || 'global');
-    setFormScopeId(policy.scope_id?.toString() || '');
-    setFormResourceType(policy.resource_type || 'llm');
-    setFormMaxRpm(policy.max_requests_per_minute?.toString() || '');
-    setFormMaxRph(policy.max_requests_per_hour?.toString() || '');
-    setFormMaxRpd(policy.max_requests_per_day?.toString() || '');
-    setFormMaxTokens(policy.max_tokens_per_request?.toString() || '');
-    setFormMaxConcurrent(policy.max_concurrent_requests?.toString() || '');
-    setFormPriority(policy.priority?.toString() || '0');
-    setFormEnabled(policy.enabled ?? true);
-    setFormDescription(policy.description || '');
+    setSimulationResult(null);
+    policyForm.reset({
+      name: policy.name || '',
+      scope: policy.scope || 'global',
+      scope_id: policy.scope_id?.toString() || '',
+      resource_type: (policy.resource_type || 'llm') as PolicyFormData['resource_type'],
+      max_requests_per_minute: policy.max_requests_per_minute?.toString() || '',
+      max_requests_per_hour: policy.max_requests_per_hour?.toString() || '',
+      max_requests_per_day: policy.max_requests_per_day?.toString() || '',
+      max_tokens_per_request: policy.max_tokens_per_request?.toString() || '',
+      max_concurrent_requests: policy.max_concurrent_requests?.toString() || '',
+      priority: policy.priority?.toString() || '0',
+      enabled: policy.enabled ?? true,
+      description: policy.description || '',
+    });
     setShowForm(true);
   };
 
@@ -171,37 +533,137 @@ export default function ResourceGovernorPage() {
     resetForm();
   };
 
-  const handleSavePolicy = async () => {
-    const name = formName.trim();
-    if (!name) {
-      showError('Policy name is required');
-      return;
-    }
+  const handleSimulatePolicy = async () => {
+    const isValid = await policyForm.trigger();
+    if (!isValid) return;
 
-    if ((formScope === 'org' || formScope === 'user' || formScope === 'role') && !formScopeId.trim()) {
-      showError(`${formScope.charAt(0).toUpperCase() + formScope.slice(1)} ID is required for ${formScope} scope`);
-      return;
-    }
+    const formData = policyForm.getValues();
+    const simulatedPolicy: ResourcePolicy = {
+      id: editingPolicy?.id,
+      name: formData.name.trim(),
+      scope: formData.scope,
+      scope_id: formData.scope === 'global' ? null : formData.scope_id.trim(),
+      resource_type: formData.resource_type,
+      enabled: formData.enabled,
+      priority: parseOptionalInt(formData.priority) ?? 0,
+      max_requests_per_minute: parseOptionalInt(formData.max_requests_per_minute),
+      max_requests_per_hour: parseOptionalInt(formData.max_requests_per_hour),
+      max_requests_per_day: parseOptionalInt(formData.max_requests_per_day),
+      max_tokens_per_request: parseOptionalInt(formData.max_tokens_per_request),
+      max_concurrent_requests: parseOptionalInt(formData.max_concurrent_requests),
+      description: formData.description.trim() || null,
+    };
 
+    try {
+      setSimulationLoading(true);
+      let nextResult: PolicySimulationResult | null = null;
+
+      try {
+        const response = await api.simulateResourceGovernorPolicy({
+          policy: simulatedPolicy,
+          lookback_hours: USAGE_LOOKBACK_HOURS,
+        });
+        if (response && typeof response === 'object') {
+          const record = response as Record<string, unknown>;
+          const affectedUsers = Number(
+            record.affected_users ?? record.users ?? record.users_affected
+          );
+          const affectedRequests24h = Number(
+            record.affected_requests_24h ?? record.requests_24h ?? record.requests_affected
+          );
+          if (Number.isFinite(affectedUsers) && Number.isFinite(affectedRequests24h)) {
+            nextResult = {
+              affectedUsers: Math.max(0, affectedUsers),
+              affectedRequests24h: Math.max(0, affectedRequests24h),
+              source: 'endpoint',
+            };
+          }
+        }
+      } catch {
+        // Best-effort endpoint attempt; fallback to client estimation below.
+      }
+
+      if (!nextResult) {
+        nextResult = estimatePolicyImpact(simulatedPolicy);
+      }
+
+      setSimulationResult(nextResult);
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to simulate policy';
+      showError(message);
+      setSimulationResult(null);
+    } finally {
+      setSimulationLoading(false);
+    }
+  };
+
+  const handleResolvePolicy = async () => {
+    try {
+      setResolutionLoading(true);
+      setResolutionError('');
+      setResolutionResult(null);
+
+      const userIdValue = resolutionUserId.trim();
+      if (!userIdValue) {
+        setResolutionError('Enter a user ID to resolve policy scope.');
+        return;
+      }
+
+      const user = scopeUsers.find((entry) => String(entry.id) === userIdValue);
+      if (!user) {
+        setResolutionError(`User ${userIdValue} was not found in the current admin scope.`);
+        return;
+      }
+
+      const matchingSteps = allPolicies
+        .filter((policy) => policy.enabled)
+        .filter((policy) => policyResourceMatches(policy, resolutionResourceType))
+        .filter((policy) => doesPolicyMatchUserScope(policy, user))
+        .map((policy) => ({
+          policy,
+          priority: getPolicyPriority(policy),
+          reason: getPolicyMatchReason(policy, user),
+        }))
+        .sort((a, b) => {
+          if (a.priority !== b.priority) return a.priority - b.priority;
+          return a.policy.name.localeCompare(b.policy.name);
+        });
+
+      const winner = matchingSteps.length > 0
+        ? [...matchingSteps].sort((a, b) => b.priority - a.priority)[0]
+        : null;
+
+      setResolutionResult({
+        user,
+        resourceType: resolutionResourceType,
+        steps: matchingSteps,
+        winner,
+      });
+    } finally {
+      setResolutionLoading(false);
+    }
+  };
+
+  const handleSavePolicy = policyForm.handleSubmit(async (data) => {
     try {
       setFormSaving(true);
       const payload: Record<string, unknown> = {
-        name,
-        scope: formScope,
-        resource_type: formResourceType,
-        enabled: formEnabled,
+        name: data.name.trim(),
+        scope: data.scope,
+        resource_type: data.resource_type,
+        enabled: data.enabled,
       };
 
-      if (formScope !== 'global') {
-        payload.scope_id = formScopeId.trim();
+      if (data.scope !== 'global') {
+        payload.scope_id = data.scope_id.trim();
       }
 
-      const maxRpm = parseOptionalInt(formMaxRpm);
-      const maxRph = parseOptionalInt(formMaxRph);
-      const maxRpd = parseOptionalInt(formMaxRpd);
-      const maxTokens = parseOptionalInt(formMaxTokens);
-      const maxConcurrent = parseOptionalInt(formMaxConcurrent);
-      const priority = parseOptionalInt(formPriority);
+      const maxRpm = parseOptionalInt(data.max_requests_per_minute);
+      const maxRph = parseOptionalInt(data.max_requests_per_hour);
+      const maxRpd = parseOptionalInt(data.max_requests_per_day);
+      const maxTokens = parseOptionalInt(data.max_tokens_per_request);
+      const maxConcurrent = parseOptionalInt(data.max_concurrent_requests);
+      const priority = parseOptionalInt(data.priority);
       const isEditMode = editingPolicy?.id != null;
 
       if (maxRpm !== null) payload.max_requests_per_minute = maxRpm;
@@ -222,10 +684,11 @@ export default function ResourceGovernorPage() {
       if (priority !== null) payload.priority = priority;
       else if (isEditMode) payload.priority = null;
 
+      const trimmedDescription = data.description.trim();
       if (isEditMode) {
-        payload.description = formDescription.trim() || null;
-      } else if (formDescription.trim()) {
-        payload.description = formDescription.trim();
+        payload.description = trimmedDescription || null;
+      } else if (trimmedDescription) {
+        payload.description = trimmedDescription;
       }
 
       if (editingPolicy?.id != null) {
@@ -243,7 +706,7 @@ export default function ResourceGovernorPage() {
     } finally {
       setFormSaving(false);
     }
-  };
+  });
 
   const handleDeletePolicy = async (policy: ResourcePolicy) => {
     if (policy.id == null) {
@@ -293,6 +756,29 @@ export default function ResourceGovernorPage() {
     return parts.length > 0 ? parts.join(', ') : 'No limits set';
   };
 
+  const scopeLabelPrefix = watchedScope === 'org'
+    ? 'Organization'
+    : watchedScope === 'user'
+      ? 'User'
+      : 'Role';
+
+  const resolutionChainSummary = useMemo(() => {
+    if (!resolutionResult || resolutionResult.steps.length === 0 || !resolutionResult.winner) return '';
+    const chain = resolutionResult.steps
+      .map((step) => {
+        const scopeLabel = step.policy.scope.charAt(0).toUpperCase() + step.policy.scope.slice(1);
+        return `${scopeLabel} policy "${step.policy.name}" (priority ${step.priority})`;
+      })
+      .join(' → ');
+    return `${chain} → Winner: ${resolutionResult.winner.policy.name}`;
+  }, [resolutionResult]);
+
+  const rateLimitEventsSourceLabel = rateLimitEventsSource === 'endpoint'
+    ? 'Endpoint data'
+    : rateLimitEventsSource === 'metrics_text'
+      ? 'Metrics fallback'
+      : 'Unavailable';
+
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
@@ -325,6 +811,14 @@ export default function ResourceGovernorPage() {
             </Alert>
           )}
 
+          {scopeContextError && (
+            <Alert>
+              <AlertDescription>
+                Scope context unavailable: {scopeContextError}
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* Create/Edit Form */}
           {showForm && (
             <Card>
@@ -342,166 +836,304 @@ export default function ResourceGovernorPage() {
                     onClick={handleCancelForm}
                     aria-label="Close policy form"
                     title="Close policy form"
+                    disabled={formSaving}
                   >
                     <X className="h-4 w-4" />
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent className="grid gap-4">
-                <div className="grid gap-4 md:grid-cols-3">
-                  <div className="space-y-1">
-                    <Label htmlFor="policy-name">Policy Name *</Label>
-                    <Input
-                      id="policy-name"
-                      placeholder="e.g., Default LLM Rate Limit"
-                      value={formName}
-                      onChange={(e) => setFormName(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="policy-scope">Scope *</Label>
-                    <Select
-                      id="policy-scope"
-                      value={formScope}
-                      onChange={(e) => setFormScope(e.target.value as ResourcePolicy['scope'])}
-                    >
-                      {POLICY_SCOPES.map((scope) => (
-                        <option key={scope} value={scope}>
-                          {scope.charAt(0).toUpperCase() + scope.slice(1)}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                  {formScope !== 'global' && (
-                    <div className="space-y-1">
-                      <Label htmlFor="policy-scope-id">
-                        {formScope === 'org' ? 'Organization' : formScope === 'user' ? 'User' : 'Role'} ID *
-                      </Label>
-                      <Input
-                        id="policy-scope-id"
-                        placeholder={`Enter ${formScope} ID`}
-                        value={formScopeId}
-                        onChange={(e) => setFormScopeId(e.target.value)}
+              <CardContent>
+                <FormProvider {...policyForm}>
+                  <Form onSubmit={handleSavePolicy} className="grid gap-4">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <FormInput<PolicyFormData>
+                        name="name"
+                        label="Policy Name"
+                        placeholder="e.g., Default LLM Rate Limit"
+                        required
+                      />
+                      <FormSelect<PolicyFormData>
+                        name="scope"
+                        label="Scope"
+                        required
+                        options={POLICY_SCOPES.map((scope) => ({
+                          value: scope,
+                          label: scope.charAt(0).toUpperCase() + scope.slice(1),
+                        }))}
+                      />
+                      {watchedScope !== 'global' && (
+                        <FormInput<PolicyFormData>
+                          name="scope_id"
+                          label={`${scopeLabelPrefix} ID`}
+                          placeholder={`Enter ${watchedScope} ID`}
+                          required
+                        />
+                      )}
+                      <FormSelect<PolicyFormData>
+                        name="resource_type"
+                        label="Resource Type"
+                        required
+                        options={RESOURCE_TYPES.map((type) => ({
+                          value: type,
+                          label: type.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+                        }))}
                       />
                     </div>
-                  )}
-                  <div className="space-y-1">
-                    <Label htmlFor="policy-resource">Resource Type *</Label>
-                    <Select
-                      id="policy-resource"
-                      value={formResourceType}
-                      onChange={(e) => setFormResourceType(e.target.value)}
-                    >
-                      {RESOURCE_TYPES.map((type) => (
-                        <option key={type} value={type}>
-                          {type.replaceAll('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                </div>
 
-                <div className="grid gap-4 md:grid-cols-5">
-                  <div className="space-y-1">
-                    <Label htmlFor="policy-rpm">Max Requests/Min</Label>
-                    <Input
-                      id="policy-rpm"
-                      type="number"
-                      min="0"
-                      placeholder="e.g., 60"
-                      value={formMaxRpm}
-                      onChange={(e) => setFormMaxRpm(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="policy-rph">Max Requests/Hour</Label>
-                    <Input
-                      id="policy-rph"
-                      type="number"
-                      min="0"
-                      placeholder="e.g., 1000"
-                      value={formMaxRph}
-                      onChange={(e) => setFormMaxRph(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="policy-rpd">Max Requests/Day</Label>
-                    <Input
-                      id="policy-rpd"
-                      type="number"
-                      min="0"
-                      placeholder="e.g., 10000"
-                      value={formMaxRpd}
-                      onChange={(e) => setFormMaxRpd(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="policy-tokens">Max Tokens/Request</Label>
-                    <Input
-                      id="policy-tokens"
-                      type="number"
-                      min="0"
-                      placeholder="e.g., 4096"
-                      value={formMaxTokens}
-                      onChange={(e) => setFormMaxTokens(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="policy-concurrent">Max Concurrent</Label>
-                    <Input
-                      id="policy-concurrent"
-                      type="number"
-                      min="0"
-                      placeholder="e.g., 10"
-                      value={formMaxConcurrent}
-                      onChange={(e) => setFormMaxConcurrent(e.target.value)}
-                    />
-                  </div>
-                </div>
+                    <div className="grid gap-4 md:grid-cols-5">
+                      <FormInput<PolicyFormData>
+                        name="max_requests_per_minute"
+                        label="Max Requests/Min"
+                        type="number"
+                        placeholder="e.g., 60"
+                      />
+                      <FormInput<PolicyFormData>
+                        name="max_requests_per_hour"
+                        label="Max Requests/Hour"
+                        type="number"
+                        placeholder="e.g., 1000"
+                      />
+                      <FormInput<PolicyFormData>
+                        name="max_requests_per_day"
+                        label="Max Requests/Day"
+                        type="number"
+                        placeholder="e.g., 10000"
+                      />
+                      <FormInput<PolicyFormData>
+                        name="max_tokens_per_request"
+                        label="Max Tokens/Request"
+                        type="number"
+                        placeholder="e.g., 4096"
+                      />
+                      <FormInput<PolicyFormData>
+                        name="max_concurrent_requests"
+                        label="Max Concurrent"
+                        type="number"
+                        placeholder="e.g., 10"
+                      />
+                    </div>
 
-                <div className="grid gap-4 md:grid-cols-3">
-                  <div className="space-y-1">
-                    <Label htmlFor="policy-priority">Priority (higher = more important)</Label>
-                    <Input
-                      id="policy-priority"
-                      type="number"
-                      min="0"
-                      placeholder="0"
-                      value={formPriority}
-                      onChange={(e) => setFormPriority(e.target.value)}
-                    />
-                  </div>
-                  <div className="flex items-center gap-2 pt-6">
-                    <Checkbox
-                      id="policy-enabled"
-                      checked={formEnabled}
-                      onCheckedChange={(checked) => setFormEnabled(checked === true)}
-                    />
-                    <Label htmlFor="policy-enabled">Enabled</Label>
-                  </div>
-                </div>
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <FormInput<PolicyFormData>
+                        name="priority"
+                        label="Priority (higher = more important)"
+                        type="number"
+                        placeholder="0"
+                      />
+                      <div className="pt-6">
+                        <FormCheckbox<PolicyFormData>
+                          name="enabled"
+                          label="Enabled"
+                        />
+                      </div>
+                    </div>
 
-                <div className="space-y-1">
-                  <Label htmlFor="policy-description">Description</Label>
-                  <Input
-                    id="policy-description"
-                    placeholder="Optional description for this policy"
-                    value={formDescription}
-                    onChange={(e) => setFormDescription(e.target.value)}
-                  />
-                </div>
+                    <FormInput<PolicyFormData>
+                      name="description"
+                      label="Description"
+                      placeholder="Optional description for this policy"
+                    />
 
-                <div className="flex gap-2">
-                  <Button onClick={handleSavePolicy} disabled={formSaving}>
-                    {formSaving ? 'Saving...' : editingPolicy ? 'Update Policy' : 'Create Policy'}
-                  </Button>
-                  <Button variant="outline" onClick={handleCancelForm}>
-                    Cancel
-                  </Button>
-                </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="submit" loading={formSaving} loadingText="Saving...">
+                        {editingPolicy ? 'Update Policy' : 'Create Policy'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={handleSimulatePolicy}
+                        disabled={formSaving}
+                        loading={simulationLoading}
+                        loadingText="Simulating..."
+                      >
+                        Simulate Impact
+                      </Button>
+                      <Button type="button" variant="outline" onClick={handleCancelForm} disabled={formSaving}>
+                        Cancel
+                      </Button>
+                    </div>
+                    {simulationResult ? (
+                      <Alert>
+                        <AlertDescription>
+                          Would affect {simulationResult.affectedUsers} users / {simulationResult.affectedRequests24h} requests in last 24h.
+                          {' '}
+                          {simulationResult.source === 'client_estimate'
+                            ? '(Client estimate)'
+                            : '(Backend simulation)'}
+                        </AlertDescription>
+                      </Alert>
+                    ) : null}
+                  </Form>
+                </FormProvider>
               </CardContent>
             </Card>
           )}
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Policy Resolution</CardTitle>
+              <CardDescription>
+                Enter a user and resource type to see which policy applies and why.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="space-y-1">
+                  <Label htmlFor="resolution-user-id">User ID</Label>
+                  <Input
+                    id="resolution-user-id"
+                    placeholder="e.g., 42"
+                    value={resolutionUserId}
+                    onChange={(event) => setResolutionUserId(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="resolution-resource-type">Resource Type</Label>
+                  <Select
+                    id="resolution-resource-type"
+                    value={resolutionResourceType}
+                    onChange={(event) => setResolutionResourceType(event.target.value as PolicyFormData['resource_type'])}
+                  >
+                    {RESOURCE_TYPES.map((type) => (
+                      <option key={type} value={type}>
+                        {type.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    onClick={handleResolvePolicy}
+                    loading={resolutionLoading}
+                    loadingText="Resolving..."
+                    disabled={scopeContextLoading}
+                  >
+                    Resolve Policy
+                  </Button>
+                </div>
+              </div>
+
+              {scopeContextLoading ? (
+                <div className="text-sm text-muted-foreground">Loading scope context...</div>
+              ) : null}
+
+              {resolutionError ? (
+                <Alert variant="destructive">
+                  <AlertDescription>{resolutionError}</AlertDescription>
+                </Alert>
+              ) : null}
+
+              {resolutionResult && resolutionResult.steps.length > 0 ? (
+                <div className="grid gap-3">
+                  <Alert>
+                    <AlertDescription>{resolutionChainSummary}</AlertDescription>
+                  </Alert>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Policy</TableHead>
+                        <TableHead>Scope</TableHead>
+                        <TableHead>Priority</TableHead>
+                        <TableHead>Reason</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {resolutionResult.steps.map((step, index) => {
+                        const isWinner = resolutionResult.winner?.policy === step.policy;
+                        return (
+                          <TableRow key={`${step.policy.name}-${index}`}>
+                            <TableCell className="font-medium">
+                              {step.policy.name}
+                              {isWinner ? (
+                                <Badge variant="default" className="ml-2">Winner</Badge>
+                              ) : null}
+                            </TableCell>
+                            <TableCell>{getScopeDisplay(step.policy)}</TableCell>
+                            <TableCell>{step.priority}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{step.reason}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : null}
+
+              {resolutionResult && resolutionResult.steps.length === 0 ? (
+                <Alert>
+                  <AlertDescription>
+                    No enabled policy matched user {resolutionResult.user.id} for resource type {resolutionResult.resourceType}.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <CardTitle>Rate Limit Events</CardTitle>
+                  <CardDescription>
+                    Recent rate-limit rejections by user/role and policy over the last {USAGE_LOOKBACK_HOURS} hours.
+                  </CardDescription>
+                </div>
+                <Badge variant="outline" className="text-xs">
+                  {rateLimitEventsSourceLabel}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              {rateLimitEventsLoading ? (
+                <div className="text-sm text-muted-foreground">Loading rate limit events...</div>
+              ) : null}
+
+              {rateLimitEventsError ? (
+                <Alert variant="destructive">
+                  <AlertDescription>{rateLimitEventsError}</AlertDescription>
+                </Alert>
+              ) : null}
+
+              {!rateLimitEventsLoading && rateLimitEvents.length === 0 ? (
+                <div className="text-sm text-muted-foreground">
+                  No rate limit rejections were found for the current data source.
+                </div>
+              ) : null}
+
+              {!rateLimitEventsLoading && rateLimitEvents.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>User/Role</TableHead>
+                      <TableHead>Policy</TableHead>
+                      <TableHead className="text-right">Rejections (24h)</TableHead>
+                      <TableHead>Last Rejection</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {rateLimitEvents.map((event, index) => (
+                      <TableRow key={`${event.actor}-${event.policy}-${index}`}>
+                        <TableCell className="font-medium">{event.actor}</TableCell>
+                        <TableCell>
+                          <div>{event.policy}</div>
+                          {(event.resourceType || event.reason) ? (
+                            <div className="text-xs text-muted-foreground">
+                              {[event.resourceType, event.reason].filter(Boolean).join(' • ')}
+                            </div>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{event.rejections24h}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {formatPolicyDate(event.lastRejectedAt)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : null}
+            </CardContent>
+          </Card>
 
           {/* Policies List */}
           <Card>
@@ -536,7 +1168,7 @@ export default function ResourceGovernorPage() {
                     <option value="">All Resources</option>
                     {RESOURCE_TYPES.map((type) => (
                       <option key={type} value={type}>
-                        {type.replaceAll('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
+                        {type.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())}
                       </option>
                     ))}
                   </Select>
@@ -556,6 +1188,7 @@ export default function ResourceGovernorPage() {
                       <TableHead>Name</TableHead>
                       <TableHead>Scope</TableHead>
                       <TableHead>Resource</TableHead>
+                      <TableHead>Affected Users</TableHead>
                       <TableHead>Limits</TableHead>
                       <TableHead>Priority</TableHead>
                       <TableHead>Status</TableHead>
@@ -565,7 +1198,7 @@ export default function ResourceGovernorPage() {
                   </TableHeader>
                   <TableBody>
                     {policies.map((policy, index) => {
-                      const rowKey = policy.id != null ? `policy-${policy.id}` : `policy-index-${index}`;
+                      const rowKey = getPolicyRowKey(policy, index);
                       const policyId = policy.id != null ? String(policy.id) : '';
                       const isDeleting = policyId !== '' && deletingPolicyId === policyId;
                       return (
@@ -581,6 +1214,9 @@ export default function ResourceGovernorPage() {
                             <Badge variant="outline">
                               {policy.resource_type?.replaceAll('_', ' ') || 'all'}
                             </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {scopeContextLoading ? '…' : (affectedUsersByPolicyKey[rowKey] ?? '—')}
                           </TableCell>
                           <TableCell className="text-sm">{getLimitsDisplay(policy)}</TableCell>
                           <TableCell>{policy.priority ?? 0}</TableCell>
@@ -610,12 +1246,9 @@ export default function ResourceGovernorPage() {
                                 title={isDeleting ? 'Deleting policy' : 'Delete policy'}
                                 aria-label={isDeleting ? 'Deleting policy' : 'Delete policy'}
                                 disabled={isDeleting}
+                                loading={isDeleting}
                               >
-                                {isDeleting ? (
-                                  <RefreshCw className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Trash2 className="h-4 w-4" />
-                                )}
+                                <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>
                           </TableCell>

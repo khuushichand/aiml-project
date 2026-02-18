@@ -7746,23 +7746,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
         return None # Should not be reached
 
-    def get_conversation_by_id(self, conversation_id: str) -> dict[str, Any] | None:
+    def get_conversation_by_id(self, conversation_id: str, include_deleted: bool = False) -> dict[str, Any] | None:
         """
         Retrieves a specific conversation by its UUID.
 
-        Only non-deleted conversations are returned.
+        Only non-deleted conversations are returned unless `include_deleted=True`.
 
         Args:
             conversation_id: The string UUID of the conversation.
 
         Returns:
-            A dictionary containing the conversation's data if found and not deleted,
-            otherwise None.
+            A dictionary containing the conversation's data if found (and not deleted
+            unless `include_deleted=True`), otherwise None.
 
         Raises:
             CharactersRAGDBError: For database errors during fetching.
         """
-        query = "SELECT * FROM conversations WHERE id = ? AND deleted = 0"
+        if include_deleted:
+            query = "SELECT * FROM conversations WHERE id = ?"
+        else:
+            query = "SELECT * FROM conversations WHERE id = ? AND deleted = 0"
         try:
             cursor = self.execute_query(query, (conversation_id,))
             row = cursor.fetchone()
@@ -7819,7 +7822,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error fetching conversations for character ID {character_id}: {e}")
             raise
 
-    def count_conversations_for_user(self, client_id: str) -> int:
+    def count_conversations_for_user(
+        self,
+        client_id: str,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
+    ) -> int:
         """
         Count total non-deleted conversations for a given user (client_id).
 
@@ -7832,7 +7840,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         Raises:
             CharactersRAGDBError on database failure.
         """
-        query = "SELECT COUNT(*) as cnt FROM conversations WHERE client_id = ? AND deleted = 0"
+        if deleted_only:
+            deleted_clause = "deleted = 1"
+        elif include_deleted:
+            deleted_clause = "1 = 1"
+        else:
+            deleted_clause = "deleted = 0"
+        query = f"SELECT COUNT(*) as cnt FROM conversations WHERE client_id = ? AND {deleted_clause}"
         try:
             cursor = self.execute_query(query, (client_id,))
             row = cursor.fetchone()
@@ -7841,9 +7855,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error counting conversations for client_id {client_id}: {e}")
             raise
 
-    def get_conversations_for_user(self, client_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def get_conversations_for_user(
+        self,
+        client_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
+    ) -> list[dict[str, Any]]:
         """
-        List non-deleted conversations for a given user (client_id), ordered by last_modified DESC.
+        List conversations for a given user (client_id), ordered by last_modified DESC.
 
         Args:
             client_id: The user/client identifier as string.
@@ -7856,9 +7877,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         Raises:
             CharactersRAGDBError on database failure.
         """
+        if deleted_only:
+            deleted_clause = "deleted = 1"
+        elif include_deleted:
+            deleted_clause = "1 = 1"
+        else:
+            deleted_clause = "deleted = 0"
+
         query = (
             "SELECT * FROM conversations "
-            "WHERE client_id = ? AND deleted = 0 "
+            f"WHERE client_id = ? AND {deleted_clause} "
             "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
         try:
@@ -8070,7 +8098,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error("Failed to fetch conversation cluster {}: {}", cluster_id, exc)
             raise
 
-    def count_conversations_for_user_by_character(self, client_id: str, character_id: int) -> int:
+    def count_conversations_for_user_by_character(
+        self,
+        client_id: str,
+        character_id: int,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
+    ) -> int:
         """
         Count non-deleted conversations for a given user scoped to a specific character.
 
@@ -8084,8 +8118,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         Raises:
             CharactersRAGDBError on database failure.
         """
+        if deleted_only:
+            deleted_clause = "deleted = 1"
+        elif include_deleted:
+            deleted_clause = "1 = 1"
+        else:
+            deleted_clause = "deleted = 0"
         query = (
-            "SELECT COUNT(1) FROM conversations WHERE client_id = ? AND character_id = ? AND deleted = 0"
+            f"SELECT COUNT(1) FROM conversations WHERE client_id = ? AND character_id = ? AND {deleted_clause}"
         )
         try:
             cursor = self.execute_query(query, (client_id, character_id))
@@ -8102,9 +8142,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
             raise
 
-    def get_conversations_for_user_and_character(self, client_id: str, character_id: int, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def get_conversations_for_user_and_character(
+        self,
+        client_id: str,
+        character_id: int,
+        limit: int = 50,
+        offset: int = 0,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
+    ) -> list[dict[str, Any]]:
         """
-        List non-deleted conversations for a given user scoped to a specific character.
+        List conversations for a given user scoped to a specific character.
 
         Args:
             client_id: The user/client identifier as string.
@@ -8118,9 +8166,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         Raises:
             CharactersRAGDBError on database failure.
         """
+        if deleted_only:
+            deleted_clause = "deleted = 1"
+        elif include_deleted:
+            deleted_clause = "1 = 1"
+        else:
+            deleted_clause = "deleted = 0"
+
         query = (
             "SELECT * FROM conversations "
-            "WHERE client_id = ? AND character_id = ? AND deleted = 0 "
+            f"WHERE client_id = ? AND character_id = ? AND {deleted_clause} "
             "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
         try:
@@ -8426,6 +8481,117 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(
                 f"Database error soft-deleting conversation ID {conversation_id} (expected v{expected_version}): {e}",
                 exc_info=True)
+            raise
+
+    def restore_conversation(self, conversation_id: str, expected_version: int) -> bool | None:
+        """
+        Restores a soft-deleted conversation using optimistic locking.
+
+        Args:
+            conversation_id: The UUID of the conversation to restore.
+            expected_version: The client's expected record version.
+
+        Returns:
+            True if restore succeeded or if already active (idempotent).
+
+        Raises:
+            ConflictError: If conversation is missing or version mismatch occurs.
+            CharactersRAGDBError: For database failures.
+        """
+        now = self._get_current_utc_timestamp_iso()
+        next_version_val = expected_version + 1
+        query = (
+            "UPDATE conversations "
+            "SET deleted = 0, last_modified = ?, version = ?, client_id = ? "
+            "WHERE id = ? AND version = ? AND deleted = 1"
+        )
+        params = (now, next_version_val, self.client_id, conversation_id, expected_version)
+
+        try:
+            with self.transaction() as conn:
+                check_cursor = conn.execute(
+                    "SELECT deleted, version FROM conversations WHERE id = ?",
+                    (conversation_id,),
+                )
+                record_status = check_cursor.fetchone()
+                if not record_status:
+                    raise ConflictError(
+                        f"Conversation ID {conversation_id} not found.",
+                        entity="conversations",
+                        entity_id=conversation_id,
+                    )
+
+                if not record_status["deleted"]:
+                    logger.info(
+                        f"Conversation ID {conversation_id} already active. Restore successful (idempotent)."
+                    )
+                    return True
+
+                current_db_version = record_status["version"]
+                if current_db_version != expected_version:
+                    raise ConflictError(
+                        (
+                            f"Restore for Conversation ID {conversation_id} failed: "
+                            f"version mismatch (db has {current_db_version}, client expected {expected_version})."
+                        ),
+                        entity="conversations",
+                        entity_id=conversation_id,
+                    )
+
+                cursor = conn.execute(query, params)
+                if cursor.rowcount == 0:
+                    check_again_cursor = conn.execute(
+                        "SELECT version, deleted FROM conversations WHERE id = ?",
+                        (conversation_id,),
+                    )
+                    final_state = check_again_cursor.fetchone()
+                    msg = (
+                        f"Restore for conversation ID {conversation_id} "
+                        f"(expected v{expected_version}) affected 0 rows."
+                    )
+                    if not final_state:
+                        msg = f"Conversation ID {conversation_id} disappeared."
+                    elif not final_state["deleted"]:
+                        logger.info(
+                            f"Conversation ID {conversation_id} was restored concurrently. Success."
+                        )
+                        return True
+                    elif final_state["version"] != expected_version:
+                        msg = (
+                            f"Conversation ID {conversation_id} version changed to "
+                            f"{final_state['version']} concurrently."
+                        )
+                    raise ConflictError(msg, entity="conversations", entity_id=conversation_id)
+
+                logger.info(
+                    f"Restored conversation ID {conversation_id} (was v{expected_version}), "
+                    f"new version {next_version_val}."
+                )
+                return True
+        except ConflictError:
+            raise
+        except CharactersRAGDBError as e:
+            logger.error(
+                f"Database error restoring conversation ID {conversation_id} (expected v{expected_version}): {e}",
+                exc_info=True,
+            )
+            raise
+
+    def hard_delete_conversation(self, conversation_id: str) -> bool:
+        """
+        Permanently deletes a conversation row.
+
+        Related rows are removed via foreign key cascades where configured.
+        """
+        try:
+            with self.transaction() as conn:
+                rowcount = conn.execute(
+                    "DELETE FROM conversations WHERE id = ?",
+                    (conversation_id,),
+                ).rowcount
+                return bool(rowcount and rowcount > 0)
+        except CharactersRAGDBError as e:
+            logger.error(f"Database error hard-deleting conversation ID {conversation_id}: {e}", exc_info=True)
             raise
 
     def search_conversations_by_title(

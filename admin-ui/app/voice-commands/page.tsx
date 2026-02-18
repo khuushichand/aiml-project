@@ -12,12 +12,13 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Form, FormInput, FormSelect, FormTextarea } from '@/components/ui/form';
-import { Eye, Mic, MicOff, Search, Plus, RefreshCw, Trash2, BarChart2 } from 'lucide-react';
+import { Eye, Mic, MicOff, Search, Plus, Trash2, BarChart2 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
 import { parseVoiceCommandInputs } from '@/lib/voice-commands';
@@ -330,8 +331,8 @@ function VoiceCommandsPageContent() {
                       >
                         Cancel
                       </Button>
-                      <Button type="submit" disabled={creating}>
-                        {creating ? 'Creating...' : 'Create Command'}
+                      <Button type="submit" loading={creating} loadingText="Creating...">
+                        Create Command
                       </Button>
                     </DialogFooter>
                   </Form>
@@ -456,9 +457,29 @@ function VoiceCommandsPageContent() {
                   <TableSkeleton rows={5} columns={7} />
                 </div>
               ) : filteredCommands.length === 0 ? (
-                <div className="text-center text-muted-foreground py-8">
-                  {searchQuery || actionTypeFilter ? 'No commands match your filters' : 'No voice commands configured'}
-                </div>
+                <EmptyState
+                  icon={Mic}
+                  title={searchQuery || actionTypeFilter ? 'No commands match your filters' : 'No voice commands configured'}
+                  description={
+                    searchQuery || actionTypeFilter
+                      ? 'Adjust filters to find commands.'
+                      : 'Create a voice command to enable quick actions.'
+                  }
+                  actions={[
+                    searchQuery || actionTypeFilter
+                      ? {
+                          label: 'Clear filters',
+                          onClick: () => {
+                            handleSearchChange('');
+                            handleActionTypeChange('');
+                          },
+                        }
+                      : {
+                          label: 'Create command',
+                          onClick: () => setShowCreateDialog(true),
+                        },
+                  ]}
+                />
               ) : (
                 <>
                   <Table>
@@ -536,13 +557,14 @@ function VoiceCommandsPageContent() {
                                 onClick={() => handleToggleEnabled(cmd)}
                               />
                               <AccessibleIconButton
-                                icon={isDeleting ? RefreshCw : Trash2}
+                                icon={Trash2}
                                 label={isDeleting ? 'Deleting command' : 'Delete command'}
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleDeleteCommand(cmd)}
                                 disabled={isDeleting}
-                                iconClassName={isDeleting ? 'animate-spin text-destructive' : 'text-destructive'}
+                                loading={isDeleting}
+                                className="text-destructive hover:text-destructive"
                               />
                             </div>
                           </TableCell>

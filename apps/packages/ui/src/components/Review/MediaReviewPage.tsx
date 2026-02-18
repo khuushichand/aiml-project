@@ -21,6 +21,7 @@ import {
   MEDIA_REVIEW_FOCUSED_ID_SETTING
 } from "@/services/settings/ui-settings"
 import { clearSetting, getSetting, setSetting } from "@/services/settings/registry"
+import { extractMediaDetailContent } from "@/utils/media-detail-content"
 
 type MediaItem = {
   id: string | number
@@ -35,35 +36,15 @@ type MediaDetail = {
   title?: string
   type?: string
   created_at?: string
-  content?: string
+  content?: string | Record<string, unknown>
   text?: string
   raw_text?: string
   summary?: string
-  latest_version?: { content?: string }
+  latest_version?: { content?: string | Record<string, unknown> }
 }
 
 const getContent = (d: MediaDetail): string => {
-  if (!d) return ""
-  const firstString = (...vals: any[]): string => {
-    for (const v of vals) {
-      if (typeof v === 'string' && v.trim().length > 0) return v
-    }
-    return ""
-  }
-  if (typeof d === 'string') return d
-  const root = firstString(d.content, d.text, (d as any).raw_text, (d as any).rawText, d.summary)
-  if (root) return root
-  const lv: any = (d as any).latest_version || (d as any).latestVersion
-  if (lv && typeof lv === 'object') {
-    const fromLatest = firstString(lv.content, lv.text, lv.raw_text, lv.rawText, lv.summary)
-    if (fromLatest) return fromLatest
-  }
-  const data: any = (d as any).data
-  if (data && typeof data === 'object') {
-    const fromData = firstString(data.content, data.text, data.raw_text, data.rawText, data.summary)
-    if (fromData) return fromData
-  }
-  return ""
+  return extractMediaDetailContent(d)
 }
 
 const MINIMAP_COLLAPSE_THRESHOLD = 8
@@ -217,7 +198,10 @@ export const MediaReviewPage: React.FC = () => {
           let d = details[m.id]
           if (!d) {
             try {
-              d = await bgRequest<MediaDetail>({ path: `/api/v1/media/${m.id}` as any, method: 'GET' as any })
+              d = await bgRequest<MediaDetail>({
+                path: `/api/v1/media/${m.id}?include_content=true&include_versions=false` as any,
+                method: 'GET' as any
+              })
               setDetails((prev) => (prev[m.id] ? prev : { ...prev, [m.id]: d! }))
             } catch {}
           }
@@ -266,7 +250,10 @@ export const MediaReviewPage: React.FC = () => {
         let d = details[m.id]
         if (!d) {
           try {
-            d = await bgRequest<MediaDetail>({ path: `/api/v1/media/${m.id}` as any, method: 'GET' as any })
+            d = await bgRequest<MediaDetail>({
+              path: `/api/v1/media/${m.id}?include_content=true&include_versions=false` as any,
+              method: 'GET' as any
+            })
             setDetails((prev) => (prev[m.id] ? prev : { ...prev, [m.id]: d! }))
           } catch {}
         }
@@ -328,7 +315,10 @@ export const MediaReviewPage: React.FC = () => {
       })
     }
     try {
-      const d = await bgRequest<MediaDetail>({ path: `/api/v1/media/${id}` as any, method: 'GET' as any })
+      const d = await bgRequest<MediaDetail>({
+        path: `/api/v1/media/${id}?include_content=true&include_versions=false` as any,
+        method: 'GET' as any
+      })
       const base = Array.isArray(data) ? (data as MediaItem[]).find((x) => x.id === id) : undefined
       const enriched = { ...d, id, title: (d as any)?.title ?? base?.title, type: (d as any)?.type ?? base?.type, created_at: (d as any)?.created_at ?? base?.created_at } as any
       setDetails((prev) => ({ ...prev, [id]: enriched }))

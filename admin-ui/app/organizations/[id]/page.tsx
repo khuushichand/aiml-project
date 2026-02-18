@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
-  ArrowLeft, Building2, Users, UserPlus, Mail, RefreshCw, Trash2, Key, Shield, Copy, Plus, Eye, EyeOff, ListChecks
+  ArrowLeft, Building2, Users, UserPlus, Mail, Trash2, Key, Shield, Copy, Plus, Eye, EyeOff, ListChecks, Pencil
 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Organization, OrgMember, Team, ProviderSecret, User, WatchlistSettings } from '@/types';
@@ -63,6 +63,12 @@ export default function OrganizationDetailPage() {
   const [editWatchlistEnabled, setEditWatchlistEnabled] = useState(false);
   const [editWatchlistThreshold, setEditWatchlistThreshold] = useState('');
   const [editWatchlistAlertOnBreach, setEditWatchlistAlertOnBreach] = useState(false);
+  const [showEditOrgDialog, setShowEditOrgDialog] = useState(false);
+  const [editOrgName, setEditOrgName] = useState('');
+  const [editOrgSlug, setEditOrgSlug] = useState('');
+  const [editOrgError, setEditOrgError] = useState('');
+  const [updatingOrg, setUpdatingOrg] = useState(false);
+  const [deletingOrg, setDeletingOrg] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -77,6 +83,9 @@ export default function OrganizationDetailPage() {
 
     if (orgData.status === 'fulfilled') {
       setOrg(orgData.value);
+      setEditOrgName(orgData.value.name || '');
+      setEditOrgSlug(orgData.value.slug || '');
+      setEditOrgError('');
     } else {
       setError('Failed to load organization');
     }
@@ -305,6 +314,67 @@ export default function OrganizationDetailPage() {
     }
   };
 
+  const validateSlug = (slug: string): string | null => {
+    if (!slug) return 'Slug is required.';
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+      return 'Slug must be lowercase letters, numbers, and hyphens.';
+    }
+    return null;
+  };
+
+  const handleUpdateOrganization = async () => {
+    const trimmedName = editOrgName.trim();
+    const trimmedSlug = editOrgSlug.trim();
+    if (!trimmedName) {
+      setEditOrgError('Organization name is required.');
+      return;
+    }
+    const slugError = validateSlug(trimmedSlug);
+    if (slugError) {
+      setEditOrgError(slugError);
+      return;
+    }
+    try {
+      setUpdatingOrg(true);
+      setEditOrgError('');
+      await api.updateOrganization(orgId, {
+        name: trimmedName,
+        slug: trimmedSlug,
+      });
+      setShowEditOrgDialog(false);
+      setSuccess('Organization updated successfully');
+      await loadData();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to update organization';
+      setEditOrgError(message);
+    } finally {
+      setUpdatingOrg(false);
+    }
+  };
+
+  const handleDeleteOrganization = async () => {
+    if (!org) return;
+    const memberCount = members.length;
+    const confirmed = await confirm({
+      title: 'Delete Organization',
+      message: `Delete "${org.name}"? This organization has ${memberCount} member${memberCount === 1 ? '' : 's'}.`,
+      confirmText: 'Delete',
+      variant: 'danger',
+      icon: 'delete',
+    });
+    if (!confirmed) return;
+    try {
+      setDeletingOrg(true);
+      await api.deleteOrganization(orgId);
+      router.push('/organizations');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to delete organization';
+      setError(message);
+    } finally {
+      setDeletingOrg(false);
+    }
+  };
+
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -373,7 +443,83 @@ export default function OrganizationDetailPage() {
                   </p>
                 </div>
               </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowEditOrgDialog(true);
+                    setEditOrgError('');
+                    setEditOrgName(org.name);
+                    setEditOrgSlug(org.slug);
+                  }}
+                >
+                  <Pencil className="mr-2 h-4 w-4" />
+                  Edit Organization
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleDeleteOrganization}
+                  disabled={deletingOrg}
+                  loading={deletingOrg}
+                  loadingText="Deleting..."
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete Organization
+                </Button>
+              </div>
             </div>
+
+            <Dialog open={showEditOrgDialog} onOpenChange={setShowEditOrgDialog}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Edit Organization</DialogTitle>
+                  <DialogDescription>
+                    Update organization name and slug.
+                  </DialogDescription>
+                </DialogHeader>
+                {editOrgError && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{editOrgError}</AlertDescription>
+                  </Alert>
+                )}
+                <div className="space-y-4 py-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="editOrgName">Organization Name</Label>
+                    <Input
+                      id="editOrgName"
+                      value={editOrgName}
+                      onChange={(event) => setEditOrgName(event.target.value)}
+                      placeholder="Organization name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="editOrgSlug">Slug</Label>
+                    <Input
+                      id="editOrgSlug"
+                      value={editOrgSlug}
+                      onChange={(event) => setEditOrgSlug(event.target.value)}
+                      placeholder="organization-slug"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Slug must be unique across organizations.
+                    </p>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setShowEditOrgDialog(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleUpdateOrganization}
+                    disabled={updatingOrg}
+                    loading={updatingOrg}
+                    loadingText="Saving..."
+                  >
+                    Save Changes
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {error && (
               <Alert variant="destructive" className="mb-6">
@@ -803,12 +949,10 @@ export default function OrganizationDetailPage() {
                                 disabled={isDeleting}
                                 title={isDeleting ? 'Removing API key' : 'Remove API key'}
                                 aria-label={isDeleting ? 'Removing API key' : 'Remove API key'}
+                                loading={isDeleting}
+                                className="text-red-500 hover:text-red-500"
                               >
-                                {isDeleting ? (
-                                  <RefreshCw className="h-4 w-4 text-red-500 animate-spin" />
-                                ) : (
-                                  <Trash2 className="h-4 w-4 text-red-500" />
-                                )}
+                                <Trash2 className="h-4 w-4" />
                               </Button>
                             </TableCell>
                           </TableRow>
@@ -873,8 +1017,8 @@ export default function OrganizationDetailPage() {
                           />
                         </div>
                       </div>
-                      <Button onClick={handleSaveWatchlistSettings} disabled={watchlistSaving}>
-                        {watchlistSaving ? 'Saving...' : 'Save Settings'}
+                      <Button onClick={handleSaveWatchlistSettings} disabled={watchlistSaving} loading={watchlistSaving} loadingText="Saving...">
+                        Save Settings
                       </Button>
                     </div>
                   )}

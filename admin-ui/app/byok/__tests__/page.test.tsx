@@ -1,0 +1,146 @@
+/* @vitest-environment jsdom */
+import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, within } from '@testing-library/react';
+import ByokDashboardPage from '../page';
+import { api } from '@/lib/api-client';
+
+const confirmMock = vi.hoisted(() => vi.fn());
+const toastSuccessMock = vi.hoisted(() => vi.fn());
+const toastErrorMock = vi.hoisted(() => vi.fn());
+
+vi.mock('@/components/PermissionGuard', () => ({
+  PermissionGuard: ({ children }: { children: ReactNode }) => <>{children}</>,
+  default: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('@/components/ResponsiveLayout', () => ({
+  ResponsiveLayout: ({ children }: { children: ReactNode }) => (
+    <div data-testid="layout">{children}</div>
+  ),
+}));
+
+vi.mock('@/components/OrgContextSwitcher', () => ({
+  useOrgContext: () => ({ selectedOrg: null }),
+  OrgContextSwitcher: () => <div data-testid="org-switcher" />,
+}));
+
+vi.mock('@/components/ui/confirm-dialog', () => ({
+  useConfirm: () => confirmMock,
+}));
+
+vi.mock('@/components/ui/toast', () => ({
+  useToast: () => ({
+    success: toastSuccessMock,
+    error: toastErrorMock,
+  }),
+}));
+
+vi.mock('@/lib/api-client', () => ({
+  api: {
+    getMetricsText: vi.fn(),
+    getAuditLogs: vi.fn(),
+    getSharedProviderKeys: vi.fn(),
+    getUsersPage: vi.fn(),
+    getAdminUserByokKeys: vi.fn(),
+    getLlmUsage: vi.fn(),
+    createSharedProviderKey: vi.fn(),
+    deleteSharedProviderKey: vi.fn(),
+    testSharedProviderKey: vi.fn(),
+  },
+}));
+
+type ApiMock = {
+  getMetricsText: ReturnType<typeof vi.fn>;
+  getAuditLogs: ReturnType<typeof vi.fn>;
+  getSharedProviderKeys: ReturnType<typeof vi.fn>;
+  getUsersPage: ReturnType<typeof vi.fn>;
+  getAdminUserByokKeys: ReturnType<typeof vi.fn>;
+  getLlmUsage: ReturnType<typeof vi.fn>;
+  createSharedProviderKey: ReturnType<typeof vi.fn>;
+  deleteSharedProviderKey: ReturnType<typeof vi.fn>;
+  testSharedProviderKey: ReturnType<typeof vi.fn>;
+};
+
+const apiMock = api as unknown as ApiMock;
+
+beforeEach(() => {
+  toastSuccessMock.mockClear();
+  toastErrorMock.mockClear();
+
+  apiMock.getMetricsText.mockResolvedValue('');
+  apiMock.getAuditLogs.mockResolvedValue({ entries: [], total: 0, limit: 200, offset: 0 });
+  apiMock.getSharedProviderKeys.mockResolvedValue({ items: [] });
+
+  apiMock.getUsersPage.mockResolvedValue({
+    items: [
+      { id: 1, username: 'alice' },
+      { id: 2, username: 'bob' },
+    ],
+    total: 2,
+    page: 1,
+    pages: 1,
+    limit: 100,
+  });
+
+  apiMock.getAdminUserByokKeys.mockImplementation(async (userId: string) => {
+    if (userId === '1') {
+      return {
+        user_id: 1,
+        items: [{ provider: 'openai', key_hint: 'sk-a1', allowed: true }],
+      };
+    }
+    return {
+      user_id: 2,
+      items: [{ provider: 'anthropic', key_hint: 'sk-b2', allowed: true }],
+    };
+  });
+
+  apiMock.getLlmUsage.mockResolvedValue({
+    items: [
+      { user_id: 1, provider: 'openai', total_tokens: 120, total_cost_usd: 0.24 },
+      { user_id: 1, provider: 'openai', total_tokens: 80, total_cost_usd: 0.16 },
+      { user_id: 2, provider: 'anthropic', total_tokens: 50, total_cost_usd: 0.5 },
+      { user_id: 2, provider: 'openai', total_tokens: 999, total_cost_usd: 9.99 },
+    ],
+    total: 4,
+    page: 1,
+    limit: 500,
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.resetAllMocks();
+});
+
+describe('ByokDashboardPage', () => {
+  it('renders per-user BYOK usage with user+provider aggregation', async () => {
+    render(<ByokDashboardPage />);
+
+    expect(await screen.findByText('Per-User BYOK Usage')).toBeInTheDocument();
+
+    const aliceRowLabel = await screen.findByText('alice');
+    const aliceRow = aliceRowLabel.closest('tr');
+    expect(aliceRow).not.toBeNull();
+    expect(within(aliceRow as HTMLElement).getByText('openai')).toBeInTheDocument();
+    expect(within(aliceRow as HTMLElement).getByText('sk-a1')).toBeInTheDocument();
+    expect(within(aliceRow as HTMLElement).getByText('2')).toBeInTheDocument();
+    expect(within(aliceRow as HTMLElement).getByText('200')).toBeInTheDocument();
+    expect(within(aliceRow as HTMLElement).getByText(/\$0\.4/)).toBeInTheDocument();
+
+    const bobRowLabel = screen.getByText('bob');
+    const bobRow = bobRowLabel.closest('tr');
+    expect(bobRow).not.toBeNull();
+    expect(within(bobRow as HTMLElement).getByText('anthropic')).toBeInTheDocument();
+    expect(within(bobRow as HTMLElement).getByText('sk-b2')).toBeInTheDocument();
+    expect(within(bobRow as HTMLElement).getByText('1')).toBeInTheDocument();
+    expect(within(bobRow as HTMLElement).getByText('50')).toBeInTheDocument();
+    expect(within(bobRow as HTMLElement).getByText(/\$0\.5/)).toBeInTheDocument();
+
+    expect(
+      screen.getByText('Validation sweep control is hidden until backend batch validation support is available.')
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /validation sweep/i })).not.toBeInTheDocument();
+  });
+});

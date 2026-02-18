@@ -1,0 +1,154 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`RoleComparisonPage > highlights role diffs and matches snapshot 1`] = `
+<table
+  class="w-full border-collapse"
+>
+  <thead>
+    <tr>
+      <th
+        class="text-left p-3 bg-muted sticky left-0 z-10 border-b"
+      >
+        Permission
+      </th>
+      <th
+        class="text-center p-3 bg-muted border-b min-w-[120px]"
+      >
+        <div
+          class="inline-flex items-center gap-2"
+        >
+          <span>
+            Admin
+          </span>
+        </div>
+      </th>
+      <th
+        class="text-center p-3 bg-muted border-b min-w-[120px]"
+      >
+        <div
+          class="inline-flex items-center gap-2"
+        >
+          <span>
+            Editor
+          </span>
+        </div>
+      </th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr
+      class="bg-background"
+    >
+      <td
+        class="p-3 sticky left-0 bg-inherit border-b"
+      >
+        <code
+          class="text-sm font-mono"
+        >
+          read:users
+        </code>
+      </td>
+      <td
+        class="p-3 text-center border-b bg-background text-foreground"
+        data-testid="compare-cell-1-101"
+      >
+        <svg
+          class="lucide lucide-check mx-auto h-4 w-4"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M20 6 9 17l-5-5"
+          />
+        </svg>
+      </td>
+      <td
+        class="p-3 text-center border-b bg-background text-foreground"
+        data-testid="compare-cell-2-101"
+      >
+        <svg
+          class="lucide lucide-check mx-auto h-4 w-4"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M20 6 9 17l-5-5"
+          />
+        </svg>
+      </td>
+    </tr>
+    <tr
+      class="bg-muted/20"
+    >
+      <td
+        class="p-3 sticky left-0 bg-inherit border-b"
+      >
+        <code
+          class="text-sm font-mono"
+        >
+          write:users
+        </code>
+      </td>
+      <td
+        class="p-3 text-center border-b bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200"
+        data-testid="compare-cell-1-102"
+      >
+        <svg
+          class="lucide lucide-check mx-auto h-4 w-4"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M20 6 9 17l-5-5"
+          />
+        </svg>
+      </td>
+      <td
+        class="p-3 text-center border-b bg-rose-50 text-rose-800 dark:bg-rose-900/30 dark:text-rose-200"
+        data-testid="compare-cell-2-102"
+      >
+        <svg
+          class="lucide lucide-x mx-auto h-4 w-4"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M18 6 6 18"
+          />
+          <path
+            d="m6 6 12 12"
+          />
+        </svg>
+      </td>
+    </tr>
+  </tbody>
+</table>
+`;

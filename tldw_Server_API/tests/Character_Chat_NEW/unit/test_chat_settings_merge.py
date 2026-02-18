@@ -218,6 +218,24 @@ def test_openapi_exposes_include_settings_query_params():
 
 
 @pytest.mark.unit
+def test_openapi_exposes_chat_trash_query_params_and_routes():
+    app = FastAPI()
+    app.include_router(sessions.router, prefix="/api/v1/chats")
+    schema = app.openapi()
+
+    list_params = schema["paths"]["/api/v1/chats/"]["get"]["parameters"]
+    list_param_names = {param["name"] for param in list_params}
+    assert "include_deleted" in list_param_names
+    assert "deleted_only" in list_param_names
+
+    delete_params = schema["paths"]["/api/v1/chats/{chat_id}"]["delete"]["parameters"]
+    delete_param_names = {param["name"] for param in delete_params}
+    assert "hard_delete" in delete_param_names
+
+    assert "/api/v1/chats/{chat_id}/restore" in schema["paths"]
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_select_greeting_returns_500_when_settings_persist_fails():
     class _StubDB:

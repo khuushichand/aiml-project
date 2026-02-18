@@ -12,6 +12,10 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_registration_service_dep,
 )
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
+    AdminMfaRequirementRequest,
+    AdminMfaRequirementResponse,
+    AdminPasswordResetRequest,
+    AdminPasswordResetResponse,
     AdminUserCreateRequest,
     UserDetailResponse,
     UserListResponse,
@@ -192,6 +196,40 @@ async def update_user(
         db,
         is_pg_fn=_get_is_pg_fn(),
     )
+
+
+@router.post("/users/{user_id}/reset-password", response_model=AdminPasswordResetResponse)
+async def reset_user_password(
+    user_id: int,
+    request: AdminPasswordResetRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: Any = Depends(get_db_transaction),
+) -> AdminPasswordResetResponse:
+    result = await admin_users_service.reset_user_password(
+        principal,
+        user_id,
+        request,
+        db,
+        is_pg_fn=_get_is_pg_fn(),
+    )
+    return AdminPasswordResetResponse(**result)
+
+
+@router.post("/users/{user_id}/mfa/require", response_model=AdminMfaRequirementResponse)
+async def set_user_mfa_requirement(
+    user_id: int,
+    request: AdminMfaRequirementRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: Any = Depends(get_db_transaction),
+) -> AdminMfaRequirementResponse:
+    result = await admin_users_service.set_user_mfa_requirement(
+        principal,
+        user_id,
+        request,
+        db,
+        is_pg_fn=_get_is_pg_fn(),
+    )
+    return AdminMfaRequirementResponse(**result)
 
 
 @router.delete("/users/{user_id}", response_model=MessageResponse)

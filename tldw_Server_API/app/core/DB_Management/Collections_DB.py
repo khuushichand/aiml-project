@@ -281,6 +281,7 @@ class CollectionsDatabase:
             self._owns_backend = False
         self.backend = backend
         self._fts_available = True
+        self._fts_supports_direct_delete = True
         self.ensure_schema()
         self._seed_watchlists_output_templates()
 
@@ -1236,6 +1237,47 @@ class CollectionsDatabase:
                 else:
                     raise
         self._fts_available = fts_available
+        self._refresh_fts_capabilities()
+
+    def _refresh_fts_capabilities(self) -> None:
+        """Refresh FTS behavior flags based on the concrete virtual table definition."""
+        self._fts_supports_direct_delete = True
+        if not self._fts_available:
+            return
+        if self.backend.backend_type != BackendType.SQLITE:
+            return
+        try:
+            row = self.backend.execute(
+                """
+                SELECT sql
+                FROM sqlite_master
+                WHERE name = 'content_items_fts'
+                LIMIT 1
+                """,
+                (),
+            ).first
+            ddl = str((row or {}).get("sql") or "").lower()
+            # content='' tables are contentless unless explicitly created with contentless_delete=1.
+            if "content=''" in ddl and "contentless_delete=1" not in ddl:
+                self._fts_supports_direct_delete = False
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("collections: failed to inspect content_items_fts capabilities: {}", exc)
+
+    @staticmethod
+    def _build_content_fts_metadata_text(
+        *,
+        notes: str | None,
+        tags: Iterable[str] | None,
+        metadata_json: str | None,
+    ) -> str:
+        metadata_text = metadata_json or ""
+        if notes:
+            metadata_text = f"{metadata_text}\n{notes}" if metadata_text else notes
+        if tags:
+            tag_text = " ".join([str(tag).strip() for tag in tags if tag])
+            if tag_text:
+                metadata_text = f"{metadata_text}\n{tag_text}" if metadata_text else tag_text
+        return metadata_text
 
     def _seed_watchlists_output_templates(self) -> None:
         seed_setting = settings.get("WATCHLISTS_SEED_OUTPUT_TEMPLATES")
@@ -1534,21 +1576,45 @@ class CollectionsDatabase:
         notes: str | None,
         tags: list[str] | None,
         metadata_json: str | None,
+        previous_title: str | None = None,
+        previous_summary: str | None = None,
+        previous_notes: str | None = None,
+        previous_tags: list[str] | None = None,
+        previous_metadata_json: str | None = None,
+        has_previous_entry: bool = False,
     ) -> None:
         if not self._fts_available:
             return
         try:
-            metadata_text = metadata_json or ""
-            if notes:
-                metadata_text = f"{metadata_text}\n{notes}" if metadata_text else notes
-            if tags:
-                tag_text = " ".join([str(tag).strip() for tag in tags if tag])
-                if tag_text:
-                    metadata_text = f"{metadata_text}\n{tag_text}" if metadata_text else tag_text
-            self.backend.execute(
-                "DELETE FROM content_items_fts WHERE rowid = ?",
-                (item_id,),
+            metadata_text = self._build_content_fts_metadata_text(
+                notes=notes,
+                tags=tags,
+                metadata_json=metadata_json,
             )
+            had_previous = has_previous_entry or any(
+                value is not None for value in (previous_title, previous_summary, previous_notes, previous_metadata_json)
+            ) or bool(previous_tags)
+
+            if had_previous:
+                previous_metadata_text = self._build_content_fts_metadata_text(
+                    notes=previous_notes,
+                    tags=previous_tags,
+                    metadata_json=previous_metadata_json,
+                )
+                if self._fts_supports_direct_delete:
+                    self.backend.execute(
+                        "DELETE FROM content_items_fts WHERE rowid = ?",
+                        (item_id,),
+                    )
+                else:
+                    # Contentless FTS5 tables require the special delete command with the old indexed values.
+                    self.backend.execute(
+                        """
+                        INSERT INTO content_items_fts(content_items_fts, rowid, title, summary, metadata)
+                        VALUES('delete', ?, ?, ?, ?)
+                        """,
+                        (item_id, previous_title or "", previous_summary or "", previous_metadata_text),
+                    )
             self.backend.execute(
                 "INSERT INTO content_items_fts(rowid, title, summary, metadata) VALUES (?, ?, ?, ?)",
                 (item_id, title or "", summary or "", metadata_text),
@@ -1556,13 +1622,38 @@ class CollectionsDatabase:
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Collections FTS update failed for item {item_id}: {exc}")
 
-    def _delete_content_fts_entry(self, item_id: int) -> None:
+    def _delete_content_fts_entry(
+        self,
+        item_id: int,
+        *,
+        title: str | None = None,
+        summary: str | None = None,
+        notes: str | None = None,
+        tags: list[str] | None = None,
+        metadata_json: str | None = None,
+    ) -> None:
         if not self._fts_available:
             return
         try:
+            if self._fts_supports_direct_delete:
+                self.backend.execute(
+                    "DELETE FROM content_items_fts WHERE rowid = ?",
+                    (item_id,),
+                )
+                return
+
+            # Contentless FTS5 delete needs the original indexed values.
+            metadata_text = self._build_content_fts_metadata_text(
+                notes=notes,
+                tags=tags,
+                metadata_json=metadata_json,
+            )
             self.backend.execute(
-                "DELETE FROM content_items_fts WHERE rowid = ?",
-                (item_id,),
+                """
+                INSERT INTO content_items_fts(content_items_fts, rowid, title, summary, metadata)
+                VALUES('delete', ?, ?, ?, ?)
+                """,
+                (item_id, title or "", summary or "", metadata_text),
             )
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Collections FTS delete failed for item {item_id}: {exc}")
@@ -1770,6 +1861,9 @@ class CollectionsDatabase:
             return current_canonical, current_domain, current_favorite, current_status
 
         existing_row, item_id = _lookup_existing()
+        existing_tags_for_fts: list[str] | None = None
+        if existing_row and item_id is not None:
+            existing_tags_for_fts = self._fetch_tags_for_item_ids([int(item_id)]).get(int(item_id), [])
         if existing_row and preserve_existing_on_null:
             preserved = _apply_preserve(existing_row)
             origin_type = preserved["origin_type"]
@@ -1844,6 +1938,7 @@ class CollectionsDatabase:
                 existing_row, item_id = _lookup_existing()
                 if not existing_row or item_id is None:
                     raise
+                existing_tags_for_fts = self._fetch_tags_for_item_ids([int(item_id)]).get(int(item_id), [])
                 if preserve_existing_on_null:
                     preserved = _apply_preserve(existing_row)
                     origin_type = preserved["origin_type"]
@@ -1940,6 +2035,12 @@ class CollectionsDatabase:
                 notes=row.notes,
                 tags=row.tags,
                 metadata_json=row.metadata_json,
+                previous_title=(existing_row.get("title") if existing_row else None),
+                previous_summary=(existing_row.get("summary") if existing_row else None),
+                previous_notes=(existing_row.get("notes") if existing_row else None),
+                previous_tags=existing_tags_for_fts,
+                previous_metadata_json=(existing_row.get("metadata_json") if existing_row else None),
+                has_previous_entry=bool(existing_row),
             )
         row.is_new = created
         row.content_changed = content_changed
@@ -2193,6 +2294,12 @@ class CollectionsDatabase:
                 notes=tgt.notes,
                 tags=tgt.tags,
                 metadata_json=tgt.metadata_json,
+                previous_title=existing.title,
+                previous_summary=existing.summary,
+                previous_notes=existing.notes,
+                previous_tags=existing.tags,
+                previous_metadata_json=existing.metadata_json,
+                has_previous_entry=True,
             )
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             pass
@@ -2205,11 +2312,17 @@ class CollectionsDatabase:
     def delete_content_item(self, item_id: int) -> None:
         """Delete a content item and its tags/FTS entry."""
         row = self.backend.execute(
-            "SELECT id FROM content_items WHERE id = ? AND user_id = ?",
+            """
+            SELECT id, title, summary, notes, metadata_json
+            FROM content_items
+            WHERE id = ? AND user_id = ?
+            """,
             (item_id, self.user_id),
         ).first
         if not row:
             raise KeyError("content_item_not_found")
+        tags_map = self._fetch_tags_for_item_ids([item_id])
+        existing_tags = tags_map.get(item_id, [])
 
         self.backend.execute(
             "DELETE FROM content_item_tags WHERE item_id = ?",
@@ -2220,7 +2333,14 @@ class CollectionsDatabase:
             (item_id, self.user_id),
         )
         with contextlib.suppress(_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
-            self._delete_content_fts_entry(item_id)
+            self._delete_content_fts_entry(
+                item_id,
+                title=row.get("title"),
+                summary=row.get("summary"),
+                notes=row.get("notes"),
+                tags=existing_tags,
+                metadata_json=row.get("metadata_json"),
+            )
 
     def prune_content_items_for_source(
         self,

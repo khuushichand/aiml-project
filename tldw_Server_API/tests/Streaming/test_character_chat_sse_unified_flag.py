@@ -356,3 +356,71 @@ async def test_character_chat_streaming_unified_sse_byte_limit(monkeypatch):
     finally:
         os.environ.pop("STREAMS_UNIFIED", None)
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _fake_provider_stream_raises_bad_request() -> Iterator[str]:
+    from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
+
+    yield "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
+    raise ChatBadRequestError(
+        provider="openai",
+        message="invalid_request_error The model `deepseek-chat` does not exist or you do not have access to it.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_character_chat_streaming_unified_sse_provider_error_emits_done(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="unified_sse_char_provider_error_")
+    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    os.environ["STREAMS_UNIFIED"] = "1"
+    os.environ["STREAM_HEARTBEAT_INTERVAL_S"] = "0.01"
+    os.environ["STREAM_HEARTBEAT_MODE"] = "data"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    try:
+        from tldw_Server_API.app.main import app
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+
+        import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as mod
+
+        def _stub_chat_api_call(*args, **kwargs):
+            return _fake_provider_stream_raises_bad_request()
+
+        mod.perform_chat_api_call = _stub_chat_api_call  # type: ignore
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+            r = await client.post("/api/v1/chats/", headers=headers, json={"character_id": character_id})
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            payload = {"provider": "openai", "model": "gpt-x", "stream": True}
+
+            async with client.stream(
+                "POST",
+                f"/api/v1/chats/{chat_id}/complete-v2",
+                headers=headers,
+                json=payload,
+            ) as resp:
+                assert resp.status_code == 200
+                lines = []
+                done_count = 0
+                async for ln in resp.aiter_lines():
+                    if not ln:
+                        continue
+                    lines.append(ln)
+                    if ln.strip().lower() == "data: [done]":
+                        done_count += 1
+                        break
+                    if len(lines) >= 60:
+                        break
+
+        assert any("provider_error" in ln.lower() for ln in lines)
+        assert done_count == 1
+    finally:
+        for k in ("STREAM_HEARTBEAT_INTERVAL_S", "STREAM_HEARTBEAT_MODE", "STREAMS_UNIFIED"):
+            os.environ.pop(k, None)
+        shutil.rmtree(tmpdir, ignore_errors=True)

@@ -33,6 +33,31 @@ type MetricSample = {
   value: number;
 };
 
+type AdminByokUserKeyItem = {
+  provider: string;
+  key_hint?: string;
+  last_used_at?: string;
+  allowed?: boolean;
+};
+
+type LlmUsageLogItem = {
+  user_id?: number | null;
+  provider?: string | null;
+  total_tokens?: number | null;
+  total_cost_usd?: number | null;
+};
+
+type ByokUserUsageRow = {
+  user_id: number;
+  username: string;
+  provider: string;
+  key_hint?: string;
+  last_used_at?: string;
+  requests: number;
+  total_tokens: number;
+  total_cost_usd: number;
+};
+
 type ResolutionSummary = {
   source: string;
   count: number;
@@ -110,6 +135,12 @@ const formatCount = (value: number | null) => {
   return `${(value / 1000000).toFixed(1)}m`;
 };
 
+const formatUsd = (value: number) => new Intl.NumberFormat(undefined, {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 2,
+}).format(value);
+
 const PROVIDER_OPTIONS = [
   'openai',
   'anthropic',
@@ -138,6 +169,9 @@ export default function ByokDashboardPage() {
   const [auditEntries, setAuditEntries] = useState<AuditLog[]>([]);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [byokUsageRows, setByokUsageRows] = useState<ByokUserUsageRow[]>([]);
+  const [byokUsageLoading, setByokUsageLoading] = useState(false);
+  const [byokUsageError, setByokUsageError] = useState<string | null>(null);
 
   // Shared Provider Keys
   const [sharedKeys, setSharedKeys] = useState<SharedProviderKey[]>([]);
@@ -225,6 +259,131 @@ export default function ByokDashboardPage() {
       setAuditError(message);
     } finally {
       setAuditLoading(false);
+    }
+  }, [selectedOrg?.id]);
+
+  const loadByokUsage = useCallback(async () => {
+    setByokUsageLoading(true);
+    setByokUsageError(null);
+    try {
+      const users: Array<{ id: number; username: string }> = [];
+      let page = 1;
+      let pages = 1;
+      do {
+        const usersPage = await api.getUsersPage({
+          page: String(page),
+          limit: '100',
+          ...(selectedOrg?.id ? { org_id: String(selectedOrg.id) } : {}),
+        });
+        users.push(...usersPage.items.map((user) => ({ id: user.id, username: user.username })));
+        pages = usersPage.pages > 0
+          ? usersPage.pages
+          : Math.max(1, Math.ceil(usersPage.total / Math.max(usersPage.limit, 1)));
+        if (usersPage.items.length === 0) {
+          break;
+        }
+        page += 1;
+      } while (page <= pages);
+
+      const byokKeyResults = await Promise.allSettled(
+        users.map(async (user) => ({
+          userId: user.id,
+          username: user.username,
+          response: await api.getAdminUserByokKeys(String(user.id)) as {
+            items?: AdminByokUserKeyItem[];
+          },
+        }))
+      );
+
+      const userProviderKeyMap = new Map<
+      string,
+      {
+        user_id: number;
+        username: string;
+        provider: string;
+        key_hint?: string;
+        last_used_at?: string;
+      }
+      >();
+
+      byokKeyResults.forEach((result) => {
+        if (result.status !== 'fulfilled') {
+          return;
+        }
+        const keyItems = Array.isArray(result.value.response.items)
+          ? result.value.response.items
+          : [];
+        keyItems.forEach((item) => {
+          const provider = (item.provider || '').trim().toLowerCase();
+          if (!provider) return;
+          const key = `${result.value.userId}:${provider}`;
+          userProviderKeyMap.set(key, {
+            user_id: result.value.userId,
+            username: result.value.username,
+            provider,
+            key_hint: item.key_hint,
+            last_used_at: item.last_used_at,
+          });
+        });
+      });
+
+      const usageItems: LlmUsageLogItem[] = [];
+      let usagePage = 1;
+      let usagePages = 1;
+      do {
+        const usageResponse = await api.getLlmUsage({
+          page: String(usagePage),
+          limit: '500',
+          ...(selectedOrg?.id ? { org_id: String(selectedOrg.id) } : {}),
+        }) as {
+          items?: LlmUsageLogItem[];
+          total?: number;
+          page?: number;
+          limit?: number;
+        };
+        const items = Array.isArray(usageResponse.items) ? usageResponse.items : [];
+        usageItems.push(...items);
+
+        const total = typeof usageResponse.total === 'number' ? usageResponse.total : items.length;
+        const limit = typeof usageResponse.limit === 'number' ? usageResponse.limit : 500;
+        usagePages = Math.min(10, Math.max(1, Math.ceil(total / Math.max(limit, 1))));
+        if (items.length === 0) {
+          break;
+        }
+        usagePage += 1;
+      } while (usagePage <= usagePages);
+
+      const usageByUserProvider = new Map<string, { requests: number; total_tokens: number; total_cost_usd: number }>();
+
+      usageItems.forEach((item) => {
+        if (!item.user_id || !item.provider) return;
+        const key = `${item.user_id}:${item.provider.toLowerCase()}`;
+        if (!userProviderKeyMap.has(key)) {
+          return;
+        }
+        const current = usageByUserProvider.get(key) || { requests: 0, total_tokens: 0, total_cost_usd: 0 };
+        current.requests += 1;
+        current.total_tokens += Number(item.total_tokens || 0);
+        current.total_cost_usd += Number(item.total_cost_usd || 0);
+        usageByUserProvider.set(key, current);
+      });
+
+      const rows = [...userProviderKeyMap.entries()].map(([key, metadata]) => {
+        const usage = usageByUserProvider.get(key) || { requests: 0, total_tokens: 0, total_cost_usd: 0 };
+        return {
+          ...metadata,
+          requests: usage.requests,
+          total_tokens: usage.total_tokens,
+          total_cost_usd: usage.total_cost_usd,
+        } satisfies ByokUserUsageRow;
+      }).sort((a, b) => b.total_cost_usd - a.total_cost_usd);
+
+      setByokUsageRows(rows);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load per-user BYOK usage.';
+      setByokUsageError(message);
+    } finally {
+      setByokUsageLoading(false);
     }
   }, [selectedOrg?.id]);
 
@@ -337,7 +496,8 @@ export default function ByokDashboardPage() {
     loadMetrics();
     loadAudit();
     loadSharedKeys();
-  }, [loadMetrics, loadAudit, loadSharedKeys]);
+    loadByokUsage();
+  }, [loadMetrics, loadAudit, loadSharedKeys, loadByokUsage]);
 
   const summaryCards = useMemo(() => {
     const byokTotal = sumValues(
@@ -436,6 +596,60 @@ export default function ByokDashboardPage() {
             ))}
           </div>
 
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Per-User BYOK Usage</CardTitle>
+              <CardDescription>
+                Aggregated from recent LLM usage logs and cross-referenced with configured user BYOK providers.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {byokUsageError && (
+                <Alert variant="destructive" className="mb-3">
+                  <AlertDescription>{byokUsageError}</AlertDescription>
+                </Alert>
+              )}
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>User</TableHead>
+                    <TableHead>Provider</TableHead>
+                    <TableHead>Key Hint</TableHead>
+                    <TableHead>Requests</TableHead>
+                    <TableHead>Tokens</TableHead>
+                    <TableHead>Cost (USD)</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {byokUsageLoading && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-muted-foreground">
+                        Loading per-user BYOK usage...
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!byokUsageLoading && byokUsageRows.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-muted-foreground">
+                        No user BYOK usage data found.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {byokUsageRows.map((row) => (
+                    <TableRow key={`${row.user_id}:${row.provider}`}>
+                      <TableCell>{row.username}</TableCell>
+                      <TableCell className="capitalize">{row.provider}</TableCell>
+                      <TableCell className="text-muted-foreground">{row.key_hint || '—'}</TableCell>
+                      <TableCell>{formatCount(row.requests)}</TableCell>
+                      <TableCell>{formatCount(row.total_tokens)}</TableCell>
+                      <TableCell>{formatUsd(row.total_cost_usd)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
           <div className="grid gap-4 lg:grid-cols-3">
             <Card>
               <CardHeader>
@@ -491,9 +705,9 @@ export default function ByokDashboardPage() {
                     </div>
                   ))
                 )}
-                <Button variant="secondary" size="sm" disabled>
-                  Validation sweep coming soon
-                </Button>
+                <div className="rounded-md border px-3 py-2 text-xs text-muted-foreground">
+                  Validation sweep control is hidden until backend batch validation support is available.
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -571,8 +785,13 @@ export default function ByokDashboardPage() {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <Button onClick={handleAddSharedKey} disabled={addingKey || !newKeyValue.trim()}>
-                      {addingKey ? 'Adding...' : 'Add Key'}
+                    <Button
+                      onClick={handleAddSharedKey}
+                      disabled={addingKey || !newKeyValue.trim()}
+                      loading={addingKey}
+                      loadingText="Adding..."
+                    >
+                      Add Key
                     </Button>
                     <Button variant="outline" onClick={resetAddKeyForm}>
                       Cancel

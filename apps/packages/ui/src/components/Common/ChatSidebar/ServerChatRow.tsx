@@ -10,6 +10,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  RotateCcw,
   Table2,
   Settings2,
   Tag,
@@ -33,6 +34,7 @@ const STATE_ICON_BY_VALUE: Record<ConversationState, React.ReactElement> = {
 
 type ServerChatRowCommonProps = {
   chat: ServerChatHistoryItem
+  isTrashView: boolean
   isPinned: boolean
   isActive: boolean
   openMenuFor: string | null
@@ -44,7 +46,8 @@ type ServerChatRowCommonProps = {
   onCreateTable: (chat: ServerChatHistoryItem) => void
   onEditTopic: (chat: ServerChatHistoryItem) => void
   onDeleteChat: (chat: ServerChatHistoryItem) => void | Promise<void>
-  onUpdateState: (chat: ServerChatHistoryItem, state: ConversationState) => void
+  onRestoreChat: (chat: ServerChatHistoryItem) => void | Promise<void>
+  onUpdateState?: (chat: ServerChatHistoryItem, state: ConversationState) => void
   t: TFunction
 }
 
@@ -65,6 +68,7 @@ type ServerChatRowAllProps = ServerChatRowProps | ServerChatRowSelectionProps
 export const ServerChatRow = React.memo((props: ServerChatRowAllProps) => {
   const {
     chat,
+    isTrashView,
     isPinned,
     isActive,
     openMenuFor,
@@ -76,6 +80,7 @@ export const ServerChatRow = React.memo((props: ServerChatRowAllProps) => {
     onCreateTable,
     onEditTopic,
     onDeleteChat,
+    onRestoreChat,
     onUpdateState,
     t
   } = props
@@ -95,10 +100,10 @@ export const ServerChatRow = React.memo((props: ServerChatRowAllProps) => {
     label: t(option.labelToken, option.defaultLabel),
     onClick: () => {
       setOpenMenuFor(null)
-      onUpdateState(chat, option.value)
+      onUpdateState?.(chat, option.value)
     }
   }))
-  const menuItems = [
+  const activeMenuItems = [
     {
       key: "settings",
       icon: <Settings2 className="size-3" />,
@@ -154,6 +159,31 @@ export const ServerChatRow = React.memo((props: ServerChatRowAllProps) => {
       }
     }
   ]
+  const trashMenuItems = [
+    {
+      key: "restore",
+      icon: <RotateCcw className="size-3" />,
+      label: t("common:restore", { defaultValue: "Restore" }),
+      onClick: () => {
+        setOpenMenuFor(null)
+        void onRestoreChat(chat)
+      }
+    },
+    { type: "divider" as const },
+    {
+      key: "hard-delete",
+      icon: <Trash2 className="size-3" />,
+      label: t("common:deletePermanently", {
+        defaultValue: "Delete permanently"
+      }),
+      danger: true,
+      onClick: () => {
+        setOpenMenuFor(null)
+        void onDeleteChat(chat)
+      }
+    }
+  ]
+  const menuItems = isTrashView ? trashMenuItems : activeMenuItems
 
   const renderSourceInfo = () => {
     if (chat.parent_conversation_id) {
@@ -245,24 +275,26 @@ export const ServerChatRow = React.memo((props: ServerChatRowAllProps) => {
       </button>
       {!selectionMode && (
         <div className="flex flex-col items-center gap-1">
-          <Tooltip title={isPinned ? t("common:unpin") : t("common:pin")}>
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation()
-                onTogglePinned(chat.id)
-              }}
-              className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-focus)] h-7 w-7 sm:min-w-0 sm:min-h-0"
-              aria-label={isPinned ? t("common:unpin") : t("common:pin")}
-              aria-pressed={isPinned}
-            >
-              {isPinned ? (
-                <PinOff className="size-3" />
-              ) : (
-                <Pin className="size-3" />
-              )}
-            </button>
-          </Tooltip>
+          {!isTrashView && (
+            <Tooltip title={isPinned ? t("common:unpin") : t("common:pin")}>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onTogglePinned(chat.id)
+                }}
+                className="rounded p-1 text-text-subtle hover:bg-surface2 hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-focus)] h-7 w-7 sm:min-w-0 sm:min-h-0"
+                aria-label={isPinned ? t("common:unpin") : t("common:pin")}
+                aria-pressed={isPinned}
+              >
+                {isPinned ? (
+                  <PinOff className="size-3" />
+                ) : (
+                  <Pin className="size-3" />
+                )}
+              </button>
+            </Tooltip>
+          )}
           <Dropdown
             menu={{ items: menuItems, id: `server-chat-actions-${chat.id}` }}
             trigger={["click"]}

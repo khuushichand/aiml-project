@@ -6,6 +6,7 @@ import {
   CalendarClock,
   FileOutput,
   FileText,
+  Newspaper,
   Play,
   Rss,
   Settings
@@ -20,6 +21,7 @@ import { RunsTab } from "./RunsTab/RunsTab"
 import { OutputsTab } from "./OutputsTab/OutputsTab"
 import { TemplatesTab } from "./TemplatesTab/TemplatesTab"
 import { SettingsTab } from "./SettingsTab/SettingsTab"
+import { ItemsTab } from "./ItemsTab/ItemsTab"
 
 /**
  * WatchlistsPlaygroundPage
@@ -76,6 +78,16 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       children: <RunsTab />
     },
     {
+      key: "items",
+      label: (
+        <span className="flex items-center gap-2">
+          <Newspaper className="h-4 w-4" />
+          {t("watchlists:tabs.items", "Items")}
+        </span>
+      ),
+      children: <ItemsTab />
+    },
+    {
       key: "outputs",
       label: (
         <span className="flex items-center gap-2">
@@ -109,7 +121,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
 
   if (!isOnline) {
     return (
-      <PageShell className="py-6" maxWidthClassName="max-w-6xl">
+      <PageShell className="py-6" maxWidthClassName="max-w-[1920px]">
         <Empty
           description={t(
             "watchlists:offline",
@@ -121,7 +133,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   }
 
   return (
-    <PageShell className="py-6" maxWidthClassName="max-w-6xl">
+    <PageShell className="py-6" maxWidthClassName="max-w-[1920px]">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-text">
           {t("watchlists:title", "Watchlists")}

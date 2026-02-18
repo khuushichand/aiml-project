@@ -26,6 +26,9 @@
   "tabs_runs": {
     "message": "Runs"
   },
+  "tabs_items": {
+    "message": "Items"
+  },
   "tabs_outputs": {
     "message": "Outputs"
   },
@@ -85,6 +88,33 @@
   },
   "sources_deleteConfirm": {
     "message": "Delete this source?"
+  },
+  "sources_checkNow": {
+    "message": "Check Now"
+  },
+  "sources_checkNowTooltip": {
+    "message": "Check now"
+  },
+  "sources_checkNowSelectedTooltip": {
+    "message": "Check now for {{count}} selected sources"
+  },
+  "sources_checkNowSuccess": {
+    "message": "Checked {{count}} source{{plural}}"
+  },
+  "sources_checkNowPartial": {
+    "message": "Checked {{success}} source{{successPlural}}, {{failed}} failed"
+  },
+  "sources_checkNowError": {
+    "message": "Failed to check selected sources"
+  },
+  "sources_checkNowMultiConfirmTitle": {
+    "message": "Check {{count}} sources now?"
+  },
+  "sources_checkNowMultiConfirmDescription": {
+    "message": "This will manually force a refresh for all selected sources."
+  },
+  "sources_viewRuns": {
+    "message": "View Runs"
   },
   "sources_never": {
     "message": "Never"
@@ -424,6 +454,105 @@
   },
   "runs_detail_noItems": {
     "message": "No items found"
+  },
+  "items_description": {
+    "message": "Browse scraped feed items and open the selected source content."
+  },
+  "items_smartFeeds": {
+    "message": "Smart Feeds"
+  },
+  "items_feeds": {
+    "message": "Feeds"
+  },
+  "items_today": {
+    "message": "Today"
+  },
+  "items_unread": {
+    "message": "All Unread"
+  },
+  "items_reviewedOnly": {
+    "message": "Reviewed"
+  },
+  "items_unreadCount": {
+    "message": "{{count}} unread"
+  },
+  "items_sourcesError": {
+    "message": "Failed to load sources"
+  },
+  "items_fetchError": {
+    "message": "Failed to load feed items"
+  },
+  "items_sourceSearchPlaceholder": {
+    "message": "Search feeds..."
+  },
+  "items_allFeeds": {
+    "message": "All Feeds"
+  },
+  "items_allFeedsHint": {
+    "message": "Browse items from every source"
+  },
+  "items_noFeeds": {
+    "message": "No feeds found"
+  },
+  "items_searchPlaceholder": {
+    "message": "Search feed items..."
+  },
+  "items_filters_all": {
+    "message": "All"
+  },
+  "items_filters_ingested": {
+    "message": "Ingested"
+  },
+  "items_filters_filtered": {
+    "message": "Filtered"
+  },
+  "items_empty": {
+    "message": "No feed items found"
+  },
+  "items_unknownSource": {
+    "message": "Unknown source"
+  },
+  "items_untitled": {
+    "message": "Untitled item"
+  },
+  "items_noSummary": {
+    "message": "No summary available"
+  },
+  "items_totalItems": {
+    "message": "{{total}} items"
+  },
+  "items_selectPrompt": {
+    "message": "Select an item to view its content"
+  },
+  "items_reviewed": {
+    "message": "Reviewed"
+  },
+  "items_published": {
+    "message": "Published: {{date}}"
+  },
+  "items_unknownDate": {
+    "message": "Unknown"
+  },
+  "items_openOriginal": {
+    "message": "Open Original"
+  },
+  "items_markReviewed": {
+    "message": "Mark as reviewed"
+  },
+  "items_markUnreviewed": {
+    "message": "Mark as unreviewed"
+  },
+  "items_markedReviewed": {
+    "message": "Marked as reviewed"
+  },
+  "items_markedUnreviewed": {
+    "message": "Marked as unreviewed"
+  },
+  "items_updateError": {
+    "message": "Failed to update item"
+  },
+  "items_noUrlHint": {
+    "message": "This item does not include an original URL."
   },
   "outputs_title": {
     "message": "Outputs"

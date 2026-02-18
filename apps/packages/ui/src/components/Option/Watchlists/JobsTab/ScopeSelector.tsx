@@ -15,6 +15,8 @@ interface ScopeSelectorProps {
 }
 
 type ScopeMode = "sources" | "groups" | "tags"
+const SCOPE_SELECTOR_PAGE_SIZE = 200
+const SCOPE_SELECTOR_SOURCE_LIMIT = 500
 
 export const ScopeSelector: React.FC<ScopeSelectorProps> = ({
   value,
@@ -39,15 +41,36 @@ export const ScopeSelector: React.FC<ScopeSelectorProps> = ({
 
   // Load data on mount
   useEffect(() => {
+    const fetchSourceOptions = async (): Promise<WatchlistSource[]> => {
+      const allSources: WatchlistSource[] = []
+      let page = 1
+
+      while (allSources.length < SCOPE_SELECTOR_SOURCE_LIMIT) {
+        const result = await fetchWatchlistSources({
+          page,
+          size: SCOPE_SELECTOR_PAGE_SIZE
+        })
+        const batch = Array.isArray(result.items) ? result.items : []
+        allSources.push(...batch)
+        const total = typeof result.total === "number" ? result.total : undefined
+
+        if (batch.length < SCOPE_SELECTOR_PAGE_SIZE) break
+        if (total != null && allSources.length >= total) break
+        page += 1
+      }
+
+      return allSources.slice(0, SCOPE_SELECTOR_SOURCE_LIMIT)
+    }
+
     const loadData = async () => {
       setLoading(true)
       try {
         const [sourcesRes, groupsRes, tagsRes] = await Promise.all([
-          fetchWatchlistSources({ page: 1, size: 500 }),
+          fetchSourceOptions(),
           fetchWatchlistGroups({ page: 1, size: 200 }),
           fetchWatchlistTags({ page: 1, size: 200 })
         ])
-        setSources(sourcesRes.items || [])
+        setSources(sourcesRes)
         setGroups(groupsRes.items || [])
         setTags(tagsRes.items || [])
       } catch (err) {

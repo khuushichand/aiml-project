@@ -27,6 +27,44 @@ class UserUpdateRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AdminPasswordResetRequest(BaseModel):
+    """Request payload for admin-initiated user password reset."""
+
+    temporary_password: str | None = Field(default=None, min_length=10, max_length=128)
+    force_password_change: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminPasswordResetResponse(BaseModel):
+    """Response payload for admin-initiated user password reset."""
+
+    user_id: int
+    temporary_password: str
+    force_password_change: bool
+    message: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminMfaRequirementRequest(BaseModel):
+    """Request payload for admin-managed MFA requirement flag."""
+
+    require_mfa: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminMfaRequirementResponse(BaseModel):
+    """Response payload for admin-managed MFA requirement flag."""
+
+    user_id: int
+    require_mfa: bool
+    message: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class AdminUserCreateRequest(BaseModel):
     """Request to create a user as an admin."""
     username: str = Field(
@@ -294,8 +332,9 @@ class SystemStatsResponse(BaseModel):
 
 
 class ActivityPoint(BaseModel):
-    """Daily activity point for dashboard charts."""
+    """Activity point for dashboard charts."""
     date: date
+    bucket_start: datetime | None = None
     requests: NonNegativeInt
     users: NonNegativeInt
 
@@ -305,6 +344,7 @@ class ActivityPoint(BaseModel):
 class ActivitySummaryResponse(BaseModel):
     """Dashboard activity summary response."""
     days: int = Field(..., ge=0)
+    granularity: Literal["hour", "day"] = "day"
     points: list[ActivityPoint]
     warnings: list[str] | None = None
 
@@ -508,12 +548,27 @@ class MaintenanceUpdateRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class FeatureFlagSnapshot(BaseModel):
+    """Feature flag state snapshot for change diffs."""
+    scope: Literal["global", "org", "user"]
+    enabled: bool
+    org_id: int | None = None
+    user_id: int | None = None
+    target_user_ids: list[int] = Field(default_factory=list)
+    rollout_percent: int = Field(100, ge=0, le=100)
+    variant_value: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class FeatureFlagHistoryEntry(BaseModel):
     """Feature flag change history entry."""
     timestamp: datetime
     enabled: bool
     actor: str | None = None
     note: str | None = None
+    before: FeatureFlagSnapshot | None = None
+    after: FeatureFlagSnapshot | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -526,10 +581,13 @@ class FeatureFlagItem(BaseModel):
     description: str | None = None
     org_id: int | None = None
     user_id: int | None = None
+    target_user_ids: list[int] = Field(default_factory=list)
+    rollout_percent: int = Field(100, ge=0, le=100)
+    variant_value: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     updated_by: str | None = None
-    history: list[FeatureFlagHistoryEntry] = []
+    history: list[FeatureFlagHistoryEntry] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -549,9 +607,36 @@ class FeatureFlagUpsertRequest(BaseModel):
     description: str | None = None
     org_id: int | None = None
     user_id: int | None = None
+    target_user_ids: list[int] | None = None
+    rollout_percent: int | None = Field(None, ge=0, le=100)
+    variant_value: str | None = Field(None, max_length=255)
     note: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("target_user_ids")
+    @classmethod
+    def validate_target_user_ids(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        cleaned: list[int] = []
+        for candidate in value:
+            try:
+                parsed = int(candidate)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("target_user_ids must contain integers") from exc
+            if parsed <= 0:
+                raise ValueError("target_user_ids must contain positive integers")
+            cleaned.append(parsed)
+        return sorted(set(cleaned))
+
+    @field_validator("variant_value")
+    @classmethod
+    def normalize_variant_value(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class IncidentEvent(BaseModel):
@@ -907,6 +992,7 @@ class LLMUsageLogResponse(BaseModel):
 
 class LLMUsageSummaryRow(BaseModel):
     group_value: str
+    group_value_secondary: str | None = None
     requests: int
     errors: int
     input_tokens: int

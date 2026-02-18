@@ -5,6 +5,7 @@ import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import MonitoringPage, { normalizeHealthStatus } from '../page';
 import { api } from '@/lib/api-client';
+import { formatAxeViolations, getCriticalAndSeriousAxeViolations } from '@/test-utils/axe';
 
 const confirmMock = vi.hoisted(() => vi.fn());
 
@@ -27,14 +28,16 @@ vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }: { children: ReactNode }) => (
     <div data-testid="chart">{children}</div>
   ),
-  AreaChart: ({ data, children }: { data: unknown; children: ReactNode }) => (
-    <div data-testid="area-chart" data-points={JSON.stringify(data)}>
+  LineChart: ({ data, children }: { data: unknown; children: ReactNode }) => (
+    <div data-testid="line-chart" data-points={JSON.stringify(data)}>
       {children}
     </div>
   ),
-  Area: () => null,
+  Line: () => null,
   XAxis: () => null,
-  YAxis: () => null,
+  YAxis: ({ yAxisId }: { yAxisId?: string }) => (
+    <div data-testid={`y-axis-${yAxisId || 'default'}`} />
+  ),
   CartesianGrid: () => null,
   Tooltip: () => null,
 }));
@@ -44,16 +47,22 @@ vi.mock('@/lib/api-client', () => ({
     getMetrics: vi.fn(),
     getWatchlists: vi.fn(),
     getAlerts: vi.fn(),
+    getUsers: vi.fn(),
     getHealth: vi.fn(),
     getHealthMetrics: vi.fn(),
     getLlmHealth: vi.fn(),
     getRagHealth: vi.fn(),
+    getTtsHealth: vi.fn(),
+    getSttHealth: vi.fn(),
+    getEmbeddingsHealth: vi.fn(),
+    getMetricsText: vi.fn(),
     getNotificationSettings: vi.fn(),
     getRecentNotifications: vi.fn(),
     createWatchlist: vi.fn(),
     deleteWatchlist: vi.fn(),
     acknowledgeAlert: vi.fn(),
     dismissAlert: vi.fn(),
+    getMonitoringMetrics: vi.fn(),
     updateNotificationSettings: vi.fn(),
     testNotification: vi.fn(),
   },
@@ -63,16 +72,22 @@ type ApiMock = {
   getMetrics: ReturnType<typeof vi.fn>;
   getWatchlists: ReturnType<typeof vi.fn>;
   getAlerts: ReturnType<typeof vi.fn>;
+  getUsers: ReturnType<typeof vi.fn>;
   getHealth: ReturnType<typeof vi.fn>;
   getHealthMetrics: ReturnType<typeof vi.fn>;
   getLlmHealth: ReturnType<typeof vi.fn>;
   getRagHealth: ReturnType<typeof vi.fn>;
+  getTtsHealth: ReturnType<typeof vi.fn>;
+  getSttHealth: ReturnType<typeof vi.fn>;
+  getEmbeddingsHealth: ReturnType<typeof vi.fn>;
+  getMetricsText: ReturnType<typeof vi.fn>;
   getNotificationSettings: ReturnType<typeof vi.fn>;
   getRecentNotifications: ReturnType<typeof vi.fn>;
   createWatchlist: ReturnType<typeof vi.fn>;
   deleteWatchlist: ReturnType<typeof vi.fn>;
   acknowledgeAlert: ReturnType<typeof vi.fn>;
   dismissAlert: ReturnType<typeof vi.fn>;
+  getMonitoringMetrics: ReturnType<typeof vi.fn>;
   updateNotificationSettings: ReturnType<typeof vi.fn>;
   testNotification: ReturnType<typeof vi.fn>;
 };
@@ -83,12 +98,19 @@ const setDefaultApiMocks = () => {
   apiMock.getMetrics.mockResolvedValue({ cpu_usage: 45, memory_usage: 67 });
   apiMock.getWatchlists.mockResolvedValue([]);
   apiMock.getAlerts.mockResolvedValue([]);
+  apiMock.getUsers.mockResolvedValue([
+    { id: '1', email: 'admin@example.com', username: 'admin' },
+  ]);
   apiMock.getHealth.mockResolvedValue({
     status: 'ok',
     checks: { database: { status: 'ok' } },
   });
   apiMock.getLlmHealth.mockResolvedValue({ status: 'ok' });
   apiMock.getRagHealth.mockResolvedValue({ status: 'ok' });
+  apiMock.getTtsHealth.mockResolvedValue({ status: 'ok' });
+  apiMock.getSttHealth.mockResolvedValue({ status: 'ok' });
+  apiMock.getEmbeddingsHealth.mockResolvedValue({ status: 'ok' });
+  apiMock.getMetricsText.mockResolvedValue('queue_depth 3');
   apiMock.getNotificationSettings.mockResolvedValue({
     channels: [],
     alert_threshold: 'warning',
@@ -100,6 +122,17 @@ const setDefaultApiMocks = () => {
     cpu: { percent: 10 },
     memory: { percent: 20 },
   });
+  apiMock.getMonitoringMetrics.mockResolvedValue([
+    {
+      timestamp: '2026-02-17T00:00:00.000Z',
+      cpu: 10,
+      memory: 20,
+      disk_usage: 33,
+      throughput: 42,
+      active_connections: 7,
+      queue_depth: 3,
+    },
+  ]);
   apiMock.createWatchlist.mockResolvedValue({});
   apiMock.acknowledgeAlert.mockResolvedValue({});
   apiMock.dismissAlert.mockResolvedValue({});
@@ -111,9 +144,14 @@ const expectLoadDataCalls = () => {
   expect(apiMock.getMetrics).toHaveBeenCalled();
   expect(apiMock.getWatchlists).toHaveBeenCalled();
   expect(apiMock.getAlerts).toHaveBeenCalled();
+  expect(apiMock.getUsers).toHaveBeenCalled();
   expect(apiMock.getHealth).toHaveBeenCalled();
   expect(apiMock.getLlmHealth).toHaveBeenCalled();
   expect(apiMock.getRagHealth).toHaveBeenCalled();
+  expect(apiMock.getTtsHealth).toHaveBeenCalled();
+  expect(apiMock.getSttHealth).toHaveBeenCalled();
+  expect(apiMock.getEmbeddingsHealth).toHaveBeenCalled();
+  expect(apiMock.getMetricsText).toHaveBeenCalled();
   expect(apiMock.getNotificationSettings).toHaveBeenCalled();
   expect(apiMock.getRecentNotifications).toHaveBeenCalled();
 };
@@ -134,11 +172,13 @@ const flushPromises = async () => {
 };
 
 beforeEach(() => {
+  localStorage.clear();
   confirmMock.mockResolvedValue(true);
   setDefaultApiMocks();
 });
 
 afterEach(() => {
+  localStorage.clear();
   cleanup();
   vi.useRealTimers();
   vi.resetAllMocks();
@@ -164,6 +204,14 @@ describe('normalizeHealthStatus', () => {
 });
 
 describe('MonitoringPage', () => {
+  it('has no critical/serious axe violations in the default state', async () => {
+    const { container } = render(<MonitoringPage />);
+    await screen.findByRole('heading', { name: 'Monitoring' });
+
+    const violations = await getCriticalAndSeriousAxeViolations(container);
+    expect(violations, formatAxeViolations(violations)).toEqual([]);
+  });
+
   it('renders loading state while data is fetching', async () => {
     const metricsDeferred = createDeferred<Record<string, unknown>>();
     const watchlistsDeferred = createDeferred<unknown[]>();
@@ -202,6 +250,10 @@ describe('MonitoringPage', () => {
     render(<MonitoringPage />);
 
     expect(await screen.findByText('No metrics available. The server may not expose metrics.')).toBeTruthy();
+    expect(screen.getByTestId('monitoring-alert-count-live').textContent).toContain('0 active alerts');
+    const statusRegion = screen.getByTestId('system-status-live-region');
+    expect(statusRegion.getAttribute('role')).toBe('status');
+    expect(statusRegion.getAttribute('aria-live')).toBe('polite');
     expect(screen.getByText('No watchlists configured')).toBeTruthy();
     expect(screen.getByText('No alerts - system is healthy')).toBeTruthy();
 
@@ -240,7 +292,7 @@ describe('MonitoringPage', () => {
 
     expect(await screen.findByText('Cpu Usage')).toBeTruthy();
     expect(screen.getByText('API Response Time')).toBeTruthy();
-    expect(screen.getByText('High CPU usage')).toBeTruthy();
+    expect(screen.getAllByText('High CPU usage').length).toBeGreaterThan(0);
 
     expectLoadDataCalls();
   });
@@ -257,22 +309,28 @@ describe('MonitoringPage', () => {
     consoleError.mockRestore();
   });
 
-  it('appends metrics history on interval polling', async () => {
+  it('refreshes metrics history on interval polling', async () => {
     vi.useFakeTimers();
-    apiMock.getHealthMetrics
-      .mockResolvedValueOnce({ cpu: { percent: 5 }, memory: { percent: 10 } })
-      .mockResolvedValueOnce({ cpu: { percent: 15 }, memory: { percent: 20 } })
-      .mockResolvedValueOnce({ cpu: { percent: 25 }, memory: { percent: 30 } });
+    apiMock.getMonitoringMetrics
+      .mockResolvedValueOnce([
+        { timestamp: '2026-02-17T00:00:00.000Z', cpu: 5, memory: 10, disk_usage: 20, throughput: 2, active_connections: 1, queue_depth: 0 },
+      ])
+      .mockResolvedValueOnce([
+        { timestamp: '2026-02-17T00:05:00.000Z', cpu: 15, memory: 20, disk_usage: 30, throughput: 3, active_connections: 2, queue_depth: 1 },
+      ])
+      .mockResolvedValueOnce([
+        { timestamp: '2026-02-17T00:10:00.000Z', cpu: 25, memory: 30, disk_usage: 40, throughput: 4, active_connections: 3, queue_depth: 1 },
+      ]);
 
     render(<MonitoringPage />);
     await flushPromises();
-    const baselineCalls = apiMock.getHealthMetrics.mock.calls.length;
+    const baselineCalls = apiMock.getMonitoringMetrics.mock.calls.length;
     expect(baselineCalls).toBeGreaterThan(0);
 
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     await flushPromises();
 
-    expect(apiMock.getHealthMetrics.mock.calls.length).toBe(baselineCalls + 1);
+    expect(apiMock.getMonitoringMetrics.mock.calls.length).toBe(baselineCalls + 1);
 
     expectLoadDataCalls();
   });
@@ -353,7 +411,7 @@ describe('MonitoringPage', () => {
 
     render(<MonitoringPage />);
 
-    expect(await screen.findByText('High memory usage')).toBeTruthy();
+    expect((await screen.findAllByText('High memory usage')).length).toBeGreaterThan(0);
     expectLoadDataCalls();
 
     await user.click(screen.getByTitle('Acknowledge'));
@@ -363,7 +421,7 @@ describe('MonitoringPage', () => {
       expect(apiMock.getAlerts).toHaveBeenCalledTimes(2);
     });
 
-    expect(screen.getByText('Acknowledged')).toBeTruthy();
+    expect(screen.getAllByText('Acknowledged').length).toBeGreaterThan(0);
   });
 
   it('dismisses alerts after confirmation', async () => {
@@ -383,7 +441,7 @@ describe('MonitoringPage', () => {
 
     render(<MonitoringPage />);
 
-    expect(await screen.findByText('Service unavailable')).toBeTruthy();
+    expect((await screen.findAllByText('Service unavailable')).length).toBeGreaterThan(0);
     expectLoadDataCalls();
 
     await user.click(screen.getByTitle('Dismiss'));
@@ -410,5 +468,156 @@ describe('MonitoringPage', () => {
 
     expect(await screen.findByText('Create failed')).toBeTruthy();
     consoleError.mockRestore();
+  });
+
+  it('updates metrics query parameters when selecting a different time range', async () => {
+    const user = userEvent.setup();
+    render(<MonitoringPage />);
+
+    await screen.findByText('Monitoring');
+    await user.click(screen.getByTestId('monitoring-time-range-7d'));
+
+    await waitFor(() => {
+      expect(apiMock.getMonitoringMetrics).toHaveBeenLastCalledWith(
+        expect.objectContaining({ granularity: '1h' })
+      );
+    });
+  });
+
+  it('validates custom ranges require start before end', async () => {
+    const user = userEvent.setup();
+    render(<MonitoringPage />);
+    await screen.findByText('Monitoring');
+
+    await user.click(screen.getByTestId('monitoring-time-range-custom'));
+    const startInput = screen.getByLabelText('Custom Start');
+    const endInput = screen.getByLabelText('Custom End');
+
+    await user.clear(startInput);
+    await user.type(startInput, '2026-02-17T12:00');
+    await user.clear(endInput);
+    await user.type(endInput, '2026-02-17T08:00');
+    await user.click(screen.getByTestId('monitoring-time-range-apply-custom'));
+
+    expect(await screen.findByText('Custom range start must be before end.')).toBeTruthy();
+  });
+
+  it('toggles chart metric series visibility from legend controls', async () => {
+    const user = userEvent.setup();
+    render(<MonitoringPage />);
+    await screen.findByText('Monitoring');
+
+    const cpuToggle = await screen.findByTestId('metric-series-toggle-cpu');
+    expect(cpuToggle.getAttribute('aria-pressed')).toBe('true');
+    await user.click(cpuToggle);
+    expect(cpuToggle.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('renders separate y-axes for percent and count metrics', async () => {
+    render(<MonitoringPage />);
+    await screen.findByText('Monitoring');
+
+    expect(await screen.findByTestId('y-axis-percent')).toBeTruthy();
+    expect(await screen.findByTestId('y-axis-count')).toBeTruthy();
+  });
+
+  it('renders expanded subsystem status cards with timing metadata', async () => {
+    render(<MonitoringPage />);
+    await screen.findByText('Monitoring');
+
+    const subsystemKeys = [
+      'api',
+      'database',
+      'llm',
+      'rag',
+      'tts',
+      'stt',
+      'embeddings',
+      'cache',
+      'queue',
+    ] as const;
+
+    subsystemKeys.forEach((key) => {
+      expect(screen.getByTestId(`system-status-card-${key}`)).toBeTruthy();
+    });
+
+    const apiResponse = screen.getByTestId('system-status-response-api').textContent || '';
+    expect(apiResponse).toContain('Response:');
+    expect(apiResponse).toContain('ms');
+  });
+
+  it('falls back to metrics for subsystem status when endpoint checks fail', async () => {
+    apiMock.getTtsHealth.mockRejectedValue(new Error('TTS endpoint unavailable'));
+    apiMock.getSttHealth.mockRejectedValue(new Error('STT endpoint unavailable'));
+    apiMock.getEmbeddingsHealth.mockRejectedValue(new Error('Embeddings endpoint unavailable'));
+    apiMock.getMetricsText.mockResolvedValue(
+      [
+        'tts_requests_total 3',
+        'stt_transcriptions_total 2',
+        'embeddings_requests_total 8',
+        'jobs_queue_depth 91',
+      ].join('\n')
+    );
+
+    render(<MonitoringPage />);
+    await screen.findByText('Monitoring');
+
+    expect(screen.getByTestId('system-status-card-tts').textContent).toContain('metrics fallback');
+    expect(screen.getByTestId('system-status-card-stt').textContent).toContain('metrics fallback');
+    expect(screen.getByTestId('system-status-card-embeddings').textContent).toContain('metrics fallback');
+    expect(screen.getByTestId('system-status-card-queue').textContent).toContain('Depth 91');
+  });
+
+  it('renders notification delivery dashboard and retries failed notifications', async () => {
+    const user = userEvent.setup();
+    apiMock.getRecentNotifications
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'n-1',
+            channel: 'email',
+            message: 'Digest sent',
+            status: 'sent',
+            timestamp: '2026-02-17T10:00:00Z',
+          },
+          {
+            id: 'n-2',
+            channel: 'webhook',
+            message: 'Webhook delivery failed',
+            status: 'failed',
+            timestamp: '2026-02-17T10:05:00Z',
+            error: 'Timeout',
+          },
+          {
+            id: 'n-3',
+            channel: 'slack',
+            message: 'Queued notification',
+            status: 'pending',
+            timestamp: '2026-02-17T10:06:00Z',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ items: [] });
+
+    render(<MonitoringPage />);
+
+    expect(await screen.findByTestId('notification-delivery-dashboard')).toBeInTheDocument();
+    expect(screen.getByTestId('notification-delivery-total').textContent).toContain('3');
+    expect(screen.getByTestId('notification-delivery-rate').textContent).toContain('33.3%');
+    expect(screen.getByTestId('notification-failure-rate').textContent).toContain('33.3%');
+    expect(screen.getByTestId('notification-channel-email').textContent).toContain('1');
+    expect(screen.getByTestId('notification-channel-webhook').textContent).toContain('1');
+    expect(screen.getByTestId('notification-error-n-2').textContent).toContain('Timeout');
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(apiMock.testNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Webhook delivery failed',
+          severity: 'error',
+        }),
+      );
+    });
   });
 });

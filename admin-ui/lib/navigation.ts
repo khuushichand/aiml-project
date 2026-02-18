@@ -6,6 +6,7 @@ import {
   Building2,
   Cpu,
   Database,
+  PlugZap,
   FileText,
   Flag,
   Gauge,
@@ -38,6 +39,12 @@ export type NavigationSection = {
   items: NavigationItem[];
 };
 
+export type BreadcrumbItem = {
+  label: string;
+  href?: string;
+  current: boolean;
+};
+
 const navigationItems = {
   dashboard: { name: 'Dashboard', href: '/', icon: LayoutDashboard, keywords: ['overview', 'home', 'stats'] },
   users: { name: 'Users', href: '/users', icon: Users, permission: 'read:users', keywords: ['accounts', 'people'] },
@@ -51,6 +58,7 @@ const navigationItems = {
   security: { name: 'Security', href: '/security', icon: ShieldAlert, role: ['admin', 'super_admin', 'owner'], keywords: ['risk', 'mfa', 'sessions'] },
   auditLogs: { name: 'Audit Logs', href: '/audit', icon: FileText, permission: 'read:audit', keywords: ['audit', 'events', 'history'] },
   monitoring: { name: 'Monitoring', href: '/monitoring', icon: Activity, role: ['admin', 'super_admin', 'owner'], keywords: ['health', 'alerts', 'metrics'] },
+  dependencies: { name: 'Dependencies', href: '/dependencies', icon: PlugZap, role: ['admin', 'super_admin', 'owner'], keywords: ['providers', 'connectivity', 'health checks'] },
   jobs: { name: 'Jobs', href: '/jobs', icon: ListChecks, role: ['admin', 'super_admin', 'owner'], keywords: ['queue', 'workers', 'tasks'] },
   usage: { name: 'Usage', href: '/usage', icon: BarChart3, role: ['admin', 'super_admin', 'owner'], keywords: ['analytics', 'consumption'] },
   budgets: { name: 'Budgets', href: '/budgets', icon: Wallet, role: ['admin', 'super_admin', 'owner'], keywords: ['cost', 'spend'] },
@@ -60,7 +68,7 @@ const navigationItems = {
   incidents: { name: 'Incidents', href: '/incidents', icon: AlertTriangle, role: ['admin', 'super_admin', 'owner'], keywords: ['outages', 'response'] },
   voiceCommands: { name: 'Voice Commands', href: '/voice-commands', icon: Mic, role: ['admin', 'super_admin', 'owner'], keywords: ['speech', 'commands'] },
   debug: { name: 'Debug', href: '/debug', icon: Bug, role: ['super_admin', 'owner'], keywords: ['diagnostics'] },
-  configuration: { name: 'Configuration', href: '/config', icon: Settings, role: ['super_admin', 'owner'], keywords: ['settings', 'system config'] },
+  configuration: { name: 'Configuration', href: '/config', icon: Settings, role: ['admin', 'super_admin', 'owner'], keywords: ['settings', 'system config'] },
 } satisfies Record<string, NavigationItem>;
 
 // Grouped navigation for sidebar sections
@@ -93,6 +101,7 @@ export const navigationSections: NavigationSection[] = [
     title: 'Operations',
     items: [
       navigationItems.monitoring,
+      navigationItems.dependencies,
       navigationItems.incidents,
       navigationItems.jobs,
       navigationItems.auditLogs,
@@ -136,3 +145,103 @@ export const matchesNavigationQuery = (
 
 // Flat navigation list for backwards compatibility
 export const navigation: NavigationItem[] = navigationSections.flatMap((section) => section.items);
+
+const routeLabelOverrides: Record<string, string> = {
+  '/roles/matrix': 'Permission Matrix',
+  '/roles/compare': 'Role Comparison',
+};
+
+const staticRouteLabels: Record<string, string> = navigation.reduce<Record<string, string>>(
+  (accumulator, item) => ({
+    ...accumulator,
+    [item.href]: item.name,
+  }),
+  {
+    '/': 'Dashboard',
+    ...routeLabelOverrides,
+  }
+);
+
+const normalizePathname = (pathname: string): string => {
+  if (!pathname) return '/';
+  const withoutQuery = pathname.split('?')[0]?.split('#')[0] ?? '/';
+  const trimmed = withoutQuery.replace(/\/+$/, '');
+  return trimmed || '/';
+};
+
+const titleCase = (value: string): string =>
+  value
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+
+const humanizeSegment = (segment: string): string => {
+  const decoded = decodeURIComponent(segment);
+  return titleCase(decoded.replace(/[-_]+/g, ' '));
+};
+
+const resolveDynamicPathLabel = (segments: string[]): string | null => {
+  if (segments.length < 2) return null;
+  const [root, idOrSlug] = segments;
+  if (!idOrSlug) return null;
+
+  if (root === 'users') {
+    if (segments.length === 2) return `User ${decodeURIComponent(idOrSlug)}`;
+    if (segments.length === 3 && segments[2] === 'api-keys') return 'API Keys';
+  }
+  if (root === 'organizations' && segments.length === 2) {
+    return `Organization ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'teams' && segments.length === 2) {
+    return `Team ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'roles' && segments.length === 2) {
+    return `Role ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'voice-commands' && segments.length === 2) {
+    return `Command ${decodeURIComponent(idOrSlug)}`;
+  }
+  return null;
+};
+
+const resolveRouteLabel = (path: string): string => {
+  const normalized = normalizePathname(path);
+  const staticLabel = staticRouteLabels[normalized];
+  if (staticLabel) return staticLabel;
+
+  const segments = normalized.split('/').filter(Boolean);
+  const dynamicLabel = resolveDynamicPathLabel(segments);
+  if (dynamicLabel) return dynamicLabel;
+
+  const lastSegment = segments[segments.length - 1];
+  return lastSegment ? humanizeSegment(lastSegment) : 'Dashboard';
+};
+
+export const buildBreadcrumbs = (pathname: string): BreadcrumbItem[] => {
+  const normalized = normalizePathname(pathname);
+  if (normalized === '/') {
+    return [{ label: 'Dashboard', current: true }];
+  }
+
+  const segments = normalized.split('/').filter(Boolean);
+  const items: BreadcrumbItem[] = [{ label: 'Dashboard', href: '/', current: false }];
+
+  segments.forEach((_, index) => {
+    const href = `/${segments.slice(0, index + 1).join('/')}`;
+    const current = index === segments.length - 1;
+    items.push({
+      label: resolveRouteLabel(href),
+      href: current ? undefined : href,
+      current,
+    });
+  });
+
+  return items;
+};
+
+export const getPageTitleForPath = (pathname: string): string => {
+  const breadcrumbs = buildBreadcrumbs(pathname);
+  const currentLabel = breadcrumbs[breadcrumbs.length - 1]?.label || 'Dashboard';
+  return `${currentLabel} | Admin Dashboard`;
+};

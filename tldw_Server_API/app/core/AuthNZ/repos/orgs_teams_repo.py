@@ -1012,15 +1012,17 @@ class AuthnzOrgsTeamsRepo:
         """
         List team memberships (including org_id) for a user.
 
-        Returns dicts with ``team_id``, ``user_id``, ``role``, ``org_id``.
+        Returns dicts with ``team_id``, ``user_id``, ``role``, ``org_id``,
+        ``team_name``, and ``org_name``.
         """
         try:
             if self._is_postgres():
                 rows = await self.db_pool.fetchall(
                     """
-                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id
+                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id, t.name AS team_name, o.name AS org_name
                     FROM team_members tm
                     JOIN teams t ON tm.team_id = t.id
+                    JOIN organizations o ON t.org_id = o.id
                     WHERE tm.user_id = $1
                     ORDER BY tm.team_id
                     """,
@@ -1031,9 +1033,10 @@ class AuthnzOrgsTeamsRepo:
             async with self.db_pool.acquire() as conn:
                 cur = await conn.execute(
                     """
-                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id
+                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id, t.name, o.name
                     FROM team_members tm
                     JOIN teams t ON tm.team_id = t.id
+                    JOIN organizations o ON t.org_id = o.id
                     WHERE tm.user_id = ?
                     ORDER BY tm.team_id
                     """,
@@ -1046,6 +1049,8 @@ class AuthnzOrgsTeamsRepo:
                         "user_id": r[1],
                         "role": r[2],
                         "org_id": r[3],
+                        "team_name": r[4],
+                        "org_name": r[5],
                     }
                     for r in rows
                 ]
@@ -1062,15 +1067,17 @@ class AuthnzOrgsTeamsRepo:
         """
         List active team memberships (including org_id) for a user.
 
-        Returns dicts with ``team_id``, ``user_id``, ``role``, ``org_id``.
+        Returns dicts with ``team_id``, ``user_id``, ``role``, ``org_id``,
+        ``team_name``, and ``org_name``.
         """
         try:
             if self._is_postgres():
                 rows = await self.db_pool.fetchall(
                     """
-                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id
+                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id, t.name AS team_name, o.name AS org_name
                     FROM team_members tm
                     JOIN teams t ON tm.team_id = t.id
+                    JOIN organizations o ON t.org_id = o.id
                     WHERE tm.user_id = $1
                       AND COALESCE(tm.status, 'active') = 'active'
                     ORDER BY tm.team_id
@@ -1082,9 +1089,10 @@ class AuthnzOrgsTeamsRepo:
             async with self.db_pool.acquire() as conn:
                 cur = await conn.execute(
                     """
-                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id
+                    SELECT tm.team_id, tm.user_id, tm.role, t.org_id, t.name, o.name
                     FROM team_members tm
                     JOIN teams t ON tm.team_id = t.id
+                    JOIN organizations o ON t.org_id = o.id
                     WHERE tm.user_id = ?
                       AND COALESCE(tm.status, 'active') = 'active'
                     ORDER BY tm.team_id
@@ -1098,6 +1106,8 @@ class AuthnzOrgsTeamsRepo:
                         "user_id": r[1],
                         "role": r[2],
                         "org_id": r[3],
+                        "team_name": r[4],
+                        "org_name": r[5],
                     }
                     for r in rows
                 ]

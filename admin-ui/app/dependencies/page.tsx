@@ -1,0 +1,672 @@
+'use client';
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Activity,
+  AlertTriangle,
+  Clock3,
+  Cpu,
+  RefreshCw,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
+import { PermissionGuard } from '@/components/PermissionGuard';
+import { ResponsiveLayout } from '@/components/ResponsiveLayout';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { api } from '@/lib/api-client';
+import { buildRecentUtcDayKeys, buildSparklinePoints } from '@/lib/provider-token-trends';
+
+type ProviderHealthStatus = 'reachable' | 'unreachable' | 'unknown';
+
+type Provider = {
+  name: string;
+  enabled: boolean;
+  models: string[];
+  defaultModel: string | null;
+};
+
+type ProviderUsageSummary = {
+  requests: number;
+  errors: number;
+  latencyAvgMs: number | null;
+};
+
+type ProviderHealthCheck = {
+  status: ProviderHealthStatus;
+  testing: boolean;
+  lastCheckedAt: string | null;
+  lastSuccessAt: string | null;
+  responseTimeMs: number | null;
+  errorMessage: string | null;
+};
+
+type LlmSummaryRow = {
+  group_value?: string;
+  group_value_secondary?: string | null;
+  requests?: number;
+  errors?: number;
+  latency_avg_ms?: number | null;
+};
+
+const TREND_DAYS = 7;
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
+
+const getString = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+
+const getNumber = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+const formatProviderName = (value: string): string =>
+  value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const toProviderList = (payload: unknown): Provider[] => {
+  const payloadRecord = asRecord(payload);
+  const rawProviders = payloadRecord?.providers;
+  const providers: Provider[] = [];
+
+  const parseProvider = (nameHint: string | null, raw: unknown): Provider | null => {
+    const record = asRecord(raw);
+    if (!record) return null;
+    const name = getString(record.name) ?? getString(record.provider) ?? nameHint;
+    if (!name) return null;
+    const models = Array.isArray(record.models)
+      ? record.models.filter((model): model is string => typeof model === 'string' && model.trim().length > 0)
+      : [];
+    const defaultModel = getString(record.default_model);
+    const enabled = typeof record.enabled === 'boolean'
+      ? record.enabled
+      : typeof record.is_enabled === 'boolean'
+        ? record.is_enabled
+        : true;
+    return { name, enabled, models, defaultModel };
+  };
+
+  if (Array.isArray(rawProviders)) {
+    rawProviders.forEach((provider) => {
+      const parsed = parseProvider(null, provider);
+      if (parsed) providers.push(parsed);
+    });
+    return providers;
+  }
+
+  if (asRecord(rawProviders)) {
+    Object.entries(rawProviders).forEach(([providerName, providerValue]) => {
+      const parsed = parseProvider(providerName, providerValue);
+      if (parsed) providers.push(parsed);
+    });
+    return providers;
+  }
+
+  if (Array.isArray(payload)) {
+    payload.forEach((provider) => {
+      const parsed = parseProvider(null, provider);
+      if (parsed) providers.push(parsed);
+    });
+    return providers;
+  }
+
+  if (payloadRecord) {
+    const ignored = new Set(['default_provider', 'total_configured', 'message', 'diagnostics_ui']);
+    Object.entries(payloadRecord).forEach(([providerName, providerValue]) => {
+      if (ignored.has(providerName)) return;
+      const parsed = parseProvider(providerName, providerValue);
+      if (parsed) providers.push(parsed);
+    });
+  }
+
+  return providers;
+};
+
+const toLlmSummaryRows = (payload: unknown): LlmSummaryRow[] => {
+  if (Array.isArray(payload)) {
+    return payload as LlmSummaryRow[];
+  }
+  const record = asRecord(payload);
+  if (record && Array.isArray(record.items)) {
+    return record.items as LlmSummaryRow[];
+  }
+  return [];
+};
+
+const normalizeDayKey = (value: unknown): string | null => {
+  const day = getString(value);
+  if (!day) return null;
+  return day.slice(0, 10);
+};
+
+const get24HourWindow = () => {
+  const end = new Date();
+  const start = new Date(end.getTime() - (24 * 60 * 60 * 1000));
+  return { start: start.toISOString(), end: end.toISOString() };
+};
+
+const getTrendWindow = (days: number) => {
+  const end = new Date();
+  const start = new Date(end.getTime() - (days * 24 * 60 * 60 * 1000));
+  return { start: start.toISOString(), end: end.toISOString() };
+};
+
+const formatPercent = (value: number): string => `${value.toFixed(1)}%`;
+
+const formatErrorRate = (errors: number, requests: number): string =>
+  requests > 0 ? formatPercent((errors / requests) * 100) : '0.0%';
+
+const formatCheckTime = (value: string | null): string =>
+  value ? new Date(value).toLocaleTimeString() : 'Never';
+
+const formatSinceSuccess = (value: string | null): string => {
+  if (!value) return 'Never';
+  const diffMs = Date.now() - new Date(value).getTime();
+  if (!Number.isFinite(diffMs) || diffMs < 0) return 'Just now';
+  const totalSeconds = Math.floor(diffMs / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s ago`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m ago`;
+  const totalHours = Math.floor(totalMinutes / 60);
+  if (totalHours < 24) return `${totalHours}h ago`;
+  const totalDays = Math.floor(totalHours / 24);
+  return `${totalDays}d ago`;
+};
+
+const statusLabel = (status: ProviderHealthStatus): string => {
+  if (status === 'reachable') return 'Reachable';
+  if (status === 'unreachable') return 'Unreachable';
+  return 'Unknown';
+};
+
+const statusVariant = (status: ProviderHealthStatus): 'default' | 'secondary' | 'destructive' | 'outline' => {
+  if (status === 'reachable') return 'default';
+  if (status === 'unreachable') return 'destructive';
+  return 'outline';
+};
+
+const hasPrometheusProviderData = (metricsText: string): boolean =>
+  /provider|llm/i.test(metricsText);
+
+function AvailabilitySparkline({
+  providerName,
+  series,
+}: {
+  providerName: string;
+  series: number[];
+}) {
+  if (!Array.isArray(series) || series.length === 0) {
+    return <span className="text-xs text-muted-foreground">No trend</span>;
+  }
+
+  const points = buildSparklinePoints(series, { width: 96, height: 28, padding: 3 });
+  const latest = series[series.length - 1] ?? 0;
+
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <svg
+        role="img"
+        aria-label={`${providerName} availability trend`}
+        viewBox="0 0 96 28"
+        className="h-7 w-24"
+      >
+        <polyline
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          points={points}
+        />
+      </svg>
+      <span className="w-12 text-right text-xs text-muted-foreground">{formatPercent(latest)}</span>
+    </div>
+  );
+}
+
+export default function DependenciesPage() {
+  const [loading, setLoading] = useState(true);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [usageByProvider, setUsageByProvider] = useState<Record<string, ProviderUsageSummary>>({});
+  const [availabilityByProvider, setAvailabilityByProvider] = useState<Record<string, number[]>>({});
+  const [providerChecks, setProviderChecks] = useState<Record<string, ProviderHealthCheck>>({});
+  const [prometheusAvailable, setPrometheusAvailable] = useState(false);
+
+  const runProviderCheck = useCallback(async (provider: Provider): Promise<Omit<ProviderHealthCheck, 'testing'>> => {
+    const started = performance.now();
+    const checkedAt = new Date().toISOString();
+    const modelToTest = provider.defaultModel ?? provider.models[0] ?? undefined;
+
+    try {
+      await api.testLLMProvider({
+        provider: provider.name,
+        model: modelToTest,
+        use_override: true,
+      });
+      const elapsed = Math.max(1, Math.round(performance.now() - started));
+      return {
+        status: 'reachable',
+        lastCheckedAt: checkedAt,
+        lastSuccessAt: checkedAt,
+        responseTimeMs: elapsed,
+        errorMessage: null,
+      };
+    } catch (error: unknown) {
+      const elapsed = Math.max(1, Math.round(performance.now() - started));
+      return {
+        status: 'unreachable',
+        lastCheckedAt: checkedAt,
+        lastSuccessAt: null,
+        responseTimeMs: elapsed,
+        errorMessage: error instanceof Error ? error.message : 'Connectivity check failed',
+      };
+    }
+  }, []);
+
+  const runAllProviderChecks = useCallback(async (providerList: Provider[]) => {
+    if (providerList.length === 0) return;
+
+    const providerKeys = providerList.map((provider) => provider.name.toLowerCase());
+    setProviderChecks((prev) => {
+      const next = { ...prev };
+      providerKeys.forEach((key) => {
+        next[key] = {
+          status: next[key]?.status ?? 'unknown',
+          testing: true,
+          lastCheckedAt: next[key]?.lastCheckedAt ?? null,
+          lastSuccessAt: next[key]?.lastSuccessAt ?? null,
+          responseTimeMs: next[key]?.responseTimeMs ?? null,
+          errorMessage: next[key]?.errorMessage ?? null,
+        };
+      });
+      return next;
+    });
+
+    const checks = await Promise.all(
+      providerList.map(async (provider) => {
+        const result = await runProviderCheck(provider);
+        return { provider, result };
+      })
+    );
+
+    setProviderChecks((prev) => {
+      const next = { ...prev };
+      checks.forEach(({ provider, result }) => {
+        const key = provider.name.toLowerCase();
+        const previous = prev[key];
+        next[key] = {
+          status: result.status,
+          testing: false,
+          lastCheckedAt: result.lastCheckedAt,
+          lastSuccessAt:
+            result.status === 'reachable'
+              ? result.lastSuccessAt
+              : previous?.lastSuccessAt ?? null,
+          responseTimeMs: result.responseTimeMs,
+          errorMessage: result.errorMessage,
+        };
+      });
+      return next;
+    });
+  }, [runProviderCheck]);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setErrors([]);
+
+    const summaryWindow = get24HourWindow();
+    const trendWindow = getTrendWindow(TREND_DAYS);
+
+    const [providersResult, usageSummaryResult, usageTrendResult, metricsResult] = await Promise.allSettled([
+      api.getLLMProviders(),
+      api.getLlmUsageSummary({
+        group_by: 'provider',
+        start: summaryWindow.start,
+        end: summaryWindow.end,
+      }),
+      api.getLlmUsageSummary({
+        group_by: ['provider', 'day'],
+        start: trendWindow.start,
+        end: trendWindow.end,
+      }),
+      api.getMetricsText(),
+    ]);
+
+    const nextErrors: string[] = [];
+    const parsedProviders = providersResult.status === 'fulfilled'
+      ? toProviderList(providersResult.value)
+      : [];
+    const usageRows = usageSummaryResult.status === 'fulfilled'
+      ? toLlmSummaryRows(usageSummaryResult.value)
+      : [];
+    const trendRows = usageTrendResult.status === 'fulfilled'
+      ? toLlmSummaryRows(usageTrendResult.value)
+      : [];
+
+    if (providersResult.status === 'rejected') {
+      nextErrors.push(`Providers unavailable: ${providersResult.reason instanceof Error ? providersResult.reason.message : 'Request failed'}`);
+    }
+    if (usageSummaryResult.status === 'rejected') {
+      nextErrors.push(`Usage summary unavailable: ${usageSummaryResult.reason instanceof Error ? usageSummaryResult.reason.message : 'Request failed'}`);
+    }
+    if (usageTrendResult.status === 'rejected') {
+      nextErrors.push(`Usage trend unavailable: ${usageTrendResult.reason instanceof Error ? usageTrendResult.reason.message : 'Request failed'}`);
+    }
+
+    const usageMap: Record<string, ProviderUsageSummary> = {};
+    usageRows.forEach((row) => {
+      const providerKey = getString(row.group_value)?.toLowerCase();
+      if (!providerKey) return;
+      usageMap[providerKey] = {
+        requests: getNumber(row.requests) ?? 0,
+        errors: getNumber(row.errors) ?? 0,
+        latencyAvgMs: getNumber(row.latency_avg_ms) ?? null,
+      };
+    });
+
+    const dayKeys = buildRecentUtcDayKeys(TREND_DAYS, new Date(trendWindow.end));
+    const dayIndexByKey = new Map(dayKeys.map((key, index) => [key, index]));
+    const requestByProviderAndDay: Record<string, { requests: number[]; errors: number[] }> = {};
+    trendRows.forEach((row) => {
+      const providerKey = getString(row.group_value)?.toLowerCase();
+      const dayKey = normalizeDayKey(row.group_value_secondary);
+      if (!providerKey || !dayKey) return;
+      const dayIndex = dayIndexByKey.get(dayKey);
+      if (dayIndex === undefined) return;
+
+      if (!requestByProviderAndDay[providerKey]) {
+        requestByProviderAndDay[providerKey] = {
+          requests: Array.from({ length: TREND_DAYS }, () => 0),
+          errors: Array.from({ length: TREND_DAYS }, () => 0),
+        };
+      }
+      requestByProviderAndDay[providerKey].requests[dayIndex] += getNumber(row.requests) ?? 0;
+      requestByProviderAndDay[providerKey].errors[dayIndex] += getNumber(row.errors) ?? 0;
+    });
+
+    const availabilityMap: Record<string, number[]> = {};
+    parsedProviders.forEach((provider) => {
+      const key = provider.name.toLowerCase();
+      const usage = requestByProviderAndDay[key];
+      availabilityMap[key] = Array.from({ length: TREND_DAYS }, (_, index) => {
+        const requests = usage?.requests[index] ?? 0;
+        const errors = usage?.errors[index] ?? 0;
+        if (requests <= 0) return 100;
+        const availability = ((requests - errors) / requests) * 100;
+        return Math.max(0, Math.min(100, availability));
+      });
+    });
+
+    const metricsText = metricsResult.status === 'fulfilled' && typeof metricsResult.value === 'string'
+      ? metricsResult.value
+      : '';
+    setPrometheusAvailable(metricsText.length > 0 && hasPrometheusProviderData(metricsText));
+
+    setProviders(parsedProviders);
+    setUsageByProvider(usageMap);
+    setAvailabilityByProvider(availabilityMap);
+    setErrors(nextErrors);
+    setLastUpdatedAt(new Date().toISOString());
+
+    await runAllProviderChecks(parsedProviders.filter((provider) => provider.enabled));
+    setLoading(false);
+  }, [runAllProviderChecks]);
+
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+    return () => window.clearTimeout(timerId);
+  }, [loadData]);
+
+  const handleTestProvider = useCallback(async (provider: Provider) => {
+    const providerKey = provider.name.toLowerCase();
+    setProviderChecks((prev) => ({
+      ...prev,
+      [providerKey]: {
+        status: prev[providerKey]?.status ?? 'unknown',
+        testing: true,
+        lastCheckedAt: prev[providerKey]?.lastCheckedAt ?? null,
+        lastSuccessAt: prev[providerKey]?.lastSuccessAt ?? null,
+        responseTimeMs: prev[providerKey]?.responseTimeMs ?? null,
+        errorMessage: prev[providerKey]?.errorMessage ?? null,
+      },
+    }));
+
+    const result = await runProviderCheck(provider);
+    setProviderChecks((prev) => {
+      const previous = prev[providerKey];
+      return {
+        ...prev,
+        [providerKey]: {
+          status: result.status,
+          testing: false,
+          lastCheckedAt: result.lastCheckedAt,
+          lastSuccessAt:
+            result.status === 'reachable'
+              ? result.lastSuccessAt
+              : previous?.lastSuccessAt ?? null,
+          responseTimeMs: result.responseTimeMs,
+          errorMessage: result.errorMessage,
+        },
+      };
+    });
+  }, [runProviderCheck]);
+
+  const summary = useMemo(() => {
+    const checks = Object.values(providerChecks);
+    const reachable = checks.filter((check) => check.status === 'reachable').length;
+    const unreachable = checks.filter((check) => check.status === 'unreachable').length;
+    return {
+      total: providers.length,
+      enabled: providers.filter((provider) => provider.enabled).length,
+      reachable,
+      unreachable,
+    };
+  }, [providerChecks, providers]);
+
+  const hasLoadedData = providers.length > 0 || Object.keys(providerChecks).length > 0;
+
+  return (
+    <PermissionGuard variant="route" requireAuth role="admin">
+      <ResponsiveLayout>
+        <div className="p-4 lg:p-8">
+          <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold">External Dependencies</h1>
+              <p className="text-muted-foreground">
+                Live availability and performance checks for configured provider dependencies.
+              </p>
+            </div>
+            <Button variant="outline" onClick={() => void loadData()} loading={loading} loadingText="Refreshing...">
+              <RefreshCw className="h-4 w-4" />
+              Refresh All
+            </Button>
+          </div>
+
+          {lastUpdatedAt && (
+            <p className="mb-4 text-sm text-muted-foreground">
+              Last refreshed: {new Date(lastUpdatedAt).toLocaleString()}
+            </p>
+          )}
+
+          {errors.length > 0 && (
+            <Alert variant="destructive" className="mb-6">
+              <AlertDescription>
+                <p className="font-medium">Some dependency telemetry is unavailable:</p>
+                <ul className="mt-2 list-disc pl-4">
+                  {errors.map((error) => (
+                    <li key={error}>{error}</li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <div className="mb-6 grid gap-4 md:grid-cols-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Configured Providers</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold">{summary.total}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Enabled Providers</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold">{summary.enabled}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Reachable</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold text-green-600">{summary.reachable}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Unreachable</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold text-red-600">{summary.unreachable}</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Dependency Health Grid</CardTitle>
+              <CardDescription>
+                Reachability checks run on page load and can be re-run per provider.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loading && !hasLoadedData ? (
+                <div className="py-8 text-center text-muted-foreground">Loading dependency checks...</div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Provider</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Last Checked</TableHead>
+                      <TableHead>Response Time</TableHead>
+                      <TableHead>Error Rate (24h)</TableHead>
+                      <TableHead>Last Success</TableHead>
+                      <TableHead className="text-right">Availability (7d)</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {providers.map((provider) => {
+                      const key = provider.name.toLowerCase();
+                      const usage = usageByProvider[key];
+                      const check = providerChecks[key] ?? {
+                        status: 'unknown',
+                        testing: false,
+                        lastCheckedAt: null,
+                        lastSuccessAt: null,
+                        responseTimeMs: null,
+                        errorMessage: null,
+                      };
+                      const unreachable = check.status === 'unreachable';
+                      const responseTimeValue = check.responseTimeMs !== null
+                        ? `${check.responseTimeMs} ms`
+                        : '—';
+                      const errorRateValue = usage
+                        ? formatErrorRate(usage.errors, usage.requests)
+                        : '—';
+                      const lastSuccessValue = formatSinceSuccess(check.lastSuccessAt);
+                      const availabilitySeries = availabilityByProvider[key] ?? [];
+
+                      return (
+                        <TableRow
+                          key={provider.name}
+                          className={unreachable ? 'bg-red-50/60' : undefined}
+                        >
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <Cpu className="h-4 w-4 text-muted-foreground" />
+                              <div>
+                                <p className="font-medium">{formatProviderName(provider.name)}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {provider.enabled ? 'Enabled' : 'Disabled'}
+                                </p>
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={statusVariant(check.status)}>
+                              {check.status === 'reachable' ? (
+                                <Wifi className="mr-1 h-3 w-3" />
+                              ) : check.status === 'unreachable' ? (
+                                <WifiOff className="mr-1 h-3 w-3" />
+                              ) : (
+                                <AlertTriangle className="mr-1 h-3 w-3" />
+                              )}
+                              {statusLabel(check.status)}
+                            </Badge>
+                            {check.errorMessage && check.status === 'unreachable' ? (
+                              <p className="mt-1 text-xs text-red-700">{check.errorMessage}</p>
+                            ) : null}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1 text-sm">
+                              <Clock3 className="h-3.5 w-3.5 text-muted-foreground" />
+                              {formatCheckTime(check.lastCheckedAt)}
+                            </div>
+                          </TableCell>
+                          <TableCell>{responseTimeValue}</TableCell>
+                          <TableCell>{errorRateValue}</TableCell>
+                          <TableCell>{lastSuccessValue}</TableCell>
+                          <TableCell className="text-right">
+                            {prometheusAvailable ? (
+                              <AvailabilitySparkline
+                                providerName={provider.name}
+                                series={availabilitySeries}
+                              />
+                            ) : (
+                              <span className="text-xs text-muted-foreground">
+                                Prometheus metrics unavailable
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void handleTestProvider(provider)}
+                              loading={check.testing}
+                              loadingText="Testing..."
+                              aria-label={`Test ${formatProviderName(provider.name)} connectivity`}
+                            >
+                              <Activity className="h-4 w-4" />
+                              Test
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </ResponsiveLayout>
+    </PermissionGuard>
+  );
+}

@@ -183,7 +183,7 @@ export const useMessageOption = (
   } = useCompareMode({ historyId, forceEnabled: opts.forceCompareEnabled })
 
   const currentChatModelSettings = useStoreChatModelSettings()
-  const [selectedModel, setSelectedModel] = useStorage<string | null>(
+  const [selectedModel, setSelectedModel, selectedModelStorageMeta] = useStorage<string | null>(
     "selectedModel",
     null
   )
@@ -566,6 +566,7 @@ export const useMessageOption = (
     stopStreamingRequest,
     clearChat,
     selectedModel,
+    selectedModelIsLoading: selectedModelStorageMeta.isLoading,
     setSelectedModel,
     chatMode,
     setChatMode,

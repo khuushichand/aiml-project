@@ -43,3 +43,14 @@ def test_websearch_request_defaults_max_archived_threads_per_board_to_none():
     )
 
     assert payload.max_archived_threads_per_board is None
+
+
+def test_websearch_request_accepts_searxng_alias():
+    from tldw_Server_API.app.api.v1.schemas.websearch_schemas import WebSearchRequest
+
+    payload = WebSearchRequest(
+        query="rust memory safety",
+        engine="searxng",
+    )
+
+    assert payload.engine == "searx"

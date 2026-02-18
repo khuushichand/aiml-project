@@ -198,12 +198,21 @@ async def upsert_feature_flag(
             description=payload.description,
             org_id=payload.org_id,
             user_id=payload.user_id,
+            target_user_ids=payload.target_user_ids,
+            rollout_percent=payload.rollout_percent,
+            variant_value=payload.variant_value,
             actor=actor,
             note=payload.note,
         )
     except ValueError as exc:
         detail = str(exc)
-        if detail in {"invalid_scope", "missing_org_id", "missing_user_id", "invalid_key"}:
+        if detail in {
+            "invalid_scope",
+            "missing_org_id",
+            "missing_user_id",
+            "invalid_key",
+            "invalid_rollout_percent",
+        }:
             raise HTTPException(status_code=400, detail=detail) from exc
         raise HTTPException(status_code=400, detail="invalid_feature_flag") from exc
     await _emit_admin_audit_event(
@@ -214,7 +223,13 @@ async def upsert_feature_flag(
         resource_type="feature_flag",
         resource_id=flag_key,
         action="feature_flag.upsert",
-        metadata={"scope": payload.scope, "enabled": payload.enabled},
+        metadata={
+            "scope": payload.scope,
+            "enabled": payload.enabled,
+            "rollout_percent": payload.rollout_percent,
+            "target_user_count": len(payload.target_user_ids or []),
+            "variant_value": payload.variant_value,
+        },
     )
     return FeatureFlagItem(**flag)
 

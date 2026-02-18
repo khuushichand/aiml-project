@@ -102,6 +102,101 @@ class TestAddMediaEndpoint:
             app.dependency_overrides.clear()
 
     @pytest.mark.unit
+    def test_add_document_html_url_ingestion_success(
+        self,
+        test_client,
+        auth_headers,
+        media_database,
+        test_media_dir,
+        monkeypatch,
+    ):
+        """
+        Regression: /media/add should accept document URLs that resolve to HTML.
+
+        The URL in this test has no document suffix, so we enforce a downloader
+        guard that requires `.html` to be present in `allowed_extensions`.
+        """
+        from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+        from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+        from tldw_Server_API.app.main import app
+
+        app.dependency_overrides[get_media_db_for_user] = lambda: media_database
+
+        fixture_html_path = Path(test_media_dir) / "mock_thread.html"
+        fixture_html_path.write_text(
+            "<html><head><title>Mock Thread</title></head><body><p>Test content.</p></body></html>",
+            encoding="utf-8",
+        )
+        captured: dict[str, object] = {}
+
+        async def _fake_download_url_async(**kwargs):
+            allowed_extensions = set(kwargs.get("allowed_extensions") or [])
+            captured["allowed_extensions"] = allowed_extensions
+            captured["check_extension"] = kwargs.get("check_extension")
+            if ".html" not in allowed_extensions:
+                raise ValueError("test guard: .html missing from document URL allowlist")
+            target_dir = Path(kwargs["target_dir"])
+            downloaded_path = target_dir / "mock_thread.html"
+            downloaded_path.write_text(
+                fixture_html_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            return downloaded_path
+
+        monkeypatch.setattr(
+            media_mod,
+            "_download_url_async",
+            _fake_download_url_async,
+            raising=True,
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Security.url_validation.assert_url_safe",
+            lambda _url: None,
+        )
+
+        try:
+            response = test_client.post(
+                "/api/v1/media/add",
+                data={
+                    "media_type": "document",
+                    "title": "HTML URL Regression",
+                    "urls": ["https://example.com/thread/108159576"],
+                    "perform_analysis": "false",
+                    "perform_chunking": "false",
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code in (
+                status.HTTP_200_OK,
+                status.HTTP_207_MULTI_STATUS,
+            ), response.text
+            payload = response.json()
+            results = payload.get("results") or []
+            assert results, payload
+
+            row = results[0]
+            assert row.get("status") in ("Success", "Warning"), {
+                "payload": payload,
+                "captured": captured,
+            }
+
+            allowlist = captured.get("allowed_extensions")
+            assert isinstance(allowlist, set)
+            assert {".html", ".htm", ".xml"}.issubset(allowlist)
+            assert captured.get("check_extension") is True
+
+            media_id = row.get("db_id")
+            assert media_id is not None, payload
+            persisted = media_database.get_media_by_id(int(media_id))
+            assert persisted is not None
+            assert persisted.get("title") == "HTML URL Regression"
+            assert isinstance(persisted.get("content"), str)
+            assert len(persisted["content"]) > 0
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.unit
     def test_add_with_invalid_url(self, test_client, auth_headers):
         """Test adding media with invalid URL returns 422."""
         form = [

@@ -16,7 +16,7 @@ Tables (per-user, colocated with Media DB):
               error_msg, log_path)
 - scrape_run_items(run_id, media_id, source_id)
 - scraped_items(id, run_id, job_id, source_id, media_id, media_uuid, url, title,
-                summary, published_at, tags_json, status, reviewed, created_at)
+                summary, content, published_at, tags_json, status, reviewed, created_at)
 
 Notes:
 - Backed by DatabaseBackendFactory; default to per-user SQLite Media DB path.
@@ -144,6 +144,7 @@ class ScrapedItemRow:
     url: str | None
     title: str | None
     summary: str | None
+    content: str | None
     published_at: str | None
     tags_json: str | None
     status: str
@@ -373,6 +374,7 @@ class WatchlistsDatabase:
                 url TEXT,
                 title TEXT,
                 summary TEXT,
+                content TEXT,
                 published_at TEXT,
                 tags_json TEXT,
                 status TEXT NOT NULL,
@@ -527,6 +529,7 @@ class WatchlistsDatabase:
                 url TEXT,
                 title TEXT,
                 summary TEXT,
+                content TEXT,
                 published_at TEXT,
                 tags_json TEXT,
                 status TEXT NOT NULL,
@@ -597,6 +600,9 @@ class WatchlistsDatabase:
         if not _col_exists("scrape_run_items", "source_id"):
             with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
                 self.backend.execute("ALTER TABLE scrape_run_items ADD COLUMN source_id INTEGER", ())
+        if not _col_exists("scraped_items", "content"):
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute("ALTER TABLE scraped_items ADD COLUMN content TEXT", ())
     # ------------------------
     # Tags helpers
     # ------------------------
@@ -1392,6 +1398,7 @@ class WatchlistsDatabase:
         published_at: str | None,
         tags: list[str] | None,
         status: str,
+        content: str | None = None,
     ) -> ScrapedItemRow:
         created_at = _utcnow_iso()
         tags_json = json.dumps(tags or [])
@@ -1399,8 +1406,8 @@ class WatchlistsDatabase:
             """
             INSERT INTO scraped_items (
                 run_id, job_id, source_id, media_id, media_uuid, url, title,
-                summary, published_at, tags_json, status, reviewed, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                summary, content, published_at, tags_json, status, reviewed, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
             """,
             (
                 run_id,
@@ -1411,6 +1418,7 @@ class WatchlistsDatabase:
                 url,
                 title,
                 summary,
+                content,
                 published_at,
                 tags_json,
                 status,
@@ -1426,7 +1434,7 @@ class WatchlistsDatabase:
         row = self.backend.execute(
             """
             SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
-                   si.summary, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
+                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
             FROM scraped_items si
             JOIN scrape_jobs sj ON sj.id = si.job_id
             WHERE si.id = ? AND sj.user_id = ?
@@ -1476,8 +1484,8 @@ class WatchlistsDatabase:
             params.append(until)
         if search:
             like = f"%{search}%"
-            where.append("(si.title LIKE ? OR si.summary LIKE ?)")
-            params.extend([like, like])
+            where.append("(si.title LIKE ? OR si.summary LIKE ? OR si.content LIKE ?)")
+            params.extend([like, like, like])
         where_sql = " AND ".join(where)
         total = int(
             self.backend.execute(
@@ -1489,7 +1497,7 @@ class WatchlistsDatabase:
         rows = self.backend.execute(
             f"""
             SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
-                   si.summary, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
+                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
             FROM scraped_items si
             JOIN scrape_jobs sj ON sj.id = si.job_id
             WHERE {where_sql}
@@ -1507,7 +1515,7 @@ class WatchlistsDatabase:
         rows = self.backend.execute(
             f"""
             SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
-                   si.summary, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
+                   si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
             FROM scraped_items si
             JOIN scrape_jobs sj ON sj.id = si.job_id
             WHERE si.id IN ({placeholders}) AND sj.user_id = ?

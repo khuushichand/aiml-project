@@ -25,7 +25,7 @@ interface FlashcardEditDrawerProps {
   open: boolean
   onClose: () => void
   card: Flashcard | null
-  onSave: (values: FlashcardUpdate) => void
+  onSave: (values: FlashcardUpdate) => Promise<void>
   onDelete: () => void
   isLoading?: boolean
   decks: Deck[]
@@ -105,7 +105,7 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
       const values = normalizeFlashcardTemplateFields(
         (await form.validateFields()) as FlashcardUpdate
       )
-      onSave(values)
+      await onSave(values)
     } catch (e: any) {
       // Validation errors handled by form
       if (!e?.errorFields) {

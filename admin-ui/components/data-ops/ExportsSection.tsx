@@ -255,8 +255,8 @@ export const ExportsSection = ({ refreshSignal }: ExportsSectionProps) => {
                 </Select>
               </Field>
             </div>
-            <Button onClick={handleAuditExport} disabled={auditExporting}>
-              {auditExporting ? 'Exporting...' : 'Download audit logs'}
+            <Button onClick={handleAuditExport} disabled={auditExporting} loading={auditExporting} loadingText="Exporting...">
+              Download audit logs
             </Button>
           </div>
 
@@ -297,8 +297,8 @@ export const ExportsSection = ({ refreshSignal }: ExportsSectionProps) => {
                 </Select>
               </Field>
             </div>
-            <Button onClick={handleUserExport} disabled={userExporting}>
-              {userExporting ? 'Exporting...' : 'Download users'}
+            <Button onClick={handleUserExport} disabled={userExporting} loading={userExporting} loadingText="Exporting...">
+              Download users
             </Button>
           </div>
         </div>

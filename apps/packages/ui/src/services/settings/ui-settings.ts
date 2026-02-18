@@ -286,7 +286,8 @@ export const SIDEBAR_ACTIVE_TAB_SETTING = defineSetting(
 const SIDEBAR_SERVER_CHAT_FILTER_VALUES = [
   "all",
   "character",
-  "non_character"
+  "non_character",
+  "trash"
 ] as const
 export type SidebarServerChatFilterValue =
   (typeof SIDEBAR_SERVER_CHAT_FILTER_VALUES)[number]
@@ -368,12 +369,19 @@ const coerceHeaderShortcutSelection = (
 ): HeaderShortcutId[] => {
   if (!Array.isArray(value)) return fallback
   const allowed = new Set<HeaderShortcutId>(HEADER_SHORTCUT_IDS)
+  const required = new Set<HeaderShortcutId>([
+    "workflows",
+    "acp-playground"
+  ])
   const unique = new Set<HeaderShortcutId>()
   for (const entry of value) {
     if (typeof entry !== "string") continue
     if (allowed.has(entry as HeaderShortcutId)) {
       unique.add(entry as HeaderShortcutId)
     }
+  }
+  for (const requiredId of required) {
+    unique.add(requiredId)
   }
   return HEADER_SHORTCUT_IDS.filter((id) => unique.has(id))
 }

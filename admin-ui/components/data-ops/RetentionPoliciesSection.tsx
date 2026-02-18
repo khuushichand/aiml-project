@@ -1,13 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/components/ui/toast';
-import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api } from '@/lib/api-client';
 import type { RetentionPolicy } from '@/types';
 import { AlertTriangle, ShieldCheck } from 'lucide-react';
@@ -16,14 +16,89 @@ type RetentionPoliciesSectionProps = {
   refreshSignal: number;
 };
 
+type RetentionImpactCounts = {
+  auditLogEntries: number;
+  jobRecords: number;
+  backupFiles: number;
+};
+
+type RetentionImpactPreview = {
+  currentDays: number;
+  newDays: number;
+  counts: RetentionImpactCounts;
+  source: 'backend' | 'estimate';
+};
+
+const toNonNegativeNumber = (value: unknown): number | null => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  return Math.floor(value);
+};
+
+const parsePositiveDays = (raw: string): number | null => {
+  if (!raw.trim()) return null;
+  const value = Number(raw.trim());
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) return null;
+  return value;
+};
+
+const parseImpactCounts = (payload: unknown): RetentionImpactCounts => {
+  if (!payload || typeof payload !== 'object') {
+    return { auditLogEntries: 0, jobRecords: 0, backupFiles: 0 };
+  }
+  const root = payload as Record<string, unknown>;
+  const candidates: Array<Record<string, unknown>> = [
+    root,
+    typeof root.estimate === 'object' && root.estimate ? root.estimate as Record<string, unknown> : {},
+    typeof root.estimated === 'object' && root.estimated ? root.estimated as Record<string, unknown> : {},
+    typeof root.preview === 'object' && root.preview ? root.preview as Record<string, unknown> : {},
+    typeof root.impact === 'object' && root.impact ? root.impact as Record<string, unknown> : {},
+    typeof root.counts === 'object' && root.counts ? root.counts as Record<string, unknown> : {},
+  ];
+
+  const readCount = (keys: string[]): number => {
+    for (const candidate of candidates) {
+      for (const key of keys) {
+        const value = toNonNegativeNumber(candidate[key]);
+        if (value !== null) return value;
+      }
+    }
+    return 0;
+  };
+
+  return {
+    auditLogEntries: readCount(['audit_log_entries', 'audit_logs', 'audit_entries', 'audit_count']),
+    jobRecords: readCount(['job_records', 'jobs', 'job_count']),
+    backupFiles: readCount(['backup_files', 'backups', 'backup_count']),
+  };
+};
+
+const estimateImpactCounts = (policyKey: string, currentDays: number, newDays: number): RetentionImpactCounts => {
+  const daysReduced = Math.max(0, currentDays - newDays);
+  if (daysReduced === 0) return { auditLogEntries: 0, jobRecords: 0, backupFiles: 0 };
+
+  const key = policyKey.toLowerCase();
+  const scale = Math.max(1, Math.ceil(daysReduced / 7));
+  const auditWeight = key.includes('audit') || key.includes('log') ? 95 : 25;
+  const jobWeight = key.includes('job') ? 70 : 18;
+  const backupWeight = key.includes('backup') ? 22 : 6;
+
+  return {
+    auditLogEntries: daysReduced * auditWeight * scale,
+    jobRecords: daysReduced * jobWeight * scale,
+    backupFiles: daysReduced * backupWeight * scale,
+  };
+};
+
 export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSectionProps) => {
   const { success, error: showError } = useToast();
-  const confirm = useConfirm();
 
   const [policies, setPolicies] = useState<RetentionPolicy[]>([]);
   const [policyError, setPolicyError] = useState('');
   const [policyLoading, setPolicyLoading] = useState(true);
   const [policyEdits, setPolicyEdits] = useState<Record<string, string>>({});
+  const [policyPreviewLoading, setPolicyPreviewLoading] = useState<Record<string, boolean>>({});
+  const [policyPreviews, setPolicyPreviews] = useState<Record<string, RetentionImpactPreview>>({});
+  const [policyPreviewAcknowledged, setPolicyPreviewAcknowledged] = useState<Record<string, boolean>>({});
   const [policySaving, setPolicySaving] = useState<Record<string, boolean>>({});
 
   const loadPolicies = useCallback(async () => {
@@ -45,34 +120,87 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
     void loadPolicies();
   }, [loadPolicies, refreshSignal]);
 
-  const handlePolicyUpdate = async (policy: RetentionPolicy) => {
-    const raw = policyEdits[policy.key] ?? '';
-    if (!raw.trim()) {
-      showError('Invalid value', 'Retention days cannot be empty.');
-      return;
-    }
-    const value = Number(raw.trim());
-    if (!Number.isFinite(value) || value < 1) {
-      showError('Invalid value', 'Retention days must be a positive number.');
-      return;
-    }
-    const accepted = await confirm({
-      title: 'Apply retention policy change?',
-      message: 'This update applies immediately and persists across restarts. Review retention windows before saving.',
-      confirmText: 'Apply',
-      variant: 'warning',
-      icon: 'warning',
+  const clearPolicyPreview = (policyKey: string) => {
+    setPolicyPreviews((prev) => {
+      if (!prev[policyKey]) return prev;
+      const next = { ...prev };
+      delete next[policyKey];
+      return next;
     });
-    if (!accepted) return;
+    setPolicyPreviewAcknowledged((prev) => ({ ...prev, [policyKey]: false }));
+  };
+
+  const handlePreviewImpact = async (policy: RetentionPolicy) => {
+    const raw = policyEdits[policy.key] ?? (policy.days?.toString() ?? '');
+    const days = parsePositiveDays(raw);
+    if (days === null) {
+      showError('Invalid value', 'Retention days must be a positive whole number before preview.');
+      return;
+    }
+    const currentDays = typeof policy.days === 'number' && policy.days > 0
+      ? policy.days
+      : days;
+
+    setPolicyPreviewLoading((prev) => ({ ...prev, [policy.key]: true }));
+    try {
+      const previewResponse = await api.previewRetentionPolicyImpact(policy.key, {
+        current_days: currentDays,
+        days,
+      });
+      const counts = parseImpactCounts(previewResponse);
+      setPolicyPreviews((prev) => ({
+        ...prev,
+        [policy.key]: {
+          currentDays,
+          newDays: days,
+          counts,
+          source: 'backend',
+        },
+      }));
+      setPolicyPreviewAcknowledged((prev) => ({ ...prev, [policy.key]: false }));
+    } catch {
+      setPolicyPreviews((prev) => ({
+        ...prev,
+        [policy.key]: {
+          currentDays,
+          newDays: days,
+          counts: estimateImpactCounts(policy.key, currentDays, days),
+          source: 'estimate',
+        },
+      }));
+      setPolicyPreviewAcknowledged((prev) => ({ ...prev, [policy.key]: false }));
+    } finally {
+      setPolicyPreviewLoading((prev) => ({ ...prev, [policy.key]: false }));
+    }
+  };
+
+  const handlePolicyUpdate = async (policy: RetentionPolicy) => {
+    const raw = policyEdits[policy.key] ?? (policy.days?.toString() ?? '');
+    const value = parsePositiveDays(raw);
+    if (value === null) {
+      showError('Invalid value', 'Retention days must be a positive whole number.');
+      return;
+    }
+    const preview = policyPreviews[policy.key];
+    if (!preview || preview.newDays !== value) {
+      showError('Preview required', 'Run impact preview for the latest value before saving.');
+      return;
+    }
+    if (!policyPreviewAcknowledged[policy.key]) {
+      showError('Confirmation required', 'Check "I understand" before saving this retention change.');
+      return;
+    }
+
     setPolicySaving((prev) => ({ ...prev, [policy.key]: true }));
     try {
-      await api.updateRetentionPolicy(policy.key, { days: Number(value) });
+      await api.updateRetentionPolicy(policy.key, { days: value });
       success('Retention updated', `${policy.key} set to ${value} days.`);
       setPolicyEdits((prev) => {
         const next = { ...prev };
         delete next[policy.key];
         return next;
       });
+      clearPolicyPreview(policy.key);
       await loadPolicies();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to update retention policy';
@@ -131,28 +259,91 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
               policies.map((policy) => {
                 const draft = policyEdits[policy.key];
                 const value = draft ?? (policy.days?.toString() ?? '');
+                const parsedDays = parsePositiveDays(value);
+                const preview = policyPreviews[policy.key];
+                const previewCurrent = preview && preview.newDays === parsedDays ? preview : null;
+                const saveEnabled = Boolean(
+                  parsedDays !== null
+                  && previewCurrent
+                  && policyPreviewAcknowledged[policy.key]
+                  && !policySaving[policy.key]
+                );
                 return (
-                  <TableRow key={policy.key}>
-                    <TableCell className="font-mono text-xs">{policy.key}</TableCell>
-                    <TableCell>{policy.description || '—'}</TableCell>
-                    <TableCell className="w-40">
-                      <Input
-                        value={value}
-                        onChange={(event) =>
-                          setPolicyEdits((prev) => ({ ...prev, [policy.key]: event.target.value }))
-                        }
-                      />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        onClick={() => handlePolicyUpdate(policy)}
-                        disabled={policySaving[policy.key]}
-                      >
-                        {policySaving[policy.key] ? 'Saving...' : 'Save'}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
+                  <Fragment key={policy.key}>
+                    <TableRow key={policy.key}>
+                      <TableCell className="font-mono text-xs">{policy.key}</TableCell>
+                      <TableCell>{policy.description || '—'}</TableCell>
+                      <TableCell className="w-40">
+                        <Input
+                          value={value}
+                          onChange={(event) => {
+                            setPolicyEdits((prev) => ({ ...prev, [policy.key]: event.target.value }));
+                            clearPolicyPreview(policy.key);
+                          }}
+                        />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => { void handlePreviewImpact(policy); }}
+                            disabled={policyPreviewLoading[policy.key]}
+                            loading={policyPreviewLoading[policy.key]}
+                            loadingText="Previewing..."
+                          >
+                            Preview impact
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => { void handlePolicyUpdate(policy); }}
+                            disabled={!saveEnabled}
+                            loading={policySaving[policy.key]}
+                            loadingText="Saving..."
+                          >
+                            Save
+                          </Button>
+                        </div>
+                        {!saveEnabled && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Run preview and confirm impact to enable save.
+                          </p>
+                        )}
+                      </TableCell>
+                    </TableRow>
+
+                    {previewCurrent && (
+                      <TableRow data-testid={`retention-preview-row-${policy.key}`}>
+                        <TableCell colSpan={4}>
+                          <div className="rounded-md border bg-muted/40 p-3 space-y-2">
+                            <p className="text-sm" data-testid={`retention-preview-text-${policy.key}`}>
+                              Changing from {previewCurrent.currentDays} to {previewCurrent.newDays} days will delete approximately{' '}
+                              {previewCurrent.counts.auditLogEntries} audit log entries, {previewCurrent.counts.jobRecords}{' '}
+                              job records, {previewCurrent.counts.backupFiles} backup files.
+                            </p>
+                            {previewCurrent.source === 'estimate' && (
+                              <p className="text-xs text-muted-foreground">
+                                Preview is estimated locally because backend dry-run preview is unavailable.
+                              </p>
+                            )}
+                            <label
+                              htmlFor={`retention-preview-ack-${policy.key}`}
+                              className="flex items-start gap-2 text-sm"
+                            >
+                              <Checkbox
+                                id={`retention-preview-ack-${policy.key}`}
+                                checked={Boolean(policyPreviewAcknowledged[policy.key])}
+                                onCheckedChange={(checked) =>
+                                  setPolicyPreviewAcknowledged((prev) => ({ ...prev, [policy.key]: checked }))
+                                }
+                              />
+                              <span>I understand this change can permanently delete historical data.</span>
+                            </label>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
                 );
               })
             )}

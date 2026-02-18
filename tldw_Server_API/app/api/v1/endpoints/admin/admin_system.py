@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import PlainTextResponse
 
@@ -35,9 +37,10 @@ async def get_system_stats(
 @router.get("/activity", response_model=ActivitySummaryResponse)
 async def get_dashboard_activity(
     days: int = Query(7, ge=1, le=30),
+    granularity: Literal["hour", "day", "auto"] = Query("auto"),
     db=Depends(get_db_transaction),
 ) -> ActivitySummaryResponse:
-    return await admin_system_service.get_dashboard_activity(days, db)
+    return await admin_system_service.get_dashboard_activity(days, db, granularity)
 
 
 @router.get("/audit-log", response_model=AuditLogResponse)

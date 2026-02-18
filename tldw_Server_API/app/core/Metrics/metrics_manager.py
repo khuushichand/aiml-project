@@ -1270,6 +1270,34 @@ class MetricsRegistry:
                 buckets=[512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072],
             )
         )
+        self.register_metric(
+            MetricDefinition(
+                name="extraction_strategy_total",
+                type=MetricType.COUNTER,
+                description="Total extraction strategy attempts",
+                labels=["strategy", "status"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="extraction_strategy_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Duration of article extraction strategy runs",
+                unit="s",
+                labels=["strategy", "status"],
+                buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="extraction_content_length_bytes",
+                type=MetricType.HISTOGRAM,
+                description="Extracted article content length in bytes by strategy",
+                unit="bytes",
+                labels=["strategy"],
+                buckets=[512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072],
+            )
+        )
 
         # Security metrics
         self.register_metric(

@@ -65,6 +65,18 @@ class TeamMemberRemoveResponse(BaseModel):
     message: str
 
 
+class TeamMemberRoleUpdateRequest(BaseModel):
+    role: str = Field(..., pattern=r"^(owner|admin|lead|member)$")
+
+
+class TeamMembershipItem(BaseModel):
+    team_id: int
+    org_id: int
+    role: str
+    team_name: str | None = None
+    org_name: str | None = None
+
+
 class VirtualKeyCreateRequest(BaseModel):
     name: str | None = None
     description: str | None = None

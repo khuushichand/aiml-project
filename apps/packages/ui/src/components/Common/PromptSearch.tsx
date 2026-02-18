@@ -3,15 +3,16 @@ import { Input, List, Tag, Space, Tooltip, Modal, Checkbox, Button, message, Sel
 import type { MenuProps } from 'antd'
 import { ChevronDown } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  generateID,
   getAllPrompts,
+  savePrompt,
+  updatePrompt,
   updateLastUsedPrompt as updateLastUsedPromptDB
 } from '@/db/dexie/helpers'
 import { useStorage } from '@plasmohq/storage/hook'
 import { tldwClient } from '@/services/tldw/TldwApiClient'
-import { savePromptFB, updatePromptFB } from '@/db'
+import { autoSyncPrompt, shouldAutoSyncWorkspacePrompts } from '@/services/prompt-sync'
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { Link } from 'react-router-dom'
 
@@ -41,8 +42,41 @@ export const PromptSearch: React.FC<Props> = ({ onInsertMessage, onInsertSystem,
   const [localOverwriteId, setLocalOverwriteId] = React.useState<string | undefined>(undefined)
   const [saving, setSaving] = React.useState(false)
   const savingRef = React.useRef(false)
+  const queryClient = useQueryClient()
 
   const { data: localPrompts } = useQuery({ queryKey: ['promptSearchAll'], queryFn: getAllPrompts })
+
+  const refreshPromptQueries = React.useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['promptSearchAll'] }),
+      queryClient.invalidateQueries({ queryKey: ['fetchAllPrompts'] })
+    ])
+  }, [queryClient])
+
+  const syncPromptIfConfigured = React.useCallback(
+    async (localId: string) => {
+      try {
+        const autoSyncEnabled = await shouldAutoSyncWorkspacePrompts()
+        if (!autoSyncEnabled) return
+
+        const syncResult = await autoSyncPrompt(localId)
+        if (!syncResult.success) {
+          message.warning(
+            syncResult.error ||
+              (t('promptSearch.saveLocalSuccess') || 'Saved') +
+                ' (server sync pending)'
+          )
+        }
+      } catch (error: unknown) {
+        message.warning(
+          (error instanceof Error ? error.message : null) ||
+            ((t('promptSearch.saveLocalSuccess') || 'Saved') +
+              ' (server sync pending)')
+        )
+      }
+    },
+    [t]
+  )
 
   const runSearch = React.useCallback(async (query: string) => {
     if (!query.trim()) { setResults([]); return }
@@ -148,12 +182,14 @@ export const PromptSearch: React.FC<Props> = ({ onInsertMessage, onInsertSystem,
         onClick: () => {
           void runWithSaving(async () => {
             try {
-              await updatePromptFB({
+              await updatePrompt({
                 id: String(selected.id),
                 title: editTitle || 'Untitled',
                 content: editContent,
                 is_system: !!editIsSystem
               })
+              await syncPromptIfConfigured(String(selected.id))
+              await refreshPromptQueries()
               message.success(t('promptSearch.saveLocalSuccess') || 'Saved')
             } catch (e: unknown) {
               message.error(
@@ -201,19 +237,18 @@ export const PromptSearch: React.FC<Props> = ({ onInsertMessage, onInsertSystem,
       key: 'save-new-local',
       label: t('promptSearch.saveAsNew') || 'Save as new',
       onClick: () => {
-        void runWithSaving(async () => {
-          try {
-            const id = generateID()
-            await savePromptFB({
-              id,
-              title: editTitle || 'Untitled',
-              content: editContent,
-              is_system: !!editIsSystem,
-              createdAt: Date.now()
-            })
-            message.success(t('promptSearch.saveSuccess'))
-          } catch (e: unknown) {
-            message.error(
+          void runWithSaving(async () => {
+            try {
+              const savedPrompt = await savePrompt({
+                title: editTitle || 'Untitled',
+                content: editContent,
+                is_system: !!editIsSystem,
+              })
+              await syncPromptIfConfigured(savedPrompt.id)
+              await refreshPromptQueries()
+              message.success(t('promptSearch.saveSuccess'))
+            } catch (e: unknown) {
+              message.error(
               resolveErrorMessage(
                 e,
                 t('promptSearch.saveFailed') || 'Failed'
@@ -234,22 +269,22 @@ export const PromptSearch: React.FC<Props> = ({ onInsertMessage, onInsertSystem,
           void runWithSaving(async () => {
             try {
               if (localOverwriteId) {
-                await updatePromptFB({
+                await updatePrompt({
                   id: localOverwriteId,
                   title: editTitle || 'Untitled',
                   content: editContent,
                   is_system: !!editIsSystem
                 })
+                await syncPromptIfConfigured(localOverwriteId)
               } else {
-                const id = generateID()
-                await savePromptFB({
-                  id,
+                const savedPrompt = await savePrompt({
                   title: editTitle || 'Untitled',
                   content: editContent,
                   is_system: !!editIsSystem,
-                  createdAt: Date.now()
                 })
+                await syncPromptIfConfigured(savedPrompt.id)
               }
+              await refreshPromptQueries()
               message.success(t('promptSearch.saveLocalSuccess') || 'Saved')
             } catch (e: unknown) {
               message.error(
@@ -291,16 +326,17 @@ export const PromptSearch: React.FC<Props> = ({ onInsertMessage, onInsertSystem,
     editContent,
     editIsSystem,
     editTitle,
-    generateID,
     localOverwriteId,
     message,
+    refreshPromptQueries,
     resolveErrorMessage,
     runWithSaving,
-    savePromptFB,
+    savePrompt,
     selected,
+    syncPromptIfConfigured,
     t,
     tldwClient,
-    updatePromptFB
+    updatePrompt
   ])
 
   const modifierKey = React.useMemo(() => {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException
 from loguru import logger
@@ -262,20 +262,66 @@ async def get_system_stats(db) -> SystemStatsResponse:
 async def get_dashboard_activity(
     days: int,
     db,
+    granularity: Literal["hour", "day", "auto"] = "auto",
 ) -> ActivitySummaryResponse:
     """Return recent request/user activity for the admin dashboard."""
-    today = datetime.now(timezone.utc).date()
-    start_date = today - timedelta(days=days - 1)
-    date_range = [start_date + timedelta(days=idx) for idx in range(days)]
-    activity_by_date = {
-        day: {
-            "date": day.isoformat(),
+    now_utc = datetime.now(timezone.utc)
+    resolved_granularity: Literal["hour", "day"] = (
+        "hour" if granularity == "auto" and days <= 1
+        else "day" if granularity == "auto"
+        else granularity
+    )
+    warnings: list[str] = []
+    if resolved_granularity == "hour":
+        end_hour = now_utc.replace(minute=0, second=0, microsecond=0)
+        buckets = [
+            end_hour - timedelta(hours=offset)
+            for offset in range(23, -1, -1)
+        ]
+    else:
+        end_day = now_utc.date()
+        start_day = end_day - timedelta(days=days - 1)
+        buckets = [
+            datetime.combine(start_day + timedelta(days=offset), datetime.min.time(), tzinfo=timezone.utc)
+            for offset in range(days)
+        ]
+    start_dt = buckets[0]
+    activity_by_bucket = {
+        bucket: {
+            "date": bucket.date().isoformat(),
+            "bucket_start": bucket.isoformat(),
             "requests": 0,
             "users": 0,
         }
-        for day in date_range
+        for bucket in buckets
     }
-    warnings: list[str] = []
+
+    def _bucket_for_datetime(timestamp: datetime) -> datetime:
+        dt = timestamp.astimezone(timezone.utc)
+        if resolved_granularity == "hour":
+            return dt.replace(minute=0, second=0, microsecond=0)
+        return datetime.combine(dt.date(), datetime.min.time(), tzinfo=timezone.utc)
+
+    def _parse_row_bucket(value: Any) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            dt = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+            return _bucket_for_datetime(dt)
+        raw = str(value).strip()
+        if not raw:
+            return None
+        if resolved_granularity == "hour" and "T" not in raw and " " in raw:
+            raw = raw.replace(" ", "T")
+        if raw.endswith("Z"):
+            raw = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return _bucket_for_datetime(parsed)
 
     try:
         registry = get_metrics_registry()
@@ -288,61 +334,96 @@ async def get_dashboard_activity(
                 ).date()
             except (OSError, OverflowError, ValueError):
                 continue
-            if metric_day in activity_by_date:
-                activity_by_date[metric_day]["requests"] += int(metric_value.value or 0)
+            metric_dt = datetime.combine(metric_day, datetime.min.time(), tzinfo=timezone.utc)
+            if resolved_granularity == "hour":
+                try:
+                    metric_dt = datetime.fromtimestamp(
+                        metric_value.timestamp,
+                        timezone.utc,
+                    )
+                except (OSError, OverflowError, ValueError):
+                    continue
+            bucket = _bucket_for_datetime(metric_dt)
+            if bucket in activity_by_bucket:
+                activity_by_bucket[bucket]["requests"] += int(metric_value.value or 0)
     except Exception as exc:
         logger.warning("Admin activity request metrics unavailable: {}", exc)
         warnings.append("request_metrics_unavailable")
 
     try:
-        start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
         is_pg = _is_postgres_connection(db)
         if is_pg:
-            rows = await db.fetch(
-                """
-                SELECT DATE(created_at) as day,
-                       COUNT(DISTINCT user_id) as active_users
-                FROM sessions
-                WHERE created_at >= $1
-                GROUP BY day
-                ORDER BY day
-                """,
-                start_dt,
-            )
+            if resolved_granularity == "hour":
+                rows = await db.fetch(
+                    """
+                    SELECT date_trunc('hour', created_at AT TIME ZONE 'UTC') as bucket,
+                           COUNT(DISTINCT user_id) as active_users
+                    FROM sessions
+                    WHERE created_at >= $1
+                    GROUP BY bucket
+                    ORDER BY bucket
+                    """,
+                    start_dt,
+                )
+            else:
+                rows = await db.fetch(
+                    """
+                    SELECT DATE(created_at) as bucket,
+                           COUNT(DISTINCT user_id) as active_users
+                    FROM sessions
+                    WHERE created_at >= $1
+                    GROUP BY bucket
+                    ORDER BY bucket
+                    """,
+                    start_dt,
+                )
         else:
-            cursor = await db.execute(
-                """
-                SELECT date(created_at) as day,
-                       COUNT(DISTINCT user_id) as active_users
-                FROM sessions
-                WHERE datetime(created_at) >= datetime(?)
-                GROUP BY date(created_at)
-                ORDER BY date(created_at)
-                """,
-                (start_dt.isoformat(),),
-            )
+            if resolved_granularity == "hour":
+                cursor = await db.execute(
+                    """
+                    SELECT strftime('%Y-%m-%dT%H:00:00', datetime(created_at)) as bucket,
+                           COUNT(DISTINCT user_id) as active_users
+                    FROM sessions
+                    WHERE datetime(created_at) >= datetime(?)
+                    GROUP BY bucket
+                    ORDER BY bucket
+                    """,
+                    (start_dt.isoformat(),),
+                )
+            else:
+                cursor = await db.execute(
+                    """
+                    SELECT date(created_at) as bucket,
+                           COUNT(DISTINCT user_id) as active_users
+                    FROM sessions
+                    WHERE datetime(created_at) >= datetime(?)
+                    GROUP BY bucket
+                    ORDER BY bucket
+                    """,
+                    (start_dt.isoformat(),),
+                )
             rows = await cursor.fetchall()
         for row in rows:
             if isinstance(row, dict):
-                day_str = row.get("day")
+                bucket_value = row.get("bucket")
                 active_users = row.get("active_users")
             else:
-                day_str = row[0] if len(row) > 0 else None
+                bucket_value = row[0] if len(row) > 0 else None
                 active_users = row[1] if len(row) > 1 else None
-            if not day_str:
-                continue
-            try:
-                metric_day = datetime.fromisoformat(str(day_str)).date()
-            except ValueError:
-                continue
-            if metric_day in activity_by_date:
-                activity_by_date[metric_day]["users"] = int(active_users or 0)
+            bucket = _parse_row_bucket(bucket_value)
+            if bucket in activity_by_bucket:
+                activity_by_bucket[bucket]["users"] = int(active_users or 0)
     except Exception as exc:
         logger.warning("Admin activity user metrics unavailable: {}", exc)
         warnings.append("user_metrics_unavailable")
 
-    points = [activity_by_date[day] for day in date_range]
-    return ActivitySummaryResponse(days=days, points=points, warnings=warnings or None)
+    points = [activity_by_bucket[bucket] for bucket in buckets]
+    return ActivitySummaryResponse(
+        days=days,
+        granularity=resolved_granularity,
+        points=points,
+        warnings=warnings or None,
+    )
 
 
 async def get_audit_log(

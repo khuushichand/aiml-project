@@ -244,6 +244,7 @@ export interface ScrapedItem {
   url?: string | null
   title?: string | null
   summary?: string | null
+  content?: string | null
   published_at?: string | null
   tags: string[]
   status: ItemStatus
@@ -392,6 +393,21 @@ export interface PaginatedResponse<T> {
   has_more?: boolean
 }
 
+export interface SourceCheckNowItem {
+  source_id: number
+  status: "ok" | "error" | "not_found" | "inactive"
+  detail?: string | null
+  last_scraped_at?: string | null
+  run_id?: number | null
+}
+
+export interface SourcesCheckNowResponse {
+  items: SourceCheckNowItem[]
+  total: number
+  success: number
+  failed: number
+}
+
 export interface SourcesBulkCreateItem {
   name?: string | null
   url: string
@@ -471,4 +487,11 @@ export interface SourceSeenResetResponse {
 // UI State Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type WatchlistTab = "sources" | "jobs" | "runs" | "outputs" | "templates" | "settings"
+export type WatchlistTab =
+  | "sources"
+  | "jobs"
+  | "runs"
+  | "items"
+  | "outputs"
+  | "templates"
+  | "settings"

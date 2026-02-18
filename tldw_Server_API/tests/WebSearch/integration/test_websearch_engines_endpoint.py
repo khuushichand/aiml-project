@@ -59,6 +59,38 @@ def test_websearch_searx_engine(monkeypatch):
         assert data["web_search_results_dict"]["results"]
 
 
+def test_websearch_searxng_engine_alias(monkeypatch):
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+
+    def fake_perform_websearch(search_engine, search_query, *args, **kwargs):
+        assert search_engine == "searx"
+        return {
+            "results": [
+                {
+                    "title": "Searx Alias Result",
+                    "url": "https://searx.example/alias",
+                    "content": "Alias handling.",
+                    "metadata": {"date_published": None},
+                }
+            ],
+            "total_results_found": 1,
+            "search_time": 0.01,
+        }
+
+    monkeypatch.setattr(ws, "perform_websearch", fake_perform_websearch)
+
+    app = _mini_app_with_user()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/research/websearch",
+            json={"query": "q", "engine": "searxng", "result_count": 3, "aggregate": False},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "web_search_results_dict" in data
+        assert data["web_search_results_dict"]["results"]
+
+
 def test_websearch_tavily_engine(monkeypatch):
     from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
 

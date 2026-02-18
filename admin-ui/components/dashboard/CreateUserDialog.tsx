@@ -161,8 +161,8 @@ export function CreateUserDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={creating}>
-              {creating ? 'Creating…' : 'Create user'}
+            <Button type="submit" loading={creating} loadingText="Creating…">
+              Create user
             </Button>
           </DialogFooter>
         </form>

@@ -205,8 +205,8 @@ export default function LoginPage() {
                   </Alert>
                 )}
 
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? 'Signing in...' : 'Sign In'}
+                <Button type="submit" className="w-full" disabled={isLoading} loading={isLoading} loadingText="Signing in...">
+                  Sign In
                 </Button>
               </form>
             </FormProvider>
@@ -251,8 +251,8 @@ export default function LoginPage() {
                   </Alert>
                 )}
 
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? 'Validating...' : 'Connect with API Key'}
+                <Button type="submit" className="w-full" disabled={isLoading} loading={isLoading} loadingText="Validating...">
+                  Connect with API Key
                 </Button>
               </form>
             </FormProvider>

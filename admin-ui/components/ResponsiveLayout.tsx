@@ -17,12 +17,16 @@ import { LogOut, Menu, Search, X } from 'lucide-react';
 import { logout } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { Breadcrumbs } from '@/components/Breadcrumbs';
 import { OrgContextSwitcher } from '@/components/OrgContextSwitcher';
 import { usePermissions } from '@/components/PermissionGuard';
 import { useToast } from '@/components/ui/toast';
 import {
+  buildBreadcrumbs,
+  getPageTitleForPath,
   matchesNavigationQuery,
   navigationSections,
   type NavigationItem,
@@ -42,6 +46,8 @@ const MobileMenuContext = createContext<MobileMenuContextType>({
   close: () => {},
   toggle: () => {},
 });
+
+const SHORTCUT_BANNER_STORAGE_KEY_PREFIX = 'admin_shortcuts_tip_dismissed_v1';
 
 export function useMobileMenu() {
   return useContext(MobileMenuContext);
@@ -198,6 +204,9 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
       {/* Logout */}
       <div className="border-t px-3 py-4">
+        <p className="mb-3 text-xs text-muted-foreground" data-testid="sidebar-shortcuts-hint">
+          Press ? for shortcuts
+        </p>
         <Button
           variant="outline"
           className="w-full justify-start gap-3"
@@ -342,10 +351,44 @@ interface ResponsiveLayoutProps {
 export function ResponsiveLayout({ children }: ResponsiveLayoutProps) {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
+  const { user, loading: permissionsLoading } = usePermissions();
   const prevPathnameRef = useRef(pathname);
+  const focusedPathnameRef = useRef(pathname);
+  const [dismissedShortcutBannerKeys, setDismissedShortcutBannerKeys] = useState<Set<string>>(new Set());
   const openMenu = useCallback(() => setIsOpen(true), []);
   const closeMenu = useCallback(() => setIsOpen(false), []);
   const toggleMenu = useCallback(() => setIsOpen((prev) => !prev), []);
+  const breadcrumbs = useMemo(() => buildBreadcrumbs(pathname || '/'), [pathname]);
+  const showBreadcrumbs = breadcrumbs.length >= 3;
+  const shortcutBannerStorageKey = user ? `${SHORTCUT_BANNER_STORAGE_KEY_PREFIX}:${user.id}` : null;
+  const showShortcutBanner = useMemo(() => {
+    if (permissionsLoading || !shortcutBannerStorageKey) return false;
+    if (dismissedShortcutBannerKeys.has(shortcutBannerStorageKey)) return false;
+    try {
+      return window.localStorage.getItem(shortcutBannerStorageKey) !== '1';
+    } catch {
+      return true;
+    }
+  }, [dismissedShortcutBannerKeys, permissionsLoading, shortcutBannerStorageKey]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.title = getPageTitleForPath(pathname || '/');
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!pathname || focusedPathnameRef.current === pathname) {
+      return undefined;
+    }
+    focusedPathnameRef.current = pathname;
+    const timeoutId = window.setTimeout(() => {
+      const main = document.getElementById('main-content');
+      if (main instanceof HTMLElement) {
+        main.focus();
+      }
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [pathname]);
 
   // Close mobile menu on route change
   useEffect(() => {
@@ -379,6 +422,22 @@ export function ResponsiveLayout({ children }: ResponsiveLayoutProps) {
     };
   }, [isOpen]);
 
+  const dismissShortcutBanner = () => {
+    if (!shortcutBannerStorageKey) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(shortcutBannerStorageKey, '1');
+    } catch {
+      // noop: banner dismissal is best-effort persistence.
+    }
+    setDismissedShortcutBannerKeys((prev) => {
+      const next = new Set(prev);
+      next.add(shortcutBannerStorageKey);
+      return next;
+    });
+  };
+
   return (
     <MobileMenuContext.Provider
       value={{
@@ -388,6 +447,12 @@ export function ResponsiveLayout({ children }: ResponsiveLayoutProps) {
         toggle: toggleMenu,
       }}
     >
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:border focus:border-primary focus:bg-background focus:px-4 focus:py-2 focus:text-foreground"
+      >
+        Skip to main content
+      </a>
       <div className="flex h-screen bg-background">
         {/* Desktop sidebar */}
         <DesktopSidebar />
@@ -399,7 +464,24 @@ export function ResponsiveLayout({ children }: ResponsiveLayoutProps) {
         <MobileHeader />
 
         {/* Main content */}
-        <main className="flex-1 overflow-y-auto pt-14 lg:pt-0">
+        <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto pt-14 lg:pt-0">
+          {(showShortcutBanner || showBreadcrumbs) && (
+            <div className="space-y-3 px-4 pt-3 lg:px-8 lg:pt-5">
+              {showShortcutBanner && (
+                <Alert data-testid="shortcuts-tip-banner">
+                  <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+                    <span>
+                      Tip: Use keyboard shortcuts for faster navigation. Press Shift+? for help.
+                    </span>
+                    <Button variant="ghost" size="sm" onClick={dismissShortcutBanner}>
+                      Dismiss
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+              {showBreadcrumbs && <Breadcrumbs />}
+            </div>
+          )}
           {children}
         </main>
       </div>

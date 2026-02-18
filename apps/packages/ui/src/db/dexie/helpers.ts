@@ -412,11 +412,14 @@ export const getAllPrompts = async () => {
     const db = new PageAssistDatabase()
     return await db.getAllPrompts()
   } catch (e) {
-    if (isDatabaseClosedError(e)) {
+    try {
       return await getAllPromptsFB()
+    } catch {
+      if (!isDatabaseClosedError(e)) {
+        console.error("Failed to load prompts from Dexie and fallback storage:", e)
+      }
+      return []
     }
-
-    return []
   }
 }
 

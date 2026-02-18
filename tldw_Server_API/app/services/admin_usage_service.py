@@ -493,7 +493,7 @@ async def fetch_llm_usage(
 async def fetch_llm_usage_summary(
     db,
     *,
-    group_by: str,
+    group_by: str | list[str],
     provider: str | None,
     start: str | None,
     end: str | None,
@@ -501,7 +501,7 @@ async def fetch_llm_usage_summary(
 ) -> list[dict[str, Any]]:
     """Summarize llm_usage_log grouped by a key.
 
-    group_by: one of user|operation|day|endpoint|provider|model|status
+    group_by: one or two of user|operation|day|endpoint|provider|model|status
     """
     pg = _is_postgres_connection(db)
     params: list[Any] = []
@@ -531,26 +531,39 @@ async def fetch_llm_usage_summary(
             params.extend(org_ids)
     where_clause = (" WHERE " + " AND ".join(where)) if where else ""
 
-    # Determine grouping expression per backend
-    if group_by == 'user':
-        key_expr = 'COALESCE(user_id,0)' if pg else 'IFNULL(user_id,0)'
-    elif group_by == 'operation':
-        key_expr = 'operation'
-    elif group_by == 'day':
-        # Align to UTC day boundary
-        key_expr = "CAST(date_trunc('day', ts AT TIME ZONE 'UTC') AS date)" if pg else "strftime('%Y-%m-%d', ts, 'utc')"
-    elif group_by in {'endpoint', 'provider', 'model', 'status'}:
-        key_expr = group_by
-    else:
+    group_fields = [group_by] if isinstance(group_by, str) else list(group_by)
+    group_fields = [field.strip().lower() for field in group_fields if field and field.strip()]
+    if not group_fields:
+        group_fields = ['user']
+    if len(group_fields) > 2:
+        group_fields = group_fields[:2]
+
+    def _group_expr(field: str) -> str:
+        # Determine grouping expression per backend
+        if field == 'user':
+            return 'COALESCE(user_id,0)' if pg else 'IFNULL(user_id,0)'
+        if field == 'operation':
+            return 'operation'
+        if field == 'day':
+            # Align to UTC day boundary
+            return "CAST(date_trunc('day', ts AT TIME ZONE 'UTC') AS date)" if pg else "strftime('%Y-%m-%d', ts, 'utc')"
+        if field in {'endpoint', 'provider', 'model', 'status'}:
+            return field
         # Fallback to endpoint for unknown values
-        key_expr = 'endpoint'
+        return 'endpoint'
+
+    key_exprs = [_group_expr(field) for field in group_fields]
+    key_select_parts = [f"{expr} as group_value{'' if idx == 0 else f'_{idx + 1}'}" for idx, expr in enumerate(key_exprs)]
+    key_group_by = ", ".join(key_exprs)
+    key_order_by = ", ".join(key_exprs)
+
     if pg:
         sql = (
-            f"SELECT {key_expr} as group_value, "
+            f"SELECT {', '.join(key_select_parts)}, "
             "COUNT(*) AS requests, SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS errors, "
             "SUM(COALESCE(prompt_tokens,0)) AS input_tokens, SUM(COALESCE(completion_tokens,0)) AS output_tokens, "
             "SUM(COALESCE(total_tokens,0)) AS total_tokens, SUM(COALESCE(total_cost_usd,0)) AS total_cost_usd, AVG(latency_ms)::float AS latency_avg_ms "
-            f"FROM llm_usage_log{join_clause}{where_clause} GROUP BY {key_expr} ORDER BY requests DESC"
+            f"FROM llm_usage_log{join_clause}{where_clause} GROUP BY {key_group_by} ORDER BY requests DESC, {key_order_by}"
         )
         rows = await db.fetch(sql, *params)
         out: list[dict[str, Any]] = []
@@ -560,15 +573,23 @@ async def fetch_llm_usage_summary(
                 d["group_value"] = str(d.get("group_value", ""))
             except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
                 d["group_value"] = str(d.get("group_value"))
+            if len(group_fields) > 1:
+                secondary_key = "group_value_2"
+                try:
+                    d["group_value_secondary"] = str(d.get(secondary_key, ""))
+                except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
+                    d["group_value_secondary"] = str(d.get(secondary_key))
+            else:
+                d["group_value_secondary"] = None
             out.append(d)
         return out
     # SQLite
     sql = (
-        f"SELECT {key_expr} as group_value, "
+        f"SELECT {', '.join(key_select_parts)}, "
         "COUNT(*) as requests, SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors, "
         "SUM(IFNULL(prompt_tokens,0)) as input_tokens, SUM(IFNULL(completion_tokens,0)) as output_tokens, "
         "SUM(IFNULL(total_tokens,0)) as total_tokens, SUM(IFNULL(total_cost_usd,0)) as total_cost_usd, AVG(latency_ms) as latency_avg_ms "
-        f"FROM llm_usage_log{join_clause}{where_clause} GROUP BY {key_expr} ORDER BY requests DESC"
+        f"FROM llm_usage_log{join_clause}{where_clause} GROUP BY {key_group_by} ORDER BY requests DESC, {key_order_by}"
     )
     cur = await db.execute(sql, params)
     rows = await cur.fetchall()
@@ -579,15 +600,24 @@ async def fetch_llm_usage_summary(
             gv_str = str(gv)
         except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
             gv_str = f"{gv}"
+        secondary_value: str | None = None
+        if len(group_fields) > 1:
+            secondary_raw = r[1]
+            try:
+                secondary_value = str(secondary_raw)
+            except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
+                secondary_value = f"{secondary_raw}"
+        metric_index_offset = len(group_fields)
         out_rows.append({
             'group_value': gv_str,
-            'requests': int(r[1] or 0),
-            'errors': int(r[2] or 0),
-            'input_tokens': int(r[3] or 0),
-            'output_tokens': int(r[4] or 0),
-            'total_tokens': int(r[5] or 0),
-            'total_cost_usd': float(r[6] or 0.0),
-            'latency_avg_ms': (float(r[7]) if r[7] is not None else None),
+            'group_value_secondary': secondary_value,
+            'requests': int(r[metric_index_offset] or 0),
+            'errors': int(r[metric_index_offset + 1] or 0),
+            'input_tokens': int(r[metric_index_offset + 2] or 0),
+            'output_tokens': int(r[metric_index_offset + 3] or 0),
+            'total_tokens': int(r[metric_index_offset + 4] or 0),
+            'total_cost_usd': float(r[metric_index_offset + 5] or 0.0),
+            'latency_avg_ms': (float(r[metric_index_offset + 6]) if r[metric_index_offset + 6] is not None else None),
         })
     return out_rows
 
@@ -845,7 +875,8 @@ async def get_llm_usage_summary(
     db,
     start: str | None,
     end: str | None,
-    group_by: str,
+    group_by: str | list[str],
+    provider: str | None,
     org_id: int | None,
 ) -> LLMUsageSummaryResponse:
     try:
@@ -855,7 +886,7 @@ async def get_llm_usage_summary(
         rows = await fetch_llm_usage_summary(
             db,
             group_by=group_by,
-            provider=None,
+            provider=provider,
             start=start,
             end=end,
             org_ids=org_ids,

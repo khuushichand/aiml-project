@@ -45,7 +45,7 @@ export const getNoteKeywords = async (limit = 200): Promise<string[]> => {
 
   const request = (async () => {
     const abs = await bgRequest<any>({
-      path: `/api/v1/notes/keywords${buildQuery({ limit })}` as any,
+      path: `/api/v1/notes/keywords/${buildQuery({ limit })}` as any,
       method: "GET" as any
     })
     const arr = Array.isArray(abs)
@@ -84,7 +84,7 @@ export const getAllNoteKeywords = async (pageSize = 1000): Promise<string[]> => 
 
     for (let page = 0; page < maxPages; page += 1) {
       const abs = await bgRequest<any>({
-        path: `/api/v1/notes/keywords${buildQuery({ limit: pageSize, offset })}` as any,
+        path: `/api/v1/notes/keywords/${buildQuery({ limit: pageSize, offset })}` as any,
         method: "GET" as any
       })
       const arr = Array.isArray(abs)
@@ -121,7 +121,7 @@ export const searchNoteKeywords = async (
   const q = String(query || "").trim()
   if (!q) return []
   const abs = await bgRequest<any>({
-    path: `/api/v1/notes/keywords/search${buildQuery({ query: q, limit })}` as any,
+    path: `/api/v1/notes/keywords/search/${buildQuery({ query: q, limit })}` as any,
     method: "GET" as any
   })
   const arr = Array.isArray(abs)

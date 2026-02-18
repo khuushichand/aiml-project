@@ -124,6 +124,7 @@ import {
   findUnavailableChatModel,
   normalizeChatModelId
 } from "@/utils/chat-model-availability"
+import { resolveStartupSelectedModel } from "@/utils/model-startup-selection"
 import {
   useModelSelector,
   useComposerTokens,
@@ -160,6 +161,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     onSubmit,
     messages,
     selectedModel,
+    selectedModelIsLoading,
     setSelectedModel,
     chatMode,
     setChatMode,
@@ -487,6 +489,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     apiModelLabel,
     modelSelectorWarning,
     favoriteModels,
+    favoriteModelsIsLoading,
     favoriteModelSet,
     toggleFavoriteModel,
     filteredModels,
@@ -526,25 +529,24 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   // Auto-select model on initial load when no model is selected
   // Priority: 1) First favorite model, 2) First available model
   React.useEffect(() => {
-    if (selectedModel || !composerModels?.length) return
-
-    // Try to find first favorite model
-    if (favoriteModels?.length) {
-      const firstFavorite = (composerModels as any[]).find(m =>
-        favoriteModels.includes(String(m.model))
-      )
-      if (firstFavorite) {
-        setSelectedModel(firstFavorite.model)
-        return
-      }
+    const nextModel = resolveStartupSelectedModel({
+      currentModel: selectedModel,
+      models: (composerModels as any[]) || [],
+      preferredModelIds: favoriteModels,
+      isCurrentModelHydrating: selectedModelIsLoading,
+      arePreferencesHydrating: favoriteModelsIsLoading
+    })
+    if (nextModel) {
+      setSelectedModel(nextModel)
     }
-
-    // Fall back to first available model
-    const firstModel = (composerModels as any[])[0]
-    if (firstModel?.model) {
-      setSelectedModel(firstModel.model)
-    }
-  }, [composerModels, selectedModel, favoriteModels, setSelectedModel])
+  }, [
+    composerModels,
+    favoriteModels,
+    favoriteModelsIsLoading,
+    selectedModel,
+    selectedModelIsLoading,
+    setSelectedModel
+  ])
 
   const compareModeActive = compareFeatureEnabled && compareMode
   const availableChatModelIds = React.useMemo(

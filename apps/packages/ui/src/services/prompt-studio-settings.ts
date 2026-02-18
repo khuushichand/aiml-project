@@ -2,6 +2,7 @@ import { defineSetting, getSetting, setSetting } from "@/services/settings/regis
 
 export type PromptStudioDefaults = {
   defaultProjectId?: number | null
+  autoSyncWorkspacePrompts?: boolean
   executeProvider?: string
   executeModel?: string
   executeTemperature?: number
@@ -17,6 +18,7 @@ const STORAGE_KEY = "promptStudioDefaults"
 
 const DEFAULTS: Required<PromptStudioDefaults> = {
   defaultProjectId: null,
+  autoSyncWorkspacePrompts: true,
   executeProvider: "openai",
   executeModel: "gpt-3.5-turbo",
   executeTemperature: 0.2,

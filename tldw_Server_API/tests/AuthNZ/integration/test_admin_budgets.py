@@ -177,6 +177,33 @@ def test_admin_budgets_defaults_in_response(isolated_test_environment):
     assert budgets["enforcement_mode"]["per_metric"] == {}
 
 
+def test_admin_budgets_put_update_by_org_id(isolated_test_environment):
+    client, db_name = isolated_test_environment
+    headers = _admin_headers(client, db_name)
+
+    org_resp = client.post("/api/v1/admin/orgs", headers=headers, json={"name": "PUT Budget Org"})
+    assert org_resp.status_code == 200, org_resp.text
+    org_id = org_resp.json()["id"]
+
+    update_resp = client.put(
+        f"/api/v1/admin/budgets/{org_id}",
+        headers=headers,
+        json={
+            "budgets": {
+                "budget_day_usd": 42.5,
+                "enforcement_mode": {
+                    "per_metric": {"budget_day_usd": "hard"},
+                },
+            },
+        },
+    )
+    assert update_resp.status_code == 200, update_resp.text
+    updated = update_resp.json()
+    assert updated["org_id"] == org_id
+    assert updated["budgets"]["budget_day_usd"] == 42.5
+    assert updated["budgets"]["enforcement_mode"]["per_metric"]["budget_day_usd"] == "hard"
+
+
 def test_admin_budgets_rejects_usd_precision(isolated_test_environment):
     client, db_name = isolated_test_environment
     headers = _admin_headers(client, db_name)

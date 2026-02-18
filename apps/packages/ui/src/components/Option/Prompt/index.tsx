@@ -45,8 +45,10 @@ import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import {
+  autoSyncPrompt,
   pushToStudio,
   pullFromStudio,
+  shouldAutoSyncWorkspacePrompts,
   unlinkPrompt as unlinkPromptFromServer
 } from "@/services/prompt-sync"
 import { hasPromptStudio } from "@/services/prompt-studio"
@@ -293,6 +295,37 @@ export const PromptBody = () => {
     }
   }, [])
 
+  const syncPromptAfterLocalSave = React.useCallback(async (localId: string) => {
+    try {
+      const autoSyncEnabled = await shouldAutoSyncWorkspacePrompts()
+      if (!autoSyncEnabled) {
+        return {
+          attempted: false,
+          success: true,
+          error: undefined
+        }
+      }
+
+      const result = await autoSyncPrompt(localId)
+      return {
+        attempted: true,
+        success: result.success,
+        error: result.error
+      }
+    } catch (error: unknown) {
+      return {
+        attempted: true,
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : t("managePrompts.sync.pendingTooltip", {
+                defaultValue: "Local changes not yet synced"
+              })
+      }
+    }
+  }, [t])
+
   const { mutate: deletePrompt } = useMutation({
     mutationFn: deletePromptById,
     onSuccess: () => {
@@ -484,8 +517,15 @@ export const PromptBody = () => {
 
   const { mutate: savePromptMutation, isPending: savePromptLoading } =
     useMutation({
-      mutationFn: savePrompt,
-      onSuccess: () => {
+      mutationFn: async (payload: any) => {
+        const savedPrompt = await savePrompt(payload)
+        const syncState = await syncPromptAfterLocalSave(savedPrompt.id)
+        return {
+          id: savedPrompt.id,
+          syncState
+        }
+      },
+      onSuccess: ({ syncState }) => {
         queryClient.invalidateQueries({
           queryKey: ["fetchAllPrompts"]
         })
@@ -495,6 +535,18 @@ export const PromptBody = () => {
           message: t("managePrompts.notification.addSuccess"),
           description: t("managePrompts.notification.addSuccessDesc")
         })
+        if (syncState.attempted && !syncState.success) {
+          notification.warning({
+            message: t("managePrompts.sync.pending", {
+              defaultValue: "Saved locally, sync pending"
+            }),
+            description:
+              syncState.error ||
+              t("managePrompts.sync.pendingTooltip", {
+                defaultValue: "Local changes not yet synced"
+              })
+          })
+        }
       },
       onError: (error) => {
         notification.error({
@@ -506,7 +558,11 @@ export const PromptBody = () => {
     })
 
   const { mutate: updatePromptDirect } = useMutation({
-    mutationFn: updatePrompt,
+    mutationFn: async (payload: any) => {
+      const id = await updatePrompt(payload)
+      await syncPromptAfterLocalSave(id)
+      return id
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["fetchAllPrompts"]
@@ -524,12 +580,17 @@ export const PromptBody = () => {
   const { mutate: updatePromptMutation, isPending: isUpdatingPrompt } =
     useMutation({
       mutationFn: async (data: any) => {
-        return await updatePrompt({
+        const id = await updatePrompt({
           ...data,
           id: editId
         })
+        const syncState = await syncPromptAfterLocalSave(id)
+        return {
+          id,
+          syncState
+        }
       },
-      onSuccess: () => {
+      onSuccess: ({ syncState }) => {
         queryClient.invalidateQueries({
           queryKey: ["fetchAllPrompts"]
         })
@@ -539,6 +600,18 @@ export const PromptBody = () => {
           message: t("managePrompts.notification.updatedSuccess"),
           description: t("managePrompts.notification.updatedSuccessDesc")
         })
+        if (syncState.attempted && !syncState.success) {
+          notification.warning({
+            message: t("managePrompts.sync.pending", {
+              defaultValue: "Saved locally, sync pending"
+            }),
+            description:
+              syncState.error ||
+              t("managePrompts.sync.pendingTooltip", {
+                defaultValue: "Local changes not yet synced"
+              })
+          })
+        }
       },
       onError: (error) => {
         notification.error({

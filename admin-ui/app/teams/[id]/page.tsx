@@ -10,10 +10,10 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { ArrowLeft, Users, UserPlus, Trash2, Shield, Building2 } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { ArrowLeft, Users, UserPlus, Trash2, Shield, Building2, Pencil } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Team, TeamMember, User } from '@/types';
 import Link from 'next/link';
@@ -37,6 +37,15 @@ export default function TeamDetailPage() {
   const [newMemberRole, setNewMemberRole] = useState('member');
   const [selectedMember, setSelectedMember] = useState<User | null>(null);
   const [addingMember, setAddingMember] = useState(false);
+  const [removingMemberId, setRemovingMemberId] = useState<number | null>(null);
+  const [memberRoleEdits, setMemberRoleEdits] = useState<Record<number, string>>({});
+  const [updatingMemberRoleId, setUpdatingMemberRoleId] = useState<number | null>(null);
+  const [showEditTeam, setShowEditTeam] = useState(false);
+  const [editTeamName, setEditTeamName] = useState('');
+  const [editTeamDescription, setEditTeamDescription] = useState('');
+  const [editTeamError, setEditTeamError] = useState('');
+  const [updatingTeam, setUpdatingTeam] = useState(false);
+  const [deletingTeam, setDeletingTeam] = useState(false);
 
   const formatJoinedAt = (value?: string | null) => {
     if (!value) {
@@ -78,7 +87,16 @@ export default function TeamDetailPage() {
         throw new Error('Unexpected team members response');
       }
       setTeam(teamData);
+      setEditTeamName(teamData.name || '');
+      setEditTeamDescription(teamData.description || '');
+      setEditTeamError('');
       setMembers(membersData);
+      setMemberRoleEdits(
+        membersData.reduce((acc, member) => {
+          acc[member.user_id] = member.role;
+          return acc;
+        }, {} as Record<number, string>)
+      );
     } catch (err: unknown) {
       console.error('Failed to load team data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load team data');
@@ -149,6 +167,7 @@ export default function TeamDetailPage() {
 
     try {
       setError('');
+      setRemovingMemberId(userId);
       await api.removeTeamMember(teamId, userId);
       setSuccess('Member removed successfully');
       void loadData();
@@ -156,6 +175,76 @@ export default function TeamDetailPage() {
       const msg = err instanceof Error ? err.message : 'Failed to remove member';
       console.error('Failed to remove member:', err);
       setError(msg);
+    } finally {
+      setRemovingMemberId((current) => (current === userId ? null : current));
+    }
+  };
+
+  const handleUpdateMemberRole = async (member: TeamMember) => {
+    const nextRole = memberRoleEdits[member.user_id] || member.role;
+    if (nextRole === member.role) return;
+    try {
+      setError('');
+      setUpdatingMemberRoleId(member.user_id);
+      await api.updateTeamMemberRole(teamId, member.user_id, { role: nextRole });
+      setSuccess('Member role updated successfully');
+      void loadData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update member role';
+      console.error('Failed to update member role:', err);
+      setError(msg);
+    } finally {
+      setUpdatingMemberRoleId((current) => (current === member.user_id ? null : current));
+    }
+  };
+
+  const handleUpdateTeam = async () => {
+    if (!team) return;
+    const trimmedName = editTeamName.trim();
+    if (!trimmedName) {
+      setEditTeamError('Team name is required.');
+      return;
+    }
+    try {
+      setUpdatingTeam(true);
+      setEditTeamError('');
+      await api.updateTeam(String(team.org_id), String(team.id), {
+        name: trimmedName,
+        description: editTeamDescription.trim() || undefined,
+      });
+      setShowEditTeam(false);
+      setSuccess('Team updated successfully');
+      void loadData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update team';
+      setEditTeamError(msg);
+    } finally {
+      setUpdatingTeam(false);
+    }
+  };
+
+  const handleDeleteTeam = async () => {
+    if (!team) return;
+    const confirmed = await confirm({
+      title: 'Delete Team',
+      message: `Delete "${team.name}"? This team has ${members.length} member${members.length === 1 ? '' : 's'}.`,
+      confirmText: 'Delete',
+      variant: 'danger',
+      icon: 'delete',
+    });
+    if (!confirmed) return;
+
+    try {
+      setDeletingTeam(true);
+      setError('');
+      await api.deleteTeam(String(team.org_id), String(team.id));
+      router.push(team.org_id ? `/teams?org=${team.org_id}` : '/teams');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete team';
+      console.error('Failed to delete team:', err);
+      setError(msg);
+    } finally {
+      setDeletingTeam(false);
     }
   };
 
@@ -197,65 +286,138 @@ export default function TeamDetailPage() {
                   )}
                 </div>
               </div>
-              <Dialog open={showAddMember} onOpenChange={setShowAddMember}>
-                <DialogTrigger asChild>
-                  <Button>
-                    <UserPlus className="mr-2 h-4 w-4" />
-                    Add Member
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Add Team Member</DialogTitle>
-                    <DialogDescription>
-                      Add an existing user to this team
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4 py-4">
-                    <UserPicker
-                      label="User"
-                      value={selectedMember}
-                      helperText="Search by username or email. The user must belong to this organization."
-                      onSelect={(user) => {
-                        setSelectedMember(user);
-                        setNewMemberUserId(String(user.id));
-                        setError('');
-                      }}
-                      onClear={() => {
-                        setSelectedMember(null);
-                        setNewMemberUserId('');
-                      }}
-                    />
-                    <div className="space-y-2">
-                      <Label htmlFor="memberRole">Role</Label>
-                      <Select
-                        id="memberRole"
-                        value={newMemberRole}
-                        onChange={(e) => setNewMemberRole(e.target.value)}
-                      >
-                        <option value="member">Member</option>
-                        <option value="lead">Lead</option>
-                        <option value="admin">Admin</option>
-                      </Select>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowEditTeam(true);
+                    setEditTeamError('');
+                    setEditTeamName(team?.name || '');
+                    setEditTeamDescription(team?.description || '');
+                  }}
+                >
+                  <Pencil className="mr-2 h-4 w-4" />
+                  Edit Team
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleDeleteTeam}
+                  disabled={deletingTeam}
+                  loading={deletingTeam}
+                  loadingText="Deleting..."
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete Team
+                </Button>
+                <Dialog open={showAddMember} onOpenChange={setShowAddMember}>
+                  <DialogTrigger asChild>
+                    <Button>
+                      <UserPlus className="mr-2 h-4 w-4" />
+                      Add Member
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Add Team Member</DialogTitle>
+                      <DialogDescription>
+                        Add an existing user to this team
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-4">
+                      <UserPicker
+                        label="User"
+                        value={selectedMember}
+                        helperText="Search by username or email. The user must belong to this organization."
+                        onSelect={(user) => {
+                          setSelectedMember(user);
+                          setNewMemberUserId(String(user.id));
+                          setError('');
+                        }}
+                        onClear={() => {
+                          setSelectedMember(null);
+                          setNewMemberUserId('');
+                        }}
+                      />
+                      <div className="space-y-2">
+                        <Label htmlFor="memberRole">Role</Label>
+                        <Select
+                          id="memberRole"
+                          value={newMemberRole}
+                          onChange={(e) => setNewMemberRole(e.target.value)}
+                        >
+                          <option value="member">Member</option>
+                          <option value="lead">Lead</option>
+                          <option value="admin">Admin</option>
+                        </Select>
+                      </div>
                     </div>
-                  </div>
-                  <DialogFooter>
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setShowAddMember(false);
-                        setError('');
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button onClick={handleAddMember} disabled={addingMember}>
-                      {addingMember ? 'Adding...' : 'Add Member'}
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
+                    <DialogFooter>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setShowAddMember(false);
+                          setError('');
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button onClick={handleAddMember} disabled={addingMember} loading={addingMember} loadingText="Adding...">
+                        Add Member
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
             </div>
+
+            <Dialog open={showEditTeam} onOpenChange={setShowEditTeam}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Edit Team</DialogTitle>
+                  <DialogDescription>
+                    Update team name and description.
+                  </DialogDescription>
+                </DialogHeader>
+                {editTeamError && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{editTeamError}</AlertDescription>
+                  </Alert>
+                )}
+                <div className="space-y-4 py-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="editTeamName">Team Name</Label>
+                    <Input
+                      id="editTeamName"
+                      value={editTeamName}
+                      onChange={(event) => setEditTeamName(event.target.value)}
+                      placeholder="Team name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="editTeamDescription">Description</Label>
+                    <Input
+                      id="editTeamDescription"
+                      value={editTeamDescription}
+                      onChange={(event) => setEditTeamDescription(event.target.value)}
+                      placeholder="Team description"
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setShowEditTeam(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleUpdateTeam}
+                    disabled={updatingTeam}
+                    loading={updatingTeam}
+                    loadingText="Saving..."
+                  >
+                    Save Changes
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {error && (
               <Alert variant="destructive" className="mb-6">
@@ -325,12 +487,25 @@ export default function TeamDetailPage() {
                             </div>
                           </TableCell>
                           <TableCell>
-                            <Badge variant={
-                              member.role === 'admin' ? 'default' :
-                              member.role === 'lead' ? 'secondary' : 'outline'
-                            }>
-                              {member.role}
-                            </Badge>
+                            <div className="space-y-2">
+                              <Label htmlFor={`team-member-role-${member.user_id}`} className="sr-only">
+                                Team role for {member.user?.username || `user ${member.user_id}`}
+                              </Label>
+                              <Select
+                                id={`team-member-role-${member.user_id}`}
+                                value={memberRoleEdits[member.user_id] || member.role}
+                                onChange={(event) => {
+                                  const role = event.target.value;
+                                  setMemberRoleEdits((prev) => ({ ...prev, [member.user_id]: role }));
+                                }}
+                                disabled={updatingMemberRoleId === member.user_id}
+                                className="max-w-[140px]"
+                              >
+                                <option value="member">Member</option>
+                                <option value="lead">Lead</option>
+                                <option value="admin">Admin</option>
+                              </Select>
+                            </div>
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {formatJoinedAt(member.joined_at)}
@@ -338,15 +513,37 @@ export default function TeamDetailPage() {
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">
                               <Link href={`/users/${member.user_id}`}>
-                                <Button variant="ghost" size="sm" title="View user">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  title="View user"
+                                  aria-label={`View user ${member.user?.username || member.user_id}`}
+                                >
                                   <Users className="h-4 w-4" />
                                 </Button>
                               </Link>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleUpdateMemberRole(member)}
+                                disabled={
+                                  updatingMemberRoleId === member.user_id
+                                  || (memberRoleEdits[member.user_id] || member.role) === member.role
+                                }
+                                loading={updatingMemberRoleId === member.user_id}
+                                loadingText="Saving..."
+                              >
+                                Save
+                              </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleRemoveMember(member.user_id, member.user?.username)}
                                 title="Remove from team"
+                                aria-label={`Remove ${member.user?.username || member.user_id} from team`}
+                                disabled={removingMemberId === member.user_id}
+                                loading={removingMemberId === member.user_id}
+                                loadingText="Removing..."
                               >
                                 <Trash2 className="h-4 w-4 text-red-500" />
                               </Button>

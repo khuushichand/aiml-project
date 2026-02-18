@@ -934,6 +934,32 @@ async def export_notes_post_csv(
 
 
 @router.get(
+    "/keywords",
+    response_model=list[KeywordResponse],
+    summary="List all keywords for the current user",
+    tags=["Keywords (for Notes)"],
+    include_in_schema=False,
+)
+async def list_keywords_endpoint_no_trailing_slash(
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("keywords.list")),
+):
+    # Keep this alias ahead of "/{note_id}" so "/notes/keywords" never binds
+    # to get_note(note_id="keywords").
+    return await _list_keywords_impl(
+        db=db,
+        limit=limit,
+        offset=offset,
+        rate_limiter=rate_limiter,
+        current_user=current_user,
+    )
+
+
+@router.get(
     "/{note_id}",
     response_model=NoteResponse,
     summary="Get a specific note by ID",
@@ -974,6 +1000,30 @@ async def get_note(
     except _NOTES_NONCRITICAL_EXCEPTIONS as kw_fetch_err:
         logger.warning(f"Fetching keywords for note {note_id} failed: {kw_fetch_err}")
     return note_data
+
+
+async def _list_keywords_impl(
+        *,
+        db: CharactersRAGDB,
+        limit: int,
+        offset: int,
+        rate_limiter: RateLimiter,
+        current_user: User,
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.list")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for keywords.list",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
+        logger.debug(f"User (DB client_id: {db.client_id}) listing keywords: limit={limit}, offset={offset}")
+        keywords_data = db.list_keywords(limit=limit, offset=offset)
+        return keywords_data
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "keywords list")
 
 
 @router.put(
@@ -1639,20 +1689,13 @@ async def list_keywords_endpoint(  # Renamed to avoid conflict
         current_user: User = Depends(get_request_user),
         _: None = Depends(rbac_rate_limit("keywords.list")),
 ):
-    try:
-        try:
-            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.list")
-        except _NOTES_NONCRITICAL_EXCEPTIONS:
-            allowed, meta = True, {}
-        if not allowed:
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                                detail="Rate limit exceeded for keywords.list",
-                                headers={"Retry-After": str(meta.get("retry_after", 60))})
-        logger.debug(f"User (DB client_id: {db.client_id}) listing keywords: limit={limit}, offset={offset}")
-        keywords_data = db.list_keywords(limit=limit, offset=offset)
-        return keywords_data
-    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
-        handle_db_errors(e, "keywords list")
+    return await _list_keywords_impl(
+        db=db,
+        limit=limit,
+        offset=offset,
+        rate_limiter=rate_limiter,
+        current_user=current_user,
+    )
 
 
 @router.delete(
