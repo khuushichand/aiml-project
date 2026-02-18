@@ -22,7 +22,7 @@ Finding IDs: `3.1` through `3.15`
 - Unit test for abort path and artifact status updates.
 - Integration test for cancel during streaming generation.
 - Component tests for delete undo and regenerate mode selection.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Render Outputs as First-Class Artifacts
 **Goal**: Replace raw text fallbacks with task-appropriate output renderers.
@@ -40,7 +40,7 @@ Finding IDs: `3.1` through `3.15`
 - Unit tests for structured quiz/flashcard serialization and save edits.
 - Integration tests for deck selection and multi-source generation payloads.
 - Component test for discuss action sending context to chat.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Information Architecture and UX Polish
 **Goal**: Improve output type comprehension and reduce layout friction.
@@ -54,9 +54,32 @@ Finding IDs: `3.1` through `3.15`
 - Component tests for grouped output categories and tooltip content.
 - Unit test for ETA heuristic function.
 - Responsive tests for contextual TTS controls and split resizing behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
 - `Discuss in chat` should share action contract with Category 6.
 - Versioning links should align with Category 10 output history strategy.
+
+## Progress Notes (2026-02-18)
+
+- Stage 2 completed in `StudioPane`:
+  - Added Mermaid render fallback path for non-renderable output (raw-content fallback).
+  - Added structured artifact editors and save serialization coverage for flashcards/quizzes.
+  - Added table viewer export verification and discuss/deck/voice-preview workflow coverage.
+- Stage 2 tests expanded:
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx`
+  - Added tests for Mermaid success/fallback, table CSV export path, flashcard/quiz edit-save serialization, deck-target generation, and voice preview.
+- Stage 3 completed in `StudioPane`:
+  - Grouped output buttons into `Study Aids`, `Analysis`, and `Creative` sections.
+  - Switched button tooltips to output descriptions sourced from `OUTPUT_TYPES`.
+  - Added generation ETA heuristic text while outputs are running.
+  - Added contextual Audio Settings reveal behavior for `Audio Overview`.
+  - Replaced fixed outputs list height (`max-h-64`) with adaptive max-height sizing.
+- Stage 3 tests added:
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage3.test.tsx`
+  - Added coverage for grouped categories + description tooltips, contextual TTS visibility, ETA display/heuristic, and adaptive output container sizing.
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage3.test.tsx`
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx`
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__`

@@ -3,7 +3,7 @@ import {
   DEFAULT_AUDIO_SETTINGS,
   DEFAULT_WORKSPACE_NOTE
 } from "@/types/workspace"
-import { useWorkspaceStore } from "../workspace"
+import { createWorkspaceStorage, useWorkspaceStore } from "../workspace"
 
 const STORAGE_KEY = "tldw-workspace"
 
@@ -18,6 +18,7 @@ const resetWorkspaceStore = () => {
     sources: [],
     selectedSourceIds: [],
     sourceSearchQuery: "",
+    sourceFocusTarget: null,
     sourcesLoading: false,
     sourcesError: null,
     generatedArtifacts: [],
@@ -25,16 +26,20 @@ const resetWorkspaceStore = () => {
     currentNote: { ...DEFAULT_WORKSPACE_NOTE },
     isGeneratingOutput: false,
     generatingOutputType: null,
+    storeHydrated: false,
     leftPaneCollapsed: false,
     rightPaneCollapsed: false,
     addSourceModalOpen: false,
     addSourceModalTab: "upload",
     addSourceProcessing: false,
     addSourceError: null,
+    chatFocusTarget: null,
+    noteFocusTarget: null,
     audioSettings: { ...DEFAULT_AUDIO_SETTINGS },
     savedWorkspaces: [],
     archivedWorkspaces: [],
-    workspaceSnapshots: {}
+    workspaceSnapshots: {},
+    workspaceChatSessions: {}
   })
 }
 
@@ -241,6 +246,21 @@ describe("workspace store snapshot persistence", () => {
               speed: 1.25
             }
           }
+        },
+        workspaceChatSessions: {
+          "workspace-rehydrate": {
+            messages: [
+              {
+                isBot: false,
+                name: "You",
+                message: "Saved workspace message",
+                sources: []
+              }
+            ],
+            history: [{ role: "user", content: "Saved workspace message" }],
+            historyId: "history-123",
+            serverChatId: "server-chat-123"
+          }
         }
       },
       version: 0
@@ -254,6 +274,9 @@ describe("workspace store snapshot persistence", () => {
     expect(state.workspaceName).toBe("Snapshot Name")
     expect(state.workspaceTag).toBe("workspace:snapshot-name")
     expect(state.workspaceChatReferenceId).toBe("snapshot-chat-ref")
+    expect(state.workspaceCreatedAt).toBeInstanceOf(Date)
+    expect(state.sources[0]?.addedAt).toBeInstanceOf(Date)
+    expect(state.generatedArtifacts[0]?.createdAt).toBeInstanceOf(Date)
     expect(state.leftPaneCollapsed).toBe(true)
     expect(state.rightPaneCollapsed).toBe(true)
     expect(state.sources).toHaveLength(1)
@@ -264,6 +287,22 @@ describe("workspace store snapshot persistence", () => {
     expect(state.savedWorkspaces.some((workspace) => workspace.id === state.workspaceId)).toBe(
       true
     )
+    expect(state.workspaceChatSessions["workspace-rehydrate"]?.historyId).toBe(
+      "history-123"
+    )
+    expect(state.storeHydrated).toBe(true)
+  })
+
+  it("uses a raw localStorage adapter without parse/stringify in getItem", () => {
+    const storage = createWorkspaceStorage()
+    const testKey = "workspace-storage-adapter-test"
+    const rawPayload = '{"state":{"workspaceCreatedAt":"2026-02-01T00:00:00.000Z"}}'
+
+    storage.setItem(testKey, rawPayload)
+    expect(storage.getItem(testKey)).toBe(rawPayload)
+
+    storage.removeItem(testKey)
+    expect(storage.getItem(testKey)).toBeNull()
   })
 
   it("duplicates workspace data with new derived IDs and isolated snapshot state", () => {
@@ -384,5 +423,131 @@ describe("workspace store snapshot persistence", () => {
     expect(state.archivedWorkspaces.some((workspace) => workspace.id === workspaceAId)).toBe(
       true
     )
+  })
+
+  it("stores independent chat sessions per workspace", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Chat Workspace A")
+    const workspaceAId = useWorkspaceStore.getState().workspaceId
+
+    useWorkspaceStore.getState().saveWorkspaceChatSession(workspaceAId, {
+      messages: [
+        {
+          isBot: false,
+          name: "You",
+          message: "Workspace A message",
+          sources: []
+        }
+      ],
+      history: [{ role: "user", content: "Workspace A message" }],
+      historyId: "history-a",
+      serverChatId: null
+    })
+
+    useWorkspaceStore.getState().createNewWorkspace("Chat Workspace B")
+    const workspaceBId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore.getState().saveWorkspaceChatSession(workspaceBId, {
+      messages: [
+        {
+          isBot: true,
+          name: "Assistant",
+          message: "Workspace B reply",
+          sources: []
+        }
+      ],
+      history: [{ role: "assistant", content: "Workspace B reply" }],
+      historyId: "history-b",
+      serverChatId: "server-chat-b"
+    })
+
+    const sessionA = useWorkspaceStore.getState().getWorkspaceChatSession(workspaceAId)
+    const sessionB = useWorkspaceStore.getState().getWorkspaceChatSession(workspaceBId)
+
+    expect(sessionA?.historyId).toBe("history-a")
+    expect(sessionA?.messages[0]?.message).toBe("Workspace A message")
+    expect(sessionB?.historyId).toBe("history-b")
+    expect(sessionB?.messages[0]?.message).toBe("Workspace B reply")
+
+    useWorkspaceStore.getState().clearWorkspaceChatSession(workspaceAId)
+    expect(useWorkspaceStore.getState().getWorkspaceChatSession(workspaceAId)).toBeNull()
+    expect(useWorkspaceStore.getState().getWorkspaceChatSession(workspaceBId)?.historyId).toBe(
+      "history-b"
+    )
+  })
+
+  it("focuses sources by media id and source id for cross-pane navigation", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Citation Workspace")
+    const addedSource = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 901, title: "Focused Source", type: "pdf" })
+
+    const focusedByMedia = useWorkspaceStore.getState().focusSourceByMediaId(901)
+    expect(focusedByMedia).toBe(true)
+    expect(useWorkspaceStore.getState().sourceFocusTarget?.sourceId).toBe(
+      addedSource.id
+    )
+
+    const previousToken = useWorkspaceStore.getState().sourceFocusTarget?.token
+    const focusedById = useWorkspaceStore.getState().focusSourceById(addedSource.id)
+    expect(focusedById).toBe(true)
+    expect(useWorkspaceStore.getState().sourceFocusTarget?.sourceId).toBe(
+      addedSource.id
+    )
+    expect(useWorkspaceStore.getState().sourceFocusTarget?.token).toBeGreaterThan(
+      previousToken ?? 0
+    )
+
+    useWorkspaceStore.getState().clearSourceFocusTarget()
+    expect(useWorkspaceStore.getState().sourceFocusTarget).toBeNull()
+    expect(useWorkspaceStore.getState().focusSourceByMediaId(99999)).toBe(false)
+    expect(useWorkspaceStore.getState().focusSourceById("missing-id")).toBe(false)
+  })
+
+  it("captures external content into current note in append mode with title proposal", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Notes Workspace")
+
+    useWorkspaceStore.getState().captureToCurrentNote({
+      title: "Assistant: Key findings",
+      content: "Primary finding one.\nPrimary finding two.",
+      mode: "append"
+    })
+
+    let state = useWorkspaceStore.getState()
+    expect(state.currentNote.title).toBe("Assistant: Key findings")
+    expect(state.currentNote.content).toContain("## Assistant: Key findings")
+    expect(state.currentNote.content).toContain("Primary finding one.")
+    expect(state.currentNote.isDirty).toBe(true)
+
+    useWorkspaceStore.getState().captureToCurrentNote({
+      title: "Artifact: Summary",
+      content: "Additional supporting context.",
+      mode: "append"
+    })
+
+    state = useWorkspaceStore.getState()
+    expect(state.currentNote.content).toContain("## Assistant: Key findings")
+    expect(state.currentNote.content).toContain("## Artifact: Summary")
+    expect(state.currentNote.content).toContain("---")
+    expect(state.currentNote.title).toBe("Assistant: Key findings")
+  })
+
+  it("captures external content into current note in replace mode", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Replace Notes Workspace")
+
+    useWorkspaceStore.getState().captureToCurrentNote({
+      title: "Initial",
+      content: "Initial content",
+      mode: "append"
+    })
+
+    useWorkspaceStore.getState().captureToCurrentNote({
+      title: "Studio output",
+      content: "Replacement content",
+      mode: "replace"
+    })
+
+    const state = useWorkspaceStore.getState()
+    expect(state.currentNote.content).toBe("## Studio output\n\nReplacement content")
+    expect(state.currentNote.title).toBe("Initial")
+    expect(state.currentNote.isDirty).toBe(true)
   })
 })

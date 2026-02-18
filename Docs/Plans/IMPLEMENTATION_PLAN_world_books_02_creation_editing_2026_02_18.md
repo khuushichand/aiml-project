@@ -23,7 +23,7 @@ Finding IDs: `2.1` through `2.7`
 - Unit test asserting frontend default constants match backend schema defaults.
 - Component test verifying optional label text and advanced-setting default rendering.
 - Accessibility test for help icon size/focusability and tooltip activation.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 2: Unify Create/Edit Form Implementation
 **Goal**: Prevent behavior drift between create and edit experiences.
@@ -35,7 +35,7 @@ Finding IDs: `2.1` through `2.7`
 - Component tests for `WorldBookForm` in both create and edit modes.
 - Regression test ensuring create and edit submit identical payload shapes for same input.
 - Mutation tests covering success and error states for both flows.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Improve Conflict and Validation Messaging
 **Goal**: Provide actionable feedback for duplicate and invalid submissions.
@@ -47,7 +47,7 @@ Finding IDs: `2.1` through `2.7`
 - Unit tests for duplicate-name validator (case sensitivity and trimming behavior).
 - Integration tests for create/edit 409 response handling and message rendering.
 - Component test for inline error presentation and focus management.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 4: Add Duplication and Template Bootstrap
 **Goal**: Reduce time-to-first-usable world book for repeat workflows.
@@ -59,7 +59,7 @@ Finding IDs: `2.1` through `2.7`
 - Integration test for duplicate workflow end-to-end with copied entries.
 - Component tests for template selection and correct field prefill.
 - Validation test confirming cloned/template names still pass uniqueness checks.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
@@ -73,3 +73,9 @@ Finding IDs: `2.1` through `2.7`
 - Added client-side duplicate-name validation (case-insensitive, trims whitespace, ignores current record in edit mode).
 - Improved conflict handling for 409 responses with clearer user-facing messages.
 - Added utility tests in `apps/packages/ui/src/components/Option/WorldBooks/__tests__/worldBookFormUtils.test.ts`.
+- Added component tests for `WorldBookForm` UI behavior in `apps/packages/ui/src/components/Option/WorldBooks/__tests__/WorldBookForm.test.tsx`.
+- Implemented Stage 4 starter templates in the shared create form (`template_key` selector with preset defaults and seeded entries on create).
+- Implemented Stage 4 duplicate action in world-book table with name deconfliction and entry cloning.
+- Added integration-style manager coverage in `apps/packages/ui/src/components/Option/WorldBooks/__tests__/WorldBooksManager.stage4.test.tsx` for:
+  - create-from-template entry seeding flow
+  - duplicate action world-book cloning flow

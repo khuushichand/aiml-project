@@ -6,6 +6,7 @@ export type FeedbackType = "helpful" | "relevance" | "report"
 export type ExplicitFeedbackRequest = {
   conversation_id?: string
   message_id?: string
+  feedback_id?: string
   feedback_type: FeedbackType
   helpful?: boolean
   relevance_score?: number

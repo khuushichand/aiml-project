@@ -8,7 +8,7 @@ from typing import Any, Literal, Optional, Union
 
 #
 # Third-party imports
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 #
 ######################################################################################################################
@@ -145,8 +145,53 @@ class CharacterUpdate(CharacterBase):
 class CharacterResponse(CharacterBase):
     id: int
     version: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    last_modified: Optional[datetime] = None
     image_present: bool = False
     model_config = {"from_attributes": True}
+
+
+class CharacterListQueryResponse(BaseModel):
+    items: list[CharacterResponse] = Field(default_factory=list)
+    total: int = Field(default=0, ge=0)
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=25, ge=1)
+    has_more: bool = False
+
+
+class CharacterTagOperationRequest(BaseModel):
+    operation: Literal["rename", "merge", "delete"]
+    source_tag: str = Field(..., min_length=1, max_length=200)
+    target_tag: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("source_tag", "target_tag", mode="before")
+    @classmethod
+    def normalize_tag_strings(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @model_validator(mode="after")
+    def validate_target_tag_requirements(self) -> "CharacterTagOperationRequest":
+        if self.operation in {"rename", "merge"} and not self.target_tag:
+            raise ValueError("target_tag is required for rename and merge operations")
+        if self.operation == "delete":
+            self.target_tag = None
+        return self
+
+
+class CharacterTagOperationResponse(BaseModel):
+    operation: Literal["rename", "merge", "delete"]
+    source_tag: str
+    target_tag: Optional[str] = None
+    matched_count: int = Field(default=0, ge=0)
+    updated_count: int = Field(default=0, ge=0)
+    failed_count: int = Field(default=0, ge=0)
+    updated_character_ids: list[int] = Field(default_factory=list)
+    failed_character_ids: list[int] = Field(default_factory=list)
 
 
 class CharacterImportResponse(BaseModel):

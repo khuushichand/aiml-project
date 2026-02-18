@@ -23,7 +23,7 @@ Finding IDs: `1.1` through `1.11`
 - Unit test for relative-time formatter and null-safe `last_modified` handling.
 - Component test verifying `Last Modified`, `Budget`, and unattached indicators render from API payload.
 - Snapshot/regression test for enabled vs disabled row visual states.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Add Search, Filters, and Sorting
 **Goal**: Make large world-book collections navigable and quickly triageable.
@@ -36,7 +36,7 @@ Finding IDs: `1.1` through `1.11`
 - Component tests for text search (name and description) and combinational filters.
 - Component tests for each sorter with ascending/descending behavior.
 - Integration test validating state persistence through query invalidation.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Normalize Row Affordances and Actions
 **Goal**: Make primary and secondary actions consistently discoverable and accessible.
@@ -48,7 +48,7 @@ Finding IDs: `1.1` through `1.11`
 - Component test for attachment affordance rendering and click target behavior.
 - Accessibility test for row actions (labels, focus order, keyboard activation).
 - Visual regression test for action layout consistency across breakpoints.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Add Bulk Table Ops and Better Empty/Preview States
 **Goal**: Improve startup guidance and high-volume maintenance workflows.
@@ -60,9 +60,41 @@ Finding IDs: `1.1` through `1.11`
 - Integration test for multi-row bulk operations and post-mutation refetch behavior.
 - Component test for custom empty state CTA navigation/open-create flow.
 - Component test for expandable preview rendering and truncation behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
 - Shared action-menu conventions should align with other workspace pages to avoid UI drift.
 - Expandable preview requires a bounded payload strategy to avoid over-fetching in large books.
+
+## Progress Notes (2026-02-18)
+
+- Added list metadata helpers in `apps/packages/ui/src/components/Option/WorldBooks/worldBookListUtils.ts` for:
+  - robust `last_modified` parsing (string/date/seconds)
+  - relative + absolute timestamp rendering
+  - null-safe fallback handling
+- Updated world-book table in `apps/packages/ui/src/components/Option/WorldBooks/Manager.tsx`:
+  - added `Last Modified` column with tooltip detail
+  - added compact `Budget` column (`{token_budget} tok`)
+  - replaced orphan dash with `Unattached` warning tag
+  - improved disabled visibility via `volcano` status tag + dimmed row class
+- Added search/filter/sorting controls to the main world-book list:
+  - text search across name + description
+  - enabled-state and attachment-state filters
+  - controlled sort state for `Name`, `Entries`, and `Enabled` to persist through list updates
+- Normalized table-row affordances and actions:
+  - replaced ambiguous attachment tags with explicit attachment-count link button
+  - standardized row actions as icon-only controls with consistent tooltips and `aria-label`s
+- Added Stage 4 list workflow improvements:
+  - world-book row selection with bulk `Enable`, `Disable`, and `Delete`
+  - custom onboarding empty state with `Create your first world book` CTA
+  - expandable row preview for first five entries via lazy-loaded preview query
+- Added Stage 1 tests:
+  - `apps/packages/ui/src/components/Option/WorldBooks/__tests__/worldBookListUtils.test.ts`
+  - `apps/packages/ui/src/components/Option/WorldBooks/__tests__/WorldBooksManager.stage1.test.tsx`
+- Added Stage 2 tests:
+  - `apps/packages/ui/src/components/Option/WorldBooks/__tests__/WorldBooksManager.stage2.test.tsx`
+- Added Stage 3 tests:
+  - `apps/packages/ui/src/components/Option/WorldBooks/__tests__/WorldBooksManager.stage3.test.tsx`
+- Expanded Stage 4 coverage in:
+  - `apps/packages/ui/src/components/Option/WorldBooks/__tests__/WorldBooksManager.stage4.test.tsx`

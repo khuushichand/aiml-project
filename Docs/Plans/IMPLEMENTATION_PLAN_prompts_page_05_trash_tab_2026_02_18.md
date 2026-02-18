@@ -20,7 +20,7 @@ Finding IDs: `5.1` through `5.4`
 **Tests**:
 - Unit tests for trash filter predicate.
 - Component tests for search input and preview rendering.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Auto-Purge Time Remaining Signals
 **Goal**: Communicate urgency before permanent deletion windows expire.
@@ -31,7 +31,7 @@ Finding IDs: `5.1` through `5.4`
 **Tests**:
 - Unit tests for remaining-days calculation across date boundaries.
 - Component tests for severity color/label thresholds.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Bulk Restore Workflow
 **Goal**: Enable efficient recovery of multiple deleted prompts.
@@ -42,7 +42,7 @@ Finding IDs: `5.1` through `5.4`
 **Tests**:
 - Integration tests for multi-select restore success and partial-failure scenarios.
 - UI regression test ensuring row-level actions still function with selection enabled.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

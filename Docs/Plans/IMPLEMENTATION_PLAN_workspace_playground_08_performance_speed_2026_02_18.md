@@ -22,7 +22,7 @@ Finding IDs: `8.1` through `8.6`
 - Unit tests for storage adapter behavior.
 - Component test for skeleton visibility lifecycle.
 - Integration test for hydration completeness before content swap.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Long-Running Work Visibility
 **Goal**: Keep users informed when ingestion continues after optimistic add.
@@ -50,3 +50,20 @@ Finding IDs: `8.1` through `8.6`
 ## Dependencies
 
 - Source status indicators depend on status model introduced in Category 1.
+
+## Progress Notes (2026-02-18)
+
+- Stage 1 completed:
+  - Added a hydration readiness gate to the workspace shell so panes render only after persisted state hydration completes.
+  - Added a Workspace Playground loading skeleton to eliminate startup content flash before hydration.
+  - Updated initialization flow to avoid creating a fresh workspace before hydration completion.
+  - Simplified workspace persistence storage adapter `getItem` to a raw localStorage passthrough; removed redundant parse/stringify from the read path.
+  - Kept date revival centralized in `onRehydrateStorage`.
+- Files updated:
+  - `apps/packages/ui/src/store/workspace.ts`
+  - `apps/packages/ui/src/store/__tests__/workspace.test.ts`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/index.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.desktop-layout.test.tsx`
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run src/store/__tests__/workspace.test.ts src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.desktop-layout.test.tsx --reporter=verbose`
+  - `cd apps/packages/ui && bunx vitest run src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage2.responsive.test.tsx src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage3.test.tsx --reporter=verbose`

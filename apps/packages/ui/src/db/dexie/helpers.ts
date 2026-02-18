@@ -431,6 +431,12 @@ export const savePrompt = async ({
   details,
   system_prompt,
   user_prompt,
+  fewShotExamples,
+  modulesConfig,
+  versionNumber,
+  changeDescription,
+  parentVersionId,
+  serverParentVersionId,
   is_system = false,
   tags = [],
   keywords,
@@ -443,6 +449,12 @@ export const savePrompt = async ({
   details?: string
   system_prompt?: string
   user_prompt?: string
+  fewShotExamples?: Prompt["fewShotExamples"]
+  modulesConfig?: Prompt["modulesConfig"]
+  versionNumber?: Prompt["versionNumber"]
+  changeDescription?: Prompt["changeDescription"]
+  parentVersionId?: Prompt["parentVersionId"]
+  serverParentVersionId?: Prompt["serverParentVersionId"]
   is_system?: boolean
   tags?: string[]
   keywords?: string[]
@@ -475,6 +487,12 @@ export const savePrompt = async ({
     details,
     system_prompt: system_prompt ?? (is_system ? resolvedContent : undefined),
     user_prompt: user_prompt ?? (!is_system ? resolvedContent : undefined),
+    fewShotExamples: fewShotExamples ?? null,
+    modulesConfig: modulesConfig ?? null,
+    versionNumber: versionNumber ?? null,
+    changeDescription: changeDescription ?? null,
+    parentVersionId: parentVersionId ?? null,
+    serverParentVersionId: serverParentVersionId ?? null,
     // Default sync values for new prompts
     syncStatus: 'local' as const,
     sourceSystem: 'workspace' as const
@@ -552,6 +570,12 @@ export const updatePrompt = async ({
   details,
   system_prompt,
   user_prompt,
+  fewShotExamples,
+  modulesConfig,
+  versionNumber,
+  changeDescription,
+  parentVersionId,
+  serverParentVersionId,
   is_system,
   tags = [],
   keywords,
@@ -565,6 +589,12 @@ export const updatePrompt = async ({
   details?: string
   system_prompt?: string
   user_prompt?: string
+  fewShotExamples?: Prompt["fewShotExamples"]
+  modulesConfig?: Prompt["modulesConfig"]
+  versionNumber?: Prompt["versionNumber"]
+  changeDescription?: Prompt["changeDescription"]
+  parentVersionId?: Prompt["parentVersionId"]
+  serverParentVersionId?: Prompt["serverParentVersionId"]
   is_system?: boolean
   tags?: string[]
   keywords?: string[]
@@ -589,7 +619,13 @@ export const updatePrompt = async ({
     author,
     details,
     system_prompt,
-    user_prompt
+    user_prompt,
+    fewShotExamples,
+    modulesConfig,
+    versionNumber,
+    changeDescription,
+    parentVersionId,
+    serverParentVersionId
   }
 
   await db.updatePrompt(id, payload)

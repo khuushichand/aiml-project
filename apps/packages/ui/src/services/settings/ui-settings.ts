@@ -678,3 +678,25 @@ export const MEDIA_COLLAPSED_SECTIONS_SETTING = defineSetting(
     area: "local"
   }
 )
+
+const MEDIA_TEXT_SIZE_PRESET_VALUES = ["s", "m", "l"] as const
+export type MediaTextSizePreset = (typeof MEDIA_TEXT_SIZE_PRESET_VALUES)[number]
+
+const coerceMediaTextSizePreset = (
+  value: unknown
+): MediaTextSizePreset => {
+  const normalized = String(value || "").toLowerCase()
+  if (MEDIA_TEXT_SIZE_PRESET_VALUES.includes(normalized as MediaTextSizePreset)) {
+    return normalized as MediaTextSizePreset
+  }
+  return "m"
+}
+
+export const MEDIA_TEXT_SIZE_PRESET_SETTING = defineSetting(
+  "tldw:media:textSizePreset",
+  "m" as MediaTextSizePreset,
+  (value) => coerceMediaTextSizePreset(value),
+  {
+    area: "local"
+  }
+)

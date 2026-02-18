@@ -66,6 +66,24 @@ export type RagContextData = {
   feedback_id?: string
 }
 
+export type SearchRuntimeDetails = {
+  expandedQueries: string[]
+  rerankingEnabled: boolean
+  rerankingStrategy: string
+  averageRelevance: number | null
+  webFallbackEnabled: boolean
+  webFallbackTriggered: boolean
+  webFallbackEngine: string | null
+  tokensUsed: number | null
+  estimatedCostUsd: number | null
+  feedbackId: string | null
+  whyTheseSources: {
+    topicality: number | null
+    diversity: number | null
+    freshness: number | null
+  } | null
+}
+
 // Search history item
 export type SearchHistoryItem = {
   id: string
@@ -75,6 +93,8 @@ export type SearchHistoryItem = {
   messageId?: string
   sourcesCount: number
   hasAnswer: boolean
+  answerPreview?: string
+  pinned?: boolean
   preset?: RagPresetName
   keywords?: string[]
 }
@@ -106,13 +126,16 @@ export type KnowledgeQAState = {
   // Search state
   query: string
   isSearching: boolean
+  hasSearched: boolean
   results: RagResult[]
   answer: string | null
   citations: CitationRef[]
+  searchDetails: SearchRuntimeDetails | null
   error: string | null
 
   // Thread state
   currentThreadId: string | null
+  isLocalOnlyThread: boolean
   messages: KnowledgeQAMessage[]
   threads: KnowledgeQAThread[]
 
@@ -135,7 +158,9 @@ export type KnowledgeQAActions = {
   // Search actions
   setQuery: (query: string) => void
   search: () => Promise<void>
+  cancelSearch: () => void
   clearResults: () => void
+  rerunWithTokenLimit: (tokenLimit: number) => Promise<void>
 
   // Thread actions
   createNewThread: (title?: string) => Promise<string>
@@ -152,6 +177,7 @@ export type KnowledgeQAActions = {
   loadSearchHistory: () => Promise<void>
   restoreFromHistory: (item: SearchHistoryItem) => Promise<void>
   deleteHistoryItem: (id: string) => Promise<void>
+  toggleHistoryPin: (id: string) => void
 
   // UI actions
   setSettingsPanelOpen: (open: boolean) => void

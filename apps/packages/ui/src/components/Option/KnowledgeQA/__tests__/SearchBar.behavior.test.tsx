@@ -1,0 +1,233 @@
+import { act, fireEvent, render, screen } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { SearchBar } from "../SearchBar"
+
+const trackMetricMock = vi.fn()
+
+const state = {
+  query: "",
+  setQuery: vi.fn(),
+  search: vi.fn(),
+  cancelSearch: vi.fn(),
+  isSearching: false,
+  clearResults: vi.fn(),
+  results: [] as Array<{ id: string }>,
+  answer: null as string | null,
+  searchHistory: [] as Array<{ query: string }>,
+  isLocalOnlyThread: false,
+  settings: {
+    enable_web_fallback: true,
+  },
+  updateSetting: vi.fn(),
+}
+
+vi.mock("../KnowledgeQAProvider", () => ({
+  useKnowledgeQA: () => ({
+    query: state.query,
+    setQuery: state.setQuery,
+    search: state.search,
+    cancelSearch: state.cancelSearch,
+    isSearching: state.isSearching,
+    clearResults: state.clearResults,
+    results: state.results,
+    answer: state.answer,
+    searchHistory: state.searchHistory,
+    isLocalOnlyThread: state.isLocalOnlyThread,
+    settings: state.settings,
+    updateSetting: state.updateSetting,
+  })
+}))
+
+vi.mock("@/utils/knowledge-qa-search-metrics", () => ({
+  trackKnowledgeQaSearchMetric: (...args: unknown[]) => trackMetricMock(...args),
+}))
+
+describe("SearchBar behavior", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    trackMetricMock.mockResolvedValue(undefined)
+    state.query = ""
+    state.isSearching = false
+    state.results = []
+    state.answer = null
+    state.searchHistory = []
+    state.isLocalOnlyThread = false
+    state.settings.enable_web_fallback = true
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("provides accessible input description and input constraints", () => {
+    render(<SearchBar autoFocus={false} />)
+
+    const input = screen.getByRole("textbox", {
+      name: "Search your knowledge base",
+    })
+    expect(input).toHaveAttribute("id", "knowledge-search-input")
+    expect(input).toHaveAttribute("maxlength", "2000")
+    expect(input).toHaveAttribute("aria-describedby", "knowledge-qa-search-description")
+    expect(screen.getByText(/Ask questions about your documents/i)).toHaveAttribute(
+      "id",
+      "knowledge-qa-search-description"
+    )
+  })
+
+  it("uses explicit searching label and loading indicator", () => {
+    state.query = "active query"
+    state.isSearching = true
+
+    render(<SearchBar autoFocus={false} />)
+
+    expect(screen.getByRole("button", { name: "Searching..." })).toBeInTheDocument()
+    expect(screen.getByTestId("knowledge-search-loading-indicator")).toBeInTheDocument()
+  })
+
+  it("shows character count near the max length", () => {
+    state.query = "a".repeat(1700)
+
+    render(<SearchBar autoFocus={false} />)
+
+    expect(screen.getByText("1700/2000")).toBeInTheDocument()
+  })
+
+  it("uses descriptive web fallback tooltip text", () => {
+    render(<SearchBar autoFocus={false} />)
+
+    const toggle = screen.getByRole("button", { name: /Web search on/i })
+    expect(toggle).toHaveAttribute(
+      "title",
+      "Falls back to web search when local source relevance is below threshold (configurable in settings)."
+    )
+  })
+
+  it("truncates typed query updates to max length", () => {
+    render(<SearchBar autoFocus={false} />)
+
+    const input = screen.getByRole("textbox", {
+      name: "Search your knowledge base",
+    })
+    const longQuery = "x".repeat(2500)
+    fireEvent.change(input, { target: { value: longQuery } })
+
+    expect(state.setQuery).toHaveBeenCalledWith(longQuery.slice(0, 2000))
+  })
+
+  it("clears only the query when clear icon is clicked", () => {
+    state.query = "existing query"
+
+    render(<SearchBar autoFocus={false} />)
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }))
+
+    expect(state.setQuery).toHaveBeenCalledWith("")
+    expect(state.clearResults).not.toHaveBeenCalled()
+  })
+
+  it("shows explicit new-search action and clears full state", () => {
+    state.query = "existing query"
+    state.results = [{ id: "r1" }]
+
+    render(<SearchBar autoFocus={false} />)
+    fireEvent.click(screen.getByRole("button", { name: "New search" }))
+
+    expect(state.clearResults).toHaveBeenCalledTimes(1)
+    expect(state.setQuery).toHaveBeenCalledWith("")
+  })
+
+  it("focuses the search input with slash shortcut", () => {
+    render(<SearchBar autoFocus={false} />)
+
+    const input = screen.getByRole("textbox", {
+      name: "Search your knowledge base",
+    })
+    expect(document.activeElement).not.toBe(input)
+
+    fireEvent.keyDown(window, { key: "/" })
+    expect(document.activeElement).toBe(input)
+  })
+
+  it("runs clear-full shortcut with Cmd/Ctrl+K", () => {
+    state.query = "existing query"
+    state.results = [{ id: "r1" }]
+
+    render(<SearchBar autoFocus={false} />)
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true })
+    expect(state.clearResults).toHaveBeenCalledTimes(1)
+    expect(state.setQuery).toHaveBeenCalledWith("")
+
+    vi.clearAllMocks()
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    expect(state.clearResults).toHaveBeenCalledTimes(1)
+    expect(state.setQuery).toHaveBeenCalledWith("")
+  })
+
+  it("shows stop action during search and triggers cancellation", () => {
+    state.query = "active query"
+    state.isSearching = true
+
+    render(<SearchBar autoFocus={false} />)
+    fireEvent.click(screen.getByRole("button", { name: "Cancel search" }))
+
+    expect(state.cancelSearch).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows local-only persistence indicator for fallback threads", () => {
+    state.isLocalOnlyThread = true
+
+    render(<SearchBar autoFocus={false} />)
+
+    expect(screen.getByText("Not synced")).toBeInTheDocument()
+    expect(screen.getByText("Not synced")).toHaveAttribute(
+      "title",
+      "Working offline - conversation is stored locally and not synced to server."
+    )
+  })
+
+  it("rotates placeholders through expanded example set", () => {
+    vi.useFakeTimers()
+    render(<SearchBar autoFocus={false} />)
+
+    const input = screen.getByRole("textbox", {
+      name: "Search your knowledge base",
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(32000)
+    })
+
+    expect(input).toHaveAttribute("placeholder", "Compare the conclusions across my PDFs")
+  })
+
+  it("shows query suggestions and applies selection", () => {
+    state.query = "comp"
+    state.searchHistory = [{ query: "Compare findings across Q1 and Q2 reports" }]
+
+    render(<SearchBar autoFocus={false} />)
+
+    const input = screen.getByRole("textbox", {
+      name: "Search your knowledge base",
+    })
+
+    fireEvent.focus(input)
+    expect(
+      screen.getByRole("option", {
+        name: /Compare findings across Q1 and Q2 reports/i,
+      })
+    ).toBeInTheDocument()
+
+    fireEvent.click(
+      screen.getByRole("option", {
+        name: /Compare findings across Q1 and Q2 reports/i,
+      })
+    )
+    expect(state.setQuery).toHaveBeenCalledWith(
+      "Compare findings across Q1 and Q2 reports"
+    )
+    expect(trackMetricMock).toHaveBeenCalledWith({
+      type: "suggestion_accept",
+      source: "history",
+    })
+  })
+})

@@ -521,6 +521,41 @@ export const api = {
   }),
 
   // ============================================
+  // Config Profiles & Editing
+  // ============================================
+  getEffectiveConfig: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/config/effective${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getConfigProfiles: () => requestJson('/admin/config/profiles'),
+  snapshotConfigProfile: (data: { name: string; description?: string }) =>
+    requestJson('/admin/config/profiles/snapshot', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getConfigProfile: (name: string) =>
+    requestJson(`/admin/config/profiles/${encodeURIComponent(name)}`),
+  restoreConfigProfile: (name: string) =>
+    requestJson(`/admin/config/profiles/${encodeURIComponent(name)}/restore`, {
+      method: 'POST',
+    }),
+  deleteConfigProfile: (name: string) =>
+    requestJson(`/admin/config/profiles/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    }),
+  updateConfigSection: (section: string, values: Record<string, string>) =>
+    requestJson(`/admin/config/sections/${encodeURIComponent(section)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ values }),
+    }),
+  exportConfig: () => requestJson('/admin/config/export'),
+  importConfig: (sections: Record<string, Record<string, string>>) =>
+    requestJson('/admin/config/import', {
+      method: 'POST',
+      body: JSON.stringify({ sections }),
+    }),
+
+  // ============================================
   // LLM Providers
   // ============================================
   getLLMProviders: () => requestJson('/llm/providers'),
@@ -537,6 +572,7 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(data),
   }),
+  getLLMProvidersHealth: () => requestJson('/admin/llm/providers/health'),
 
   // ============================================
   // Monitoring
@@ -853,6 +889,76 @@ export const api = {
     requestJson('/authnz/debug/budget-summary', {
       headers: { 'X-API-KEY': apiKey },
     }),
+
+  // ============================================
+  // ACP Sessions (Admin)
+  // ============================================
+  getACPSessions: (params?: Record<string, QueryParamValue>) => {
+    const queryParams = buildQueryString(params);
+    return requestJson(`/admin/acp/sessions${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getACPSessionUsage: (sessionId: string) =>
+    requestJson(`/admin/acp/sessions/${encodeURIComponent(sessionId)}/usage`),
+  closeACPSession: (sessionId: string) =>
+    requestJson(`/admin/acp/sessions/${encodeURIComponent(sessionId)}/close`, {
+      method: 'POST',
+    }),
+
+  // ============================================
+  // ACP Agent Configs (Admin)
+  // ============================================
+  getACPAgentConfigs: (params?: Record<string, QueryParamValue>) => {
+    const queryParams = buildQueryString(params);
+    return requestJson(`/admin/acp/agents${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getACPAgentConfig: (configId: number) =>
+    requestJson(`/admin/acp/agents/${configId}`),
+  createACPAgentConfig: (data: Record<string, unknown>) =>
+    requestJson('/admin/acp/agents', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateACPAgentConfig: (configId: number, data: Record<string, unknown>) =>
+    requestJson(`/admin/acp/agents/${configId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteACPAgentConfig: (configId: number) =>
+    requestJson(`/admin/acp/agents/${configId}`, {
+      method: 'DELETE',
+    }),
+
+  // ============================================
+  // ACP Permission Policies (Admin)
+  // ============================================
+  getACPPermissionPolicies: (params?: Record<string, QueryParamValue>) => {
+    const queryParams = buildQueryString(params);
+    return requestJson(`/admin/acp/permission-policies${queryParams ? `?${queryParams}` : ''}`);
+  },
+  createACPPermissionPolicy: (data: Record<string, unknown>) =>
+    requestJson('/admin/acp/permission-policies', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateACPPermissionPolicy: (policyId: number, data: Record<string, unknown>) =>
+    requestJson(`/admin/acp/permission-policies/${policyId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteACPPermissionPolicy: (policyId: number) =>
+    requestJson(`/admin/acp/permission-policies/${policyId}`, {
+      method: 'DELETE',
+    }),
+
+  // ============================================
+  // MCP Servers (Admin)
+  // ============================================
+  getMCPStatus: () => requestJson('/mcp/status'),
+  getMCPMetrics: () => requestJson('/mcp/metrics'),
+  getMCPTools: () => requestJson('/mcp/tools'),
+  getMCPModules: () => requestJson('/mcp/modules'),
+  getMCPModulesHealth: () => requestJson('/mcp/modules/health'),
+  getMCPHealth: () => requestJson('/mcp/health'),
 
   // ============================================
   // Voice Commands & Assistant

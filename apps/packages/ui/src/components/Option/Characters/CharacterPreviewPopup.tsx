@@ -24,6 +24,9 @@ interface CharacterPreviewPopupProps {
   onExport: (format?: 'json' | 'png') => void
   onDelete: () => void
   onViewConversations: () => void
+  attachedWorldBooks?: Array<{ id: number; name: string }>
+  attachedWorldBooksLoading?: boolean
+  launchedFromWorldBooks?: boolean
   deleting?: boolean
   exporting?: boolean
 }
@@ -38,6 +41,9 @@ export function CharacterPreviewPopup({
   onExport,
   onDelete,
   onViewConversations,
+  attachedWorldBooks = [],
+  attachedWorldBooksLoading = false,
+  launchedFromWorldBooks = false,
   deleting = false,
   exporting = false
 }: CharacterPreviewPopupProps) {
@@ -108,6 +114,79 @@ export function CharacterPreviewPopup({
           greeting={character.greeting || character.first_message}
           tags={character.tags}
         />
+
+        <div className="rounded-md border border-border bg-surface p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-medium">
+              {t("settings:manageCharacters.worldBooks.title", {
+                defaultValue: "World Books"
+              })}
+            </div>
+            <a
+              href={`/world-books?from=characters&focusCharacterId=${encodeURIComponent(
+                String(character.id || "")
+              )}`}
+              className="text-xs text-primary hover:underline"
+              aria-label={t("settings:manageCharacters.worldBooks.openWorkspaceAria", {
+                defaultValue: "Open World Books workspace"
+              })}
+            >
+              {t("settings:manageCharacters.worldBooks.openWorkspace", {
+                defaultValue: "Open workspace"
+              })}
+            </a>
+          </div>
+
+          {launchedFromWorldBooks && (
+            <div className="mt-2">
+              <a
+                href="/world-books"
+                className="text-xs text-primary hover:underline"
+                aria-label={t("settings:manageCharacters.worldBooks.backAria", {
+                  defaultValue: "Back to World Books"
+                })}
+              >
+                {t("settings:manageCharacters.worldBooks.back", {
+                  defaultValue: "Back to World Books"
+                })}
+              </a>
+            </div>
+          )}
+
+          <div className="mt-2">
+            {attachedWorldBooksLoading ? (
+              <div className="text-xs text-text-muted">
+                {t("settings:manageCharacters.worldBooks.loading", {
+                  defaultValue: "Loading attached world books..."
+                })}
+              </div>
+            ) : attachedWorldBooks.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {attachedWorldBooks.map((worldBook) => (
+                  <a
+                    key={worldBook.id}
+                    href={`/world-books?from=characters&focusCharacterId=${encodeURIComponent(
+                      String(character.id || "")
+                    )}&focusWorldBookId=${encodeURIComponent(String(worldBook.id))}`}
+                    className="inline-flex items-center rounded border border-border px-2 py-1 text-xs text-primary hover:bg-surface2"
+                    aria-label={t("settings:manageCharacters.worldBooks.openBookAria", {
+                      defaultValue: "Open world book {{name}}",
+                      name: worldBook.name
+                    })}
+                  >
+                    {worldBook.name}
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-text-muted">
+                {t("settings:manageCharacters.worldBooks.empty", {
+                  defaultValue: "No world books attached to this character."
+                })}
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center justify-center gap-2 border-t border-border pt-4">

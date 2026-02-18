@@ -1,0 +1,336 @@
+import { fireEvent, render, screen } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { Modal } from "antd"
+import { ConnectionPhase } from "@/types/connection"
+import { ChatPane } from "../ChatPane"
+
+const mockCheckConnectionOnce = vi.fn()
+const mockSaveWorkspaceChatSession = vi.fn()
+const mockGetWorkspaceChatSession = vi.fn()
+const mockFocusSourceById = vi.fn()
+const mockFocusSourceByMediaId = vi.fn()
+const mockClearChatFocusTarget = vi.fn()
+const mockCaptureToCurrentNote = vi.fn()
+const mockSetMessages = vi.fn()
+const mockSetHistory = vi.fn()
+const mockSetHistoryId = vi.fn()
+const mockSetServerChatId = vi.fn()
+const mockSetStreaming = vi.fn()
+const mockSetIsProcessing = vi.fn()
+const mockStopStreamingRequest = vi.fn()
+const mockOnSubmit = vi.fn()
+const mockRegenerateLastMessage = vi.fn()
+const mockDeleteMessage = vi.fn()
+const mockEditMessage = vi.fn()
+
+const connectionStoreState = {
+  state: {
+    phase: ConnectionPhase.CONNECTED,
+    isChecking: false,
+    lastError: null
+  },
+  checkOnce: mockCheckConnectionOnce
+}
+
+const workspaceSessions = new Map<
+  string,
+  {
+    messages: Array<{ isBot: boolean; name: string; message: string; sources: any[] }>
+    history: Array<{ role: "user" | "assistant" | "system"; content: string }>
+    historyId: string | null
+    serverChatId: string | null
+  }
+>()
+
+const workspaceStoreState = {
+  sources: [] as Array<{ id: string; mediaId: number; title: string; type: string }>,
+  selectedSourceIds: [] as string[],
+  getSelectedSources: () => [] as Array<{ id: string; title: string }>,
+  getSelectedMediaIds: () => [] as number[],
+  setSelectedSourceIds: vi.fn(),
+  focusSourceById: mockFocusSourceById,
+  focusSourceByMediaId: mockFocusSourceByMediaId,
+  chatFocusTarget: null as { messageId: string; token: number } | null,
+  clearChatFocusTarget: mockClearChatFocusTarget,
+  captureToCurrentNote: mockCaptureToCurrentNote,
+  workspaceId: "workspace-a",
+  workspaceChatReferenceId: "workspace-a",
+  saveWorkspaceChatSession: mockSaveWorkspaceChatSession,
+  getWorkspaceChatSession: mockGetWorkspaceChatSession
+}
+
+const messageOptionState = {
+  messages: [] as Array<{
+    id: string
+    isBot: boolean
+    name: string
+    message: string
+    sources: any[]
+  }>,
+  setMessages: mockSetMessages,
+  history: [] as Array<{ role: "user" | "assistant" | "system"; content: string }>,
+  setHistory: mockSetHistory,
+  streaming: false,
+  setStreaming: mockSetStreaming,
+  isProcessing: false,
+  setIsProcessing: mockSetIsProcessing,
+  onSubmit: mockOnSubmit,
+  stopStreamingRequest: mockStopStreamingRequest,
+  regenerateLastMessage: mockRegenerateLastMessage,
+  deleteMessage: mockDeleteMessage,
+  editMessage: mockEditMessage,
+  historyId: null as string | null,
+  setHistoryId: mockSetHistoryId,
+  serverChatId: null as string | null,
+  setServerChatId: mockSetServerChatId
+}
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (
+      key: string,
+      defaultValueOrOptions?:
+        | string
+        | {
+            defaultValue?: string
+          }
+    ) => {
+      if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
+      if (defaultValueOrOptions?.defaultValue) return defaultValueOrOptions.defaultValue
+      return key
+    }
+  })
+}))
+
+vi.mock("@/hooks/useMediaQuery", () => ({
+  useMobile: () => false
+}))
+
+vi.mock("@/hooks/useSmartScroll", () => ({
+  useSmartScroll: () => ({
+    containerRef: { current: null },
+    isAutoScrollToBottom: true,
+    autoScrollToBottom: vi.fn()
+  })
+}))
+
+vi.mock("@/store/connection", () => ({
+  useConnectionStore: (
+    selector: (state: typeof connectionStoreState) => unknown
+  ) => selector(connectionStoreState)
+}))
+
+vi.mock("@/store/workspace", () => ({
+  useWorkspaceStore: (
+    selector: (state: typeof workspaceStoreState) => unknown
+  ) => selector(workspaceStoreState)
+}))
+
+vi.mock("@/store/option", () => ({
+  useStoreMessageOption: (
+    selector: (state: {
+      setRagMediaIds: (ids: number[] | null) => void
+      setChatMode: (mode: string) => void
+      setFileRetrievalEnabled: (enabled: boolean) => void
+      ragTopK: number
+      setRagTopK: (value: number | null) => void
+      ragAdvancedOptions: Record<string, unknown>
+      setRagAdvancedOptions: (opts: Record<string, unknown>) => void
+    }) => unknown
+  ) =>
+    selector({
+      setRagMediaIds: vi.fn(),
+      setChatMode: vi.fn(),
+      setFileRetrievalEnabled: vi.fn(),
+      ragTopK: 8,
+      setRagTopK: vi.fn(),
+      ragAdvancedOptions: {},
+      setRagAdvancedOptions: vi.fn()
+    })
+}))
+
+vi.mock("@/hooks/useMessageOption", () => ({
+  useMessageOption: () => messageOptionState
+}))
+
+vi.mock("@/components/Common/Playground/Message", () => ({
+  PlaygroundMessage: ({ message }: { message: string }) => (
+    <div data-testid="playground-message">{message}</div>
+  )
+}))
+
+vi.mock("@/components/Common/FeatureEmptyState", () => ({
+  default: ({ title }: { title: string }) => <div>{title}</div>
+}))
+
+vi.mock("../source-location-copy", () => ({
+  getWorkspaceChatNoSourcesHint: () =>
+    "Select sources from the Sources pane, then ask questions."
+}))
+
+describe("ChatPane Stage 1 reliability and controls", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    workspaceSessions.clear()
+
+    connectionStoreState.state.phase = ConnectionPhase.CONNECTED
+    connectionStoreState.state.isChecking = false
+    connectionStoreState.state.lastError = null
+
+    workspaceStoreState.workspaceId = "workspace-a"
+    workspaceStoreState.workspaceChatReferenceId = "workspace-a"
+    workspaceStoreState.sources = []
+    workspaceStoreState.selectedSourceIds = []
+    workspaceStoreState.getSelectedSources = () => []
+    workspaceStoreState.getSelectedMediaIds = () => []
+    mockFocusSourceById.mockReset()
+    mockFocusSourceByMediaId.mockReset()
+    workspaceStoreState.chatFocusTarget = null
+
+    messageOptionState.messages = []
+    messageOptionState.history = []
+    messageOptionState.historyId = null
+    messageOptionState.serverChatId = null
+    messageOptionState.streaming = false
+    messageOptionState.isProcessing = false
+    mockOnSubmit.mockResolvedValue(undefined)
+
+    mockGetWorkspaceChatSession.mockImplementation((workspaceId: string) => {
+      return workspaceSessions.get(workspaceId) ?? null
+    })
+  })
+
+  it("shows stop button while streaming and triggers stopStreamingRequest", () => {
+    messageOptionState.streaming = true
+
+    render(<ChatPane />)
+
+    const stopButton = screen.getByRole("button", { name: "Stop" })
+    fireEvent.click(stopButton)
+
+    expect(mockStopStreamingRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it("clears chat with confirmation and persists empty session state", () => {
+    messageOptionState.messages = [
+      {
+        id: "m1",
+        isBot: false,
+        name: "You",
+        message: "hello",
+        sources: []
+      }
+    ]
+    messageOptionState.history = [{ role: "user", content: "hello" }]
+    messageOptionState.historyId = "history-a"
+    messageOptionState.serverChatId = "server-chat-a"
+
+    const confirmSpy = vi
+      .spyOn(Modal, "confirm")
+      .mockImplementation((config) => {
+        config.onOk?.()
+        return {
+          destroy: vi.fn(),
+          update: vi.fn()
+        } as any
+      })
+
+    render(<ChatPane />)
+    fireEvent.click(screen.getByRole("button", { name: "Clear chat" }))
+
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(mockSetMessages).toHaveBeenCalledWith([])
+    expect(mockSetHistory).toHaveBeenCalledWith([])
+    expect(mockSetHistoryId).toHaveBeenCalledWith(null, {
+      preserveServerChatId: true
+    })
+    expect(mockSetServerChatId).toHaveBeenCalledWith(null)
+    expect(mockSaveWorkspaceChatSession).toHaveBeenCalledWith("workspace-a", {
+      messages: [],
+      history: [],
+      historyId: null,
+      serverChatId: null
+    })
+  })
+
+  it("shows connection banner and retries connection check", () => {
+    connectionStoreState.state.phase = ConnectionPhase.ERROR
+    connectionStoreState.state.lastError = "server-unreachable"
+
+    render(<ChatPane />)
+
+    expect(screen.getByText(/Unable to reach server/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+    expect(mockCheckConnectionOnce).toHaveBeenCalledTimes(1)
+  })
+
+  it("saves previous workspace chat and restores next workspace chat on switch", () => {
+    messageOptionState.messages = [
+      {
+        id: "a-1",
+        isBot: false,
+        name: "You",
+        message: "Workspace A message",
+        sources: []
+      }
+    ]
+    messageOptionState.history = [
+      {
+        role: "user",
+        content: "Workspace A message"
+      }
+    ]
+    messageOptionState.historyId = "history-a"
+    messageOptionState.serverChatId = "server-chat-a"
+
+    workspaceSessions.set("workspace-b", {
+      messages: [
+        {
+          isBot: true,
+          name: "Assistant",
+          message: "Workspace B response",
+          sources: []
+        }
+      ],
+      history: [{ role: "assistant", content: "Workspace B response" }],
+      historyId: "history-b",
+      serverChatId: "server-chat-b"
+    })
+
+    const { rerender } = render(<ChatPane />)
+
+    workspaceStoreState.workspaceId = "workspace-b"
+    workspaceStoreState.workspaceChatReferenceId = "workspace-b"
+    rerender(<ChatPane />)
+
+    expect(mockSaveWorkspaceChatSession).toHaveBeenCalledWith("workspace-a", {
+      messages: [
+        {
+          id: "a-1",
+          isBot: false,
+          name: "You",
+          message: "Workspace A message",
+          sources: []
+        }
+      ],
+      history: [{ role: "user", content: "Workspace A message" }],
+      historyId: "history-a",
+      serverChatId: "server-chat-a"
+    })
+    expect(mockSetMessages).toHaveBeenCalledWith([
+      {
+        isBot: true,
+        name: "Assistant",
+        message: "Workspace B response",
+        sources: []
+      }
+    ])
+    expect(mockSetHistory).toHaveBeenCalledWith([
+      { role: "assistant", content: "Workspace B response" }
+    ])
+    expect(mockSetHistoryId).toHaveBeenCalledWith("history-b", {
+      preserveServerChatId: true
+    })
+    expect(mockSetServerChatId).toHaveBeenCalledWith("server-chat-b")
+  })
+})

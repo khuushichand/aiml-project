@@ -58,6 +58,7 @@ export interface GeneratedArtifact {
   presentationId?: string // For slides - ID of the generated presentation
   presentationVersion?: number // For slides - version for export
   errorMessage?: string // If status is failed
+  data?: Record<string, unknown> // Optional structured artifact payload (quiz, flashcards, tables, etc.)
   createdAt: Date
   completedAt?: Date
 }

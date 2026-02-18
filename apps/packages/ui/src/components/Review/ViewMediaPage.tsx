@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ChevronDown, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { Storage } from '@plasmohq/storage'
@@ -15,6 +15,7 @@ import { useDemoMode } from '@/context/demo-mode'
 import { useMessageOption } from '@/hooks/useMessageOption'
 import { useAntdMessage } from '@/hooks/useAntdMessage'
 import { useUndoNotification } from '@/hooks/useUndoNotification'
+import { useDebounce } from '@/hooks/useDebounce'
 import FeatureEmptyState from '@/components/Common/FeatureEmptyState'
 import { SearchBar } from '@/components/Media/SearchBar'
 import { FilterPanel } from '@/components/Media/FilterPanel'
@@ -51,16 +52,46 @@ import {
   trackMediaNavigationTelemetry
 } from '@/utils/media-navigation-telemetry'
 import { normalizeRequestedMediaRenderMode } from '@/utils/media-render-mode'
-import { setSetting } from '@/services/settings/registry'
+import { clearSetting, getSetting, setSetting } from '@/services/settings/registry'
 import {
   DISCUSS_MEDIA_PROMPT_SETTING,
   LAST_MEDIA_ID_SETTING
 } from '@/services/settings/ui-settings'
+import {
+  buildMediaSearchPayload,
+  DEFAULT_MEDIA_SEARCH_FIELDS,
+  hasDefaultMediaSearchFields,
+  hasMediaSearchFilters,
+  type MediaBoostFields,
+  type MediaDateRange,
+  type MediaSearchField,
+  type MediaSearchMode,
+  type MediaSortBy
+} from '@/components/Review/mediaSearchRequest'
+import {
+  buildMetadataSearchPath,
+  createMetadataSearchFilter,
+  normalizeMetadataSearchFilters,
+  type MetadataMatchMode,
+  type MetadataSearchFilter,
+  validateMetadataSearchFilters
+} from '@/components/Review/mediaMetadataSearchRequest'
+import {
+  isMediaOnly,
+  isNotesOnly,
+  resolveKindsForTab
+} from '@/components/Review/mediaKinds'
+import {
+  buildMediaPermalinkSearch,
+  getMediaPermalinkIdFromSearch,
+  normalizeMediaPermalinkId
+} from '@/components/Review/mediaPermalink'
 
 const MEDIA_NAVIGATION_PANEL_VISIBLE_STORAGE_KEY =
   'media:navigation:panelVisible'
 const MEDIA_NAVIGATION_GENERATED_FALLBACK_STORAGE_KEY =
   'media:navigation:includeGeneratedFallback'
+const MEDIA_SIDEBAR_COLLAPSED_STORAGE_KEY = 'media:sidebar:collapsed'
 
 const ViewMediaPage: React.FC = () => {
   const { t } = useTranslation(['review', 'common', 'settings'])
@@ -246,6 +277,7 @@ const extractKeywordsFromMedia = (m: any): string[] => {
 const MediaPageContent: React.FC = () => {
   const { t } = useTranslation(['review', 'common'])
   const navigate = useNavigate()
+  const location = useLocation()
   const message = useAntdMessage()
   const { showUndoNotification } = useUndoNotification()
   const {
@@ -262,25 +294,53 @@ const MediaPageContent: React.FC = () => {
     useMediaAnalysisDisplayModeSelector()
 
   const [shortcutsOverlayOpen, setShortcutsOverlayOpen] = useState(false)
+  const [searchMode, setSearchMode] = useState<MediaSearchMode>('full_text')
   const [query, setQuery] = useState<string>('')
-  const [debouncedQuery, setDebouncedQuery] = useState<string>('')
+  const debouncedQuery = useDebounce(query, 300)
   const [kinds, setKinds] = useState<{ media: boolean; notes: boolean }>({
     media: true,
     notes: false
   })
   const [selected, setSelected] = useState<MediaResultItem | null>(null)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [pendingInitialMediaId, setPendingInitialMediaId] = useState<string | null>(null)
+  const [pendingInitialMediaIdSource, setPendingInitialMediaIdSource] = useState<
+    'url' | 'setting' | null
+  >(null)
   const [searchCollapsed, setSearchCollapsed] = useState(false)
   const [jumpToCollapsed, setJumpToCollapsed] = useState(false)
   const [page, setPage] = useState<number>(1)
-  const [pageSize] = useState<number>(20)
+  const [pageSize, setPageSize] = useState<number>(20)
   const [mediaTotal, setMediaTotal] = useState<number>(0)
   const [notesTotal, setNotesTotal] = useState<number>(0)
   const [combinedTotal, setCombinedTotal] = useState<number>(0)
   const [mediaTypes, setMediaTypes] = useState<string[]>([])
   const [availableMediaTypes, setAvailableMediaTypes] = useState<string[]>([])
   const [keywordTokens, setKeywordTokens] = useState<string[]>([])
+  const [excludeKeywordTokens, setExcludeKeywordTokens] = useState<string[]>([])
+  const [sortBy, setSortBy] = useState<MediaSortBy>('relevance')
+  const [dateRange, setDateRange] = useState<MediaDateRange>({
+    startDate: null,
+    endDate: null
+  })
+  const [exactPhrase, setExactPhrase] = useState<string>('')
+  const [searchFields, setSearchFields] = useState<MediaSearchField[]>([
+    ...DEFAULT_MEDIA_SEARCH_FIELDS
+  ])
+  const [enableBoostFields, setEnableBoostFields] = useState(false)
+  const [boostFields, setBoostFields] = useState<MediaBoostFields>({
+    title: 2,
+    content: 1
+  })
+  const [metadataFilters, setMetadataFilters] = useState<MetadataSearchFilter[]>([
+    createMetadataSearchFilter()
+  ])
+  const [metadataMatchMode, setMetadataMatchMode] =
+    useState<MetadataMatchMode>('all')
+  const [metadataValidationError, setMetadataValidationError] = useState<string | null>(
+    null
+  )
   const [keywordOptions, setKeywordOptions] = useState<string[]>([])
+  const [keywordSourceMode, setKeywordSourceMode] = useState<'endpoint' | 'results'>('results')
   const [selectedContent, setSelectedContent] = useState<string>('')
   const [selectedDetail, setSelectedDetail] = useState<any>(null)
   const [selectedNavigationNodeId, setSelectedNavigationNodeId] =
@@ -299,9 +359,17 @@ const MediaPageContent: React.FC = () => {
     useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [contentHeight, setContentHeight] = useState<number>(0)
+  const permalinkMediaId = useMemo(
+    () => getMediaPermalinkIdFromSearch(location.search),
+    [location.search]
+  )
 
   // Favorites state - persisted to extension storage
   const [favorites, setFavorites] = useStorage<string[]>('media:favorites', [])
+  const [sidebarCollapsed, setSidebarCollapsed] = useStorage<boolean>(
+    MEDIA_SIDEBAR_COLLAPSED_STORAGE_KEY,
+    false
+  )
   const [navigationPanelVisible, setNavigationPanelVisible] = useStorage<boolean>(
     MEDIA_NAVIGATION_PANEL_VISIBLE_STORAGE_KEY,
     true
@@ -312,8 +380,10 @@ const MediaPageContent: React.FC = () => {
       includeGeneratedFallbackDefault
     )
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
+  const sidebarCollapsedValue = sidebarCollapsed === true
   const contentDivRef = React.useRef<HTMLDivElement | null>(null)
   const hasRunInitialSearch = React.useRef(false)
+  const keywordEndpointUnavailableRef = React.useRef(false)
   const pendingSectionSelectionTelemetryRef = React.useRef<{
     nodeId: string
     startedAt: number
@@ -881,14 +951,190 @@ const MediaPageContent: React.FC = () => {
 
   const runSearch = useCallback(async (): Promise<MediaResultItem[]> => {
     const results: MediaResultItem[] = []
-    const hasQuery = query.trim().length > 0
-    const hasMediaFilters = mediaTypes.length > 0 || keywordTokens.length > 0
+    const hasTextQuery = query.trim().length > 0
+    const hasQuery =
+      hasTextQuery ||
+      (searchMode === 'full_text' && exactPhrase.trim().length > 0)
+    const hasMediaFilters = hasMediaSearchFilters({
+      mediaTypes,
+      includeKeywords: keywordTokens,
+      excludeKeywords: excludeKeywordTokens,
+      sortBy,
+      dateRange,
+      exactPhrase,
+      fields: searchFields,
+      boostFields: enableBoostFields ? boostFields : undefined
+    })
     let actualMediaCount = 0
     let actualNotesCount = 0
 
     if (kinds.media) {
       try {
-        if (!hasQuery && !hasMediaFilters) {
+        if (searchMode === 'metadata') {
+          const normalizedFilters = normalizeMetadataSearchFilters(metadataFilters)
+          const validationError = validateMetadataSearchFilters(normalizedFilters)
+          if (validationError) {
+            setMetadataValidationError(validationError)
+            setMediaTotal(0)
+            actualMediaCount = 0
+          } else {
+            setMetadataValidationError(null)
+            const path = buildMetadataSearchPath({
+              filters: normalizedFilters,
+              matchMode: metadataMatchMode,
+              page,
+              perPage: pageSize
+            })
+            const metadataResp = await bgRequest<any>({
+              path: path as any,
+              method: 'GET' as any
+            })
+            const rows = Array.isArray(metadataResp?.results)
+              ? metadataResp.results
+              : []
+
+            const includeTerms = keywordTokens
+              .map((token) => token.trim().toLowerCase())
+              .filter(Boolean)
+            const excludeTerms = excludeKeywordTokens
+              .map((token) => token.trim().toLowerCase())
+              .filter(Boolean)
+            const startMs = dateRange.startDate
+              ? new Date(dateRange.startDate).getTime()
+              : null
+            const endMs = dateRange.endDate
+              ? new Date(dateRange.endDate).getTime()
+              : null
+            const textQuery = query.trim().toLowerCase()
+
+            let filteredRows = rows.filter((row: any) => {
+              const type = String(row?.type ?? '').toLowerCase()
+              if (mediaTypes.length > 0 && !mediaTypes.includes(type)) {
+                return false
+              }
+
+              if (startMs != null || endMs != null) {
+                const createdAt = row?.created_at ? new Date(row.created_at).getTime() : null
+                if (createdAt == null || Number.isNaN(createdAt)) {
+                  return false
+                }
+                if (startMs != null && createdAt < startMs) {
+                  return false
+                }
+                if (endMs != null && createdAt > endMs) {
+                  return false
+                }
+              }
+
+              const metadataPayload =
+                row?.safe_metadata && typeof row.safe_metadata === 'object'
+                  ? JSON.stringify(row.safe_metadata)
+                  : ''
+              const haystack =
+                `${String(row?.title ?? '')} ${metadataPayload}`.toLowerCase()
+
+              if (textQuery && !haystack.includes(textQuery)) {
+                return false
+              }
+              if (includeTerms.some((term) => !haystack.includes(term))) {
+                return false
+              }
+              if (excludeTerms.some((term) => haystack.includes(term))) {
+                return false
+              }
+
+              return true
+            })
+
+            if (sortBy === 'date_desc') {
+              filteredRows = filteredRows.sort(
+                (a, b) =>
+                  (new Date(b?.created_at ?? 0).getTime() || 0) -
+                  (new Date(a?.created_at ?? 0).getTime() || 0)
+              )
+            } else if (sortBy === 'date_asc') {
+              filteredRows = filteredRows.sort(
+                (a, b) =>
+                  (new Date(a?.created_at ?? 0).getTime() || 0) -
+                  (new Date(b?.created_at ?? 0).getTime() || 0)
+              )
+            } else if (sortBy === 'title_asc') {
+              filteredRows = filteredRows.sort((a, b) =>
+                String(a?.title ?? '').localeCompare(String(b?.title ?? ''))
+              )
+            } else if (sortBy === 'title_desc') {
+              filteredRows = filteredRows.sort((a, b) =>
+                String(b?.title ?? '').localeCompare(String(a?.title ?? ''))
+              )
+            }
+
+            const metadataKeys = [
+              'doi',
+              'pmid',
+              'pmcid',
+              'arxiv_id',
+              's2_paper_id',
+              'journal',
+              'license'
+            ]
+
+            for (const row of filteredRows) {
+              const id = row?.media_id ?? row?.id ?? row?.pk ?? row?.uuid
+              const type =
+                typeof row?.type === 'string'
+                  ? row.type.toLowerCase().trim()
+                  : 'document'
+              if (type && !availableMediaTypes.includes(type)) {
+                setAvailableMediaTypes((prev) =>
+                  prev.includes(type) ? prev : [...prev, type]
+                )
+              }
+
+              const safeMetadata =
+                row?.safe_metadata && typeof row.safe_metadata === 'object'
+                  ? row.safe_metadata
+                  : {}
+              const snippet = metadataKeys
+                .map((key) => {
+                  const value = safeMetadata?.[key]
+                  if (value == null || String(value).trim().length === 0) {
+                    return null
+                  }
+                  return `${key}: ${String(value)}`
+                })
+                .filter((value): value is string => Boolean(value))
+                .join(' • ')
+
+              results.push({
+                kind: 'media',
+                id,
+                title: row?.title || `Media ${id}`,
+                snippet,
+                keywords: [],
+                meta: {
+                  type,
+                  created_at: row?.created_at
+                },
+                raw: row
+              })
+            }
+
+            const serverTotal = Number(metadataResp?.pagination?.total || rows.length || 0)
+            const hasClientSideConstraints =
+              hasTextQuery ||
+              mediaTypes.length > 0 ||
+              keywordTokens.length > 0 ||
+              excludeKeywordTokens.length > 0 ||
+              Boolean(dateRange.startDate || dateRange.endDate) ||
+              sortBy !== 'relevance'
+
+            const effectiveMediaTotal = hasClientSideConstraints
+              ? filteredRows.length
+              : serverTotal
+            setMediaTotal(effectiveMediaTotal)
+            actualMediaCount = effectiveMediaTotal
+          }
+        } else if (!hasQuery && !hasMediaFilters) {
           // Blank browse: GET listing with pagination
           const listing = await bgRequest<any>({
             path: `/api/v1/media/?page=${page}&results_per_page=${pageSize}&include_keywords=true` as any,
@@ -922,13 +1168,17 @@ const MediaPageContent: React.FC = () => {
           }
         } else {
           // Search with optional filters and pagination
-          const body: any = {
-            query: hasQuery ? query : null,
-            fields: ['title', 'content'],
-            sort_by: 'relevance'
-          }
-          if (mediaTypes.length > 0) body.media_types = mediaTypes
-          if (keywordTokens.length > 0) body.must_have = keywordTokens
+          const body = buildMediaSearchPayload({
+            query,
+            mediaTypes,
+            includeKeywords: keywordTokens,
+            excludeKeywords: excludeKeywordTokens,
+            sortBy,
+            dateRange,
+            exactPhrase,
+            fields: searchFields,
+            boostFields: enableBoostFields ? boostFields : undefined
+          })
           const mediaResp = await bgRequest<any>({
             path: `/api/v1/media/search?page=${page}&results_per_page=${pageSize}&include_keywords=true` as any,
             method: 'POST' as any,
@@ -973,7 +1223,7 @@ const MediaPageContent: React.FC = () => {
     }
 
     // Fetch notes if enabled
-    if (kinds.notes) {
+    if (kinds.notes && searchMode !== 'metadata') {
       try {
         // Helper to extract keywords from note
         const extractNoteKeywords = (note: any): string[] => {
@@ -997,7 +1247,7 @@ const MediaPageContent: React.FC = () => {
           return []
         }
 
-        if (hasQuery) {
+        if (hasTextQuery) {
           // Search notes with server-side pagination.
           // Prefer POST /api/v1/notes/search/ with SearchRequest so the server can
           // apply keyword filtering; fall back to GET on older servers.
@@ -1108,10 +1358,22 @@ const MediaPageContent: React.FC = () => {
 
     return results
   }, [
+    searchMode,
     query,
     kinds,
     mediaTypes,
     keywordTokens,
+    excludeKeywordTokens,
+    sortBy,
+    dateRange.startDate,
+    dateRange.endDate,
+    exactPhrase,
+    searchFields,
+    enableBoostFields,
+    boostFields.title,
+    boostFields.content,
+    metadataMatchMode,
+    metadataFilters,
     page,
     pageSize,
     availableMediaTypes
@@ -1124,6 +1386,18 @@ const MediaPageContent: React.FC = () => {
       kinds,
       mediaTypes,
       keywordTokens.join('|'),
+      excludeKeywordTokens.join('|'),
+      sortBy,
+      dateRange.startDate,
+      dateRange.endDate,
+      exactPhrase,
+      searchFields.join('|'),
+      enableBoostFields,
+      boostFields.title,
+      boostFields.content,
+      searchMode,
+      metadataMatchMode,
+      JSON.stringify(metadataFilters),
       page,
       pageSize
     ],
@@ -1132,7 +1406,27 @@ const MediaPageContent: React.FC = () => {
   })
 
   // Compute active filters state
-  const hasActiveFilters = mediaTypes.length > 0 || keywordTokens.length > 0 || showFavoritesOnly
+  const hasActiveFilters =
+    mediaTypes.length > 0 ||
+    keywordTokens.length > 0 ||
+    excludeKeywordTokens.length > 0 ||
+    Boolean(dateRange.startDate || dateRange.endDate) ||
+    sortBy !== 'relevance' ||
+    Boolean(exactPhrase.trim()) ||
+    !hasDefaultMediaSearchFields(searchFields) ||
+    enableBoostFields ||
+    searchMode === 'metadata' ||
+    normalizeMetadataSearchFilters(metadataFilters).length > 0 ||
+    showFavoritesOnly
+
+  useEffect(() => {
+    if (searchMode !== 'metadata') {
+      setMetadataValidationError(null)
+      return
+    }
+    setKinds((prev) => (prev.media && !prev.notes ? prev : { media: true, notes: false }))
+    setNotesTotal(0)
+  }, [searchMode])
 
   // Filter results by favorites if enabled
   const displayResults = useMemo(() => {
@@ -1140,6 +1434,30 @@ const MediaPageContent: React.FC = () => {
     return results.filter(r => favoritesSet.has(String(r.id)))
   }, [results, showFavoritesOnly, favoritesSet])
   const hasJumpTo = displayResults.length > 5
+
+  useEffect(() => {
+    if (!permalinkMediaId) return
+    if (selected?.kind === 'media' && selected?.id != null) return
+    setPendingInitialMediaId(permalinkMediaId)
+    setPendingInitialMediaIdSource('url')
+  }, [permalinkMediaId, selected?.id, selected?.kind])
+
+  useEffect(() => {
+    if (permalinkMediaId) return
+    if (selected?.kind === 'media' && selected?.id != null) return
+    let cancelled = false
+    ;(async () => {
+      const lastMediaId = normalizeMediaPermalinkId(
+        await getSetting(LAST_MEDIA_ID_SETTING)
+      )
+      if (cancelled || !lastMediaId) return
+      setPendingInitialMediaId((prev) => prev ?? lastMediaId)
+      setPendingInitialMediaIdSource((prev) => prev ?? 'setting')
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [permalinkMediaId, selected?.id, selected?.kind])
 
   // Compute total pages for pagination
   const totalPages = Math.ceil(
@@ -1150,34 +1468,56 @@ const MediaPageContent: React.FC = () => {
         : mediaTotal) / pageSize
   )
 
-  // Debounce search query
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedQuery(query)
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [query])
-
   // Auto-refetch when debounced query changes (including clearing to empty)
   useEffect(() => {
     if (!hasRunInitialSearch.current) {
       hasRunInitialSearch.current = true
-      if (debouncedQuery === '' && query === '') return
+      if (debouncedQuery === '') return
     }
-    setPage(1)
+    if (page !== 1) {
+      setPage(1)
+      return
+    }
     refetch()
-  }, [debouncedQuery, query, refetch])
+  }, [debouncedQuery, page, refetch])
 
   // Auto-refetch when paginating
   useEffect(() => {
     refetch()
   }, [page, pageSize, refetch])
 
-  // Reset to page 1 when filters change and refetch
+  // Refetch when switching between media/notes kinds.
   useEffect(() => {
+    if (!hasRunInitialSearch.current) return
     setPage(1)
     refetch()
-  }, [mediaTypes, keywordTokens, refetch])
+  }, [kinds, refetch])
+
+  // Reset to page 1 when filters change and refetch
+  useEffect(() => {
+    if (page !== 1) {
+      setPage(1)
+      return
+    }
+    refetch()
+  }, [
+    searchMode,
+    page,
+    mediaTypes,
+    keywordTokens,
+    excludeKeywordTokens,
+    sortBy,
+    dateRange.startDate,
+    dateRange.endDate,
+    exactPhrase,
+    searchFields,
+    enableBoostFields,
+    boostFields.title,
+    boostFields.content,
+    metadataMatchMode,
+    metadataFilters,
+    refetch
+  ])
 
   // Initial load: populate media types and auto-browse first page
   useEffect(() => {
@@ -1247,22 +1587,70 @@ const MediaPageContent: React.FC = () => {
     })()
   }, []) // Intentionally empty - runs only on mount with initial (empty) filters
 
-  // Load keyword suggestions for the filter dropdown
-  // Note: /api/v1/media/keywords endpoint doesn't exist on the server
-  // So we extract keywords from the current search results instead
+  // Load keyword suggestions for the filter dropdown.
+  // Preferred source: `/api/v1/media/keywords` endpoint.
+  // Fallback source: keywords from currently loaded results.
   const loadKeywordSuggestions = useCallback(async (searchText?: string) => {
+    const normalizeKeywords = (items: any[]): string[] => {
+      const out = new Set<string>()
+      for (const item of items) {
+        const raw =
+          typeof item === 'string'
+            ? item
+            : item?.keyword ?? item?.text ?? item?.tag ?? item?.name
+
+        if (typeof raw !== 'string') continue
+        const trimmed = raw.trim()
+        if (!trimmed) continue
+        if (searchText && !trimmed.toLowerCase().includes(searchText.toLowerCase())) {
+          continue
+        }
+        out.add(trimmed)
+      }
+      return Array.from(out)
+    }
+
+    if (!keywordEndpointUnavailableRef.current) {
+      try {
+        const trimmedSearch = searchText?.trim()
+        const endpointPath = trimmedSearch
+          ? `/api/v1/media/keywords?query=${encodeURIComponent(trimmedSearch)}`
+          : '/api/v1/media/keywords'
+        const keywordResp = await bgRequest<any>({
+          path: endpointPath as any,
+          method: 'GET' as any
+        })
+        const endpointItems = Array.isArray(keywordResp)
+          ? keywordResp
+          : Array.isArray(keywordResp?.keywords)
+            ? keywordResp.keywords
+            : Array.isArray(keywordResp?.items)
+              ? keywordResp.items
+              : null
+
+        if (!endpointItems) {
+          throw new Error('Unexpected keyword endpoint response')
+        }
+
+        setKeywordOptions(normalizeKeywords(endpointItems))
+        setKeywordSourceMode('endpoint')
+        return
+      } catch {
+        keywordEndpointUnavailableRef.current = true
+      }
+    }
+
     const keywordsFromResults = new Set<string>()
     for (const result of results) {
-      if (result.keywords) {
-        for (const kw of result.keywords) {
-          // Filter by search text if provided
-          if (!searchText || kw.toLowerCase().includes(searchText.toLowerCase())) {
-            keywordsFromResults.add(kw)
-          }
+      if (!result.keywords) continue
+      for (const kw of result.keywords) {
+        if (!searchText || kw.toLowerCase().includes(searchText.toLowerCase())) {
+          keywordsFromResults.add(kw)
         }
       }
     }
     setKeywordOptions(Array.from(keywordsFromResults))
+    setKeywordSourceMode('results')
   }, [results])
 
   // Keep keyword suggestions in sync with results
@@ -1359,6 +1747,70 @@ const MediaPageContent: React.FC = () => {
   // Track selected ID to avoid re-fetching on keyword updates
   const [lastFetchedId, setLastFetchedId] = useState<string | number | null>(null)
 
+  useEffect(() => {
+    if (!pendingInitialMediaId) return
+
+    const pendingId = pendingInitialMediaId
+    const pendingSource = pendingInitialMediaIdSource
+    const matchingResult = displayResults.find(
+      (item) => item.kind === 'media' && String(item.id) === pendingId
+    )
+    if (matchingResult) {
+      setSelected(matchingResult)
+      setPendingInitialMediaId(null)
+      setPendingInitialMediaIdSource(null)
+      if (pendingSource === 'setting') {
+        void clearSetting(LAST_MEDIA_ID_SETTING)
+      }
+      return
+    }
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const detail = await bgRequest<any>({
+          path: `/api/v1/media/${pendingId}` as any,
+          method: 'GET' as any
+        })
+        if (cancelled) return
+
+        const resolvedId = detail?.id ?? detail?.media_id ?? pendingId
+        const hydratedSelection: MediaResultItem = {
+          kind: 'media',
+          id: resolvedId,
+          title: detail?.title || detail?.filename || `Media ${resolvedId}`,
+          snippet: detail?.snippet || detail?.summary || '',
+          keywords: extractKeywordsFromMedia(detail),
+          meta: deriveMediaMeta(detail),
+          raw: detail
+        }
+
+        setSelected(hydratedSelection)
+        setSelectedContent(String(contentFromDetail(detail) || ''))
+        setSelectedDetail(detail)
+        setLastFetchedId(resolvedId)
+      } catch (error) {
+        console.debug('Failed to hydrate permalink media selection', error)
+      } finally {
+        if (cancelled) return
+        setPendingInitialMediaId(null)
+        setPendingInitialMediaIdSource(null)
+        if (pendingSource === 'setting') {
+          void clearSetting(LAST_MEDIA_ID_SETTING)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    contentFromDetail,
+    displayResults,
+    pendingInitialMediaId,
+    pendingInitialMediaIdSource
+  ])
+
   // Load selected item content
   useEffect(() => {
     ;(async () => {
@@ -1403,6 +1855,45 @@ const MediaPageContent: React.FC = () => {
     })()
   }, [selected?.id, fetchSelectedDetails, contentFromDetail])
 
+  const selectedMediaPermalinkId =
+    selected?.kind === 'media' && selected?.id != null ? String(selected.id) : null
+
+  useEffect(() => {
+    if (!selectedMediaPermalinkId) return
+    void setSetting(LAST_MEDIA_ID_SETTING, selectedMediaPermalinkId)
+  }, [selectedMediaPermalinkId])
+
+  useEffect(() => {
+    if (
+      selectedMediaPermalinkId == null &&
+      pendingInitialMediaIdSource === 'url' &&
+      pendingInitialMediaId
+    ) {
+      return
+    }
+    const nextSearch = buildMediaPermalinkSearch(
+      location.search,
+      selectedMediaPermalinkId
+    )
+    if (nextSearch === location.search) return
+    navigate(
+      {
+        pathname: location.pathname,
+        search: nextSearch,
+        hash: location.hash
+      },
+      { replace: true }
+    )
+  }, [
+    location.hash,
+    location.pathname,
+    location.search,
+    navigate,
+    pendingInitialMediaId,
+    pendingInitialMediaIdSource,
+    selectedMediaPermalinkId
+  ])
+
   // Note: Removed auto-clear effect that cleared selection when item wasn't in current results.
   // This caused UX issues - selection was lost when changing filters or pages.
   // The selection now persists until the user explicitly selects a different item.
@@ -1434,6 +1925,14 @@ const MediaPageContent: React.FC = () => {
     setPage(1)
     refetch()
   }
+
+  const handleKindChange = useCallback((nextKind: 'media' | 'notes') => {
+    if (searchMode === 'metadata' && nextKind === 'notes') {
+      return
+    }
+    setKinds((prev) => resolveKindsForTab(prev, nextKind))
+    setPage(1)
+  }, [searchMode])
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -1850,10 +2349,10 @@ const MediaPageContent: React.FC = () => {
       {/* Left Sidebar */}
       <div
         className={`bg-surface border-r border-border flex flex-col ${
-          sidebarCollapsed ? 'w-0' : 'w-full md:w-80 lg:w-96'
+          sidebarCollapsedValue ? 'w-0' : 'w-full md:w-80 lg:w-96'
         }`}
         style={{
-          overflow: sidebarCollapsed ? 'hidden' : 'visible',
+          overflow: sidebarCollapsedValue ? 'hidden' : 'visible',
           height: `${sidebarHeight}px`,
           minHeight: '850px',
           transition: 'width 300ms ease-in-out, height 200ms ease-out'
@@ -1861,8 +2360,8 @@ const MediaPageContent: React.FC = () => {
       >
         <div
           className="flex h-full flex-col"
-          hidden={sidebarCollapsed}
-          aria-hidden={sidebarCollapsed}
+          hidden={sidebarCollapsedValue}
+          aria-hidden={sidebarCollapsedValue}
         >
           {/* Header */}
           <div className="px-4 py-3 border-b border-border">
@@ -1892,6 +2391,49 @@ const MediaPageContent: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            <div className="mt-3 inline-flex items-center gap-1 rounded-lg border border-border bg-surface2 p-1">
+              <button
+                type="button"
+                onClick={() => handleKindChange('media')}
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors ${
+                  isMediaOnly(kinds)
+                    ? 'bg-primary text-white'
+                    : 'text-text hover:bg-surface'
+                }`}
+                aria-pressed={isMediaOnly(kinds)}
+                aria-label={t('review:mediaPage.showMediaOnly', { defaultValue: 'Show media only' })}
+              >
+                <span>{t('review:mediaPage.media', { defaultValue: 'Media' })}</span>
+                <span className="rounded-full bg-black/10 px-1.5 py-0.5 text-[10px] font-medium">
+                  {mediaTotal}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleKindChange('notes')}
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors ${
+                  isNotesOnly(kinds)
+                    ? 'bg-primary text-white'
+                    : 'text-text hover:bg-surface'
+                } ${searchMode === 'metadata' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                disabled={searchMode === 'metadata'}
+                title={
+                  searchMode === 'metadata'
+                    ? t('review:mediaPage.notesDisabledInMetadataMode', {
+                        defaultValue: 'Notes are unavailable in metadata mode'
+                      })
+                    : undefined
+                }
+                aria-pressed={isNotesOnly(kinds)}
+                aria-label={t('review:mediaPage.showNotesOnly', { defaultValue: 'Show notes only' })}
+              >
+                <span>{t('review:mediaPage.notes', { defaultValue: 'Notes' })}</span>
+                <span className="rounded-full bg-black/10 px-1.5 py-0.5 text-[10px] font-medium">
+                  {notesTotal}
+                </span>
+              </button>
+            </div>
           </div>
 
           {/* Search */}
@@ -1920,6 +2462,16 @@ const MediaPageContent: React.FC = () => {
                     // M4: Clear filters when clearing search
                     setMediaTypes([])
                     setKeywordTokens([])
+                    setExcludeKeywordTokens([])
+                    setDateRange({ startDate: null, endDate: null })
+                    setSortBy('relevance')
+                    setExactPhrase('')
+                    setSearchFields([...DEFAULT_MEDIA_SEARCH_FIELDS])
+                    setEnableBoostFields(false)
+                    setBoostFields({ title: 2, content: 1 })
+                    setMetadataFilters([createMetadataSearchFilter()])
+                    setMetadataMatchMode('all')
+                    setMetadataValidationError(null)
                     setShowFavoritesOnly(false)
                   }}
                 />
@@ -1930,16 +2482,71 @@ const MediaPageContent: React.FC = () => {
                   {t('review:mediaPage.search', { defaultValue: 'Search' })}
                 </button>
                 <FilterPanel
+                  searchMode={searchMode}
+                  onSearchModeChange={(nextMode) => {
+                    if (nextMode === searchMode) return
+                    setSearchMode(nextMode)
+                    if (nextMode === 'metadata') {
+                      setKinds({ media: true, notes: false })
+                    }
+                    setPage(1)
+                  }}
                   mediaTypes={availableMediaTypes}
                   selectedMediaTypes={mediaTypes}
                   onMediaTypesChange={setMediaTypes}
+                  sortBy={sortBy}
+                  onSortByChange={(nextSort) => {
+                    setSortBy(nextSort)
+                    setPage(1)
+                  }}
+                  dateRange={dateRange}
+                  onDateRangeChange={(nextDateRange) => {
+                    setDateRange(nextDateRange)
+                    setPage(1)
+                  }}
+                  exactPhrase={exactPhrase}
+                  onExactPhraseChange={(nextExactPhrase) => {
+                    setExactPhrase(nextExactPhrase)
+                    setPage(1)
+                  }}
+                  searchFields={searchFields}
+                  onSearchFieldsChange={(nextFields) => {
+                    setSearchFields(nextFields)
+                    setPage(1)
+                  }}
+                  enableBoostFields={enableBoostFields}
+                  onEnableBoostFieldsChange={(enabled) => {
+                    setEnableBoostFields(enabled)
+                    setPage(1)
+                  }}
+                  boostFields={boostFields}
+                  onBoostFieldsChange={(nextBoostFields) => {
+                    setBoostFields(nextBoostFields)
+                    setPage(1)
+                  }}
+                  metadataFilters={metadataFilters}
+                  onMetadataFiltersChange={(nextFilters) => {
+                    setMetadataFilters(nextFilters)
+                    setPage(1)
+                  }}
+                  metadataMatchMode={metadataMatchMode}
+                  onMetadataMatchModeChange={(mode) => {
+                    setMetadataMatchMode(mode)
+                    setPage(1)
+                  }}
+                  metadataValidationError={metadataValidationError}
                   selectedKeywords={keywordTokens}
                   onKeywordsChange={(kws) => {
                     setKeywordTokens(kws)
                     setPage(1)
-                    refetch()
+                  }}
+                  selectedExcludedKeywords={excludeKeywordTokens}
+                  onExcludedKeywordsChange={(kws) => {
+                    setExcludeKeywordTokens(kws)
+                    setPage(1)
                   }}
                   keywordOptions={keywordOptions}
+                  keywordSourceMode={keywordSourceMode}
                   onKeywordSearch={(txt) => {
                     loadKeywordSuggestions(txt)
                   }}
@@ -1997,6 +2604,16 @@ const MediaPageContent: React.FC = () => {
             onClearAll={() => {
               setMediaTypes([])
               setKeywordTokens([])
+              setExcludeKeywordTokens([])
+              setDateRange({ startDate: null, endDate: null })
+              setSortBy('relevance')
+              setExactPhrase('')
+              setSearchFields([...DEFAULT_MEDIA_SEARCH_FIELDS])
+              setEnableBoostFields(false)
+              setBoostFields({ title: 2, content: 1 })
+              setMetadataFilters([createMetadataSearchFilter()])
+              setMetadataMatchMode('all')
+              setMetadataValidationError(null)
               setShowFavoritesOnly(false)
             }}
           />
@@ -2020,10 +2637,29 @@ const MediaPageContent: React.FC = () => {
               loadedCount={displayResults.length}
               isLoading={isLoading || isFetching}
               hasActiveFilters={hasActiveFilters}
+              searchQuery={query}
+              onClearSearch={() => {
+                setQuery('')
+              }}
               onClearFilters={() => {
                 setMediaTypes([])
                 setKeywordTokens([])
+                setExcludeKeywordTokens([])
+                setDateRange({ startDate: null, endDate: null })
+                setSortBy('relevance')
+                setExactPhrase('')
+                setSearchFields([...DEFAULT_MEDIA_SEARCH_FIELDS])
+                setEnableBoostFields(false)
+                setBoostFields({ title: 2, content: 1 })
+                setMetadataFilters([createMetadataSearchFilter()])
+                setMetadataMatchMode('all')
+                setMetadataValidationError(null)
                 setShowFavoritesOnly(false)
+              }}
+              onOpenQuickIngest={() => {
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('tldw:open-quick-ingest'))
+                }
               }}
               favorites={favoritesSet}
               onToggleFavorite={toggleFavorite}
@@ -2042,6 +2678,12 @@ const MediaPageContent: React.FC = () => {
                 }
                 itemsPerPage={pageSize}
                 currentItemsCount={results.length}
+                pageSizeOptions={[20, 50, 100]}
+                onItemsPerPageChange={(nextPageSize) => {
+                  if (nextPageSize === pageSize) return
+                  setPageSize(nextPageSize)
+                  setPage(1)
+                }}
               />
               {/* Keyboard shortcuts hint */}
               <div className="px-4 py-1.5 border-t border-border flex items-center justify-center">
@@ -2064,12 +2706,12 @@ const MediaPageContent: React.FC = () => {
 
       {/* Collapse Button */}
       <button
-        onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+        onClick={() => setSidebarCollapsed(!sidebarCollapsedValue)}
         className="relative w-6 bg-surface border-r border-border hover:bg-surface2 flex items-center justify-center group transition-colors"
-        aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        aria-label={sidebarCollapsedValue ? 'Expand sidebar' : 'Collapse sidebar'}
       >
         <div className="flex items-center justify-center w-full h-full">
-          {sidebarCollapsed ? (
+          {sidebarCollapsedValue ? (
             <ChevronRight className="w-4 h-4 text-text-subtle group-hover:text-text" />
           ) : (
             <ChevronLeft className="w-4 h-4 text-text-subtle group-hover:text-text" />

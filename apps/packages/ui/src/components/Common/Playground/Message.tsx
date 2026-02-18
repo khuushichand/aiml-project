@@ -155,6 +155,13 @@ type Props = {
   historyId?: string
   conversationInstanceId: string
   onDeleteMessage?: () => void
+  onSaveToWorkspaceNotes?: (payload: {
+    message: string
+    isBot: boolean
+    name: string
+    messageId?: string
+    createdAt?: number | string
+  }) => void
   onTogglePinned?: () => void
   pinned?: boolean
   characterIdentity?: Character | null
@@ -452,6 +459,10 @@ export const PlaygroundMessage = (props: Props) => {
   const canSaveToNotes = canSaveKnowledge && Boolean(capabilities?.hasNotes)
   const canSaveToFlashcards =
     canSaveKnowledge && Boolean(capabilities?.hasFlashcards)
+  const canSaveToWorkspaceNotes =
+    Boolean(props.onSaveToWorkspaceNotes) &&
+    Boolean((errorFriendlyText || props.message || "").trim()) &&
+    !errorPayload
   const canGenerateDocument =
     Boolean(capabilities?.hasChatDocuments) &&
     Boolean(props.serverChatId) &&
@@ -561,6 +572,30 @@ export const PlaygroundMessage = (props: Props) => {
       })
     )
   }, [errorFriendlyText, props.message, props.serverChatId, props.serverMessageId])
+
+  const handleSaveToWorkspaceNotes = React.useCallback(() => {
+    const snippet = (errorFriendlyText || props.message || "").trim()
+    if (!snippet || !props.onSaveToWorkspaceNotes) return
+    props.onSaveToWorkspaceNotes({
+      message: snippet,
+      isBot: props.isBot,
+      name: props.name,
+      messageId: props.messageId || props.serverMessageId || undefined,
+      createdAt:
+        typeof props.createdAt === "number" || typeof props.createdAt === "string"
+          ? props.createdAt
+          : undefined
+    })
+  }, [
+    errorFriendlyText,
+    props.createdAt,
+    props.isBot,
+    props.message,
+    props.messageId,
+    props.name,
+    props.onSaveToWorkspaceNotes,
+    props.serverMessageId
+  ])
 
   const handleSaveKnowledge = async (makeFlashcard: boolean) => {
     if (!props.serverChatId || !props.serverMessageId) return
@@ -1328,6 +1363,8 @@ export const PlaygroundMessage = (props: Props) => {
               onCopy={handleCopy}
               canReply={canReply}
               onReply={handleReply}
+              canSaveToWorkspaceNotes={canSaveToWorkspaceNotes}
+              onSaveToWorkspaceNotes={handleSaveToWorkspaceNotes}
               canSaveToNotes={canSaveToNotes}
               canSaveToFlashcards={canSaveToFlashcards}
               canGenerateDocument={canGenerateDocument}

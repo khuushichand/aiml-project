@@ -1,4 +1,3 @@
-import { Storage } from "@plasmohq/storage"
 import { createSafeStorage } from "@/utils/safe-storage"
 
 const storage = createSafeStorage()
@@ -161,6 +160,10 @@ export const setAllCopilotPrompts = async (
         }
     }
 }
+
+// Alias that clarifies semantics: this updates only provided keys and leaves other
+// copilot prompts unchanged.
+export const upsertCopilotPrompts = setAllCopilotPrompts
 
 export const getPrompt = async (key: string) => {
     switch (key) {

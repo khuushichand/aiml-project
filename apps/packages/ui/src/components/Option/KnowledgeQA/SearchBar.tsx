@@ -2,17 +2,32 @@
  * SearchBar - Prominent search input for Knowledge QA
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react"
-import { Search, Sparkles, X } from "lucide-react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { CloudOff, Search, Sparkles, Square, X } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
 import { cn } from "@/lib/utils"
+import { trackKnowledgeQaSearchMetric } from "@/utils/knowledge-qa-search-metrics"
+import {
+  buildLocalQuerySuggestions,
+  shouldShowSuggestionPrototype,
+  type QuerySuggestion,
+} from "./querySuggestions"
 
 const EXAMPLE_QUERIES = [
   "What are the key findings from the research?",
   "Summarize the main arguments in this document",
   "What are the pros and cons discussed?",
   "Explain the methodology used in this study",
+  "Compare the conclusions across my PDFs",
+  "When was topic X first mentioned in my sources?",
+  "What are the citations for claim Y?",
 ]
+const MAX_QUERY_LENGTH = 2000
+const SUGGESTION_SOURCE_LABELS: Record<QuerySuggestion["source"], string> = {
+  history: "History",
+  source_title: "Source",
+  example: "Example",
+}
 
 type SearchBarProps = {
   className?: string
@@ -24,16 +39,57 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
     query,
     setQuery,
     search,
+    cancelSearch,
     isSearching,
     clearResults,
+    results,
+    answer,
+    searchHistory,
+    isLocalOnlyThread,
     settings,
     updateSetting,
   } = useKnowledgeQA()
   const inputRef = useRef<HTMLInputElement>(null)
+  const blurTimeoutRef = useRef<number | null>(null)
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
   const [isFocused, setIsFocused] = useState(false)
   const [cycleCount, setCycleCount] = useState(0)
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1)
   const MAX_CYCLES = 3 // Stop rotating after 3 full cycles
+  const hasResults = results.length > 0 || Boolean(answer)
+  const showHintEmphasis = !query && !isSearching && cycleCount === 0
+  const showCharacterCount = query.length >= Math.floor(MAX_QUERY_LENGTH * 0.8)
+  const historyQueries = useMemo(
+    () => searchHistory.map((item) => item.query).filter((item) => item.trim().length > 0),
+    [searchHistory]
+  )
+  const sourceTitles = useMemo(
+    () =>
+      results
+        .map((result) =>
+          typeof result.metadata?.title === "string" ? result.metadata.title : ""
+        )
+        .filter((title) => title.trim().length > 0),
+    [results]
+  )
+  const suggestions = useMemo(
+    () =>
+      buildLocalQuerySuggestions({
+        query,
+        historyQueries,
+        sourceTitles,
+        exampleQueries: EXAMPLE_QUERIES,
+        limit: 5,
+      }),
+    [query, historyQueries, sourceTitles]
+  )
+  const shouldShowSuggestions =
+    showSuggestions &&
+    isFocused &&
+    !isSearching &&
+    shouldShowSuggestionPrototype(query) &&
+    suggestions.length > 0
 
   // Rotate placeholder examples - slower interval, pause on focus, stop after cycles
   useEffect(() => {
@@ -85,24 +141,63 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
     }
   }, [autoFocus])
 
+  useEffect(
+    () => () => {
+      if (blurTimeoutRef.current) {
+        window.clearTimeout(blurTimeoutRef.current)
+      }
+    },
+    []
+  )
+
+  useEffect(() => {
+    if (!shouldShowSuggestions) {
+      setActiveSuggestionIndex(-1)
+    }
+  }, [shouldShowSuggestions])
+
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault()
       if (query.trim() && !isSearching) {
+        setShowSuggestions(false)
         search()
       }
     },
     [query, isSearching, search]
   )
 
+  const applySuggestion = useCallback(
+    (suggestion: QuerySuggestion) => {
+      setQuery(suggestion.text)
+      void trackKnowledgeQaSearchMetric({
+        type: "suggestion_accept",
+        source: suggestion.source,
+      })
+      setShowSuggestions(false)
+      setActiveSuggestionIndex(-1)
+      requestAnimationFrame(() => inputRef.current?.focus())
+    },
+    [setQuery]
+  )
+
   const handleClear = useCallback(() => {
     setQuery("")
-    clearResults()
+    setShowSuggestions(true)
     inputRef.current?.focus()
-  }, [setQuery, clearResults])
+  }, [setQuery])
+
+  const handleNewSearch = useCallback(() => {
+    clearResults()
+    setQuery("")
+    inputRef.current?.focus()
+  }, [clearResults, setQuery])
 
   return (
     <form onSubmit={handleSubmit} className={cn("w-full max-w-3xl mx-auto", className)}>
+      <p id="knowledge-qa-search-description" className="sr-only">
+        Ask questions about your documents and get AI-powered answers with citations from your knowledge base.
+      </p>
       <div className="relative group">
         {/* Search icon */}
         <div className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none">
@@ -117,14 +212,57 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
 
         {/* Input */}
         <input
+          id="knowledge-search-input"
           ref={inputRef}
           type="text"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
+          onChange={(e) => setQuery(e.target.value.slice(0, MAX_QUERY_LENGTH))}
+          onFocus={() => {
+            if (blurTimeoutRef.current) {
+              window.clearTimeout(blurTimeoutRef.current)
+              blurTimeoutRef.current = null
+            }
+            setIsFocused(true)
+            setShowSuggestions(true)
+          }}
+          onBlur={() => {
+            setIsFocused(false)
+            blurTimeoutRef.current = window.setTimeout(() => {
+              setShowSuggestions(false)
+              setActiveSuggestionIndex(-1)
+            }, 120)
+          }}
+          onKeyDown={(e) => {
+            if (!shouldShowSuggestions) return
+
+            if (e.key === "ArrowDown") {
+              e.preventDefault()
+              setActiveSuggestionIndex((prev) =>
+                prev >= suggestions.length - 1 ? 0 : prev + 1
+              )
+              return
+            }
+            if (e.key === "ArrowUp") {
+              e.preventDefault()
+              setActiveSuggestionIndex((prev) =>
+                prev <= 0 ? suggestions.length - 1 : prev - 1
+              )
+              return
+            }
+            if (e.key === "Enter" && activeSuggestionIndex >= 0) {
+              e.preventDefault()
+              applySuggestion(suggestions[activeSuggestionIndex])
+              return
+            }
+            if (e.key === "Escape") {
+              e.preventDefault()
+              setShowSuggestions(false)
+              setActiveSuggestionIndex(-1)
+            }
+          }}
           placeholder={EXAMPLE_QUERIES[placeholderIndex]}
           disabled={isSearching}
+          maxLength={MAX_QUERY_LENGTH}
           className={cn(
             "w-full pl-12 pr-20 py-4 text-lg",
             "bg-surface border border-border rounded-xl",
@@ -135,7 +273,41 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
             isSearching && "opacity-75 cursor-not-allowed"
           )}
           aria-label="Search your knowledge base"
+          aria-describedby="knowledge-qa-search-description"
+          aria-autocomplete="list"
+          aria-expanded={shouldShowSuggestions}
+          aria-controls={shouldShowSuggestions ? "knowledge-search-suggestions" : undefined}
         />
+
+        {shouldShowSuggestions && (
+          <div
+            id="knowledge-search-suggestions"
+            role="listbox"
+            className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-border bg-surface shadow-lg"
+          >
+            {suggestions.map((suggestion, index) => (
+              <button
+                key={suggestion.id}
+                type="button"
+                role="option"
+                aria-selected={activeSuggestionIndex === index}
+                className={cn(
+                  "flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors",
+                  activeSuggestionIndex === index
+                    ? "bg-primary/10 text-primary"
+                    : "hover:bg-muted"
+                )}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => applySuggestion(suggestion)}
+              >
+                <span className="truncate">{suggestion.text}</span>
+                <span className="text-[10px] uppercase tracking-wide text-text-subtle">
+                  {SUGGESTION_SOURCE_LABELS[suggestion.source]}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Clear button */}
         {query && (
@@ -163,33 +335,85 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
             "hover:bg-primaryStrong"
           )}
         >
-          {isSearching ? "..." : "Ask"}
+          {isSearching ? "Searching..." : "Ask"}
         </button>
       </div>
 
-      {/* Keyboard hint + quick controls */}
-      <div className="mt-2 flex items-center justify-between gap-3 text-xs text-text-muted">
-        <span className="truncate">
-          Press <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono">/</kbd> to focus,{" "}
-          <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono">Cmd+K</kbd> for new search
-        </span>
-        <button
-          type="button"
-          onClick={() =>
-            updateSetting("enable_web_fallback", !settings.enable_web_fallback)
-          }
-          className={cn(
-            "px-2 py-1 rounded-md border transition-colors whitespace-nowrap",
-            settings.enable_web_fallback
-              ? "border-primary/40 bg-primary/10 text-primary"
-              : "border-border hover:bg-muted"
-          )}
-          aria-pressed={settings.enable_web_fallback}
-          title="Toggle web search fallback"
+      {isSearching && (
+        <div
+          className="mt-2 h-1 w-full overflow-hidden rounded-full bg-muted"
+          data-testid="knowledge-search-loading-indicator"
         >
-          Web search {settings.enable_web_fallback ? "on" : "off"}
-        </button>
+          <div className="h-full w-1/3 rounded-full bg-primary animate-pulse" />
+        </div>
+      )}
+
+      {/* Keyboard hint + quick controls */}
+      <div
+        className={cn(
+          "mt-2 flex items-center justify-between gap-3 text-xs text-text-muted",
+          showHintEmphasis && "text-sm text-text"
+        )}
+      >
+        <span className="truncate">
+          Press <kbd className="px-1.5 py-0.5 bg-muted text-text rounded font-mono">/</kbd> to focus,{" "}
+          <kbd className="px-1.5 py-0.5 bg-muted text-text rounded font-mono">Cmd+K</kbd> for new search
+        </span>
+        <div className="flex items-center gap-2">
+          {isLocalOnlyThread && (
+            <span
+              className="inline-flex items-center gap-1 rounded-md border border-warn/40 bg-warn/10 px-2 py-1 text-[11px] text-warn"
+              title="Working offline - conversation is stored locally and not synced to server."
+            >
+              <CloudOff className="h-3 w-3" />
+              Not synced
+            </span>
+          )}
+          {hasResults && (
+            <button
+              type="button"
+              onClick={handleNewSearch}
+              className="px-2 py-1 rounded-md border border-border hover:bg-muted transition-colors whitespace-nowrap"
+              title="Clear current results and start a new search"
+            >
+              New search
+            </button>
+          )}
+          {isSearching && (
+            <button
+              type="button"
+              onClick={cancelSearch}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-warn/40 bg-warn/10 text-warn hover:bg-warn/20 transition-colors whitespace-nowrap"
+              aria-label="Cancel search"
+            >
+              <Square className="w-3 h-3" />
+              Stop
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() =>
+              updateSetting("enable_web_fallback", !settings.enable_web_fallback)
+            }
+            className={cn(
+              "px-2 py-1 rounded-md border transition-colors whitespace-nowrap",
+              settings.enable_web_fallback
+                ? "border-primary/40 bg-primary/10 text-primary"
+                : "border-border hover:bg-muted"
+            )}
+            aria-pressed={settings.enable_web_fallback}
+            title="Falls back to web search when local source relevance is below threshold (configurable in settings)."
+          >
+            Web search {settings.enable_web_fallback ? "on" : "off"}
+          </button>
+        </div>
       </div>
+
+      {showCharacterCount && (
+        <div className="mt-1 text-right text-xs text-text-muted">
+          {query.length}/{MAX_QUERY_LENGTH}
+        </div>
+      )}
     </form>
   )
 }

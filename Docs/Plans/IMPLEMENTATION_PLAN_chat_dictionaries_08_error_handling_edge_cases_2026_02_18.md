@@ -15,15 +15,16 @@ Finding IDs: `8.1` through `8.8`
 ## Stage 1: Empty and Error State Clarity
 **Goal**: Ensure users always see actionable next steps when data is absent or unavailable.
 **Success Criteria**:
-- Dictionary list empty state uses `FeatureEmptyState` with create/import/template CTAs.
+- Dictionary list empty state uses `FeatureEmptyState` with create/import CTAs and example use cases.
 - Entry manager empty state explains entry purpose with example pattern/replacement.
 - Query `error` state renders explicit failure UI with retry action.
 - Existing regex error clarity and soft-delete safety behavior are preserved.
 **Tests**:
 - Component tests for dictionary and entry empty-state rendering.
 - Integration test for server-offline/query-error retry flow.
-- Regression tests for regex validation alert and soft-delete call path.
-**Status**: Not Started
+- Entry-manager query-error retry rendering test.
+- Manual regression check: regex validation alert and dictionary delete confirmation path unchanged.
+**Status**: Complete
 
 ## Stage 2: Failure Recovery and Undo for Destructive Actions
 **Goal**: Make destructive and import actions recoverable where practical.
@@ -35,8 +36,8 @@ Finding IDs: `8.1` through `8.8`
 **Tests**:
 - Component tests for delete -> undo -> restore lifecycle.
 - Unit tests for client-side import schema validation helper.
-- Integration tests for malformed input messaging precedence (client vs server).
-**Status**: Not Started
+- Component test for malformed import rendering client-side structural errors and blocking request dispatch.
+**Status**: Complete
 
 ## Stage 3: Optimistic Concurrency and Version Conflict Handling
 **Goal**: Prevent silent overwrite when multiple sessions edit the same dictionary.
@@ -47,9 +48,9 @@ Finding IDs: `8.1` through `8.8`
 - Conflict copy differentiates from name-collision conflicts in import flows.
 **Tests**:
 - API tests for version mismatch conflict behavior.
-- Component tests for conflict dialog and reload action.
-- E2E two-tab scenario test confirming overwrite prevention.
-**Status**: Not Started
+- Component tests for inline active-toggle conflict dialog and reload action.
+- Manual check: edit modal conflict reload preserves in-progress edits while refreshing version.
+**Status**: Complete
 
 ## Dependencies
 

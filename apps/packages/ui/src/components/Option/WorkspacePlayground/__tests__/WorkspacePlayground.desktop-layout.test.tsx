@@ -4,14 +4,38 @@ import { WorkspacePlayground } from "../index"
 
 const testState = {
   isMobile: false,
+  storeHydrated: true,
   leftPaneCollapsed: false,
   rightPaneCollapsed: false,
   workspaceId: "workspace-1",
   initializeWorkspace: vi.fn(),
+  addSources: vi.fn(),
+  setSelectedSourceIds: vi.fn(),
+  captureToCurrentNote: vi.fn(),
   setLeftPaneCollapsed: vi.fn(),
   setRightPaneCollapsed: vi.fn(),
   selectedSourceIds: [] as string[],
-  generatedArtifacts: [] as Array<{ id: string }>
+  generatedArtifacts: [] as Array<{ id: string }>,
+  sources: [] as Array<{
+    id: string
+    mediaId: number
+    title: string
+    type: "pdf" | "video" | "audio" | "website" | "document" | "text"
+    addedAt: Date
+  }>,
+  currentNote: {
+    title: "",
+    content: "",
+    keywords: [] as string[],
+    isDirty: false
+  },
+  workspaceChatSessions: {} as Record<
+    string,
+    { messages: Array<{ message: string; sources: unknown[]; isBot: boolean; name: string }> }
+  >,
+  focusSourceById: vi.fn(),
+  focusChatMessageById: vi.fn(),
+  focusWorkspaceNote: vi.fn()
 }
 
 vi.mock("react-i18next", () => ({
@@ -38,26 +62,71 @@ vi.mock("@/hooks/useMediaQuery", () => ({
 vi.mock("@/store/workspace", () => ({
   useWorkspaceStore: (
     selector: (state: {
+      storeHydrated?: boolean
       workspaceId: string | null
       initializeWorkspace: () => void
+      addSources: (
+        sources: Array<{ mediaId: number; title: string; type: string }>
+      ) => unknown
+      setSelectedSourceIds: (ids: string[]) => void
+      captureToCurrentNote: (input: {
+        title?: string
+        content: string
+        mode?: "append" | "replace"
+      }) => void
       leftPaneCollapsed: boolean
       rightPaneCollapsed: boolean
       setLeftPaneCollapsed: (collapsed: boolean) => void
       setRightPaneCollapsed: (collapsed: boolean) => void
       selectedSourceIds: string[]
       generatedArtifacts: Array<{ id: string }>
+      sources: Array<{
+        id: string
+        mediaId: number
+        title: string
+        type: "pdf" | "video" | "audio" | "website" | "document" | "text"
+        addedAt: Date
+      }>
+      currentNote: {
+        title: string
+        content: string
+        keywords: string[]
+        isDirty: boolean
+      }
+      workspaceChatSessions: Record<
+        string,
+        { messages: Array<{ message: string; sources: unknown[]; isBot: boolean; name: string }> }
+      >
+      focusSourceById: (id: string) => boolean
+      focusChatMessageById: (messageId: string) => boolean
+      focusWorkspaceNote: (field?: "title" | "content") => void
     }) => unknown
   ) =>
     selector({
+      storeHydrated: testState.storeHydrated,
       workspaceId: testState.workspaceId,
       initializeWorkspace: testState.initializeWorkspace,
+      addSources: testState.addSources,
+      setSelectedSourceIds: testState.setSelectedSourceIds,
+      captureToCurrentNote: testState.captureToCurrentNote,
       leftPaneCollapsed: testState.leftPaneCollapsed,
       rightPaneCollapsed: testState.rightPaneCollapsed,
       setLeftPaneCollapsed: testState.setLeftPaneCollapsed,
       setRightPaneCollapsed: testState.setRightPaneCollapsed,
       selectedSourceIds: testState.selectedSourceIds,
-      generatedArtifacts: testState.generatedArtifacts
+      generatedArtifacts: testState.generatedArtifacts,
+      sources: testState.sources,
+      currentNote: testState.currentNote,
+      workspaceChatSessions: testState.workspaceChatSessions,
+      focusSourceById: testState.focusSourceById,
+      focusChatMessageById: testState.focusChatMessageById,
+      focusWorkspaceNote: testState.focusWorkspaceNote
     })
+}))
+
+vi.mock("@/utils/workspace-playground-prefill", () => ({
+  consumeWorkspacePlaygroundPrefill: vi.fn().mockResolvedValue(null),
+  buildKnowledgeQaSeedNote: vi.fn().mockReturnValue(""),
 }))
 
 vi.mock("../WorkspaceHeader", () => ({
@@ -115,11 +184,20 @@ describe("WorkspacePlayground desktop layout guardrails", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     testState.isMobile = false
+    testState.storeHydrated = true
     testState.leftPaneCollapsed = false
     testState.rightPaneCollapsed = false
     testState.workspaceId = "workspace-1"
     testState.selectedSourceIds = []
     testState.generatedArtifacts = []
+    testState.sources = []
+    testState.currentNote = {
+      title: "",
+      content: "",
+      keywords: [],
+      isDirty: false
+    }
+    testState.workspaceChatSessions = {}
   })
 
   it("renders the desktop three-panel structure with sources, chat, and studio panes", () => {
@@ -137,5 +215,28 @@ describe("WorkspacePlayground desktop layout guardrails", () => {
     expect(
       main?.querySelector("[data-testid='workspace-chat-pane']")
     ).not.toBeNull()
+  })
+
+  it("renders hydration skeleton until workspace store hydration completes", () => {
+    testState.storeHydrated = false
+
+    render(<WorkspacePlayground />)
+
+    expect(screen.getByTestId("workspace-playground-skeleton")).toBeInTheDocument()
+    expect(screen.queryByTestId("workspace-header")).not.toBeInTheDocument()
+  })
+
+  it("swaps from hydration skeleton to panes after hydration", () => {
+    testState.storeHydrated = false
+    const { rerender } = render(<WorkspacePlayground />)
+
+    expect(screen.getByTestId("workspace-playground-skeleton")).toBeInTheDocument()
+
+    testState.storeHydrated = true
+    rerender(<WorkspacePlayground />)
+
+    expect(screen.queryByTestId("workspace-playground-skeleton")).not.toBeInTheDocument()
+    expect(screen.getByTestId("workspace-header")).toBeInTheDocument()
+    expect(screen.getByTestId("workspace-chat-pane")).toBeInTheDocument()
   })
 })

@@ -24,7 +24,7 @@ Finding IDs: `1.1` through `1.10`
 - Unit tests for search query builder and OR/AND tag filter translation.
 - Component tests for debounce, loading state, and pagination state changes.
 - Integration tests for online search path and offline fallback path.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Table Usability and Metadata Visibility
 **Goal**: Improve discoverability and comparison in the prompt table.
@@ -37,7 +37,7 @@ Finding IDs: `1.1` through `1.10`
 - Component tests for sorter behavior and default/fallback ordering.
 - Unit tests for modified-date renderer and relative time formatting.
 - Interaction test for content expand/collapse behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Export, Import Feedback, and Bulk Operations
 **Goal**: Enable high-volume prompt management workflows.
@@ -50,7 +50,7 @@ Finding IDs: `1.1` through `1.10`
 - Integration tests for CSV/Markdown export request/response handling.
 - Unit tests for import result aggregation and notification formatting.
 - Integration tests for each new bulk action including partial-failure summaries.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Regression Safety and Interaction Preservation
 **Goal**: Ship improvements without regressing proven strengths.
@@ -61,8 +61,8 @@ Finding IDs: `1.1` through `1.10`
 **Tests**:
 - Snapshot/interaction regression tests for "Use in Chat" modal.
 - Performance smoke test with large prompt fixture (search + pagination + sort).
-- E2E scenario covering select, use, and navigation to chat.
-**Status**: Not Started
+- Component integration scenario covering select, use, and navigation to chat.
+**Status**: Complete
 
 ## Dependencies
 

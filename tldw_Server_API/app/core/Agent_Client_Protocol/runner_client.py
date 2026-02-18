@@ -261,11 +261,22 @@ class ACPRunnerClient:
     def _determine_permission_tier(self, tool_name: str) -> str:
         """Determine the permission tier for a tool based on its name.
 
-        This is a heuristic based on common patterns:
+        First consults admin-configured permission policies (if any).
+        Falls back to a heuristic based on common patterns:
         - Read operations: auto
         - Write operations: batch
         - Execute/delete operations: individual
         """
+        # Check admin-configured policies first (best-effort, sync)
+        try:
+            from tldw_Server_API.app.services.admin_acp_sessions_service import _store
+            if _store is not None:
+                policy_tier = _store.resolve_permission_tier(tool_name)
+                if policy_tier is not None:
+                    return policy_tier
+        except Exception:
+            pass
+
         tool_lower = tool_name.lower()
 
         # Auto-approve tier (read-only)

@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Activity,
   BarChart3,
+  Bot,
   Bug,
   Building2,
   Cpu,
@@ -11,8 +12,10 @@ import {
   Flag,
   Gauge,
   AlertTriangle,
+  MessageSquare,
   Mic,
   ScrollText,
+  Server,
   Key,
   KeyRound,
   LayoutDashboard,
@@ -66,6 +69,9 @@ const navigationItems = {
   logs: { name: 'Logs', href: '/logs', icon: ScrollText, role: ['admin', 'super_admin', 'owner'], keywords: ['system logs'] },
   flags: { name: 'Flags', href: '/flags', icon: Flag, role: ['admin', 'super_admin', 'owner'], keywords: ['feature flags', 'maintenance'] },
   incidents: { name: 'Incidents', href: '/incidents', icon: AlertTriangle, role: ['admin', 'super_admin', 'owner'], keywords: ['outages', 'response'] },
+  acpSessions: { name: 'ACP Sessions', href: '/acp-sessions', icon: MessageSquare, role: ['admin', 'super_admin', 'owner'], keywords: ['agent', 'chat', 'sessions', 'acp'] },
+  acpAgents: { name: 'ACP Agents', href: '/acp-agents', icon: Bot, role: ['admin', 'super_admin', 'owner'], keywords: ['agent', 'config', 'custom agents'] },
+  mcpServers: { name: 'MCP Servers', href: '/mcp-servers', icon: Server, role: ['admin', 'super_admin', 'owner'], keywords: ['mcp', 'tools', 'servers', 'model context protocol'] },
   voiceCommands: { name: 'Voice Commands', href: '/voice-commands', icon: Mic, role: ['admin', 'super_admin', 'owner'], keywords: ['speech', 'commands'] },
   debug: { name: 'Debug', href: '/debug', icon: Bug, role: ['super_admin', 'owner'], keywords: ['diagnostics'] },
   configuration: { name: 'Configuration', href: '/config', icon: Settings, role: ['admin', 'super_admin', 'owner'], keywords: ['settings', 'system config'] },
@@ -94,6 +100,9 @@ export const navigationSections: NavigationSection[] = [
     items: [
       navigationItems.providers,
       navigationItems.byok,
+      navigationItems.acpSessions,
+      navigationItems.acpAgents,
+      navigationItems.mcpServers,
       navigationItems.voiceCommands,
     ],
   },
@@ -201,6 +210,12 @@ const resolveDynamicPathLabel = (segments: string[]): string | null => {
   }
   if (root === 'voice-commands' && segments.length === 2) {
     return `Command ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'acp-sessions' && segments.length === 2) {
+    return `Session ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'acp-agents' && segments.length === 2) {
+    return `Agent ${decodeURIComponent(idOrSlug)}`;
   }
   return null;
 };

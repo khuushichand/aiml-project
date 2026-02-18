@@ -1,0 +1,588 @@
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import { PermissionGuard } from '@/components/PermissionGuard';
+import { ResponsiveLayout } from '@/components/ResponsiveLayout';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useToast } from '@/components/ui/toast';
+import { RefreshCw, Bot, Plus, Pencil, Trash2, Shield } from 'lucide-react';
+import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
+import { api, ApiError } from '@/lib/api-client';
+
+interface AgentConfig {
+  id: number;
+  type: string;
+  name: string;
+  description: string;
+  system_prompt: string | null;
+  allowed_tools: string[] | null;
+  denied_tools: string[] | null;
+  parameters: Record<string, unknown>;
+  requires_api_key: string | null;
+  org_id: number | null;
+  team_id: number | null;
+  enabled: boolean;
+  is_configured: boolean;
+  created_at: string;
+  updated_at: string | null;
+}
+
+interface PermissionPolicy {
+  id: number;
+  name: string;
+  description: string;
+  rules: Array<{ tool_pattern: string; tier: string }>;
+  org_id: number | null;
+  team_id: number | null;
+  priority: number;
+  created_at: string;
+  updated_at: string | null;
+}
+
+const defaultAgentForm = {
+  type: '',
+  name: '',
+  description: '',
+  system_prompt: '',
+  allowed_tools: '',
+  denied_tools: '',
+  temperature: '0.7',
+  model: '',
+  max_tokens: '',
+  requires_api_key: '',
+  enabled: true,
+};
+
+const defaultPolicyForm = {
+  name: '',
+  description: '',
+  rules: '[]',
+  priority: '0',
+};
+
+export default function ACPAgentsPage() {
+  const [agents, setAgents] = useState<AgentConfig[]>([]);
+  const [policies, setPolicies] = useState<PermissionPolicy[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  // Agent dialog state
+  const [agentDialogOpen, setAgentDialogOpen] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<AgentConfig | null>(null);
+  const [agentForm, setAgentForm] = useState(defaultAgentForm);
+
+  // Policy dialog state
+  const [policyDialogOpen, setPolicyDialogOpen] = useState(false);
+  const [editingPolicy, setEditingPolicy] = useState<PermissionPolicy | null>(null);
+  const [policyForm, setPolicyForm] = useState(defaultPolicyForm);
+
+  const [activeTab, setActiveTab] = useState<'agents' | 'policies'>('agents');
+
+  const confirm = useConfirm();
+  const toast = useToast();
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [agentsRes, policiesRes] = await Promise.all([
+        api.getACPAgentConfigs() as Promise<{ agents: AgentConfig[]; total: number }>,
+        api.getACPPermissionPolicies() as Promise<{ policies: PermissionPolicy[]; total: number }>,
+      ]);
+      setAgents(agentsRes.agents || []);
+      setPolicies(policiesRes.policies || []);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Failed to load data';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // -- Agent CRUD --
+
+  const openCreateAgent = () => {
+    setEditingAgent(null);
+    setAgentForm(defaultAgentForm);
+    setAgentDialogOpen(true);
+  };
+
+  const openEditAgent = (agent: AgentConfig) => {
+    setEditingAgent(agent);
+    setAgentForm({
+      type: agent.type,
+      name: agent.name,
+      description: agent.description,
+      system_prompt: agent.system_prompt || '',
+      allowed_tools: agent.allowed_tools?.join(', ') || '',
+      denied_tools: agent.denied_tools?.join(', ') || '',
+      temperature: String((agent.parameters as Record<string, unknown>).temperature ?? '0.7'),
+      model: String((agent.parameters as Record<string, unknown>).model ?? ''),
+      max_tokens: String((agent.parameters as Record<string, unknown>).max_tokens ?? ''),
+      requires_api_key: agent.requires_api_key || '',
+      enabled: agent.enabled,
+    });
+    setAgentDialogOpen(true);
+  };
+
+  const handleSaveAgent = async () => {
+    try {
+      const payload: Record<string, unknown> = {
+        type: agentForm.type,
+        name: agentForm.name,
+        description: agentForm.description,
+        system_prompt: agentForm.system_prompt || null,
+        allowed_tools: agentForm.allowed_tools ? agentForm.allowed_tools.split(',').map(s => s.trim()).filter(Boolean) : null,
+        denied_tools: agentForm.denied_tools ? agentForm.denied_tools.split(',').map(s => s.trim()).filter(Boolean) : null,
+        parameters: {
+          ...(agentForm.temperature ? { temperature: parseFloat(agentForm.temperature) } : {}),
+          ...(agentForm.model ? { model: agentForm.model } : {}),
+          ...(agentForm.max_tokens ? { max_tokens: parseInt(agentForm.max_tokens) } : {}),
+        },
+        requires_api_key: agentForm.requires_api_key || null,
+        enabled: agentForm.enabled,
+      };
+
+      if (editingAgent) {
+        await api.updateACPAgentConfig(editingAgent.id, payload);
+        toast.success('Agent configuration updated');
+      } else {
+        await api.createACPAgentConfig(payload);
+        toast.success('Agent configuration created');
+      }
+      setAgentDialogOpen(false);
+      loadData();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Failed to save agent configuration';
+      toast.error(message);
+    }
+  };
+
+  const handleDeleteAgent = async (agent: AgentConfig) => {
+    const ok = await confirm({
+      title: 'Delete Agent Configuration',
+      message: `Are you sure you want to delete "${agent.name}"?`,
+      confirmText: 'Delete',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await api.deleteACPAgentConfig(agent.id);
+      toast.success('Agent configuration deleted');
+      loadData();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Failed to delete agent';
+      toast.error(message);
+    }
+  };
+
+  // -- Policy CRUD --
+
+  const openCreatePolicy = () => {
+    setEditingPolicy(null);
+    setPolicyForm(defaultPolicyForm);
+    setPolicyDialogOpen(true);
+  };
+
+  const openEditPolicy = (policy: PermissionPolicy) => {
+    setEditingPolicy(policy);
+    setPolicyForm({
+      name: policy.name,
+      description: policy.description,
+      rules: JSON.stringify(policy.rules, null, 2),
+      priority: String(policy.priority),
+    });
+    setPolicyDialogOpen(true);
+  };
+
+  const handleSavePolicy = async () => {
+    try {
+      let rules;
+      try {
+        rules = JSON.parse(policyForm.rules);
+      } catch {
+        toast.error('Invalid JSON in rules');
+        return;
+      }
+      const payload = {
+        name: policyForm.name,
+        description: policyForm.description,
+        rules,
+        priority: parseInt(policyForm.priority) || 0,
+      };
+      if (editingPolicy) {
+        await api.updateACPPermissionPolicy(editingPolicy.id, payload);
+        toast.success('Permission policy updated');
+      } else {
+        await api.createACPPermissionPolicy(payload);
+        toast.success('Permission policy created');
+      }
+      setPolicyDialogOpen(false);
+      loadData();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Failed to save policy';
+      toast.error(message);
+    }
+  };
+
+  const handleDeletePolicy = async (policy: PermissionPolicy) => {
+    const ok = await confirm({
+      title: 'Delete Permission Policy',
+      message: `Are you sure you want to delete "${policy.name}"?`,
+      confirmText: 'Delete',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await api.deleteACPPermissionPolicy(policy.id);
+      toast.success('Permission policy deleted');
+      loadData();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Failed to delete policy';
+      toast.error(message);
+    }
+  };
+
+  return (
+    <PermissionGuard variant="route" requireAuth role="admin">
+      <ResponsiveLayout>
+        <div className="p-4 lg:p-8 space-y-6">
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold">ACP Agent Configuration</h1>
+              <p className="text-muted-foreground">Manage custom agent profiles and tool permission policies</p>
+            </div>
+            <AccessibleIconButton
+              icon={RefreshCw}
+              label="Refresh"
+              onClick={loadData}
+              disabled={loading}
+              className={loading ? 'animate-spin' : ''}
+            />
+          </div>
+
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          {/* Tab Navigation */}
+          <div className="flex gap-2 border-b pb-2">
+            <Button
+              variant={activeTab === 'agents' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setActiveTab('agents')}
+            >
+              <Bot className="h-4 w-4 mr-2" />
+              Agents ({agents.length})
+            </Button>
+            <Button
+              variant={activeTab === 'policies' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setActiveTab('policies')}
+            >
+              <Shield className="h-4 w-4 mr-2" />
+              Permission Policies ({policies.length})
+            </Button>
+          </div>
+
+          {/* Agents Tab */}
+          {activeTab === 'agents' && (
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-base">Custom Agent Configurations</CardTitle>
+                  <CardDescription>Define agent profiles with system prompts, tool access, and parameters</CardDescription>
+                </div>
+                <Button size="sm" onClick={openCreateAgent}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  New Agent
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {agents.length === 0 ? (
+                  <EmptyState
+                    icon={Bot}
+                    title="No Custom Agents"
+                    description="Create custom agent configurations to control agent behavior and tool access."
+                  />
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Model</TableHead>
+                        <TableHead>Tools</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {agents.map((agent) => (
+                        <TableRow key={agent.id}>
+                          <TableCell>
+                            <div className="flex flex-col">
+                              <span className="font-medium">{agent.name}</span>
+                              <span className="text-xs text-muted-foreground">{agent.description}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell><Badge variant="outline">{agent.type}</Badge></TableCell>
+                          <TableCell>
+                            <div className="flex gap-1">
+                              {agent.enabled ? (
+                                <Badge variant="default">Enabled</Badge>
+                              ) : (
+                                <Badge variant="secondary">Disabled</Badge>
+                              )}
+                              {agent.is_configured ? (
+                                <Badge variant="default">Configured</Badge>
+                              ) : (
+                                <Badge variant="destructive">Needs Key</Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-xs font-mono">
+                            {(agent.parameters as Record<string, unknown>).model as string || '-'}
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {agent.allowed_tools ? `${agent.allowed_tools.length} allowed` : 'All'}
+                            {agent.denied_tools ? `, ${agent.denied_tools.length} denied` : ''}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex gap-1">
+                              <AccessibleIconButton
+                                icon={Pencil}
+                                label="Edit"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => openEditAgent(agent)}
+                              />
+                              <AccessibleIconButton
+                                icon={Trash2}
+                                label="Delete"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleDeleteAgent(agent)}
+                              />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Policies Tab */}
+          {activeTab === 'policies' && (
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-base">Tool Permission Policies</CardTitle>
+                  <CardDescription>Define rules for auto-approving, batching, or requiring individual approval for tools</CardDescription>
+                </div>
+                <Button size="sm" onClick={openCreatePolicy}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  New Policy
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {policies.length === 0 ? (
+                  <EmptyState
+                    icon={Shield}
+                    title="No Permission Policies"
+                    description="Create policies to control which tools require approval."
+                  />
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Rules</TableHead>
+                        <TableHead>Priority</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {policies.map((policy) => (
+                        <TableRow key={policy.id}>
+                          <TableCell>
+                            <div className="flex flex-col">
+                              <span className="font-medium">{policy.name}</span>
+                              <span className="text-xs text-muted-foreground">{policy.description}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-1">
+                              {policy.rules.map((rule, i) => (
+                                <Badge key={i} variant="outline" className="text-xs">
+                                  {rule.tool_pattern}: {rule.tier}
+                                </Badge>
+                              ))}
+                            </div>
+                          </TableCell>
+                          <TableCell>{policy.priority}</TableCell>
+                          <TableCell>
+                            <div className="flex gap-1">
+                              <AccessibleIconButton
+                                icon={Pencil}
+                                label="Edit"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => openEditPolicy(policy)}
+                              />
+                              <AccessibleIconButton
+                                icon={Trash2}
+                                label="Delete"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleDeletePolicy(policy)}
+                              />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Agent Config Dialog */}
+          <Dialog open={agentDialogOpen} onOpenChange={setAgentDialogOpen}>
+            <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{editingAgent ? 'Edit Agent Configuration' : 'Create Agent Configuration'}</DialogTitle>
+                <DialogDescription>Define agent behavior, tool access, and model parameters</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="agent-type">Type Identifier</Label>
+                    <Input id="agent-type" value={agentForm.type} onChange={(e) => setAgentForm(f => ({ ...f, type: e.target.value }))} placeholder="e.g., my_custom_agent" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="agent-name">Name</Label>
+                    <Input id="agent-name" value={agentForm.name} onChange={(e) => setAgentForm(f => ({ ...f, name: e.target.value }))} placeholder="My Custom Agent" />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="agent-desc">Description</Label>
+                  <Input id="agent-desc" value={agentForm.description} onChange={(e) => setAgentForm(f => ({ ...f, description: e.target.value }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="agent-prompt">System Prompt</Label>
+                  <textarea
+                    id="agent-prompt"
+                    value={agentForm.system_prompt}
+                    onChange={(e) => setAgentForm(f => ({ ...f, system_prompt: e.target.value }))}
+                    className="w-full min-h-[120px] rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    placeholder="You are a helpful coding assistant..."
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="agent-model">Model</Label>
+                    <Input id="agent-model" value={agentForm.model} onChange={(e) => setAgentForm(f => ({ ...f, model: e.target.value }))} placeholder="claude-opus-4-6" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="agent-temp">Temperature</Label>
+                    <Input id="agent-temp" type="number" step="0.1" min="0" max="2" value={agentForm.temperature} onChange={(e) => setAgentForm(f => ({ ...f, temperature: e.target.value }))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="agent-tokens">Max Tokens</Label>
+                    <Input id="agent-tokens" type="number" value={agentForm.max_tokens} onChange={(e) => setAgentForm(f => ({ ...f, max_tokens: e.target.value }))} placeholder="4096" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="agent-allowed">Allowed Tools (comma-separated)</Label>
+                    <Input id="agent-allowed" value={agentForm.allowed_tools} onChange={(e) => setAgentForm(f => ({ ...f, allowed_tools: e.target.value }))} placeholder="read_file, write_file, search" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="agent-denied">Denied Tools (comma-separated)</Label>
+                    <Input id="agent-denied" value={agentForm.denied_tools} onChange={(e) => setAgentForm(f => ({ ...f, denied_tools: e.target.value }))} placeholder="bash, execute_command" />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="agent-key">Required API Key (env var name)</Label>
+                  <Input id="agent-key" value={agentForm.requires_api_key} onChange={(e) => setAgentForm(f => ({ ...f, requires_api_key: e.target.value }))} placeholder="ANTHROPIC_API_KEY" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="agent-enabled"
+                    checked={agentForm.enabled}
+                    onCheckedChange={(checked) => setAgentForm(f => ({ ...f, enabled: checked === true }))}
+                  />
+                  <Label htmlFor="agent-enabled">Enabled</Label>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setAgentDialogOpen(false)}>Cancel</Button>
+                <Button onClick={handleSaveAgent}>{editingAgent ? 'Update' : 'Create'}</Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Policy Dialog */}
+          <Dialog open={policyDialogOpen} onOpenChange={setPolicyDialogOpen}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>{editingPolicy ? 'Edit Permission Policy' : 'Create Permission Policy'}</DialogTitle>
+                <DialogDescription>Define tool permission rules</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="policy-name">Name</Label>
+                  <Input id="policy-name" value={policyForm.name} onChange={(e) => setPolicyForm(f => ({ ...f, name: e.target.value }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="policy-desc">Description</Label>
+                  <Input id="policy-desc" value={policyForm.description} onChange={(e) => setPolicyForm(f => ({ ...f, description: e.target.value }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="policy-rules">Rules (JSON)</Label>
+                  <textarea
+                    id="policy-rules"
+                    value={policyForm.rules}
+                    onChange={(e) => setPolicyForm(f => ({ ...f, rules: e.target.value }))}
+                    className="w-full min-h-[120px] font-mono text-xs rounded-md border border-input bg-background px-3 py-2"
+                    placeholder='[{"tool_pattern": "read_*", "tier": "auto"}]'
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="policy-priority">Priority (higher takes precedence)</Label>
+                  <Input id="policy-priority" type="number" value={policyForm.priority} onChange={(e) => setPolicyForm(f => ({ ...f, priority: e.target.value }))} />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setPolicyDialogOpen(false)}>Cancel</Button>
+                <Button onClick={handleSavePolicy}>{editingPolicy ? 'Update' : 'Create'}</Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </ResponsiveLayout>
+    </PermissionGuard>
+  );
+}

@@ -15,6 +15,8 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
   const { askFollowUp, isSearching, createNewThread, results, answer } =
     useKnowledgeQA()
   const [input, setInput] = useState("")
+  const shouldShow = isSearching || results.length > 0 || Boolean(answer)
+  const isQueuedState = isSearching && results.length === 0 && !answer
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -33,8 +35,7 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
     setInput("")
   }, [createNewThread])
 
-  // Only show if we have results or an answer
-  if (results.length === 0 && !answer) {
+  if (!shouldShow) {
     return null
   }
 
@@ -46,10 +47,11 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
           type="button"
           onClick={handleNewTopic}
           aria-label="Start new topic"
-          className="flex items-center justify-center w-10 h-10 rounded-lg border border-border hover:border-primary/30 hover:bg-muted/50 transition-colors"
+          className="flex items-center gap-1.5 h-10 px-3 rounded-lg border border-border hover:border-primary/30 hover:bg-muted/50 transition-colors"
           title="Start new topic"
         >
-          <Plus className="w-5 h-5 text-text-muted" />
+          <Plus className="w-4 h-4 text-text-muted" />
+          <span className="text-xs font-medium text-text-muted">New Topic</span>
         </button>
 
         {/* Input */}
@@ -58,7 +60,12 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask a follow-up question..."
+            placeholder={
+              isQueuedState
+                ? "Type your next question..."
+                : "Ask a follow-up question..."
+            }
+            aria-label="Ask a follow-up question"
             disabled={isSearching}
             className={cn(
               "w-full pl-4 pr-12 py-3",
@@ -93,7 +100,9 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
       </form>
 
       <p className="mt-2 text-xs text-text-muted text-center">
-        Follow-up questions maintain context. Click &quot;New Topic&quot; to start fresh.
+        {isQueuedState
+          ? "You can queue your next question while the current search completes."
+          : "Follow-up questions maintain context. Click \"New Topic\" to start fresh."}
       </p>
     </div>
   )

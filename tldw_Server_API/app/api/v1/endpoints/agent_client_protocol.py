@@ -17,15 +17,23 @@ from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentListResponse,
     ACPSessionCancelRequest,
     ACPSessionCloseRequest,
+    ACPSessionDetailResponse,
+    ACPSessionForkRequest,
+    ACPSessionForkResponse,
+    ACPSessionInfo,
+    ACPSessionListResponse,
     ACPSessionNewRequest,
     ACPSessionNewResponse,
     ACPSessionPromptRequest,
     ACPSessionPromptResponse,
     ACPSessionUpdatesResponse,
+    ACPSessionUsageResponse,
+    ACPTokenUsage,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
     get_runner_client,
 )
+from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
@@ -746,6 +754,30 @@ async def acp_session_new(
         except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             resolved_agent_type = "custom"
 
+    # Persist session metadata and emit SSE event
+    try:
+        store = await get_acp_session_store()
+        await store.register_session(
+            session_id=session_id,
+            user_id=int(user.id),
+            agent_type=resolved_agent_type or "custom",
+            name=session_name,
+            cwd=payload.cwd,
+            tags=payload.tags,
+        )
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        logger.warning("Failed to persist ACP session metadata for {}", session_id)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.admin.admin_events_stream import emit_admin_event
+        await emit_admin_event("acp_session_created", {
+            "session_id": session_id,
+            "user_id": int(user.id),
+            "agent_type": resolved_agent_type or "custom",
+            "name": session_name,
+        }, category="acp")
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        pass
+
     return ACPSessionNewResponse(
         session_id=session_id,
         name=session_name,
@@ -771,9 +803,24 @@ async def acp_session_prompt(
         logger.error("ACP session/prompt failed for user {}: {}", user.id, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
+    # Record prompt exchange and accumulate token usage
+    turn_usage = None
+    try:
+        store = await get_acp_session_store()
+        turn_usage_data = await store.record_prompt(payload.session_id, payload.prompt, result)
+        if turn_usage_data:
+            turn_usage = ACPTokenUsage(
+                prompt_tokens=turn_usage_data.prompt_tokens,
+                completion_tokens=turn_usage_data.completion_tokens,
+                total_tokens=turn_usage_data.total_tokens,
+            )
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        logger.warning("Failed to record prompt for session {}", payload.session_id)
+
     return ACPSessionPromptResponse(
         stop_reason=result.get("stopReason"),
         raw_result=result,
+        usage=turn_usage,
     )
 
 
@@ -804,6 +851,20 @@ async def acp_session_close(
     except ACPResponseError as exc:
         logger.error("ACP session/close failed for user {}: {}", user.id, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    # Mark session as closed in store and emit SSE event
+    try:
+        store = await get_acp_session_store()
+        await store.close_session(payload.session_id)
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        pass
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.admin.admin_events_stream import emit_admin_event
+        await emit_admin_event("acp_session_closed", {
+            "session_id": payload.session_id,
+            "user_id": int(user.id),
+        }, category="acp")
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        pass
     return {"status": "ok"}
 
 
@@ -817,3 +878,125 @@ async def acp_session_updates(
     await _require_session_access(client, session_id=session_id, user_id=int(user.id))
     updates = client.pop_updates(session_id, limit=limit or 100)
     return ACPSessionUpdatesResponse(updates=updates)
+
+
+# -----------------------------------------------------------------------------
+# Session Listing & Detail Endpoints
+# -----------------------------------------------------------------------------
+
+
+@router.get("/sessions", response_model=ACPSessionListResponse)
+async def acp_list_sessions(
+    status_filter: str | None = Query(default=None, alias="status"),
+    agent_type: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(get_request_user),
+) -> ACPSessionListResponse:
+    """List ACP sessions for the authenticated user."""
+    store = await get_acp_session_store()
+    client = await get_runner_client()
+    records, total = await store.list_sessions(
+        user_id=int(user.id),
+        status=status_filter,
+        agent_type=agent_type,
+        limit=limit,
+        offset=offset,
+    )
+    sessions = [
+        ACPSessionInfo(**rec.to_info_dict(
+            has_websocket=client.has_websocket_connections(rec.session_id),
+        ))
+        for rec in records
+    ]
+    return ACPSessionListResponse(sessions=sessions, total=total)
+
+
+@router.get("/sessions/{session_id}/detail", response_model=ACPSessionDetailResponse)
+async def acp_session_detail(
+    session_id: str,
+    user: User = Depends(get_request_user),
+) -> ACPSessionDetailResponse:
+    """Get detailed information about an ACP session."""
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+    store = await get_acp_session_store()
+    rec = await store.get_session(session_id)
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+    return ACPSessionDetailResponse(**rec.to_detail_dict(
+        has_websocket=client.has_websocket_connections(session_id),
+    ))
+
+
+@router.get("/sessions/{session_id}/usage", response_model=ACPSessionUsageResponse)
+async def acp_session_usage(
+    session_id: str,
+    user: User = Depends(get_request_user),
+) -> ACPSessionUsageResponse:
+    """Get token usage for an ACP session."""
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+    store = await get_acp_session_store()
+    rec = await store.get_session(session_id)
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+    return ACPSessionUsageResponse(
+        session_id=rec.session_id,
+        user_id=rec.user_id,
+        agent_type=rec.agent_type,
+        usage=ACPTokenUsage(**rec.usage.to_dict()),
+        message_count=rec.message_count,
+        created_at=rec.created_at,
+        last_activity_at=rec.last_activity_at,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Session Forking
+# -----------------------------------------------------------------------------
+
+
+@router.post("/sessions/{session_id}/fork", response_model=ACPSessionForkResponse)
+async def acp_session_fork(
+    session_id: str,
+    payload: ACPSessionForkRequest,
+    user: User = Depends(get_request_user),
+) -> ACPSessionForkResponse:
+    """Fork an ACP session from a specific message index.
+
+    Creates a new session with message history up to the specified index.
+    The forked session starts fresh with no active runner process — call
+    ``/sessions/new`` with the returned session_id to resume.
+    """
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+
+    store = await get_acp_session_store()
+    source = await store.get_session(session_id)
+    if not source:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+    if payload.message_index >= len(source.messages):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"message_index {payload.message_index} exceeds message count {len(source.messages)}",
+        )
+
+    import uuid as _uuid
+    new_session_id = str(_uuid.uuid4())
+    forked = await store.fork_session(
+        source_session_id=session_id,
+        new_session_id=new_session_id,
+        message_index=payload.message_index,
+        user_id=int(user.id),
+        name=payload.name,
+    )
+    if not forked:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="fork_failed")
+
+    return ACPSessionForkResponse(
+        session_id=forked.session_id,
+        name=forked.name,
+        forked_from=session_id,
+        message_count=forked.message_count,
+    )

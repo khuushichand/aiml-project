@@ -21,7 +21,7 @@ Finding IDs: `2.1` through `2.7`
 **Tests**:
 - Unit tests for token estimate utility and threshold state logic.
 - Component tests for live counter updates and warning rendering.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Template Variable Parsing, Highlighting, and Validation
 **Goal**: Make template variables first-class in the drawer workflow.
@@ -34,7 +34,7 @@ Finding IDs: `2.1` through `2.7`
 - Unit tests for extraction/normalization parity with backend regex behavior.
 - Component tests for highlighting and variable-chip rendering.
 - Form validation tests for missing variable references.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Few-Shot and Version History In-Context Editing
 **Goal**: Remove avoidable context switches to Studio for common edit tasks.
@@ -45,7 +45,7 @@ Finding IDs: `2.1` through `2.7`
 **Tests**:
 - Component tests for few-shot CRUD and reorder state handling.
 - Integration test validating history action availability only for synced prompts.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Draft Isolation, Responsive Drawer, and Unsaved-Change Confirmation
 **Goal**: Prevent accidental data crossover and accidental-close loss.
@@ -58,7 +58,7 @@ Finding IDs: `2.1` through `2.7`
 - Unit tests for draft key construction and retrieval isolation.
 - Responsive component tests for drawer width by breakpoint.
 - Interaction tests for dirty-close confirmation decision paths.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

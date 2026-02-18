@@ -1,0 +1,1079 @@
+import React from "react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { CharactersManager } from "../Manager"
+
+const TEMPLATE_CHOOSER_SEEN_KEY = "characters-template-chooser-seen"
+
+const {
+  useQueryMock,
+  useMutationMock,
+  useQueryClientMock,
+  useNavigateMock,
+  useStorageMock,
+  confirmDangerMock,
+  navigateMock,
+  setSelectedCharacterMock,
+  focusComposerMock,
+  notificationMock,
+  tldwClientMock,
+  templateData
+} = vi.hoisted(() => ({
+  useQueryMock: vi.fn(),
+  useMutationMock: vi.fn(),
+  useQueryClientMock: vi.fn(),
+  useNavigateMock: vi.fn(),
+  useStorageMock: vi.fn(),
+  confirmDangerMock: vi.fn(async () => true),
+  navigateMock: vi.fn(),
+  setSelectedCharacterMock: vi.fn(),
+  focusComposerMock: vi.fn(),
+  notificationMock: {
+    success: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    open: vi.fn(),
+    destroy: vi.fn()
+  },
+  tldwClientMock: {
+    initialize: vi.fn(async () => undefined),
+    listAllCharacters: vi.fn(async () => []),
+    listCharactersPage: vi.fn(async () => ({
+      items: [],
+      total: 0,
+      page: 1,
+      page_size: 25,
+      has_more: false
+    })),
+    listChats: vi.fn(async () => []),
+    createCharacter: vi.fn(async () => ({ id: "char-1" })),
+    updateCharacter: vi.fn(async () => ({})),
+    deleteCharacter: vi.fn(async () => ({})),
+    restoreCharacter: vi.fn(async () => ({})),
+    importCharacterFile: vi.fn(async () => ({ success: true })),
+    exportCharacter: vi.fn(async () => ({})),
+    listChatMessages: vi.fn(async () => []),
+    getChat: vi.fn(async () => null)
+  },
+  templateData: [
+    {
+      id: "writer-coach",
+      name: "Writer Coach",
+      description: "Helps with structure and tone.",
+      system_prompt: "You are a writing coach.",
+      greeting: "Ready to improve your draft?",
+      tags: ["writing", "coach"]
+    },
+    {
+      id: "interviewer",
+      name: "Interview Trainer",
+      description: "Runs realistic interview practice.",
+      system_prompt: "You are an interview coach.",
+      greeting: "Let's practice your interview skills.",
+      tags: ["career"]
+    },
+    {
+      id: "study-buddy",
+      name: "Study Buddy",
+      description: "Explains difficult concepts simply.",
+      system_prompt: "You teach with examples.",
+      greeting: "What are we studying today?",
+      tags: ["education"]
+    }
+  ]
+}))
+
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: useQueryMock,
+  useMutation: useMutationMock,
+  useQueryClient: useQueryClientMock
+}))
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (
+      key: string,
+      fallbackOrOptions?: string | { defaultValue?: string; [k: string]: unknown }
+    ) => {
+      if (typeof fallbackOrOptions === "string") return fallbackOrOptions
+      if (fallbackOrOptions && typeof fallbackOrOptions === "object") {
+        return fallbackOrOptions.defaultValue || key
+      }
+      return key
+    }
+  })
+}))
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>(
+    "react-router-dom"
+  )
+  return {
+    ...actual,
+    useNavigate: useNavigateMock
+  }
+})
+
+vi.mock("@/hooks/useAntdNotification", () => ({
+  useAntdNotification: () => notificationMock
+}))
+
+vi.mock("@/components/Common/confirm-danger", () => ({
+  useConfirmDanger: () => confirmDangerMock
+}))
+
+vi.mock("@/hooks/useCharacterShortcuts", () => ({
+  useCharacterShortcuts: () => undefined
+}))
+
+vi.mock("@/hooks/useCharacterGeneration", () => ({
+  useCharacterGeneration: () => ({
+    isGenerating: false,
+    generatingField: null,
+    error: null,
+    generateFullCharacter: vi.fn(),
+    generateField: vi.fn(),
+    cancel: vi.fn(),
+    clearError: vi.fn()
+  })
+}))
+
+vi.mock("@/hooks/useFormDraft", () => ({
+  useFormDraft: () => ({
+    hasDraft: false,
+    draftData: null,
+    saveDraft: vi.fn(),
+    clearDraft: vi.fn(),
+    applyDraft: vi.fn(() => null),
+    dismissDraft: vi.fn(),
+    lastSaved: null
+  })
+}))
+
+vi.mock("@/hooks/useSelectedCharacter", () => ({
+  useSelectedCharacter: () => [null, setSelectedCharacterMock]
+}))
+
+vi.mock("@/hooks/useComposerFocus", () => ({
+  focusComposer: focusComposerMock
+}))
+
+vi.mock("@/store/option", () => ({
+  useStoreMessageOption: (selector: any) =>
+    selector({
+      setHistory: vi.fn(),
+      setMessages: vi.fn(),
+      setHistoryId: vi.fn(),
+      setServerChatId: vi.fn(),
+      setServerChatState: vi.fn(),
+      setServerChatTopic: vi.fn(),
+      setServerChatClusterId: vi.fn(),
+      setServerChatSource: vi.fn(),
+      setServerChatExternalRef: vi.fn()
+    })
+}))
+
+vi.mock("@plasmohq/storage/hook", () => ({
+  useStorage: (...args: any[]) => useStorageMock(...args)
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: tldwClientMock
+}))
+
+vi.mock("@/services/tldw-server", () => ({
+  fetchChatModels: vi.fn(async () => [])
+}))
+
+vi.mock("@/data/character-templates", () => ({
+  CHARACTER_TEMPLATES: templateData
+}))
+
+vi.mock("../GenerateCharacterPanel", () => ({
+  GenerateCharacterPanel: () => <div data-testid="generate-character-panel" />,
+  GenerationPreviewModal: () => null
+}))
+
+const makeUseQueryResult = (value: Record<string, unknown>) => ({
+  data: undefined,
+  status: "success",
+  error: null,
+  isPending: false,
+  isFetching: false,
+  isLoading: false,
+  refetch: vi.fn(),
+  ...value
+})
+
+describe("CharactersManager first-use onboarding", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    window.localStorage.clear()
+    useNavigateMock.mockReturnValue(navigateMock)
+    confirmDangerMock.mockResolvedValue(true)
+    useStorageMock.mockImplementation(
+      (_key: string, defaultValue: unknown) => [
+        defaultValue ?? null,
+        vi.fn(),
+        { isLoading: false }
+      ]
+    )
+
+    useQueryClientMock.mockReturnValue({
+      invalidateQueries: vi.fn(),
+      setQueryData: vi.fn()
+    })
+
+    useMutationMock.mockReturnValue({
+      mutate: vi.fn(),
+      mutateAsync: vi.fn(),
+      isPending: false
+    })
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+  })
+
+  const selectTagManagerSourceTag = async (
+    user: ReturnType<typeof userEvent.setup>,
+    dialog: HTMLElement,
+    tagLabelWithCount: RegExp
+  ) => {
+    const combobox = within(dialog).getByRole("combobox")
+    fireEvent.mouseDown(combobox)
+    await user.click(await screen.findByText(tagLabelWithCount))
+  }
+
+  const getListCharactersQueryOptions = () => {
+    const call = useQueryMock.mock.calls.find(([opts]) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      return key === "tldw:listCharacters"
+    })
+    expect(call).toBeDefined()
+    return call?.[0] as any
+  }
+
+  it("requests lightweight character list payload by default", async () => {
+    render(<CharactersManager />)
+
+    const listQuery = getListCharactersQueryOptions()
+    expect(listQuery.queryKey[1]).toMatchObject({
+      include_image_base64: false
+    })
+
+    await listQuery.queryFn()
+
+    expect(tldwClientMock.listCharactersPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include_image_base64: false
+      })
+    )
+    expect(tldwClientMock.listAllCharacters).not.toHaveBeenCalled()
+  })
+
+  it("falls back to legacy client-side query path when rollout flag is disabled", async () => {
+    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => {
+      if (key === "ff_characters_server_query") {
+        return [false, vi.fn(), { isLoading: false }]
+      }
+      return [defaultValue ?? null, vi.fn(), { isLoading: false }]
+    })
+    tldwClientMock.listAllCharacters.mockResolvedValueOnce([
+      { id: "2", name: "Zeta", tags: ["alpha"] },
+      { id: "1", name: "Alpha", tags: ["alpha"] }
+    ])
+
+    render(<CharactersManager />)
+
+    const listQuery = getListCharactersQueryOptions()
+    expect(listQuery.queryKey[2]).toBe("legacy")
+
+    const response = await listQuery.queryFn()
+
+    expect(tldwClientMock.listAllCharacters).toHaveBeenCalledWith({
+      pageSize: 250,
+      maxPages: 50
+    })
+    expect(tldwClientMock.listCharactersPage).not.toHaveBeenCalled()
+    expect(response.items.map((item: any) => item.name)).toEqual([
+      "Alpha",
+      "Zeta"
+    ])
+    expect(response.total).toBe(2)
+  })
+
+  it("renders enriched empty state with guidance and import CTA", async () => {
+    const user = userEvent.setup()
+    render(<CharactersManager />)
+
+    expect(screen.getByRole("heading", { name: "No characters yet" })).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Create reusable personas you can chat with. Each character keeps its own conversation history."
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByText("Create a writing coach")).toBeInTheDocument()
+    expect(screen.getByText("Import a SillyTavern card")).toBeInTheDocument()
+    expect(screen.getByText("Build an interview practice persona")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Import character" })).toBeInTheDocument()
+
+    const uploadButton = screen.getByRole("button", { name: "Upload character" })
+    const uploadClickSpy = vi.fn()
+    uploadButton.addEventListener("click", uploadClickSpy)
+
+    await user.click(screen.getByRole("button", { name: "Import character" }))
+
+    expect(uploadClickSpy).toHaveBeenCalled()
+  })
+
+  it("shows template strip in empty state and applies selected template", async () => {
+    const user = userEvent.setup()
+    render(<CharactersManager />)
+
+    expect(screen.getByText("Start from a template")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /Writer Coach/i })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /Interview Trainer/i })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /Study Buddy/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: /Writer Coach/i }))
+
+    await waitFor(() => {
+      expect(notificationMock.info).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Template applied" })
+      )
+    })
+    expect(window.localStorage.getItem(TEMPLATE_CHOOSER_SEEN_KEY)).toBe("true")
+    expect(await screen.findByDisplayValue("Writer Coach")).toBeInTheDocument()
+  })
+
+  it("expands template chooser on first create-modal open and keeps it collapsed once seen", async () => {
+    const user = userEvent.setup()
+    render(<CharactersManager />)
+
+    await user.click(screen.getByRole("button", { name: "New character" }))
+
+    expect(await screen.findByText("Choose a template")).toBeInTheDocument()
+    expect(window.localStorage.getItem(TEMPLATE_CHOOSER_SEEN_KEY)).toBe("true")
+  })
+
+  it("keeps template chooser collapsed when seen flag already exists", async () => {
+    const user = userEvent.setup()
+    window.localStorage.setItem(TEMPLATE_CHOOSER_SEEN_KEY, "true")
+
+    render(<CharactersManager />)
+    await user.click(screen.getByRole("button", { name: "New character" }))
+
+    expect(screen.queryByText("Choose a template")).not.toBeInTheDocument()
+    expect(
+      await screen.findByRole("button", { name: "Start from a template..." })
+    ).toBeInTheDocument()
+  })
+
+  it("shows and applies the system prompt example from the create form", async () => {
+    const user = userEvent.setup()
+    window.localStorage.setItem(TEMPLATE_CHOOSER_SEEN_KEY, "true")
+
+    render(<CharactersManager />)
+    await user.click(screen.getByRole("button", { name: "New character" }))
+
+    await user.click(await screen.findByRole("button", { name: "Show example" }))
+    expect(await screen.findByText("Writing Assistant example")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Use this example" }))
+
+    expect(
+      await screen.findByDisplayValue(/You are a skilled writing assistant/i)
+    ).toBeInTheDocument()
+  }, 30000)
+
+  it("promotes prompt preset and groups advanced fields into named sections in create mode", async () => {
+    const user = userEvent.setup()
+    window.localStorage.setItem(TEMPLATE_CHOOSER_SEEN_KEY, "true")
+
+    render(<CharactersManager />)
+    await user.click(screen.getByRole("button", { name: "New character" }))
+
+    const createSubmitButton = await waitFor(() => {
+      const candidate = screen
+        .getAllByRole("button", { name: "Create character" })
+        .find((button) => button.getAttribute("type") === "submit")
+      expect(candidate).toBeDefined()
+      return candidate as HTMLElement
+    })
+    const createFormElement = createSubmitButton.closest("form")
+    expect(createFormElement).not.toBeNull()
+    const createScope = within(createFormElement as HTMLElement)
+
+    expect(
+      createScope.getByText(
+        /System prompt: full behavioral instructions sent to the model/i
+      )
+    ).toBeInTheDocument()
+    expect(
+      createScope.getByText("Description: brief blurb shown in character lists and cards.")
+    ).toBeInTheDocument()
+    expect(createScope.getByText("Prompt preset")).toBeInTheDocument()
+    expect(createScope.queryByText("Generation temperature")).not.toBeInTheDocument()
+
+    await user.click(createScope.getByRole("button", { name: "Show advanced fields" }))
+
+    expect(createScope.getByRole("button", { name: "Prompt control" })).toBeInTheDocument()
+    expect(createScope.getByRole("button", { name: "Generation settings" })).toBeInTheDocument()
+    expect(createScope.getByRole("button", { name: "Metadata" })).toBeInTheDocument()
+    expect(
+      createScope.getByText(
+        "Personality: adjectives and traits injected into context to shape voice and behavior."
+      )
+    ).toBeInTheDocument()
+    expect(createScope.getByRole("button", { name: "Add alternate greeting" })).toBeInTheDocument()
+
+    await user.click(createScope.getByRole("button", { name: "Generation settings" }))
+    expect(createScope.getByText("Generation temperature")).toBeInTheDocument()
+
+    await user.click(createScope.getByRole("button", { name: "Metadata" }))
+    expect(createScope.getByText("Extensions (JSON)")).toBeInTheDocument()
+    expect(createScope.getByText("Mood images (coming soon)")).toBeInTheDocument()
+  }, 30000)
+
+  it("renders the same advanced section structure in edit mode", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "char-edit-1",
+      name: "Existing Character",
+      system_prompt: "Existing system prompt.",
+      greeting: "Hi",
+      description: "Existing description",
+      tags: ["existing"],
+      version: 1
+    }
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /Edit character/i }))
+
+    const saveButton = await waitFor(() => {
+      const candidate = screen
+        .getAllByRole("button", { name: "Save changes" })
+        .find((button) => button.getAttribute("type") === "submit")
+      expect(candidate).toBeDefined()
+      return candidate as HTMLElement
+    })
+    const editFormElement = saveButton.closest("form")
+    expect(editFormElement).not.toBeNull()
+    const editScope = within(editFormElement as HTMLElement)
+
+    expect(
+      editScope.getByText(
+        /System prompt: full behavioral instructions sent to the model/i
+      )
+    ).toBeInTheDocument()
+    expect(
+      editScope.getByText("Description: brief blurb shown in character lists and cards.")
+    ).toBeInTheDocument()
+    expect(editScope.getByText("Prompt preset")).toBeInTheDocument()
+    await user.click(editScope.getByRole("button", { name: "Show advanced fields" }))
+
+    expect(editScope.getByRole("button", { name: "Prompt control" })).toBeInTheDocument()
+    expect(editScope.getByRole("button", { name: "Generation settings" })).toBeInTheDocument()
+    expect(editScope.getByRole("button", { name: "Metadata" })).toBeInTheDocument()
+    expect(
+      editScope.getByText(
+        "Personality: adjectives and traits injected into context to shape voice and behavior."
+      )
+    ).toBeInTheDocument()
+
+    await user.click(editScope.getByRole("button", { name: "Metadata" }))
+    expect(editScope.getByText("Mood images (coming soon)")).toBeInTheDocument()
+  }, 30000)
+
+  it("persists gallery density preference and applies compact rendering", async () => {
+    const user = userEvent.setup()
+    const galleryRecord = {
+      id: "gallery-1",
+      name: "Gallery Dense",
+      description: "This description should be hidden in compact mode.",
+      tags: ["one", "two", "three"],
+      version: 1
+    }
+
+    window.localStorage.setItem("characters-view-mode", "gallery")
+    window.localStorage.setItem("characters-gallery-density", "compact")
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [galleryRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    expect(await screen.findByText("Gallery Dense")).toBeInTheDocument()
+    expect(
+      screen.queryByText("This description should be hidden in compact mode.")
+    ).not.toBeInTheDocument()
+
+    await user.click(screen.getByText("Rich"))
+
+    expect(
+      await screen.findByText("This description should be hidden in compact mode.")
+    ).toBeInTheDocument()
+    expect(window.localStorage.getItem("characters-gallery-density")).toBe("rich")
+  }, 30000)
+
+  it("applies persisted page size for table pagination", async () => {
+    const records = Array.from({ length: 12 }, (_, index) => ({
+      id: `char-${index + 1}`,
+      name: `Character ${index + 1}`,
+      system_prompt: "Prompt text",
+      version: 1
+    }))
+
+    window.localStorage.setItem("characters-page-size", "25")
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    expect(await screen.findByText("Character 12")).toBeInTheDocument()
+    expect(window.localStorage.getItem("characters-page-size")).toBe("25")
+  }, 30000)
+
+  it("supports has-conversations filter scaffold and clear reset", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "char-a",
+        name: "With Chats",
+        creator: "alice",
+        system_prompt: "Prompt text",
+        version: 1
+      },
+      {
+        id: "char-b",
+        name: "No Chats",
+        creator: "bob",
+        system_prompt: "Prompt text",
+        version: 1
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: { "char-a": 3, "char-b": 0 } })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    expect(await screen.findByText("With Chats")).toBeInTheDocument()
+    expect(screen.getByText("No Chats")).toBeInTheDocument()
+    expect(
+      screen.getByLabelText("Filter characters by creator")
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole("checkbox", { name: "Has conversations" }))
+
+    await waitFor(() => {
+      expect(screen.queryByText("No Chats")).not.toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole("button", { name: "Clear filters" }))
+
+    expect(await screen.findByText("No Chats")).toBeInTheDocument()
+  }, 30000)
+
+  it("renames tags across affected characters from the manage tags modal", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "char-1",
+        name: "Legacy One",
+        tags: ["legacy", "shared"],
+        system_prompt: "Prompt text",
+        version: 1
+      },
+      {
+        id: "char-2",
+        name: "Legacy Two",
+        tags: ["legacy"],
+        system_prompt: "Prompt text",
+        version: 3
+      },
+      {
+        id: "char-3",
+        name: "Shared Only",
+        tags: ["shared"],
+        system_prompt: "Prompt text",
+        version: 2
+      }
+    ]
+
+    tldwClientMock.listCharactersPage.mockResolvedValue({
+      items: records,
+      total: records.length,
+      page: 1,
+      page_size: 100,
+      has_more: false
+    })
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(screen.getByRole("button", { name: "Manage tags" }))
+    const renameDialog = await screen.findByRole("dialog")
+    expect(within(renameDialog).getByText("Manage tags")).toBeInTheDocument()
+
+    await selectTagManagerSourceTag(user, renameDialog, /^legacy \(2\)$/i)
+    fireEvent.change(within(renameDialog).getByPlaceholderText("Destination tag"), {
+      target: { value: "modern" }
+    })
+    await user.click(within(renameDialog).getByRole("button", { name: "Apply" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.updateCharacter).toHaveBeenCalledTimes(2)
+    })
+    expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
+      "char-1",
+      { tags: ["modern", "shared"] },
+      1
+    )
+    expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
+      "char-2",
+      { tags: ["modern"] },
+      3
+    )
+  }, 30000)
+
+  it("merges source tags into destination tags from the manage tags modal", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "char-a",
+        name: "Alpha Beta",
+        tags: ["alpha", "beta", "misc"],
+        system_prompt: "Prompt text",
+        version: 4
+      },
+      {
+        id: "char-b",
+        name: "Alpha Only",
+        tags: ["alpha"],
+        system_prompt: "Prompt text",
+        version: 6
+      },
+      {
+        id: "char-c",
+        name: "Beta Only",
+        tags: ["beta"],
+        system_prompt: "Prompt text",
+        version: 5
+      }
+    ]
+
+    tldwClientMock.listCharactersPage.mockResolvedValue({
+      items: records,
+      total: records.length,
+      page: 1,
+      page_size: 100,
+      has_more: false
+    })
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(screen.getByRole("button", { name: "Manage tags" }))
+    const mergeDialog = await screen.findByRole("dialog")
+    expect(within(mergeDialog).getByText("Manage tags")).toBeInTheDocument()
+
+    await user.click(within(mergeDialog).getByText("Merge"))
+    await selectTagManagerSourceTag(user, mergeDialog, /^alpha \(2\)$/i)
+    fireEvent.change(within(mergeDialog).getByPlaceholderText("Destination tag"), {
+      target: { value: "beta" }
+    })
+    await user.click(within(mergeDialog).getByRole("button", { name: "Apply" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.updateCharacter).toHaveBeenCalledTimes(2)
+    })
+    expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
+      "char-a",
+      { tags: ["beta", "misc"] },
+      4
+    )
+    expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
+      "char-b",
+      { tags: ["beta"] },
+      6
+    )
+  }, 30000)
+
+  it("deletes tags across affected characters from the manage tags modal", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "char-x",
+        name: "Obsolete One",
+        tags: ["obsolete", "active"],
+        system_prompt: "Prompt text",
+        version: 7
+      },
+      {
+        id: "char-y",
+        name: "Obsolete Two",
+        tags: ["obsolete"],
+        system_prompt: "Prompt text",
+        version: 8
+      },
+      {
+        id: "char-z",
+        name: "Active",
+        tags: ["active"],
+        system_prompt: "Prompt text",
+        version: 9
+      }
+    ]
+
+    tldwClientMock.listCharactersPage.mockResolvedValue({
+      items: records,
+      total: records.length,
+      page: 1,
+      page_size: 100,
+      has_more: false
+    })
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(screen.getByRole("button", { name: "Manage tags" }))
+    const deleteDialog = await screen.findByRole("dialog")
+    expect(within(deleteDialog).getByText("Manage tags")).toBeInTheDocument()
+
+    await user.click(within(deleteDialog).getByText("Delete"))
+    await selectTagManagerSourceTag(user, deleteDialog, /^obsolete \(2\)$/i)
+    expect(
+      within(deleteDialog).queryByPlaceholderText("Destination tag")
+    ).not.toBeInTheDocument()
+    await user.click(within(deleteDialog).getByRole("button", { name: "Apply" }))
+
+    await waitFor(() => {
+      expect(confirmDangerMock).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(tldwClientMock.updateCharacter).toHaveBeenCalledTimes(2)
+    })
+    expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
+      "char-x",
+      { tags: ["active"] },
+      7
+    )
+    expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
+      "char-y",
+      { tags: [] },
+      8
+    )
+  }, 30000)
+
+  it("saves alternate greetings in reordered list order", async () => {
+    window.localStorage.setItem(TEMPLATE_CHOOSER_SEEN_KEY, "true")
+
+    useMutationMock.mockImplementation((opts: any) => ({
+      mutate: (variables: any) => opts?.mutationFn?.(variables),
+      mutateAsync: (variables: any) => opts?.mutationFn?.(variables),
+      isPending: false
+    }))
+
+    render(<CharactersManager />)
+    fireEvent.click(screen.getByRole("button", { name: "New character" }))
+    const createSubmitButton = await waitFor(() => {
+      const candidate = screen
+        .getAllByRole("button", { name: "Create character" })
+        .find((button) => button.getAttribute("type") === "submit")
+      expect(candidate).toBeDefined()
+      return candidate as HTMLElement
+    })
+    const createFormElement = createSubmitButton.closest("form")
+    expect(createFormElement).not.toBeNull()
+    const createScope = within(createFormElement as HTMLElement)
+
+    fireEvent.change(createScope.getByPlaceholderText("e.g. Writing coach"), {
+      target: { value: "Tester" }
+    })
+    fireEvent.change(
+      createScope.getByPlaceholderText(
+        "E.g., You are a patient math teacher who explains concepts step by step and checks understanding with short examples."
+      ),
+      {
+        target: { value: "Helpful guide." }
+      }
+    )
+
+    fireEvent.click(createScope.getByRole("button", { name: "Show advanced fields" }))
+    fireEvent.click(createScope.getByRole("button", { name: "Add alternate greeting" }))
+    fireEvent.click(createScope.getByRole("button", { name: "Add alternate greeting" }))
+
+    const greetingInputs = createScope.getAllByPlaceholderText(
+      "Enter an alternate greeting message"
+    )
+    fireEvent.change(greetingInputs[0], { target: { value: "First" } })
+    fireEvent.change(greetingInputs[1], { target: { value: "Second" } })
+
+    const moveUpButtons = createScope.getAllByLabelText("Move greeting up")
+    fireEvent.click(moveUpButtons[1])
+
+    fireEvent.click(createScope.getByRole("button", { name: "Create character" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.createCharacter).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Tester",
+          alternate_greetings: ["Second", "First"]
+        })
+      )
+    })
+  }, 30000)
+
+  it("supports first-run template -> create -> chat handoff", async () => {
+    const user = userEvent.setup()
+    let listCharactersData: any[] = []
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: listCharactersData, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    useMutationMock.mockImplementation((opts: any) => {
+      return {
+        mutate: async (variables: any) => {
+          const result = await opts?.mutationFn?.(variables)
+          if (
+            variables &&
+            typeof variables.name === "string" &&
+            typeof variables.system_prompt === "string"
+          ) {
+            listCharactersData = [
+              {
+                id: result?.id ?? "char-1",
+                name: variables?.name ?? "Writer Coach",
+                description: variables?.description ?? "Helps with structure and tone.",
+                system_prompt: variables?.system_prompt ?? "You are a writing coach.",
+                greeting: variables?.greeting ?? "Ready to improve your draft?",
+                tags: variables?.tags ?? ["writing", "coach"],
+                version: 1
+              }
+            ]
+          }
+          await opts?.onSuccess?.(result, variables, undefined)
+          return result
+        },
+        mutateAsync: async (variables: any) => {
+          const result = await opts?.mutationFn?.(variables)
+          if (
+            variables &&
+            typeof variables.name === "string" &&
+            typeof variables.system_prompt === "string"
+          ) {
+            listCharactersData = [
+              {
+                id: result?.id ?? "char-1",
+                name: variables?.name ?? "Writer Coach",
+                description: variables?.description ?? "Helps with structure and tone.",
+                system_prompt: variables?.system_prompt ?? "You are a writing coach.",
+                greeting: variables?.greeting ?? "Ready to improve your draft?",
+                tags: variables?.tags ?? ["writing", "coach"],
+                version: 1
+              }
+            ]
+          }
+          await opts?.onSuccess?.(result, variables, undefined)
+          return result
+        },
+        isPending: false
+      }
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(screen.getByRole("button", { name: /Writer Coach/i }))
+    expect(await screen.findByDisplayValue("Writer Coach")).toBeInTheDocument()
+
+    const createSubmitButton = await waitFor(() => {
+      const candidate = screen
+        .getAllByRole("button", { name: "Create character" })
+        .find((button) => button.getAttribute("type") === "submit")
+      expect(candidate).toBeDefined()
+      return candidate as HTMLElement
+    })
+    fireEvent.click(createSubmitButton)
+
+    const nameCell = await screen.findByText("Writer Coach")
+    const tableRow = nameCell.closest("tr")
+    expect(tableRow).not.toBeNull()
+    const chatButton = within(tableRow as HTMLElement).getByRole("button", {
+      name: /Chat/i
+    })
+    await user.click(chatButton)
+
+    expect(setSelectedCharacterMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "char-1",
+        name: "Writer Coach",
+        system_prompt: expect.any(String),
+        greeting: expect.any(String)
+      })
+    )
+    expect(navigateMock).toHaveBeenCalledWith("/")
+    expect(focusComposerMock).toHaveBeenCalled()
+  }, 30000)
+
+  it("imports a character file through the upload control", async () => {
+    const user = userEvent.setup()
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const file = new File(
+      [JSON.stringify({ name: "Uploaded Character" })],
+      "uploaded-character.json",
+      { type: "application/json" }
+    )
+    await user.upload(input, file)
+
+    await waitFor(() => {
+      expect(tldwClientMock.importCharacterFile).toHaveBeenCalled()
+    })
+    expect(tldwClientMock.importCharacterFile).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "uploaded-character.json" }),
+      expect.objectContaining({ allowImageOnly: false })
+    )
+  })
+})

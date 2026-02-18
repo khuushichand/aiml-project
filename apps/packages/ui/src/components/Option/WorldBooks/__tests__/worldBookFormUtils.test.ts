@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest"
 import {
+  WORLD_BOOK_STARTER_TEMPLATES,
+  buildDuplicateWorldBookName,
   WORLD_BOOK_FORM_DEFAULTS,
   buildWorldBookFormPayload,
   buildWorldBookMutationErrorMessage,
+  getWorldBookStarterTemplate,
   hasDuplicateWorldBookName,
   toWorldBookFormValues
 } from "../worldBookFormUtils"
@@ -54,5 +57,21 @@ describe("worldBookFormUtils", () => {
     expect(values.scan_depth).toBe(3)
     expect(values.token_budget).toBe(900)
     expect(values.enabled).toBe(true)
+  })
+
+  it("builds a duplicate name with suffix when needed", () => {
+    const worldBooks = [
+      { name: "Arcana" },
+      { name: "Copy of Arcana" },
+      { name: "Copy of Arcana (2)" }
+    ]
+    expect(buildDuplicateWorldBookName("Arcana", worldBooks)).toBe("Copy of Arcana (3)")
+  })
+
+  it("exposes starter template metadata and entries", () => {
+    expect(WORLD_BOOK_STARTER_TEMPLATES.length).toBeGreaterThanOrEqual(2)
+    const template = getWorldBookStarterTemplate("fantasy")
+    expect(template?.label).toBe("Fantasy Setting")
+    expect((template?.entries || []).length).toBeGreaterThan(0)
   })
 })

@@ -64,6 +64,52 @@ const unwrapResponseData = <T>(response: unknown): T | null => {
   return (payload?.data?.data || payload?.data || null) as T | null
 }
 
+const toText = (value: unknown): string => (typeof value === 'string' ? value : '')
+
+const getLocalPromptTextsForConflict = (
+  local: LocalPrompt
+): { systemPrompt: string; userPrompt: string } => {
+  const explicitSystem = toText(local.system_prompt)
+  const explicitUser = toText(local.user_prompt)
+  const contentFallback = toText(local.content)
+
+  return {
+    systemPrompt:
+      explicitSystem || (local.is_system ? contentFallback : ''),
+    userPrompt:
+      explicitUser || (!local.is_system ? contentFallback : '')
+  }
+}
+
+const getServerPromptTextsForConflict = (
+  server: ServerPrompt
+): { systemPrompt: string; userPrompt: string } => ({
+  systemPrompt: toText(server.system_prompt),
+  userPrompt: toText(server.user_prompt)
+})
+
+const promptTextHash = (systemPrompt: string, userPrompt: string): string => {
+  const combined = `${systemPrompt}\u241f${userPrompt}`
+  let hash = 0x811c9dc5
+  for (let i = 0; i < combined.length; i += 1) {
+    hash ^= combined.charCodeAt(i)
+    hash = (hash * 0x01000193) >>> 0
+  }
+  return hash.toString(16).padStart(8, '0')
+}
+
+const hasPromptContentConflict = (
+  local: LocalPrompt,
+  server: ServerPrompt
+): boolean => {
+  const localText = getLocalPromptTextsForConflict(local)
+  const serverText = getServerPromptTextsForConflict(server)
+  return (
+    promptTextHash(localText.systemPrompt, localText.userPrompt) !==
+    promptTextHash(serverText.systemPrompt, serverText.userPrompt)
+  )
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -540,7 +586,7 @@ export async function getSyncStatus(localId: string): Promise<{
     return { status: 'local', hasConflict: false }
   }
 
-  // Check for conflict by comparing timestamps
+  // Check for conflict by comparing timestamps and content fingerprints.
   try {
     const response = await getServerPrompt(local.serverId)
     const serverPrompt = (response as any)?.data?.data || (response as any)?.data
@@ -556,8 +602,10 @@ export async function getSyncStatus(localId: string): Promise<{
     }
 
     const serverUpdatedAt = serverPrompt.updated_at
-    const hasConflict = local.serverUpdatedAt !== serverUpdatedAt &&
-      (local.updatedAt || 0) > (local.lastSyncedAt || 0)
+    const serverVersionChanged = local.serverUpdatedAt !== serverUpdatedAt
+    const localHasUnsyncedChanges = (local.updatedAt || 0) > (local.lastSyncedAt || 0)
+    const contentChanged = hasPromptContentConflict(local, serverPrompt)
+    const hasConflict = serverVersionChanged && localHasUnsyncedChanges && contentChanged
 
     return {
       status: hasConflict ? 'conflict' : local.syncStatus || 'synced',

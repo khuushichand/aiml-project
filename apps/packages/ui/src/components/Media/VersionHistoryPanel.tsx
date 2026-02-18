@@ -22,9 +22,18 @@ interface VersionHistoryPanelProps {
   mediaId: string | number
   onVersionLoad?: (content: string, analysis: string, prompt: string, versionNumber: number) => void
   onRefresh?: () => void
-  onShowDiff?: (leftText: string, rightText: string, leftLabel: string, rightLabel: string) => void
+  onShowDiff?: (
+    leftText: string,
+    rightText: string,
+    leftLabel: string,
+    rightLabel: string,
+    metadataDiff?: VersionMetadataDiffSummary
+  ) => void
   currentVersionNumber?: number
   defaultExpanded?: boolean
+  currentContent?: string
+  currentPrompt?: string
+  currentAnalysis?: string
 }
 
 interface Version {
@@ -37,7 +46,27 @@ interface Version {
   created_at?: string
   updated_at?: string
   timestamp?: string
+  safe_metadata?: Record<string, unknown> | string | null
 }
+
+interface VersionMetadataEntry {
+  key: string
+  label: string
+  value: string
+}
+
+export interface VersionMetadataDiffSummary {
+  left: string[]
+  right: string[]
+  changed: string[]
+}
+
+const VERSION_METADATA_FIELDS: Array<{ key: string; label: string; paths: string[] }> = [
+  { key: 'doi', label: 'DOI', paths: ['doi', 'DOI', 'identifiers.doi', 'citation.doi'] },
+  { key: 'pmid', label: 'PMID', paths: ['pmid', 'PMID', 'identifiers.pmid', 'citation.pmid'] },
+  { key: 'journal', label: 'Journal', paths: ['journal', 'publication', 'citation.journal'] },
+  { key: 'license', label: 'License', paths: ['license', 'rights.license', 'source.license'] }
+]
 
 export function VersionHistoryPanel({
   mediaId,
@@ -45,7 +74,10 @@ export function VersionHistoryPanel({
   onRefresh,
   onShowDiff,
   currentVersionNumber,
-  defaultExpanded = false
+  defaultExpanded = false,
+  currentContent = '',
+  currentPrompt = '',
+  currentAnalysis = ''
 }: VersionHistoryPanelProps) {
   const { t } = useTranslation(['review'])
   const confirmDanger = useConfirmDanger()
@@ -56,6 +88,7 @@ export function VersionHistoryPanel({
   const [selectedIndex, setSelectedIndex] = useState(-1)
   const [onlyWithAnalysis, setOnlyWithAnalysis] = useState(false)
   const [page, setPage] = useState(1)
+  const [savingNewVersion, setSavingNewVersion] = useState(false)
   const selectedIndexRef = useRef(selectedIndex)
   const pageSize = 10
 
@@ -80,6 +113,89 @@ export function VersionHistoryPanel({
       return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     } catch {
       return ts
+    }
+  }
+
+  const parseSafeMetadata = (v: Version): Record<string, unknown> | null => {
+    const raw = v?.safe_metadata
+    if (!raw) return null
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>
+        }
+      } catch {
+        return null
+      }
+      return null
+    }
+    if (typeof raw === 'object' && !Array.isArray(raw)) {
+      return raw as Record<string, unknown>
+    }
+    return null
+  }
+
+  const getMetadataPathValue = (metadata: Record<string, unknown>, path: string): unknown => {
+    const parts = path.split('.')
+    let cursor: unknown = metadata
+    for (const part of parts) {
+      if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)) return undefined
+      cursor = (cursor as Record<string, unknown>)[part]
+    }
+    return cursor
+  }
+
+  const getMetadataFieldValue = (
+    metadata: Record<string, unknown>,
+    paths: string[]
+  ): string | null => {
+    for (const path of paths) {
+      const raw = getMetadataPathValue(metadata, path)
+      if (raw == null) continue
+      if (typeof raw === 'string' && raw.trim().length > 0) return raw.trim()
+      if (typeof raw === 'number' || typeof raw === 'boolean') return String(raw)
+    }
+    return null
+  }
+
+  const getVersionMetadataEntries = (v: Version): VersionMetadataEntry[] => {
+    const metadata = parseSafeMetadata(v)
+    if (!metadata) return []
+    const entries: VersionMetadataEntry[] = []
+
+    for (const field of VERSION_METADATA_FIELDS) {
+      const value = getMetadataFieldValue(metadata, field.paths)
+      if (!value) continue
+      entries.push({ key: field.key, label: field.label, value })
+    }
+
+    return entries
+  }
+
+  const buildMetadataDiffSummary = (
+    leftEntries: VersionMetadataEntry[],
+    rightEntries: VersionMetadataEntry[]
+  ): VersionMetadataDiffSummary => {
+    const leftByKey = new Map(leftEntries.map((entry) => [entry.key, entry]))
+    const rightByKey = new Map(rightEntries.map((entry) => [entry.key, entry]))
+    const allKeys = new Set<string>([...leftByKey.keys(), ...rightByKey.keys()])
+    const changed: string[] = []
+
+    for (const key of allKeys) {
+      const left = leftByKey.get(key)
+      const right = rightByKey.get(key)
+      const leftValue = left?.value || '—'
+      const rightValue = right?.value || '—'
+      if (leftValue !== rightValue) {
+        changed.push(`${left?.label || right?.label || key}: ${leftValue} → ${rightValue}`)
+      }
+    }
+
+    return {
+      left: leftEntries.map((entry) => `${entry.label}: ${entry.value}`),
+      right: rightEntries.map((entry) => `${entry.label}: ${entry.value}`),
+      changed
     }
   }
 
@@ -261,6 +377,99 @@ export function VersionHistoryPanel({
     }
   }
 
+  const resolveSnapshotForNewVersion = useCallback(async () => {
+    let content = String(currentContent || '')
+    let prompt = String(currentPrompt || '')
+    let analysis = String(currentAnalysis || '')
+
+    if (content.trim() && prompt.trim() && analysis.trim()) {
+      return { content, prompt, analysis }
+    }
+
+    try {
+      const listData = await bgRequest<any>({
+        path: `/api/v1/media/${mediaId}/versions?include_content=false&limit=50&page=1` as any,
+        method: 'GET' as any
+      })
+      const arr = Array.isArray(listData) ? listData : (listData?.items || [])
+
+      if (arr.length > 0) {
+        const latest = arr.reduce((best: Version | null, candidate: Version) => {
+          if (!best) return candidate
+          const bestNum = getVersionNumber(best) ?? -Infinity
+          const candidateNum = getVersionNumber(candidate) ?? -Infinity
+          return candidateNum > bestNum ? candidate : best
+        }, null)
+
+        if (latest) {
+          if (!prompt.trim()) {
+            prompt = getVersionPrompt(latest)
+          }
+          if (!analysis.trim()) {
+            analysis = getVersionAnalysis(latest)
+          }
+
+          if (!content.trim()) {
+            const latestNum = getVersionNumber(latest)
+            if (latestNum !== undefined) {
+              const detail = await bgRequest<any>({
+                path: `/api/v1/media/${mediaId}/versions/${latestNum}?include_content=true` as any,
+                method: 'GET' as any
+              })
+              content = String(detail?.content || detail?.raw_content || '')
+              if (!prompt.trim()) {
+                prompt = String(detail?.prompt || '')
+              }
+              if (!analysis.trim()) {
+                analysis = String(detail?.analysis_content || detail?.analysis || '')
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to resolve snapshot for manual version save:', err)
+    }
+
+    return { content, prompt, analysis }
+  }, [currentAnalysis, currentContent, currentPrompt, mediaId])
+
+  const handleSaveAsVersion = useCallback(async () => {
+    if (!mediaId || savingNewVersion) return
+
+    setSavingNewVersion(true)
+    try {
+      const snapshot = await resolveSnapshotForNewVersion()
+      const content = String(snapshot?.content || '')
+      const prompt = String(snapshot?.prompt || '')
+      const analysis = String(snapshot?.analysis || '')
+
+      if (!content.trim()) {
+        message.warning(t('mediaPage.noContent', 'No content available'))
+        return
+      }
+
+      await bgRequest<any>({
+        path: `/api/v1/media/${mediaId}/versions` as any,
+        method: 'POST' as any,
+        headers: { 'Content-Type': 'application/json' },
+        body: {
+          content,
+          prompt,
+          analysis_content: analysis
+        }
+      })
+      message.success(t('mediaPage.versionSaved', 'Saved as new version'))
+      await loadVersions()
+      if (onRefresh) onRefresh()
+    } catch (err) {
+      console.error('Failed to save version:', err)
+      message.error(t('mediaPage.saveFailed', 'Failed to save version'))
+    } finally {
+      setSavingNewVersion(false)
+    }
+  }, [loadVersions, mediaId, onRefresh, resolveSnapshotForNewVersion, savingNewVersion, t])
+
   // Show diff between selected and another version
   const handleShowDiff = (v: Version) => {
     if (!onShowDiff || selectedIndex < 0) return
@@ -271,13 +480,26 @@ export function VersionHistoryPanel({
     const rightNum = getVersionNumber(v)
     const leftText = getVersionAnalysis(selectedV)
     const rightText = getVersionAnalysis(v)
+    const leftMetadataEntries = getVersionMetadataEntries(selectedV)
+    const rightMetadataEntries = getVersionMetadataEntries(v)
+    const metadataDiff = buildMetadataDiffSummary(leftMetadataEntries, rightMetadataEntries)
+    const hasMetadataDiff =
+      metadataDiff.left.length > 0 ||
+      metadataDiff.right.length > 0 ||
+      metadataDiff.changed.length > 0
 
-    onShowDiff(
-      leftText,
-      rightText,
-      `Version ${leftNum}`,
-      `Version ${rightNum}`
-    )
+    if (hasMetadataDiff) {
+      onShowDiff(
+        leftText,
+        rightText,
+        `Version ${leftNum}`,
+        `Version ${rightNum}`,
+        metadataDiff
+      )
+      return
+    }
+
+    onShowDiff(leftText, rightText, `Version ${leftNum}`, `Version ${rightNum}`)
   }
 
   const getVersionMenuItems = (v: Version, idx: number): MenuProps['items'] => [
@@ -370,6 +592,19 @@ export function VersionHistoryPanel({
                 </div>
                 <div className="flex items-center gap-1">
                   <button
+                    onClick={handleSaveAsVersion}
+                    disabled={savingNewVersion}
+                    className="px-2 py-1 text-xs bg-primary/10 text-primaryStrong hover:bg-primary/20 rounded transition-colors inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={t('mediaPage.saveAsVersion', 'Save as New Version')}
+                  >
+                    {savingNewVersion ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : null}
+                    {savingNewVersion
+                      ? t('mediaPage.savingVersion', 'Saving...')
+                      : t('mediaPage.saveVersionShort', 'Save Version')}
+                  </button>
+                  <button
                     onClick={handleCopyAll}
                     className="px-2 py-1 text-xs text-text-muted hover:bg-surface2 rounded transition-colors"
                     title={t('mediaPage.copyAll', 'Copy All')}
@@ -393,6 +628,7 @@ export function VersionHistoryPanel({
                   const vNum = getVersionNumber(v)
                   const analysis = getVersionAnalysis(v)
                   const timestamp = formatTimestamp(getVersionTimestamp(v))
+                  const metadataEntries = getVersionMetadataEntries(v)
                   const isCurrent = vNum === currentVersionNumber
                   const isSelected = globalIdx === selectedIndex
 
@@ -447,6 +683,19 @@ export function VersionHistoryPanel({
                         <div className="mt-1 text-xs text-text-muted line-clamp-2">
                           {analysis.substring(0, 150)}
                           {analysis.length > 150 && '...'}
+                        </div>
+                      )}
+                      {metadataEntries.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {metadataEntries.map((entry) => (
+                            <span
+                              key={entry.key}
+                              className="px-1.5 py-0.5 text-[10px] bg-surface2 border border-border rounded text-text-muted"
+                              title={`${entry.label}: ${entry.value}`}
+                            >
+                              {entry.label}: {entry.value}
+                            </span>
+                          ))}
                         </div>
                       )}
                     </div>

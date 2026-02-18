@@ -4,6 +4,10 @@ import { Plus, Search, FileText, Video, Headphones, Globe, File, Type, PanelLeft
 import { Input, Checkbox, Empty, Button, Tooltip } from "antd"
 import { useWorkspaceStore } from "@/store/workspace"
 import type { WorkspaceSourceType } from "@/types/workspace"
+import {
+  WORKSPACE_SOURCE_DRAG_TYPE,
+  serializeWorkspaceSourceDragPayload
+} from "../drag-source"
 import { AddSourceModal } from "./AddSourceModal"
 
 // Icon mapping for source types
@@ -31,14 +35,22 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
   const sources = useWorkspaceStore((s) => s.sources)
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
   const sourceSearchQuery = useWorkspaceStore((s) => s.sourceSearchQuery)
+  const sourceFocusTarget = useWorkspaceStore((s) => s.sourceFocusTarget)
 
   // Store actions
   const toggleSourceSelection = useWorkspaceStore((s) => s.toggleSourceSelection)
   const selectAllSources = useWorkspaceStore((s) => s.selectAllSources)
   const deselectAllSources = useWorkspaceStore((s) => s.deselectAllSources)
   const setSourceSearchQuery = useWorkspaceStore((s) => s.setSourceSearchQuery)
+  const clearSourceFocusTarget = useWorkspaceStore(
+    (s) => s.clearSourceFocusTarget
+  )
   const openAddSourceModal = useWorkspaceStore((s) => s.openAddSourceModal)
   const removeSource = useWorkspaceStore((s) => s.removeSource)
+  const sourceItemRefs = React.useRef<Record<string, HTMLDivElement | null>>({})
+  const [highlightedSourceId, setHighlightedSourceId] = React.useState<
+    string | null
+  >(null)
 
   // Filter sources based on search query
   const filteredSources = React.useMemo(() => {
@@ -60,6 +72,52 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
       selectAllSources()
     }
   }
+
+  React.useEffect(() => {
+    const targetSourceId = sourceFocusTarget?.sourceId
+    if (!targetSourceId) return
+
+    const sourceExists = sources.some((source) => source.id === targetSourceId)
+    if (!sourceExists) {
+      clearSourceFocusTarget()
+      return
+    }
+
+    const isTargetVisible = filteredSources.some(
+      (source) => source.id === targetSourceId
+    )
+    if (!isTargetVisible && sourceSearchQuery.trim()) {
+      setSourceSearchQuery("")
+    }
+
+    const revealTimer = window.setTimeout(() => {
+      const element = sourceItemRefs.current[targetSourceId]
+      if (element) {
+        element.scrollIntoView({ behavior: "smooth", block: "nearest" })
+      }
+      setHighlightedSourceId(targetSourceId)
+    }, 0)
+
+    const highlightTimer = window.setTimeout(() => {
+      setHighlightedSourceId((current) =>
+        current === targetSourceId ? null : current
+      )
+    }, 1800)
+
+    clearSourceFocusTarget()
+
+    return () => {
+      window.clearTimeout(revealTimer)
+      window.clearTimeout(highlightTimer)
+    }
+  }, [
+    clearSourceFocusTarget,
+    filteredSources,
+    sourceFocusTarget,
+    sourceSearchQuery,
+    sources,
+    setSourceSearchQuery
+  ])
 
   return (
     <div className="flex h-full flex-col">
@@ -108,6 +166,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
               checked={allSelected}
               indeterminate={someSelected}
               onChange={handleSelectAllToggle}
+              className="[@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11"
             >
               <span className="text-text-muted">
                 {selectedSourceIds.length > 0
@@ -173,21 +232,50 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
             {filteredSources.map((source) => {
               const Icon = SOURCE_TYPE_ICONS[source.type] || File
               const isSelected = selectedSourceIds.includes(source.id)
+              const isHighlighted = highlightedSourceId === source.id
 
               return (
                 <div
                   key={source.id}
+                  data-source-id={source.id}
+                  data-source-draggable="true"
+                  data-highlighted={isHighlighted ? "true" : "false"}
+                  ref={(element) => {
+                    sourceItemRefs.current[source.id] = element
+                  }}
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = "copyMove"
+                    event.dataTransfer.setData(
+                      WORKSPACE_SOURCE_DRAG_TYPE,
+                      serializeWorkspaceSourceDragPayload({
+                        sourceId: source.id,
+                        mediaId: source.mediaId,
+                        title: source.title,
+                        type: source.type
+                      })
+                    )
+                    event.dataTransfer.setData("text/plain", source.title)
+                  }}
                   className={`group flex items-start gap-2 rounded-lg p-2 transition-colors ${
                     isSelected
                       ? "bg-primary/10 border border-primary/30"
                       : "hover:bg-surface2 border border-transparent"
-                  }`}
+                  } ${
+                    isHighlighted
+                      ? "ring-2 ring-primary/40 border-primary/40 bg-primary/15"
+                      : ""
+                  } cursor-grab active:cursor-grabbing`}
                 >
-                  <Checkbox
-                    checked={isSelected}
-                    onChange={() => toggleSourceSelection(source.id)}
-                    className="mt-0.5"
-                  />
+                  <div
+                    data-testid={`source-checkbox-hitarea-${source.id}`}
+                    className="mt-0.5 flex items-center justify-center [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11"
+                  >
+                    <Checkbox
+                      checked={isSelected}
+                      onChange={() => toggleSourceSelection(source.id)}
+                    />
+                  </div>
                   <div className="flex min-w-0 flex-1 items-start gap-2">
                     <div
                       className={`flex h-8 w-8 shrink-0 items-center justify-center rounded ${
@@ -208,7 +296,8 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
                   <button
                     type="button"
                     onClick={() => removeSource(source.id)}
-                    className="shrink-0 rounded p-1 text-text-muted opacity-0 transition hover:bg-error/10 hover:text-error group-hover:opacity-100"
+                    data-testid={`remove-source-${source.id}`}
+                    className="shrink-0 rounded p-1 text-text-muted opacity-0 transition hover:bg-error/10 hover:text-error group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11 [@media(hover:none)]:opacity-100"
                     aria-label={t("common:remove", "Remove")}
                   >
                     <svg

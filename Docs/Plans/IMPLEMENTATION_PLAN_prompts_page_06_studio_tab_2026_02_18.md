@@ -20,7 +20,7 @@ Finding IDs: `6.1` through `6.6`
 **Tests**:
 - Component tests for disabled-state explanatory content.
 - Responsive tests for mobile tab selector readability and actionability.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Queue Health Interpretation and Polling Strategy
 **Goal**: Convert raw status numbers into actionable system feedback.
@@ -31,7 +31,7 @@ Finding IDs: `6.1` through `6.6`
 **Tests**:
 - Unit tests for health-summary classification logic.
 - Integration tests for adaptive polling interval transitions.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Execute Playground Provider/Model Selection
 **Goal**: Prevent invalid execution configs and improve default visibility.
@@ -44,7 +44,7 @@ Finding IDs: `6.1` through `6.6`
 - Integration tests for provider/model loading and dependent selection behavior.
 - Form validation tests for unavailable provider/model selections.
 - Snapshot test for default placeholder rendering.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Real-Time Status Path (Longer-Term)
 **Goal**: Define and integrate WebSocket-based progress updates for long jobs.

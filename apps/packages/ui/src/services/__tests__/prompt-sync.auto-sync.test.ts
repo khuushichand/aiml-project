@@ -209,4 +209,289 @@ describe("prompt-sync auto-sync defaults", () => {
       })
     )
   })
+
+  it("returns conflict details with both local and server prompts", async () => {
+    state.prompts.set("local-conflict-info", {
+      id: "local-conflict-info",
+      title: "Local Prompt",
+      name: "Local Prompt",
+      content: "local",
+      user_prompt: "local",
+      createdAt: 1,
+      updatedAt: 10,
+      serverId: 321,
+      syncStatus: "conflict"
+    })
+    mocks.getPrompt.mockResolvedValue({
+      data: {
+        data: {
+          id: 321,
+          project_id: 9,
+          name: "Server Prompt",
+          system_prompt: "server system",
+          user_prompt: "server user",
+          version_number: 2,
+          updated_at: "2026-02-17T10:00:00Z"
+        }
+      }
+    })
+
+    const { getConflictInfo } = await importPromptSync()
+    const info = await getConflictInfo("local-conflict-info")
+
+    expect(info).toEqual(
+      expect.objectContaining({
+        localPrompt: expect.objectContaining({ id: "local-conflict-info" }),
+        serverPrompt: expect.objectContaining({ id: 321 })
+      })
+    )
+  })
+
+  it("resolveConflict keep_local pushes the local version to server", async () => {
+    state.prompts.set("local-keep-local", {
+      id: "local-keep-local",
+      title: "Prompt Local",
+      name: "Prompt Local",
+      content: "local content",
+      system_prompt: "local system",
+      user_prompt: "local user",
+      createdAt: 1,
+      updatedAt: 10,
+      serverId: 77,
+      studioProjectId: 17,
+      syncStatus: "conflict"
+    })
+    mocks.updatePrompt.mockResolvedValue({
+      data: {
+        data: {
+          id: 77,
+          project_id: 17,
+          name: "Prompt Local",
+          system_prompt: "local system",
+          user_prompt: "local user",
+          version_number: 3,
+          updated_at: "2026-02-17T10:05:00Z"
+        }
+      }
+    })
+
+    const { resolveConflict } = await importPromptSync()
+    const result = await resolveConflict("local-keep-local", "keep_local")
+
+    expect(result.success).toBe(true)
+    expect(result.syncStatus).toBe("synced")
+    expect(mocks.updatePrompt).toHaveBeenCalledWith(
+      77,
+      expect.objectContaining({
+        name: "Prompt Local"
+      })
+    )
+    expect(state.prompts.get("local-keep-local")).toEqual(
+      expect.objectContaining({
+        serverId: 77,
+        syncStatus: "synced"
+      })
+    )
+  })
+
+  it("resolveConflict keep_server pulls server version into local", async () => {
+    state.prompts.set("local-keep-server", {
+      id: "local-keep-server",
+      title: "Local stale",
+      name: "Local stale",
+      content: "stale",
+      user_prompt: "stale",
+      createdAt: 1,
+      updatedAt: 11,
+      serverId: 88,
+      syncStatus: "conflict"
+    })
+    mocks.getPrompt.mockResolvedValue({
+      data: {
+        data: {
+          id: 88,
+          project_id: 17,
+          name: "Server fresh",
+          system_prompt: "fresh system",
+          user_prompt: "fresh user",
+          version_number: 4,
+          updated_at: "2026-02-17T10:10:00Z"
+        }
+      }
+    })
+
+    const { resolveConflict } = await importPromptSync()
+    const result = await resolveConflict("local-keep-server", "keep_server")
+
+    expect(result.success).toBe(true)
+    expect(result.syncStatus).toBe("synced")
+    expect(state.prompts.get("local-keep-server")).toEqual(
+      expect.objectContaining({
+        name: "Server fresh",
+        system_prompt: "fresh system",
+        user_prompt: "fresh user",
+        syncStatus: "synced"
+      })
+    )
+  })
+
+  it("resolveConflict keep_both unlinks local and creates a new server prompt", async () => {
+    state.prompts.set("local-keep-both", {
+      id: "local-keep-both",
+      title: "Prompt Keep Both",
+      name: "Prompt Keep Both",
+      content: "keep both content",
+      user_prompt: "keep both user",
+      createdAt: 1,
+      updatedAt: 12,
+      serverId: 99,
+      studioProjectId: 17,
+      syncStatus: "conflict"
+    })
+    mocks.createPrompt.mockResolvedValue({
+      data: {
+        data: {
+          id: 199,
+          project_id: 17,
+          name: "Prompt Keep Both",
+          system_prompt: null,
+          user_prompt: "keep both user",
+          version_number: 1,
+          updated_at: "2026-02-17T10:15:00Z"
+        }
+      }
+    })
+
+    const { resolveConflict } = await importPromptSync()
+    const result = await resolveConflict("local-keep-both", "keep_both")
+
+    expect(result.success).toBe(true)
+    expect(result.syncStatus).toBe("synced")
+    expect(mocks.promptUpdate).toHaveBeenCalledWith(
+      "local-keep-both",
+      expect.objectContaining({
+        serverId: null,
+        syncStatus: "local"
+      })
+    )
+    expect(mocks.createPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id: 17,
+        name: "Prompt Keep Both"
+      })
+    )
+    expect(state.prompts.get("local-keep-both")).toEqual(
+      expect.objectContaining({
+        serverId: 199,
+        syncStatus: "synced"
+      })
+    )
+  })
+
+  it("getSyncStatus does not flag metadata-only server updates as conflicts", async () => {
+    state.prompts.set("status-metadata-only", {
+      id: "status-metadata-only",
+      title: "Prompt",
+      name: "Prompt",
+      content: "same user text",
+      user_prompt: "same user text",
+      is_system: false,
+      createdAt: 1,
+      updatedAt: 50,
+      lastSyncedAt: 10,
+      serverUpdatedAt: "2026-02-17T10:00:00Z",
+      serverId: 701,
+      syncStatus: "pending"
+    })
+    mocks.getPrompt.mockResolvedValue({
+      data: {
+        data: {
+          id: 701,
+          project_id: 17,
+          name: "Prompt",
+          system_prompt: null,
+          user_prompt: "same user text",
+          version_number: 3,
+          updated_at: "2026-02-17T11:00:00Z"
+        }
+      }
+    })
+
+    const { getSyncStatus } = await importPromptSync()
+    const status = await getSyncStatus("status-metadata-only")
+
+    expect(status.hasConflict).toBe(false)
+    expect(status.status).toBe("pending")
+  })
+
+  it("getSyncStatus flags conflict when both timestamp and content differ", async () => {
+    state.prompts.set("status-content-conflict", {
+      id: "status-content-conflict",
+      title: "Prompt",
+      name: "Prompt",
+      content: "local user text",
+      user_prompt: "local user text",
+      is_system: false,
+      createdAt: 1,
+      updatedAt: 60,
+      lastSyncedAt: 10,
+      serverUpdatedAt: "2026-02-17T10:00:00Z",
+      serverId: 702,
+      syncStatus: "pending"
+    })
+    mocks.getPrompt.mockResolvedValue({
+      data: {
+        data: {
+          id: 702,
+          project_id: 17,
+          name: "Prompt",
+          system_prompt: null,
+          user_prompt: "server user text",
+          version_number: 4,
+          updated_at: "2026-02-17T11:05:00Z"
+        }
+      }
+    })
+
+    const { getSyncStatus } = await importPromptSync()
+    const status = await getSyncStatus("status-content-conflict")
+
+    expect(status.hasConflict).toBe(true)
+    expect(status.status).toBe("conflict")
+  })
+
+  it("getSyncStatus supports legacy content-only local prompts", async () => {
+    state.prompts.set("status-legacy-content", {
+      id: "status-legacy-content",
+      title: "Legacy Prompt",
+      name: "Legacy Prompt",
+      content: "legacy system text",
+      is_system: true,
+      createdAt: 1,
+      updatedAt: 70,
+      lastSyncedAt: 10,
+      serverUpdatedAt: "2026-02-17T10:00:00Z",
+      serverId: 703,
+      syncStatus: "pending"
+    })
+    mocks.getPrompt.mockResolvedValue({
+      data: {
+        data: {
+          id: 703,
+          project_id: 17,
+          name: "Legacy Prompt",
+          system_prompt: "legacy system text",
+          user_prompt: null,
+          version_number: 2,
+          updated_at: "2026-02-17T11:10:00Z"
+        }
+      }
+    })
+
+    const { getSyncStatus } = await importPromptSync()
+    const status = await getSyncStatus("status-legacy-content")
+
+    expect(status.hasConflict).toBe(false)
+    expect(status.status).toBe("pending")
+  })
 })

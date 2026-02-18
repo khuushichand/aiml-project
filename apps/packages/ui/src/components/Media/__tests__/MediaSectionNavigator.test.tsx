@@ -180,4 +180,27 @@ describe('MediaSectionNavigator', () => {
     expect(screen.getByText('Leaf 12')).toBeInTheDocument()
     expect(screen.getByText('Root > Long Child > Leaf 12')).toBeInTheDocument()
   })
+
+  it('restores deep selection when selected node changes after initial render', () => {
+    const { rerender } = render(
+      <MediaSectionNavigator
+        nodes={deepBranchNodes}
+        selectedNodeId={null}
+        onSelectNode={vi.fn()}
+      />
+    )
+
+    expect(screen.queryByText('Leaf 12')).not.toBeInTheDocument()
+
+    rerender(
+      <MediaSectionNavigator
+        nodes={deepBranchNodes}
+        selectedNodeId={'leaf-12'}
+        onSelectNode={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText('Leaf 12')).toBeInTheDocument()
+    expect(screen.getByText('Root > Long Child > Leaf 12')).toBeInTheDocument()
+  })
 })

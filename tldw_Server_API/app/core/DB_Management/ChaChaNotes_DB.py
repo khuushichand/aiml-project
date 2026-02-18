@@ -6531,6 +6531,329 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error listing character cards: {e}")
             raise
 
+    def query_character_cards(
+        self,
+        *,
+        query: str | None = None,
+        tags: list[str] | None = None,
+        match_all_tags: bool = False,
+        creator: str | None = None,
+        has_conversations: bool | None = None,
+        created_from: str | None = None,
+        created_to: str | None = None,
+        updated_from: str | None = None,
+        updated_to: str | None = None,
+        sort_by: str = "name",
+        sort_order: str = "asc",
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """
+        Query character cards with server-side filtering, sorting, and pagination.
+
+        Returns:
+            tuple of (items, total_count)
+        """
+        normalized_limit = max(1, int(limit))
+        normalized_offset = max(0, int(offset))
+        normalized_query = (query or "").strip().lower()
+        normalized_creator = (creator or "").strip().lower()
+        normalized_tags = [
+            str(tag).strip().lower() for tag in (tags or []) if str(tag).strip()
+        ]
+        deleted_false = "FALSE" if self.backend_type == BackendType.POSTGRESQL else "0"
+        updated_expr = "COALESCE(cc.last_modified, cc.created_at)"
+        conversation_count_expr = (
+            "SELECT COUNT(1) FROM conversations conv "
+            f"WHERE conv.deleted = {deleted_false} AND conv.character_id = cc.id"
+        )
+        last_used_expr = (
+            "COALESCE(("
+            "SELECT MAX(conv.last_modified) FROM conversations conv "
+            f"WHERE conv.deleted = {deleted_false} AND conv.character_id = cc.id"
+            "), cc.created_at)"
+        )
+
+        filters: list[str] = []
+        params: list[Any] = []
+
+        if normalized_query:
+            like_value = f"%{normalized_query}%"
+            filters.append(
+                "("
+                "LOWER(COALESCE(cc.name, '')) LIKE ? OR "
+                "LOWER(COALESCE(cc.description, '')) LIKE ? OR "
+                "LOWER(COALESCE(cc.personality, '')) LIKE ? OR "
+                "LOWER(COALESCE(cc.scenario, '')) LIKE ? OR "
+                "LOWER(COALESCE(cc.system_prompt, '')) LIKE ?"
+                ")"
+            )
+            params.extend([like_value, like_value, like_value, like_value, like_value])
+
+        if normalized_tags:
+            tag_clauses: list[str] = []
+            for tag in normalized_tags:
+                if self.backend_type == BackendType.SQLITE:
+                    tag_clauses.append(
+                        "("
+                        "(json_valid(cc.tags) AND EXISTS ("
+                        "SELECT 1 FROM json_each(cc.tags) je "
+                        "WHERE LOWER(TRIM(COALESCE(je.value, ''))) = ?"
+                        ")) "
+                        "OR LOWER(COALESCE(cc.tags, '')) LIKE ?"
+                        ")"
+                    )
+                    params.append(tag)
+                    params.append(f'%"{tag}"%')
+                else:
+                    tag_clauses.append("LOWER(COALESCE(cc.tags, '')) LIKE ?")
+                    params.append(f'%"{tag}"%')
+            joiner = " AND " if match_all_tags else " OR "
+            filters.append("(" + joiner.join(tag_clauses) + ")")
+
+        if normalized_creator:
+            filters.append("LOWER(COALESCE(cc.creator, '')) = ?")
+            params.append(normalized_creator)
+
+        if has_conversations is True:
+            filters.append(
+                "EXISTS ("
+                "SELECT 1 FROM conversations conv "
+                f"WHERE conv.deleted = {deleted_false} AND conv.character_id = cc.id"
+                ")"
+            )
+        elif has_conversations is False:
+            filters.append(
+                "NOT EXISTS ("
+                "SELECT 1 FROM conversations conv "
+                f"WHERE conv.deleted = {deleted_false} AND conv.character_id = cc.id"
+                ")"
+            )
+
+        if created_from:
+            filters.append("cc.created_at >= ?")
+            params.append(created_from)
+        if created_to:
+            filters.append("cc.created_at <= ?")
+            params.append(created_to)
+        if updated_from:
+            filters.append(f"{updated_expr} >= ?")
+            params.append(updated_from)
+        if updated_to:
+            filters.append(f"{updated_expr} <= ?")
+            params.append(updated_to)
+
+        sort_key_map: dict[str, str] = {
+            "name": "LOWER(COALESCE(cc.name, ''))",
+            "creator": "LOWER(COALESCE(cc.creator, ''))",
+            "created_at": "cc.created_at",
+            "updated_at": updated_expr,
+            "last_used_at": last_used_expr,
+            "conversation_count": f"({conversation_count_expr})",
+        }
+        normalized_sort_by = sort_by if sort_by in sort_key_map else "name"
+        normalized_sort_order = "DESC" if str(sort_order).lower() == "desc" else "ASC"
+        sort_expr = sort_key_map[normalized_sort_by]
+
+        base_query = f"FROM character_cards cc WHERE cc.deleted = {deleted_false}"
+        if filters:
+            base_query += " AND " + " AND ".join(filters)
+
+        total_query = f"SELECT COUNT(1) AS total {base_query}"
+        data_query = (
+            f"SELECT cc.* {base_query} "
+            f"ORDER BY {sort_expr} {normalized_sort_order}, cc.id {normalized_sort_order} "
+            "LIMIT ? OFFSET ?"
+        )
+
+        try:
+            total_cursor = self.execute_query(total_query, tuple(params))
+            total_row = total_cursor.fetchone()
+            if total_row is None:
+                total = 0
+            elif isinstance(total_row, dict):
+                total = int(total_row.get("total", 0))
+            else:
+                try:
+                    total = int(total_row["total"])  # sqlite Row / adapter row
+                except _CHACHA_NONCRITICAL_EXCEPTIONS:
+                    total = int(total_row[0]) if len(total_row) > 0 else 0
+
+            data_params = list(params)
+            data_params.extend([normalized_limit, normalized_offset])
+            data_cursor = self.execute_query(data_query, tuple(data_params))
+            rows = data_cursor.fetchall()
+            items = [
+                self._deserialize_row_fields(row, self._CHARACTER_CARD_JSON_FIELDS)
+                for row in rows
+                if row
+            ]
+            return items, total
+        except CharactersRAGDBError as e:
+            logger.error(f"Database error querying character cards: {e}")
+            raise
+
+    @staticmethod
+    def _normalize_character_tags_for_operation(tags_value: Any) -> list[str]:
+        """Normalize mixed tag payloads to a deduplicated list preserving order."""
+        if tags_value is None:
+            return []
+
+        raw_tags: list[Any]
+        if isinstance(tags_value, list):
+            raw_tags = tags_value
+        elif isinstance(tags_value, str):
+            stripped = tags_value.strip()
+            if not stripped:
+                return []
+            try:
+                parsed = json.loads(stripped)
+                raw_tags = parsed if isinstance(parsed, list) else [stripped]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raw_tags = [stripped]
+        else:
+            raw_tags = [tags_value]
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for tag in raw_tags:
+            tag_str = str(tag).strip()
+            if not tag_str or tag_str in seen:
+                continue
+            seen.add(tag_str)
+            normalized.append(tag_str)
+        return normalized
+
+    @staticmethod
+    def _apply_character_tag_operation_to_list(
+        tags: list[str],
+        operation: str,
+        source_tag: str,
+        target_tag: str | None,
+    ) -> list[str]:
+        """Apply a rename/merge/delete operation to a normalized tag list."""
+        seen: set[str] = set()
+        next_tags: list[str] = []
+
+        for tag in tags:
+            if operation == "delete" and tag == source_tag:
+                continue
+            candidate = target_tag if operation in {"rename", "merge"} and tag == source_tag else tag
+            candidate = str(candidate or "").strip()
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            next_tags.append(candidate)
+
+        return next_tags
+
+    def manage_character_tags(
+        self,
+        *,
+        operation: str,
+        source_tag: str,
+        target_tag: str | None = None,
+        limit: int = 10_000,
+    ) -> dict[str, Any]:
+        """
+        Apply rename/merge/delete tag operations across character cards.
+
+        Returns:
+            Summary dictionary with matched/updated/failed counts and affected IDs.
+        """
+        normalized_operation = str(operation or "").strip().lower()
+        if normalized_operation not in {"rename", "merge", "delete"}:
+            raise InputError(
+                f"Unsupported tag operation '{operation}'. Expected rename, merge, or delete."
+            )
+
+        normalized_source = str(source_tag or "").strip()
+        normalized_target = str(target_tag or "").strip() if target_tag is not None else None
+
+        if not normalized_source:
+            raise InputError("source_tag is required for tag operations")
+
+        if normalized_operation in {"rename", "merge"} and not normalized_target:
+            raise InputError("target_tag is required for rename and merge operations")
+
+        normalized_limit = max(1, int(limit))
+        all_cards: list[dict[str, Any]] = []
+        offset = 0
+        batch_size = min(500, normalized_limit)
+        while len(all_cards) < normalized_limit:
+            batch = self.list_character_cards(limit=batch_size, offset=offset)
+            if not batch:
+                break
+            all_cards.extend(batch)
+            if len(batch) < batch_size:
+                break
+            offset += len(batch)
+            remaining = normalized_limit - len(all_cards)
+            if remaining <= 0:
+                break
+            batch_size = min(500, remaining)
+
+        matched_count = 0
+        updated_character_ids: list[int] = []
+        failed_character_ids: list[int] = []
+
+        for card in all_cards:
+            card_id_raw = card.get("id")
+            card_version_raw = card.get("version")
+
+            try:
+                card_id = int(card_id_raw)
+                card_version = int(card_version_raw)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Skipping character tag operation for record with invalid id/version: id={}, version={}",
+                    card_id_raw,
+                    card_version_raw,
+                )
+                continue
+
+            existing_tags = self._normalize_character_tags_for_operation(card.get("tags"))
+            if normalized_source not in existing_tags:
+                continue
+
+            matched_count += 1
+            next_tags = self._apply_character_tag_operation_to_list(
+                existing_tags,
+                normalized_operation,
+                normalized_source,
+                normalized_target,
+            )
+
+            if next_tags == existing_tags:
+                continue
+
+            try:
+                self.update_character_card(
+                    card_id,
+                    {"tags": next_tags},
+                    expected_version=card_version,
+                )
+                updated_character_ids.append(card_id)
+            except (ConflictError, InputError, CharactersRAGDBError) as exc:
+                logger.warning(
+                    "Failed to apply '{}' tag operation for character {}: {}",
+                    normalized_operation,
+                    card_id,
+                    exc,
+                )
+                failed_character_ids.append(card_id)
+
+        return {
+            "operation": normalized_operation,
+            "source_tag": normalized_source,
+            "target_tag": normalized_target if normalized_operation != "delete" else None,
+            "matched_count": matched_count,
+            "updated_count": len(updated_character_ids),
+            "failed_count": len(failed_character_ids),
+            "updated_character_ids": updated_character_ids,
+            "failed_character_ids": failed_character_ids,
+        }
+
     def update_character_card(self, character_id: int, card_data: dict[str, Any], expected_version: int) -> bool | None:
         """Update character card with optimistic locking."""
         logger.debug(

@@ -120,6 +120,106 @@ test.describe("Chat Dictionaries Workflow", () => {
     })
   })
 
+  test.describe("Usage Safety", () => {
+    test("should warn before deactivating a dictionary used by active chats", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+
+      dictPage = new DictionariesPage(authedPage)
+      let updateCalled = false
+
+      await authedPage.route("**/api/v1/chat/dictionaries**", async (route) => {
+        const req = route.request()
+        const url = req.url()
+        const method = req.method()
+
+        if (method === "GET" && /\/api\/v1\/chat\/dictionaries(?:\?|$)/.test(url)) {
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              dictionaries: [
+                {
+                  id: 999,
+                  name: `${testPrefix}-in-use`,
+                  description: "Dictionary linked to active chats",
+                  is_active: true,
+                  created_at: "2026-02-18T10:00:00Z",
+                  updated_at: "2026-02-18T12:00:00Z",
+                  version: 1,
+                  entry_count: 2,
+                  regex_entry_count: 1,
+                  used_by_chat_count: 3,
+                  used_by_active_chat_count: 1,
+                  used_by_chat_refs: [
+                    {
+                      chat_id: "chat-e2e-1",
+                      title: "Active Session",
+                      state: "in-progress",
+                      last_modified: "2026-02-18T12:00:00Z"
+                    }
+                  ]
+                }
+              ],
+              total: 1,
+              active_count: 1,
+              inactive_count: 0
+            })
+          })
+          return
+        }
+
+        if (method === "PUT" && /\/api\/v1\/chat\/dictionaries\/999$/.test(url)) {
+          updateCalled = true
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              id: 999,
+              name: `${testPrefix}-in-use`,
+              description: "Dictionary linked to active chats",
+              is_active: false,
+              created_at: "2026-02-18T10:00:00Z",
+              updated_at: "2026-02-18T12:00:00Z",
+              version: 2,
+              entry_count: 2,
+              regex_entry_count: 1,
+              used_by_chat_count: 3,
+              used_by_active_chat_count: 1,
+              used_by_chat_refs: []
+            })
+          })
+          return
+        }
+
+        await route.continue()
+      })
+
+      await dictPage.goto()
+      await dictPage.waitForReady()
+
+      const toggle = authedPage.getByRole("switch", {
+        name: new RegExp(`set dictionary ${testPrefix}-in-use inactive`, "i")
+      })
+      await toggle.click()
+
+      const warningModal = authedPage.getByRole("dialog", {
+        name: /deactivate dictionary\?/i
+      })
+      await expect(warningModal).toBeVisible({ timeout: 10_000 })
+      await expect(warningModal).toContainText("active chat session")
+
+      const cancelButton = warningModal.getByRole("button", { name: /cancel/i })
+      await cancelButton.click()
+
+      expect(updateCalled).toBe(false)
+      await assertNoCriticalErrors(diagnostics)
+    })
+  })
+
   // ═════════════════════════════════════════════════════════════════════
   // 1.3  Manage Entries
   // ═════════════════════════════════════════════════════════════════════

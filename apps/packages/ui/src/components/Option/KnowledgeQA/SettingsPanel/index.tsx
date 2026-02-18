@@ -240,6 +240,9 @@ export function SettingsPanel({ open, onClose, className }: SettingsPanelProps) 
           {/* Settings content */}
           <div className="p-4">
             {expertMode ? <ExpertSettings /> : <BasicSettings />}
+            <p className="mt-4 text-xs text-text-muted">
+              Changes apply to your next search. Previous answers are not affected.
+            </p>
           </div>
         </div>
 
@@ -250,7 +253,7 @@ export function SettingsPanel({ open, onClose, className }: SettingsPanelProps) 
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md hover:bg-muted transition-colors"
           >
             <RotateCcw className="w-4 h-4" />
-            Reset to Defaults
+            Reset to Balanced Defaults
           </button>
           <button
             onClick={onClose}

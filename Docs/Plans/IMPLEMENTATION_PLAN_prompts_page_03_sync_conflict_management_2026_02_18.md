@@ -23,7 +23,7 @@ Finding IDs: `3.1` through `3.6`
 - Integration tests for modal launch from badge and menu entry points.
 - Unit tests for resolution-action mapping and state transitions.
 - Integration test for each resolution path with mocked sync service responses.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Sync Failure Transparency and Offline Context Retention
 **Goal**: Ensure users understand sync state and failures without opening dev tools.
@@ -36,7 +36,7 @@ Finding IDs: `3.1` through `3.6`
 - Component tests for failure toast and pending-count badge behavior.
 - Component tests for offline sync-column rendering and tooltip content.
 - Integration test for inline project creation from empty selector state.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Batch Sync Operations
 **Goal**: Reduce repetitive per-prompt sync actions for large libraries.
@@ -49,7 +49,7 @@ Finding IDs: `3.1` through `3.6`
 - Unit tests for actionable-item selection from status list.
 - Integration tests for batch sync progress and partial failure handling.
 - UI regression test for toolbar visibility rules.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Conflict Detection Hardening
 **Goal**: Reduce false-positive conflicts while preserving true conflict detection.
@@ -60,7 +60,7 @@ Finding IDs: `3.1` through `3.6`
 **Tests**:
 - Unit tests for hash generation and conflict predicate matrix.
 - Integration tests for metadata-only and content-change scenarios.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

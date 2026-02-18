@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { Modal, Button, Select, Input, Spin } from 'antd'
 import { Storage } from '@plasmohq/storage'
 import { useStorage } from '@plasmohq/storage/hook'
@@ -70,6 +70,10 @@ export function AnalysisModal({
   const [showPresets, setShowPresets] = useState(false)
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [analysisPreview, setAnalysisPreview] = useState("")
+  const [cancelledGeneration, setCancelledGeneration] = useState(false)
+  const activeAbortControllerRef = useRef<AbortController | null>(null)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const cancelledByUserRef = useRef(false)
 
   const buildTimeoutMessage = () => {
     const summary = t('common:error.friendlyTimeoutSummary', 'Your chat timed out.')
@@ -90,9 +94,19 @@ export function AnalysisModal({
     const lowered = msg.toLowerCase()
     return (
       lowered.includes("timeout") ||
-      lowered.includes("timed out") ||
-      lowered.includes("abort")
+      lowered.includes("timed out")
     )
+  }
+
+  const isAbortError = (err: unknown) => {
+    if (err instanceof Error && err.name === 'AbortError') return true
+    const msg =
+      err instanceof Error
+        ? err.message
+        : typeof err === 'string'
+          ? err
+          : ''
+    return msg.toLowerCase().includes('abort')
   }
 
   const presets = useMemo(
@@ -114,8 +128,47 @@ export function AnalysisModal({
   useEffect(() => {
     if (!open) {
       setAnalysisPreview("")
+      setCancelledGeneration(false)
     }
   }, [open])
+
+  const clearGenerationTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+  }, [])
+
+  const handleCancelGeneration = useCallback((showMessage = true) => {
+    cancelledByUserRef.current = true
+    try {
+      activeAbortControllerRef.current?.abort()
+    } catch {}
+    clearGenerationTimer()
+    setGenerating(false)
+    setElapsedSeconds(0)
+    setAnalysisPreview('')
+    setCancelledGeneration(true)
+    if (showMessage) {
+      messageApi.info(t('mediaPage.analysisGenerationCancelled', 'Analysis generation cancelled'))
+    }
+  }, [clearGenerationTimer, messageApi, t])
+
+  useEffect(() => {
+    return () => {
+      try {
+        activeAbortControllerRef.current?.abort()
+      } catch {}
+      clearGenerationTimer()
+    }
+  }, [clearGenerationTimer])
+
+  const handleModalClose = useCallback(() => {
+    if (generating) {
+      handleCancelGeneration(false)
+    }
+    onClose()
+  }, [generating, handleCancelGeneration, onClose])
 
   const getAnalysisTimeouts = async () => {
     try {
@@ -216,16 +269,21 @@ export function AnalysisModal({
       )
       return
     }
+    if (generating) return
     const normalizedModel = effectiveModel.replace(/^tldw:/, "").trim()
     const resolvedApiProvider = await resolveApiProviderForModel({
       modelId: effectiveModel
     })
 
+    cancelledByUserRef.current = false
+    setCancelledGeneration(false)
+    const abortController = new AbortController()
+    activeAbortControllerRef.current = abortController
     setGenerating(true)
     setElapsedSeconds(0)
     setAnalysisPreview("")
     const startTime = Date.now()
-    const timer = setInterval(() => {
+    timerRef.current = setInterval(() => {
       setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000))
     }, 1000)
     const extractPersistedAnalysis = (detail: any): string => {
@@ -296,8 +354,12 @@ export function AnalysisModal({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: { ...requestBody, stream: true },
-          streamIdleTimeoutMs
+          streamIdleTimeoutMs,
+          abortSignal: abortController.signal
         })) {
+          if (cancelledByUserRef.current || abortController.signal.aborted) {
+            return
+          }
           const delta = extractStreamDelta(chunk)
           if (delta) {
             streamedText += delta
@@ -313,9 +375,13 @@ export function AnalysisModal({
           setAnalysisPreview(analysisText)
         }
       } catch (err) {
+        if (cancelledByUserRef.current || abortController.signal.aborted || isAbortError(err)) {
+          return
+        }
         streamError = err
       }
 
+      if (cancelledByUserRef.current || abortController.signal.aborted) return
       if (!analysisText) {
         const resp = await bgRequest<any>({
           path: '/api/v1/chat/completions',
@@ -330,6 +396,7 @@ export function AnalysisModal({
       } else if (streamError) {
         console.warn('Analysis stream completed with warnings:', streamError)
       }
+      if (cancelledByUserRef.current || abortController.signal.aborted) return
 
       if (!analysisText) {
         messageApi.error(t('mediaPage.noAnalysisReturned', 'No analysis returned from API'))
@@ -387,6 +454,9 @@ export function AnalysisModal({
         console.error('Save error:', err)
       }
     } catch (err) {
+      if (cancelledByUserRef.current || abortController.signal.aborted || isAbortError(err)) {
+        return
+      }
       if (isTimeoutError(err)) {
         messageApi.error(buildTimeoutMessage())
       } else {
@@ -394,7 +464,10 @@ export function AnalysisModal({
       }
       console.error('Generation error:', err)
     } finally {
-      clearInterval(timer)
+      clearGenerationTimer()
+      if (activeAbortControllerRef.current === abortController) {
+        activeAbortControllerRef.current = null
+      }
       setGenerating(false)
       setElapsedSeconds(0)
     }
@@ -404,15 +477,20 @@ export function AnalysisModal({
     <Modal
       title={t('mediaPage.generateAnalysis', 'Generate Analysis')}
       open={open}
-      onCancel={onClose}
+      onCancel={handleModalClose}
       width={700}
       footer={[
         <Button key="save" onClick={handleSaveAsDefault}>
           {t('mediaPage.saveAsDefault', 'Save as default')}
         </Button>,
-        <Button key="cancel" onClick={onClose}>
+        <Button key="cancel" onClick={handleModalClose}>
           {t('common:cancel', 'Cancel')}
         </Button>,
+        generating ? (
+          <Button key="cancel-generation" danger onClick={() => handleCancelGeneration(true)}>
+            {t('mediaPage.cancelGeneration', 'Cancel generation')}
+          </Button>
+        ) : null,
         <Button
           key="generate"
           type="primary"
@@ -426,9 +504,14 @@ export function AnalysisModal({
         >
           {t('mediaPage.generateAnalysis', 'Generate Analysis')}
         </Button>
-      ]}
+      ].filter(Boolean)}
     >
       <div className="space-y-4">
+        {cancelledGeneration && !generating && (
+          <div className="rounded-md border border-warning/40 bg-warning/10 p-2 text-xs text-warning">
+            {t('mediaPage.analysisGenerationCancelled', 'Analysis generation cancelled')}
+          </div>
+        )}
         {/* M9: Show indeterminate spinner with elapsed time instead of misleading progress bar */}
         {generating && (
           <div className="rounded-md border border-primary bg-surface2 p-3">

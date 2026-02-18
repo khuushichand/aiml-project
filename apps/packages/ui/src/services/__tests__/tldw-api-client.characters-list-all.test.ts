@@ -101,3 +101,67 @@ describe("TldwApiClient listAllCharacters", () => {
     ])
   })
 })
+
+describe("TldwApiClient listCharactersPage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("returns normalized paged response", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      items: [{ id: 1, name: "Alpha" }],
+      total: 42,
+      page: 2,
+      page_size: 25,
+      has_more: true
+    })
+
+    const client = new TldwApiClient()
+    const response = await client.listCharactersPage({
+      page: 2,
+      page_size: 25,
+      query: "alp",
+      sort_by: "name",
+      sort_order: "asc",
+      include_image_base64: false
+    })
+
+    expect(response).toEqual({
+      items: [{ id: 1, name: "Alpha" }],
+      total: 42,
+      page: 2,
+      page_size: 25,
+      has_more: true
+    })
+
+    const request = mocks.bgRequest.mock.calls
+      .map(([call]) => call as { path?: string; method?: string })
+      .find(
+        (call) =>
+          call.method === "GET" &&
+          typeof call.path === "string" &&
+          call.path.includes("/api/v1/characters/query?")
+      )
+    expect(request).toBeDefined()
+    if (!request) return
+    expect(request.method).toBe("GET")
+    expect(request.path).toContain("/api/v1/characters/query?")
+    expect(request.path).toContain("page=2")
+    expect(request.path).toContain("page_size=25")
+    expect(request.path).toContain("query=alp")
+    expect(request.path).toContain("include_image_base64=false")
+  })
+
+  it("supports legacy array responses as a fallback", async () => {
+    mocks.bgRequest.mockResolvedValue([{ id: 10, name: "Legacy" }])
+
+    const client = new TldwApiClient()
+    const response = await client.listCharactersPage({ page: 1, page_size: 10 })
+
+    expect(response.items).toEqual([{ id: 10, name: "Legacy" }])
+    expect(response.total).toBe(1)
+    expect(response.page).toBe(1)
+    expect(response.page_size).toBe(10)
+    expect(response.has_more).toBe(false)
+  })
+})

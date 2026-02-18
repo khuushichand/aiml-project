@@ -191,6 +191,7 @@ class DictionaryEntryResponse(DictionaryEntryBase):
     type: str = Field(..., description="Entry type")
     enabled: bool = Field(..., description="Whether the entry is enabled")
     case_sensitive: bool = Field(..., description="Case-sensitive matching for literal patterns")
+    priority: Optional[int] = Field(None, ge=1, description="Execution priority (1 = first)")
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
 
@@ -215,6 +216,19 @@ class ChatDictionaryUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100, description="New dictionary name")
     description: Optional[str] = Field(None, max_length=500, description="New description")
     is_active: Optional[bool] = Field(None, description="New active status")
+    version: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Expected dictionary version for optimistic locking",
+    )
+
+
+class DictionaryUsageChatRef(BaseModel):
+    """Lightweight chat reference used by dictionary usage summaries."""
+    chat_id: str = Field(..., description="Chat session ID")
+    title: Optional[str] = Field(None, description="Chat title")
+    state: str = Field("in-progress", description="Conversation state")
+    last_modified: Optional[datetime] = Field(None, description="Chat last-modified timestamp")
 
 
 class ChatDictionaryResponse(ChatDictionaryBase):
@@ -224,6 +238,12 @@ class ChatDictionaryResponse(ChatDictionaryBase):
     updated_at: datetime = Field(..., description="Last update timestamp")
     version: int = Field(..., description="Version number for optimistic locking")
     entry_count: Optional[int] = Field(None, description="Number of entries in the dictionary")
+    used_by_chat_count: int = Field(0, description="Number of chat sessions linked to this dictionary")
+    used_by_active_chat_count: int = Field(0, description="Number of active chat sessions linked to this dictionary")
+    used_by_chat_refs: list[DictionaryUsageChatRef] = Field(
+        default_factory=list,
+        description="Small preview of linked chat sessions",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -293,12 +313,46 @@ class BulkEntryOperation(BaseModel):
     operation: str = Field(..., pattern="^(delete|activate|deactivate|group)$", description="Operation to perform")
     group_name: Optional[str] = Field(None, description="Group name (for group operation)")
 
+    @model_validator(mode="after")
+    def validate_group_operation(self) -> "BulkEntryOperation":
+        """Require a non-empty group_name when operation is group."""
+        if self.operation == "group":
+            group_name = (self.group_name or "").strip()
+            if not group_name:
+                raise ValueError("group_name is required when operation is 'group'")
+            self.group_name = group_name
+        return self
+
 
 class BulkOperationResponse(BaseModel):
     """Response schema for bulk operations."""
     success: bool = Field(..., description="Whether the operation succeeded")
     affected_count: int = Field(..., description="Number of entries affected")
     failed_ids: list[int] = Field(default_factory=list, description="IDs that failed to process")
+    message: str = Field(..., description="Operation result message")
+
+
+class DictionaryEntryReorderRequest(BaseModel):
+    """Schema for reordering all entries in a dictionary."""
+    entry_ids: list[int] = Field(
+        ...,
+        min_length=1,
+        description="Full ordered list of dictionary entry IDs",
+    )
+
+    @model_validator(mode="after")
+    def validate_unique_entry_ids(self) -> "DictionaryEntryReorderRequest":
+        if len(set(self.entry_ids)) != len(self.entry_ids):
+            raise ValueError("entry_ids must not contain duplicates")
+        return self
+
+
+class DictionaryEntryReorderResponse(BaseModel):
+    """Response schema for dictionary entry reordering."""
+    success: bool = Field(..., description="Whether reorder completed successfully")
+    dictionary_id: int = Field(..., description="Dictionary ID")
+    affected_count: int = Field(..., description="Number of entries reordered")
+    entry_ids: list[int] = Field(..., description="Persisted ordered list of entry IDs")
     message: str = Field(..., description="Operation result message")
 
 

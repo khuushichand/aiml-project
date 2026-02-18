@@ -117,12 +117,19 @@ export type FlashcardsExportParams = {
 }
 
 // Decks
-export async function listDecks(): Promise<Deck[]> {
-  return await decksClient.list<Deck[]>()
+export async function listDecks(options?: { signal?: AbortSignal }): Promise<Deck[]> {
+  return await decksClient.list<Deck[]>(undefined, {
+    abortSignal: options?.signal
+  })
 }
 
-export async function createDeck(input: { name: string; description?: string | null }): Promise<Deck> {
-  return await decksClient.create<Deck>(input)
+export async function createDeck(
+  input: { name: string; description?: string | null },
+  options?: { signal?: AbortSignal }
+): Promise<Deck> {
+  return await decksClient.create<Deck>(input, {
+    abortSignal: options?.signal
+  })
 }
 
 // Flashcards CRUD
@@ -146,8 +153,13 @@ export async function listFlashcards(params: {
   })
 }
 
-export async function createFlashcard(input: FlashcardCreate): Promise<Flashcard> {
-  return await flashcardsClient.create<Flashcard>(input)
+export async function createFlashcard(
+  input: FlashcardCreate,
+  options?: { signal?: AbortSignal }
+): Promise<Flashcard> {
+  return await flashcardsClient.create<Flashcard>(input, {
+    abortSignal: options?.signal
+  })
 }
 
 export async function getFlashcard(card_uuid: string): Promise<Flashcard> {

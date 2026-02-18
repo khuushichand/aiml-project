@@ -10,6 +10,7 @@ interface SyncStatusBadgeProps {
   serverId?: number | null
   lastSyncedAt?: number | null
   compact?: boolean
+  onClick?: () => void
 }
 
 export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({
@@ -17,9 +18,11 @@ export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({
   sourceSystem = "workspace",
   serverId,
   lastSyncedAt,
-  compact = false
+  compact = false,
+  onClick
 }) => {
   const { t } = useTranslation(["settings", "common"])
+  const isInteractive = typeof onClick === "function"
 
   const formatLastSync = (timestamp: number | null | undefined) => {
     if (!timestamp) return null
@@ -99,9 +102,25 @@ export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({
   if (compact) {
     return (
       <Tooltip title={`${statusConfig.tooltip} | ${sourceConfig.tooltip}`}>
-        <span className="inline-flex items-center gap-1 text-text-muted">
-          {statusConfig.icon}
-        </span>
+        {isInteractive ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              onClick?.()
+            }}
+            className="inline-flex items-center gap-1 rounded p-0.5 text-text-muted hover:text-text focus:outline-none focus:ring-2 focus:ring-primary"
+            aria-label={t("settings:managePrompts.sync.resolveConflict", {
+              defaultValue: "Resolve conflict"
+            })}
+          >
+            {statusConfig.icon}
+          </button>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-text-muted">
+            {statusConfig.icon}
+          </span>
+        )}
       </Tooltip>
     )
   }
@@ -109,13 +128,35 @@ export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({
   return (
     <div className="inline-flex items-center gap-1">
       <Tooltip title={statusConfig.tooltip}>
-        <Tag
-          color={statusConfig.color}
-          className="inline-flex items-center gap-1 text-xs"
-        >
-          {statusConfig.icon}
-          {statusConfig.label}
-        </Tag>
+        {isInteractive ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              onClick?.()
+            }}
+            className="rounded focus:outline-none focus:ring-2 focus:ring-primary"
+            aria-label={t("settings:managePrompts.sync.resolveConflict", {
+              defaultValue: "Resolve conflict"
+            })}
+          >
+            <Tag
+              color={statusConfig.color}
+              className="inline-flex items-center gap-1 text-xs cursor-pointer"
+            >
+              {statusConfig.icon}
+              {statusConfig.label}
+            </Tag>
+          </button>
+        ) : (
+          <Tag
+            color={statusConfig.color}
+            className="inline-flex items-center gap-1 text-xs"
+          >
+            {statusConfig.icon}
+            {statusConfig.label}
+          </Tag>
+        )}
       </Tooltip>
       {serverId && (
         <Tooltip title={`Server ID: ${serverId}`}>

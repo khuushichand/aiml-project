@@ -105,4 +105,26 @@ describe("WorldBookForm", () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
   })
+
+  it("applies a starter template and submits template-adjusted defaults", async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn()
+
+    render(<WorldBookFormHarness onSubmit={onSubmit} />)
+
+    await user.click(screen.getByRole("combobox", { name: "Starter Template (optional)" }))
+    await user.click(await screen.findByText("Fantasy Setting"))
+    await user.click(screen.getByRole("button", { name: "Create" }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        template_key: "fantasy",
+        name: "Fantasy Lore",
+        scan_depth: 4,
+        token_budget: 700,
+        recursive_scanning: true
+      })
+    )
+  })
 })

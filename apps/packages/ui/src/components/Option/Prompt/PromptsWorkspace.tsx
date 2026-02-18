@@ -2,6 +2,7 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 import { PageShell } from "@/components/Common/PageShell"
 import { PromptBody } from "."
+import { PromptPageErrorBoundary } from "./PromptPageErrorBoundary"
 
 export const PromptsWorkspace: React.FC = () => {
   const { t } = useTranslation(["settings", "common"])
@@ -19,7 +20,9 @@ export const PromptsWorkspace: React.FC = () => {
           })}
         </p>
       </div>
-      <PromptBody />
+      <PromptPageErrorBoundary>
+        <PromptBody />
+      </PromptPageErrorBoundary>
     </PageShell>
   )
 }

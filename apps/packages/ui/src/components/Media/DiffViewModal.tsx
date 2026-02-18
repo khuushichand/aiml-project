@@ -9,6 +9,11 @@ interface DiffViewModalProps {
   rightText: string
   leftLabel?: string
   rightLabel?: string
+  metadataDiff?: {
+    left?: string[]
+    right?: string[]
+    changed?: string[]
+  }
 }
 
 type DiffLine = { type: 'same' | 'add' | 'del'; text: string }
@@ -60,7 +65,8 @@ export function DiffViewModal({
   leftText,
   rightText,
   leftLabel = 'Left',
-  rightLabel = 'Right'
+  rightLabel = 'Right',
+  metadataDiff
 }: DiffViewModalProps) {
   const { t } = useTranslation(['review'])
   const [viewMode, setViewMode] = useState<'unified' | 'sideBySide'>('unified')
@@ -109,6 +115,13 @@ export function DiffViewModal({
 
     return { left, right }
   }, [diffLines])
+
+  const hasMetadataDiff = useMemo(() => {
+    const leftCount = metadataDiff?.left?.length || 0
+    const rightCount = metadataDiff?.right?.length || 0
+    const changedCount = metadataDiff?.changed?.length || 0
+    return leftCount > 0 || rightCount > 0 || changedCount > 0
+  }, [metadataDiff])
 
   const getLineClass = (type: string) => {
     switch (type) {
@@ -161,6 +174,49 @@ export function DiffViewModal({
           <Radio.Button value="sideBySide">{t('mediaPage.sideBySide', 'Side by Side')}</Radio.Button>
         </Radio.Group>
       </div>
+
+      {hasMetadataDiff && (
+        <div className="mb-3 rounded-lg border border-border bg-surface2 p-2 text-xs">
+          {(metadataDiff?.changed?.length || 0) > 0 && (
+            <div className="mb-2">
+              <div className="font-medium text-text-muted">
+                {t('mediaPage.metadataChanges', 'Metadata changes')}
+              </div>
+              <ul className="mt-1 list-disc pl-4 text-text">
+                {(metadataDiff?.changed || []).map((entry, idx) => (
+                  <li key={`metadata-change-${idx}`}>{entry}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <div className="font-medium text-text-muted mb-1">{leftLabel}</div>
+              <div className="space-y-0.5 text-text">
+                {(metadataDiff?.left || []).length > 0 ? (
+                  (metadataDiff?.left || []).map((entry, idx) => (
+                    <div key={`metadata-left-${idx}`}>{entry}</div>
+                  ))
+                ) : (
+                  <div className="text-text-subtle">—</div>
+                )}
+              </div>
+            </div>
+            <div>
+              <div className="font-medium text-text-muted mb-1">{rightLabel}</div>
+              <div className="space-y-0.5 text-text">
+                {(metadataDiff?.right || []).length > 0 ? (
+                  (metadataDiff?.right || []).map((entry, idx) => (
+                    <div key={`metadata-right-${idx}`}>{entry}</div>
+                  ))
+                ) : (
+                  <div className="text-text-subtle">—</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div
         ref={contentRef}

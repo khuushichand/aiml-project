@@ -7,37 +7,56 @@ import {
 type UseServerCapabilitiesResult = {
   capabilities: ServerCapabilities | null
   loading: boolean
+  refresh: () => Promise<void>
 }
 
 export const useServerCapabilities = (): UseServerCapabilitiesResult => {
   const [capabilities, setCapabilities] =
     React.useState<ServerCapabilities | null>(null)
   const [loading, setLoading] = React.useState<boolean>(true)
+  const mountedRef = React.useRef(true)
 
   React.useEffect(() => {
-    let cancelled = false
-    ;(async () => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  const fetchCapabilities = React.useCallback(
+    async (forceRefresh: boolean) => {
+      if (mountedRef.current) {
+        setLoading(true)
+      }
+
       try {
-        const caps = await getServerCapabilities()
-        if (!cancelled) {
+        const caps = await getServerCapabilities(
+          forceRefresh ? { forceRefresh: true } : undefined
+        )
+        if (mountedRef.current) {
           setCapabilities(caps)
         }
       } catch {
-        if (!cancelled) {
+        if (mountedRef.current) {
           // Keep null as a safe "unknown/unavailable" state; guardian routes
           // are treated as unavailable once loading has completed.
           setCapabilities(null)
         }
       } finally {
-        if (!cancelled) {
+        if (mountedRef.current) {
           setLoading(false)
         }
       }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
+    },
+    []
+  )
 
-  return { capabilities, loading }
+  React.useEffect(() => {
+    void fetchCapabilities(false)
+  }, [fetchCapabilities])
+
+  const refresh = React.useCallback(async () => {
+    await fetchCapabilities(true)
+  }, [fetchCapabilities])
+
+  return { capabilities, loading, refresh }
 }

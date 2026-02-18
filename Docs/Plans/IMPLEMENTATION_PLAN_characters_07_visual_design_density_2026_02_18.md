@@ -20,7 +20,7 @@ Finding IDs: `C-22` through `C-23`
 - Component tests for description/tag rendering and fallback handling.
 - Visual regression snapshots for grid density at desktop/tablet/mobile widths.
 - Interaction tests confirming click targets remain stable.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Introduce Deterministic Avatar Fallback Styling
 **Goal**: Differentiate avatar-less characters at a glance.
@@ -32,7 +32,7 @@ Finding IDs: `C-22` through `C-23`
 - Unit tests for hash-to-color determinism.
 - Accessibility tests validating text/background contrast ratio.
 - Component tests for fallback rendering when avatar is absent.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Add Density Toggle and Final Visual QA
 **Goal**: Preserve current minimal view while shipping richer default/optional layouts.
@@ -43,7 +43,7 @@ Finding IDs: `C-22` through `C-23`
 **Tests**:
 - Integration tests for density toggle persistence.
 - Visual regression tests for both compact and rich card modes.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

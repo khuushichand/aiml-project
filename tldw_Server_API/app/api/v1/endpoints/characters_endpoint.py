@@ -8,7 +8,7 @@ import pathlib
 import struct
 import zlib
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 #
 # Third-party Libraries
@@ -129,6 +129,9 @@ from tldw_Server_API.app.api.v1.schemas.character_schemas import (
     CharacterExemplarSelectionDebugRequest,
     CharacterExemplarUpdate,
     CharacterImportResponse,
+    CharacterListQueryResponse,
+    CharacterTagOperationRequest,
+    CharacterTagOperationResponse,
     CharacterResponse,
     CharacterUpdate,
     DeletionResponse,
@@ -215,20 +218,32 @@ _EXEMPLAR_SEARCH_HYBRID_LEXICAL_WEIGHT = 0.45
 
 
 # --- Helper Functions (Keep _convert_db_char_to_response_model as is) ---
-def _convert_db_char_to_response_model(char_dict_from_db: dict[str, Any]) -> CharacterResponse:
+def _convert_db_char_to_response_model(
+        char_dict_from_db: dict[str, Any],
+        *,
+        include_image_base64: bool = True
+) -> CharacterResponse:
     response_data = char_dict_from_db.copy()
     if response_data.get('image') and isinstance(response_data['image'], bytes):
-        try:
-            response_data['image_base64'] = base64.b64encode(response_data['image']).decode('utf-8')
-            response_data['image_present'] = True
-        except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
-            logger.error(f"Error encoding image for char {response_data.get('id')}: {e}")
+        if include_image_base64:
+            try:
+                response_data['image_base64'] = base64.b64encode(response_data['image']).decode('utf-8')
+                response_data['image_present'] = True
+            except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+                logger.error(f"Error encoding image for char {response_data.get('id')}: {e}")
+                response_data['image_base64'] = None
+                response_data['image_present'] = False
+        else:
             response_data['image_base64'] = None
-            response_data['image_present'] = False
+            response_data['image_present'] = True
     else:
         response_data['image_base64'] = None
         response_data['image_present'] = bool(
             response_data.get('image') and isinstance(response_data.get('image'), bytes))
+    if response_data.get("updated_at") is None:
+        response_data["updated_at"] = response_data.get("last_modified")
+    if response_data.get("last_modified") is None:
+        response_data["last_modified"] = response_data.get("updated_at")
     response_data.pop('image', None)
     return CharacterResponse.model_validate(response_data)
 
@@ -737,6 +752,70 @@ async def list_all_characters(  # Renamed from list_characters to avoid conflict
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
+@router.get("/query", response_model=CharacterListQueryResponse, summary="Query characters", tags=["characters"])
+async def query_characters(
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+        query: Optional[str] = Query(None, description="Search term across name/description/prompt fields"),
+        tags: list[str] = Query([], description="Filter by tags"),
+        match_all_tags: bool = Query(False, description="Require all tags instead of any tag"),
+        creator: Optional[str] = Query(None, description="Filter by creator"),
+        has_conversations: Optional[bool] = Query(None, description="Filter by conversation existence"),
+        created_from: Optional[str] = Query(None, description="Created-at lower bound (ISO timestamp)"),
+        created_to: Optional[str] = Query(None, description="Created-at upper bound (ISO timestamp)"),
+        updated_from: Optional[str] = Query(None, description="Updated-at lower bound (ISO timestamp)"),
+        updated_to: Optional[str] = Query(None, description="Updated-at upper bound (ISO timestamp)"),
+        sort_by: Literal[
+            "name",
+            "creator",
+            "created_at",
+            "updated_at",
+            "last_used_at",
+            "conversation_count"
+        ] = Query("name"),
+        sort_order: Literal["asc", "desc"] = Query("asc"),
+        include_image_base64: bool = Query(False, description="Include image_base64 payloads in list results")
+):
+    try:
+        offset = (page - 1) * page_size
+        raw_cards, total = db.query_character_cards(
+            query=query,
+            tags=tags,
+            match_all_tags=match_all_tags,
+            creator=creator,
+            has_conversations=has_conversations,
+            created_from=created_from,
+            created_to=created_to,
+            updated_from=updated_from,
+            updated_to=updated_to,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=page_size,
+            offset=offset
+        )
+        items = [
+            _convert_db_char_to_response_model(
+                card,
+                include_image_base64=include_image_base64
+            )
+            for card in raw_cards
+        ]
+        return CharacterListQueryResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            has_more=(offset + len(items)) < total
+        )
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error querying characters: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Unexpected error querying characters: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
+
+
 @router.get("/rate-limit-status", summary="Get rate limit status", tags=["characters"])
 async def get_rate_limit_status(
     current_user: User = Depends(get_request_user)
@@ -862,6 +941,38 @@ async def filter_characters_by_tags(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while filtering characters"
+        ) from e
+
+
+@router.post(
+    "/tags/operations",
+    response_model=CharacterTagOperationResponse,
+    summary="Manage character tags in bulk",
+    tags=["characters"],
+)
+async def manage_character_tags_endpoint(
+    request: CharacterTagOperationRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Apply rename, merge, or delete operations to character tags."""
+    try:
+        result = db.manage_character_tags(
+            operation=request.operation,
+            source_tag=request.source_tag,
+            target_tag=request.target_tag,
+        )
+        return CharacterTagOperationResponse.model_validate(result)
+    except InputError as e:
+        logger.warning(f"Invalid tag operation request: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error applying tag operation: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Unexpected error applying tag operation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while updating character tags",
         ) from e
 
 

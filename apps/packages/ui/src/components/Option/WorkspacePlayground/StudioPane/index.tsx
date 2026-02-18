@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import {
   Headphones,
@@ -9,20 +9,29 @@ import {
   HelpCircle,
   Calendar,
   Presentation,
-  Table,
+  Table as TableIconLucide,
   Loader2,
   CheckCircle,
   XCircle,
   Eye,
   Download,
   RefreshCw,
+  Square,
+  MessageCircle,
+  StickyNote,
+  Pencil,
+  Plus,
+  Save,
+  Search,
+  ZoomIn,
+  ZoomOut,
   Trash2,
   ChevronDown,
   ChevronUp,
   Settings2,
   PanelRightClose
 } from "lucide-react"
-import { Button, Empty, Tooltip, Input, Modal, message, Slider, Select } from "antd"
+import { Button, Empty, Tooltip, Input, Modal, message, Slider, Select, Dropdown, Table as AntTable } from "antd"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useWorkspaceStore } from "@/store/workspace"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
@@ -30,7 +39,9 @@ import { generateQuiz } from "@/services/quizzes"
 import { createFlashcard, createDeck, listDecks } from "@/services/flashcards"
 import { fetchTldwVoiceCatalog, type TldwVoice } from "@/services/tldw/audio-voices"
 import { inferTldwProviderFromModel } from "@/services/tts-provider"
+import { OUTPUT_TYPES } from "@/types/workspace"
 import type { ArtifactType, GeneratedArtifact, AudioTtsProvider } from "@/types/workspace"
+import Mermaid from "@/components/Common/Mermaid"
 import { QuickNotesSection } from "./QuickNotesSection"
 import { getWorkspaceStudioNoSourcesHint } from "../source-location-copy"
 
@@ -44,24 +55,110 @@ const ARTIFACT_TYPE_ICONS: Record<ArtifactType, React.ElementType> = {
   quiz: HelpCircle,
   timeline: Calendar,
   slides: Presentation,
-  data_table: Table
+  data_table: TableIconLucide
 }
 
 // Output type button configuration
 const OUTPUT_BUTTONS: {
   type: ArtifactType
   label: string
+  description: string
   icon: React.ElementType
 }[] = [
-  { type: "audio_overview", label: "Audio Overview", icon: Headphones },
-  { type: "summary", label: "Summary", icon: FileText },
-  { type: "mindmap", label: "Mind Map", icon: GitBranch },
-  { type: "report", label: "Report", icon: FileSpreadsheet },
-  { type: "flashcards", label: "Flashcards", icon: Layers },
-  { type: "quiz", label: "Quiz", icon: HelpCircle },
-  { type: "timeline", label: "Timeline", icon: Calendar },
-  { type: "slides", label: "Slides", icon: Presentation },
-  { type: "data_table", label: "Data Table", icon: Table }
+  {
+    type: "audio_overview",
+    label: "Audio Overview",
+    description:
+      OUTPUT_TYPES.find((config) => config.type === "audio_overview")
+        ?.description || "Generate a spoken summary of your sources",
+    icon: Headphones
+  },
+  {
+    type: "summary",
+    label: "Summary",
+    description:
+      OUTPUT_TYPES.find((config) => config.type === "summary")?.description ||
+      "Create a concise summary of key points",
+    icon: FileText
+  },
+  {
+    type: "mindmap",
+    label: "Mind Map",
+    description:
+      OUTPUT_TYPES.find((config) => config.type === "mindmap")?.description ||
+      "Visualize concepts and relationships",
+    icon: GitBranch
+  },
+  {
+    type: "report",
+    label: "Report",
+    description:
+      OUTPUT_TYPES.find((config) => config.type === "report")?.description ||
+      "Generate a detailed report document",
+    icon: FileSpreadsheet
+  },
+  {
+    type: "flashcards",
+    label: "Flashcards",
+    description:
+      OUTPUT_TYPES.find((config) => config.type === "flashcards")?.description ||
+      "Create study flashcards for review",
+    icon: Layers
+  },
+  {
+    type: "quiz",
+    label: "Quiz",
+    description:
+      OUTPUT_TYPES.find((config) => config.type === "quiz")?.description ||
+      "Generate a quiz to test understanding",
+    icon: HelpCircle
+  },
+  {
+    type: "timeline",
+    label: "Timeline",
+    description:
+      OUTPUT_TYPES.find((config) => config.type === "timeline")?.description ||
+      "Create a chronological timeline",
+    icon: Calendar
+  },
+  {
+    type: "slides",
+    label: "Slides",
+    description:
+      OUTPUT_TYPES.find((config) => config.type === "slides")?.description ||
+      "Generate presentation slides",
+    icon: Presentation
+  },
+  {
+    type: "data_table",
+    label: "Data Table",
+    description:
+      OUTPUT_TYPES.find((config) => config.type === "data_table")
+        ?.description || "Extract structured data into a table",
+    icon: TableIconLucide
+  }
+]
+
+const OUTPUT_GROUPS: Array<{
+  id: string
+  label: string
+  types: ArtifactType[]
+}> = [
+  {
+    id: "study-aids",
+    label: "Study Aids",
+    types: ["quiz", "flashcards"]
+  },
+  {
+    id: "analysis",
+    label: "Analysis",
+    types: ["summary", "report", "timeline", "data_table"]
+  },
+  {
+    id: "creative",
+    label: "Creative",
+    types: ["mindmap", "slides", "audio_overview"]
+  }
 ]
 
 // Status icons for artifacts
@@ -121,6 +218,81 @@ interface StudioPaneProps {
   onHide?: () => void
 }
 
+type RegenerateMode = "replace" | "new_version"
+
+type ArtifactGenerationOptions = {
+  mode?: RegenerateMode
+  targetArtifactId?: string
+}
+
+type FlashcardDraft = {
+  front: string
+  back: string
+}
+
+type QuizQuestionDraft = {
+  question: string
+  options: string[]
+  answer: string
+  explanation?: string
+}
+
+type MarkdownTableData = {
+  headers: string[]
+  rows: string[][]
+}
+
+type ArtifactDiscussDetail = {
+  artifactId: string
+  artifactType: ArtifactType
+  title: string
+  content: string
+}
+
+const WORKSPACE_DISCUSS_EVENT = "workspace-playground:discuss-artifact"
+const VOICE_PREVIEW_TEXT =
+  "This is a quick voice preview from your current audio settings."
+
+const isAbortLikeError = (error: unknown): boolean => {
+  if ((error as { name?: string } | null)?.name === "AbortError") {
+    return true
+  }
+  const message = error instanceof Error ? error.message : String(error ?? "")
+  return /abort|cancel/i.test(message)
+}
+
+export const estimateGenerationSeconds = (
+  type: ArtifactType,
+  sourceCount: number
+): number => {
+  const normalizedSourceCount = Math.max(1, sourceCount)
+  const baseSeconds: Record<ArtifactType, number> = {
+    summary: 8,
+    report: 16,
+    timeline: 12,
+    quiz: 10,
+    flashcards: 10,
+    mindmap: 12,
+    audio_overview: 24,
+    slides: 20,
+    data_table: 14
+  }
+  const perSourceSeconds: Record<ArtifactType, number> = {
+    summary: 2,
+    report: 4,
+    timeline: 3,
+    quiz: 2,
+    flashcards: 2,
+    mindmap: 3,
+    audio_overview: 5,
+    slides: 4,
+    data_table: 3
+  }
+  return Math.round(
+    baseSeconds[type] + perSourceSeconds[type] * (normalizedSourceCount - 1)
+  )
+}
+
 /**
  * StudioPane - Right pane for generating outputs
  */
@@ -137,6 +309,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const generatingOutputType = useWorkspaceStore((s) => s.generatingOutputType)
   const workspaceTag = useWorkspaceStore((s) => s.workspaceTag)
   const audioSettings = useWorkspaceStore((s) => s.audioSettings)
+  const noteFocusTarget = useWorkspaceStore((s) => s.noteFocusTarget)
 
   // Store actions
   const addArtifact = useWorkspaceStore((s) => s.addArtifact)
@@ -144,16 +317,26 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const removeArtifact = useWorkspaceStore((s) => s.removeArtifact)
   const setIsGeneratingOutput = useWorkspaceStore((s) => s.setIsGeneratingOutput)
   const setAudioSettings = useWorkspaceStore((s) => s.setAudioSettings)
+  const captureToCurrentNote = useWorkspaceStore((s) => s.captureToCurrentNote)
 
   // Local state for TTS settings panel
   const [showTtsSettings, setShowTtsSettings] = useState(false)
   const [tldwVoices, setTldwVoices] = useState<TldwVoice[]>([])
   const [loadingVoices, setLoadingVoices] = useState(false)
+  const [previewingVoice, setPreviewingVoice] = useState(false)
+  const [availableDecks, setAvailableDecks] = useState<Array<{ id: number; name: string }>>([])
+  const [loadingDecks, setLoadingDecks] = useState(false)
+  const [selectedFlashcardDeck, setSelectedFlashcardDeck] = useState<"auto" | number>("auto")
+  const [activeOutputType, setActiveOutputType] = useState<ArtifactType | null>(
+    null
+  )
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null)
 
   // Local state for collapsible sections
   const [studioExpanded, setStudioExpanded] = useState(true)
   const [outputsExpanded, setOutputsExpanded] = useState(true)
   const [notesExpanded, setNotesExpanded] = useState(true)
+  const generationAbortRef = useRef<AbortController | null>(null)
 
   const inferredTldwProviderKey = inferTldwProviderFromModel(audioSettings.model)
 
@@ -176,7 +359,78 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       .finally(() => setLoadingVoices(false))
   }, [audioSettings.provider, inferredTldwProviderKey])
 
+  const loadFlashcardDecks = async (signal?: AbortSignal) => {
+    setLoadingDecks(true)
+    try {
+      const decks = await listDecks({ signal })
+      const normalizedDecks = decks.map((deck) => ({
+        id: deck.id,
+        name: deck.name || `Deck ${deck.id}`
+      }))
+      setAvailableDecks(normalizedDecks)
+      if (
+        selectedFlashcardDeck !== "auto" &&
+        !normalizedDecks.some((deck) => deck.id === selectedFlashcardDeck)
+      ) {
+        setSelectedFlashcardDeck("auto")
+      }
+    } catch (error) {
+      if (!isAbortLikeError(error)) {
+        setAvailableDecks([])
+      }
+    } finally {
+      setLoadingDecks(false)
+    }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void loadFlashcardDecks(controller.signal)
+    return () => {
+      controller.abort()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const hasSelectedSources = selectedSourceIds.length > 0
+  const selectedMediaCount = Math.max(
+    getSelectedMediaIds().length,
+    selectedSourceIds.length
+  )
+  const contextualAudioSettingsVisible =
+    activeOutputType === "audio_overview" ||
+    generatingOutputType === "audio_overview"
+  const showAudioSettingsPanel = showTtsSettings || contextualAudioSettingsVisible
+  const studioControlSize = isMobile ? "large" : "small"
+  const mobileSliderClassName = isMobile
+    ? "[&_.ant-slider-rail]:!h-2 [&_.ant-slider-track]:!h-2 [&_.ant-slider-handle]:!h-5 [&_.ant-slider-handle]:!w-5"
+    : undefined
+  const etaSeconds =
+    isGeneratingOutput && generatingOutputType
+      ? estimateGenerationSeconds(
+          generatingOutputType,
+          Math.max(1, selectedMediaCount)
+        )
+      : null
+
+  useEffect(() => {
+    return () => {
+      generationAbortRef.current?.abort()
+      generationAbortRef.current = null
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause()
+        previewAudioRef.current.src = ""
+        previewAudioRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!noteFocusTarget) return
+    if (!notesExpanded) {
+      setNotesExpanded(true)
+    }
+  }, [noteFocusTarget, notesExpanded])
 
   // Get voice options based on provider
   const getVoiceOptions = () => {
@@ -212,23 +466,197 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     return []
   }
 
-  const handleGenerateOutput = async (type: ArtifactType) => {
+  const handleCancelGeneration = () => {
+    const activeAbort = generationAbortRef.current
+    if (!activeAbort) return
+    activeAbort.abort()
+  }
+
+  const handleDeleteArtifact = (artifact: GeneratedArtifact) => {
+    Modal.confirm({
+      title: t("playground:studio.deleteOutputTitle", "Delete output?"),
+      content: t(
+        "playground:studio.deleteOutputDescription",
+        "This generated output will be permanently removed."
+      ),
+      okText: t("common:delete", "Delete"),
+      cancelText: t("common:cancel", "Cancel"),
+      okButtonProps: { danger: true },
+      onOk: () => removeArtifact(artifact.id)
+    })
+  }
+
+  const handlePreviewVoice = async () => {
+    if (audioSettings.provider === "browser") {
+      if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+        messageApi.error(
+          t(
+            "playground:studio.voicePreviewUnavailable",
+            "Voice preview is unavailable in this browser."
+          )
+        )
+        return
+      }
+      window.speechSynthesis.cancel()
+      const utterance = new SpeechSynthesisUtterance(VOICE_PREVIEW_TEXT)
+      utterance.rate = audioSettings.speed
+      window.speechSynthesis.speak(utterance)
+      return
+    }
+
+    setPreviewingVoice(true)
+    try {
+      const audioBuffer = await tldwClient.synthesizeSpeech(VOICE_PREVIEW_TEXT, {
+        model: audioSettings.model,
+        voice: audioSettings.voice,
+        responseFormat: "mp3",
+        speed: audioSettings.speed
+      })
+      const audioBlob = new Blob([audioBuffer], { type: "audio/mpeg" })
+      const audioUrl = URL.createObjectURL(audioBlob)
+
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause()
+      }
+      const previewAudio = new Audio(audioUrl)
+      previewAudioRef.current = previewAudio
+      previewAudio.onended = () => {
+        URL.revokeObjectURL(audioUrl)
+        if (previewAudioRef.current === previewAudio) {
+          previewAudioRef.current = null
+        }
+      }
+      void previewAudio.play()
+    } catch (error) {
+      if (!isAbortLikeError(error)) {
+        messageApi.error(
+          t(
+            "playground:studio.voicePreviewFailed",
+            "Unable to preview this voice right now."
+          )
+        )
+      }
+    } finally {
+      setPreviewingVoice(false)
+    }
+  }
+
+  const handleDiscussArtifact = (artifact: GeneratedArtifact) => {
+    if (typeof window === "undefined") return
+    const content = (artifact.content || "").trim()
+    if (!content) {
+      messageApi.warning(
+        t(
+          "playground:studio.discussNoContent",
+          "This output has no text content to discuss yet."
+        )
+      )
+      return
+    }
+    const detail: ArtifactDiscussDetail = {
+      artifactId: artifact.id,
+      artifactType: artifact.type,
+      title: artifact.title,
+      content
+    }
+    window.dispatchEvent(
+      new CustomEvent<ArtifactDiscussDetail>(WORKSPACE_DISCUSS_EVENT, { detail })
+    )
+    messageApi.success(
+      t(
+        "playground:studio.discussSent",
+        "Sent to chat. Ask a follow-up in the chat pane."
+      )
+    )
+  }
+
+  const handleSaveArtifactToNotes = (
+    artifact: GeneratedArtifact,
+    mode: "append" | "replace" = "append"
+  ) => {
+    const content = (artifact.content || "").trim()
+    if (!content) {
+      messageApi.warning(
+        t(
+          "playground:studio.notesCaptureNoContent",
+          "This output has no text content to save."
+        )
+      )
+      return
+    }
+    captureToCurrentNote({
+      title: artifact.title,
+      content,
+      mode
+    })
+    messageApi.success(
+      mode === "replace"
+        ? t(
+            "playground:studio.notesCaptureReplaced",
+            "Output replaced the current note draft."
+          )
+        : t(
+            "playground:studio.notesCaptureAppended",
+            "Output added to your current note draft."
+          )
+    )
+  }
+
+  const handleGenerateOutput = async (
+    type: ArtifactType,
+    options: ArtifactGenerationOptions = {}
+  ) => {
     if (!hasSelectedSources) return
 
     const mediaIds = getSelectedMediaIds()
     if (mediaIds.length === 0) return
 
+    const activeAbort = new AbortController()
+    generationAbortRef.current = activeAbort
+
     // Start generation
     setIsGeneratingOutput(true, type)
 
-    // Create artifact placeholder
-    const artifact = addArtifact({
-      type,
-      title: `${OUTPUT_BUTTONS.find((b) => b.type === type)?.label || type}`,
-      status: "generating"
-    })
+    let artifact: GeneratedArtifact | null = null
 
     try {
+      const artifactLabel = OUTPUT_BUTTONS.find((b) => b.type === type)?.label || type
+      const shouldReplaceExisting =
+        options.mode === "replace" && Boolean(options.targetArtifactId)
+
+      if (shouldReplaceExisting) {
+        const existingArtifact = generatedArtifacts.find(
+          (entry) => entry.id === options.targetArtifactId
+        )
+        if (existingArtifact) {
+          updateArtifactStatus(existingArtifact.id, "generating", {
+            createdAt: new Date(),
+            completedAt: undefined,
+            serverId: undefined,
+            content: undefined,
+            audioUrl: undefined,
+            audioFormat: undefined,
+            presentationId: undefined,
+            presentationVersion: undefined,
+            data: undefined,
+            errorMessage: undefined
+          })
+          artifact = existingArtifact
+        } else {
+          artifact = addArtifact({
+            type,
+            title: `${artifactLabel}`,
+            status: "generating"
+          })
+        }
+      } else {
+        artifact = addArtifact({
+          type,
+          title: `${artifactLabel}`,
+          status: "generating"
+        })
+      }
+
       let result: {
         serverId?: number | string
         content?: string
@@ -236,48 +664,79 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         audioFormat?: string
         presentationId?: string
         presentationVersion?: number
+        data?: Record<string, unknown>
       } = {}
 
       switch (type) {
         case "summary":
-          result = await generateSummary(mediaIds, workspaceTag)
+          result = await generateSummary(
+            mediaIds,
+            workspaceTag,
+            activeAbort.signal
+          )
           break
         case "report":
-          result = await generateReport(mediaIds, workspaceTag)
+          result = await generateReport(mediaIds, workspaceTag, activeAbort.signal)
           break
         case "timeline":
-          result = await generateTimeline(mediaIds, workspaceTag)
+          result = await generateTimeline(
+            mediaIds,
+            workspaceTag,
+            activeAbort.signal
+          )
           break
         case "quiz":
-          result = await generateQuizFromMedia(mediaIds[0], workspaceTag)
+          result = await generateQuizFromMedia(
+            mediaIds,
+            workspaceTag,
+            activeAbort.signal
+          )
           break
         case "flashcards":
-          result = await generateFlashcards(mediaIds[0], workspaceTag)
+          result = await generateFlashcards(
+            mediaIds,
+            selectedFlashcardDeck === "auto" ? undefined : selectedFlashcardDeck,
+            workspaceTag,
+            activeAbort.signal
+          )
           break
         case "mindmap":
-          result = await generateMindMap(mediaIds)
+          result = await generateMindMap(mediaIds, activeAbort.signal)
           break
         case "audio_overview":
-          result = await generateAudioOverview(mediaIds, audioSettings)
+          result = await generateAudioOverview(
+            mediaIds,
+            audioSettings,
+            activeAbort.signal
+          )
           break
         case "slides":
-          result = await generateSlidesFromApi(mediaIds[0])
+          result = await generateSlidesFromApi(mediaIds[0], activeAbort.signal)
           break
         case "data_table":
-          result = await generateDataTable(mediaIds, workspaceTag)
+          result = await generateDataTable(
+            mediaIds,
+            workspaceTag,
+            activeAbort.signal
+          )
           break
         default:
           throw new Error(`Unsupported output type: ${type}`)
       }
 
       // Update artifact with success
+      if (!artifact) {
+        throw new Error("Artifact placeholder was not created")
+      }
+
       updateArtifactStatus(artifact.id, "completed", {
         serverId: result.serverId,
         content: result.content,
         audioUrl: result.audioUrl,
         audioFormat: result.audioFormat,
         presentationId: result.presentationId,
-        presentationVersion: result.presentationVersion
+        presentationVersion: result.presentationVersion,
+        data: result.data
       })
 
       messageApi.success(
@@ -286,18 +745,61 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         })
       )
     } catch (error) {
-      updateArtifactStatus(artifact.id, "failed", {
-        errorMessage:
-          error instanceof Error ? error.message : "Generation failed"
-      })
-
-      messageApi.error(
-        t("playground:studio.generateError", "Failed to generate {{type}}", {
-          type: OUTPUT_BUTTONS.find((b) => b.type === type)?.label || type
+      const generationWasAborted = isAbortLikeError(error)
+      if (artifact) {
+        updateArtifactStatus(artifact.id, "failed", {
+          errorMessage: generationWasAborted
+            ? t(
+                "playground:studio.generateCancelled",
+                "Generation canceled before completion."
+              )
+            : error instanceof Error
+              ? error.message
+              : "Generation failed"
         })
-      )
+      }
+
+      if (generationWasAborted) {
+        messageApi.info(
+          t("playground:studio.generateCancelledToast", "Generation canceled")
+        )
+      } else {
+        messageApi.error(
+          t("playground:studio.generateError", "Failed to generate {{type}}", {
+            type: OUTPUT_BUTTONS.find((b) => b.type === type)?.label || type
+          })
+        )
+      }
     } finally {
+      if (generationAbortRef.current === activeAbort) {
+        generationAbortRef.current = null
+      }
       setIsGeneratingOutput(false)
+    }
+  }
+
+  const getResponsiveArtifactModalProps = (
+    desktopWidth: number
+  ): {
+    width: number | string
+    style?: React.CSSProperties
+    styles?: {
+      body?: React.CSSProperties
+    }
+  } => {
+    if (!isMobile) {
+      return { width: desktopWidth }
+    }
+
+    return {
+      width: "100%",
+      style: { top: 0, paddingBottom: 0 },
+      styles: {
+        body: {
+          maxHeight: "calc(100dvh - 96px)",
+          overflowY: "auto"
+        }
+      }
     }
   }
 
@@ -327,9 +829,104 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             )}
           </div>
         ),
-        width: 500
+        ...getResponsiveArtifactModalProps(500)
       })
-    } else if (artifact.content) {
+      return
+    }
+
+    if (artifact.type === "mindmap" && artifact.content) {
+      Modal.info({
+        title: artifact.title,
+        content: (
+          <MindMapArtifactViewer title={artifact.title} content={artifact.content} />
+        ),
+        ...getResponsiveArtifactModalProps(960),
+        footer: null,
+        icon: null
+      })
+      return
+    }
+
+    if (artifact.type === "data_table" && artifact.content) {
+      Modal.info({
+        title: artifact.title,
+        content: (
+          <DataTableArtifactViewer title={artifact.title} content={artifact.content} />
+        ),
+        ...getResponsiveArtifactModalProps(980),
+        footer: null,
+        icon: null
+      })
+      return
+    }
+
+    if (artifact.type === "flashcards") {
+      const initialCards = getArtifactFlashcards(artifact)
+      const modal = Modal.info({
+        title: artifact.title,
+        content: (
+          <FlashcardArtifactEditor
+            cards={initialCards}
+            onSave={(cards) => {
+              const nextContent = formatFlashcardsContent(cards)
+              updateArtifactStatus(artifact.id, artifact.status, {
+                content: nextContent,
+                data: {
+                  ...(artifact.data || {}),
+                  flashcards: cards
+                }
+              })
+              messageApi.success(
+                t(
+                  "playground:studio.flashcardsSaved",
+                  "Flashcards updated"
+                )
+              )
+              modal.destroy()
+            }}
+          />
+        ),
+        ...getResponsiveArtifactModalProps(820),
+        footer: null,
+        icon: null
+      })
+      return
+    }
+
+    if (artifact.type === "quiz") {
+      const initialQuestions = getArtifactQuizQuestions(artifact)
+      const modal = Modal.info({
+        title: artifact.title,
+        content: (
+          <QuizArtifactEditor
+            questions={initialQuestions}
+            onSave={(questions) => {
+              const nextContent = formatQuizQuestionsContent(
+                questions,
+                artifact.title
+              )
+              updateArtifactStatus(artifact.id, artifact.status, {
+                content: nextContent,
+                data: {
+                  ...(artifact.data || {}),
+                  questions
+                }
+              })
+              messageApi.success(
+                t("playground:studio.quizSaved", "Quiz updated")
+              )
+              modal.destroy()
+            }}
+          />
+        ),
+        ...getResponsiveArtifactModalProps(860),
+        footer: null,
+        icon: null
+      })
+      return
+    }
+
+    if (artifact.content) {
       Modal.info({
         title: artifact.title,
         content: (
@@ -337,7 +934,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             {artifact.content}
           </div>
         ),
-        width: 600
+        ...getResponsiveArtifactModalProps(600)
       })
     }
   }
@@ -475,44 +1072,91 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         </button>
         {studioExpanded && (
           <div className="px-4 pb-4">
-        <div className="grid grid-cols-2 gap-3">
-          {OUTPUT_BUTTONS.map(({ type, label, icon: Icon }) => {
-            const isGenerating =
-              isGeneratingOutput && generatingOutputType === type
-            const isDisabled = !hasSelectedSources || isGeneratingOutput
-
-            return (
-              <Tooltip
-                key={type}
-                title={
-                  !hasSelectedSources
-                    ? t(
-                        "playground:studio.selectSourcesFirst",
-                        "Select sources first"
-                      )
-                    : label
+        {isGeneratingOutput && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-text-muted">
+              {t(
+                "playground:studio.generatingWithEta",
+                "Generating {{type}}... (~{{seconds}}s for {{count}} source{{suffix}})",
+                {
+                  type:
+                    OUTPUT_BUTTONS.find(
+                      (button) => button.type === generatingOutputType
+                    )?.label || generatingOutputType || "output",
+                  seconds: etaSeconds ?? 15,
+                  count: Math.max(1, selectedMediaCount),
+                  suffix: Math.max(1, selectedMediaCount) === 1 ? "" : "s"
                 }
-              >
-                <button
-                  type="button"
-                  disabled={isDisabled}
-                  onClick={() => handleGenerateOutput(type)}
-                  className={`flex flex-col items-center justify-center rounded-lg border p-3 transition-colors ${
-                    isDisabled
-                      ? "cursor-not-allowed border-border bg-surface2/50 text-text-muted"
-                      : "border-border bg-surface hover:border-primary/50 hover:bg-primary/5"
-                  }`}
-                >
-                  {isGenerating ? (
-                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                  ) : (
-                    <Icon className="h-5 w-5" />
-                  )}
-                  <span className="mt-1.5 text-xs font-medium">{label}</span>
-                </button>
-              </Tooltip>
-            )
-          })}
+              )}
+            </p>
+            <Button
+              size="small"
+              danger
+              icon={<Square className="h-3.5 w-3.5 fill-current" />}
+              onClick={handleCancelGeneration}
+            >
+              {t("common:cancel", "Cancel")}
+            </Button>
+          </div>
+        )}
+        <div className="space-y-4">
+          {OUTPUT_GROUPS.map((group) => (
+            <section key={group.id} aria-label={group.label}>
+              <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+                {group.label}
+              </h4>
+              <div className="grid grid-cols-2 gap-3">
+                {group.types.map((type) => {
+                  const button = OUTPUT_BUTTONS.find((entry) => entry.type === type)
+                  if (!button) return null
+                  const { label, icon: Icon, description } = button
+                  const isGenerating =
+                    isGeneratingOutput && generatingOutputType === type
+                  const isDisabled = !hasSelectedSources || isGeneratingOutput
+
+                  return (
+                    <Tooltip
+                      key={type}
+                      title={
+                        !hasSelectedSources
+                          ? t(
+                              "playground:studio.selectSourcesFirst",
+                              "Select sources first"
+                            )
+                          : description
+                      }
+                    >
+                      <button
+                        type="button"
+                        disabled={isDisabled}
+                        onFocus={() => setActiveOutputType(type)}
+                        onMouseEnter={() => setActiveOutputType(type)}
+                        onClick={() => {
+                          setActiveOutputType(type)
+                          if (type === "audio_overview") {
+                            setShowTtsSettings(true)
+                          }
+                          void handleGenerateOutput(type)
+                        }}
+                        className={`flex flex-col items-center justify-center rounded-lg border p-3 transition-colors ${
+                          isDisabled
+                            ? "cursor-not-allowed border-border bg-surface2/50 text-text-muted"
+                            : "border-border bg-surface hover:border-primary/50 hover:bg-primary/5"
+                        }`}
+                      >
+                        {isGenerating ? (
+                          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                        ) : (
+                          <Icon className="h-5 w-5" />
+                        )}
+                        <span className="mt-1.5 text-xs font-medium">{label}</span>
+                      </button>
+                    </Tooltip>
+                  )
+                })}
+              </div>
+            </section>
+          ))}
         </div>
         {!hasSelectedSources && (
           <p className="mt-2 text-center text-xs text-text-muted">
@@ -525,6 +1169,14 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
 
         {/* TTS Settings Panel */}
         <div className="mt-4">
+          {!contextualAudioSettingsVisible && !showTtsSettings && (
+            <p className="mb-2 rounded border border-border bg-surface2/30 px-3 py-2 text-xs text-text-muted">
+              {t(
+                "playground:studio.audioSettingsHint",
+                "Select Audio Overview to configure TTS voice and speed."
+              )}
+            </p>
+          )}
           <button
             type="button"
             onClick={() => setShowTtsSettings(!showTtsSettings)}
@@ -534,22 +1186,26 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
               <Settings2 className="h-3.5 w-3.5" />
               {t("playground:studio.audioSettings", "Audio Settings")}
             </span>
-            {showTtsSettings ? (
+            {showAudioSettingsPanel ? (
               <ChevronUp className="h-3.5 w-3.5" />
             ) : (
               <ChevronDown className="h-3.5 w-3.5" />
             )}
           </button>
 
-          {showTtsSettings && (
-            <div className="mt-2 space-y-3 rounded border border-border bg-surface2/30 p-3">
+          {showAudioSettingsPanel && (
+            <div
+              className={`mt-2 rounded border border-border bg-surface2/30 p-3 ${
+                isMobile ? "space-y-4" : "space-y-3"
+              }`}
+            >
               {/* Provider */}
               <div>
                 <label className="mb-1 block text-xs font-medium text-text-muted">
                   {t("playground:studio.ttsProvider", "TTS Provider")}
                 </label>
                 <Select
-                  size="small"
+                  size={studioControlSize}
                   className="w-full"
                   value={audioSettings.provider}
                   onChange={(value) => setAudioSettings({ provider: value as AudioTtsProvider })}
@@ -564,7 +1220,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                     {t("playground:studio.ttsModel", "Model")}
                   </label>
                   <Select
-                    size="small"
+                    size={studioControlSize}
                     className="w-full"
                     value={audioSettings.model}
                     onChange={(value) => setAudioSettings({ model: value })}
@@ -580,7 +1236,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                     {t("playground:studio.ttsVoice", "Voice")}
                   </label>
                   <Select
-                    size="small"
+                    size={studioControlSize}
                     className="w-full"
                     value={audioSettings.voice}
                     onChange={(value) => setAudioSettings({ voice: value })}
@@ -589,6 +1245,15 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                     showSearch
                     optionFilterProp="label"
                   />
+                  <div className="mt-2 flex justify-end">
+                    <Button
+                      size={studioControlSize}
+                      onClick={() => void handlePreviewVoice()}
+                      loading={previewingVoice}
+                    >
+                      {t("playground:studio.previewVoice", "Preview")}
+                    </Button>
+                  </div>
                 </div>
               )}
 
@@ -598,6 +1263,8 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                   {t("playground:studio.ttsSpeed", "Speed")}: {audioSettings.speed.toFixed(1)}x
                 </label>
                 <Slider
+                  data-testid="studio-tts-speed-slider"
+                  className={mobileSliderClassName}
                   min={0.5}
                   max={2.0}
                   step={0.1}
@@ -613,11 +1280,49 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                   {t("playground:studio.ttsFormat", "Output Format")}
                 </label>
                 <Select
-                  size="small"
+                  size={studioControlSize}
                   className="w-full"
                   value={audioSettings.format}
                   onChange={(value) => setAudioSettings({ format: value as any })}
                   options={AUDIO_FORMATS}
+                />
+              </div>
+
+              <div className="rounded border border-border bg-surface/40 p-2">
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="block text-xs font-medium text-text-muted">
+                    {t("playground:studio.flashcardDeck", "Flashcard Deck")}
+                  </label>
+                  <Button
+                    size={studioControlSize}
+                    onClick={() => void loadFlashcardDecks()}
+                    loading={loadingDecks}
+                  >
+                    {t("common:refresh", "Refresh")}
+                  </Button>
+                </div>
+                <Select
+                  size={studioControlSize}
+                  className="w-full"
+                  value={selectedFlashcardDeck}
+                  onChange={(value) =>
+                    setSelectedFlashcardDeck(
+                      value === "auto" ? "auto" : Number(value)
+                    )
+                  }
+                  options={[
+                    {
+                      value: "auto",
+                      label: t(
+                        "playground:studio.flashcardDeckAuto",
+                        "Auto (first deck or create new)"
+                      )
+                    },
+                    ...availableDecks.map((deck) => ({
+                      value: deck.id,
+                      label: deck.name
+                    }))
+                  ]}
                 />
               </div>
             </div>
@@ -649,7 +1354,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           )}
         </button>
         {outputsExpanded && (
-          <div className="custom-scrollbar max-h-64 overflow-y-auto px-4 pb-4">
+          <div
+            className="custom-scrollbar min-h-[10rem] overflow-y-auto px-4 pb-4"
+            style={{ maxHeight: "40vh" }}
+          >
           {generatedArtifacts.length === 0 ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -701,9 +1409,22 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                             <button
                               type="button"
                               onClick={() => handleViewArtifact(artifact)}
+                            className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
+                            aria-label={t("common:view", "View")}
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
+                          </Tooltip>
+                        )}
+                        {(artifact.type === "flashcards" || artifact.type === "quiz") && (
+                          <Tooltip title={t("common:edit", "Edit")}>
+                            <button
+                              type="button"
+                              onClick={() => handleViewArtifact(artifact)}
                               className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
+                              aria-label={t("common:edit", "Edit")}
                             >
-                              <Eye className="h-4 w-4" />
+                              <Pencil className="h-4 w-4" />
                             </button>
                           </Tooltip>
                         )}
@@ -716,24 +1437,130 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                                 : handleDownloadArtifact(artifact)
                             }
                             className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
+                            aria-label={t("common:download", "Download")}
                           >
                             <Download className="h-4 w-4" />
                           </button>
                         </Tooltip>
-                        <Tooltip title={t("common:regenerate", "Regenerate")}>
+                        <Dropdown
+                          trigger={["click"]}
+                          menu={{
+                            items: [
+                              {
+                                key: "replace",
+                                label: t(
+                                  "playground:studio.regenerateReplace",
+                                  "Replace existing"
+                                )
+                              },
+                              {
+                                key: "new_version",
+                                label: t(
+                                  "playground:studio.regenerateNewVersion",
+                                  "Create new version"
+                                )
+                              }
+                            ],
+                            onClick: ({ key }) => {
+                              const mode =
+                                key === "replace" ? "replace" : "new_version"
+                              handleGenerateOutput(artifact.type, {
+                                mode,
+                                targetArtifactId:
+                                  mode === "replace" ? artifact.id : undefined
+                              })
+                            }
+                          }}
+                        >
+                          <Tooltip
+                            title={t(
+                              "playground:studio.regenerateOptions",
+                              "Regenerate options"
+                            )}
+                          >
+                            <button
+                              type="button"
+                              className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
+                              aria-label={t(
+                                "playground:studio.regenerateOptions",
+                                "Regenerate options"
+                              )}
+                            >
+                            <RefreshCw className="h-4 w-4" />
+                            </button>
+                          </Tooltip>
+                        </Dropdown>
+                        <Tooltip
+                          title={t(
+                            "playground:studio.discussAction",
+                            "Discuss in chat"
+                          )}
+                        >
                           <button
                             type="button"
-                            onClick={() => handleGenerateOutput(artifact.type)}
+                            onClick={() => handleDiscussArtifact(artifact)}
                             className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
+                            aria-label={t(
+                              "playground:studio.discussAction",
+                              "Discuss in chat"
+                            )}
                           >
-                            <RefreshCw className="h-4 w-4" />
+                            <MessageCircle className="h-4 w-4" />
                           </button>
                         </Tooltip>
+                        {artifact.content && (
+                          <Dropdown
+                            trigger={["click"]}
+                            menu={{
+                              items: [
+                                {
+                                  key: "append",
+                                  label: t(
+                                    "playground:studio.saveToNotesAppend",
+                                    "Append to notes"
+                                  )
+                                },
+                                {
+                                  key: "replace",
+                                  label: t(
+                                    "playground:studio.saveToNotesReplace",
+                                    "Replace note draft"
+                                  )
+                                }
+                              ],
+                              onClick: ({ key }) => {
+                                handleSaveArtifactToNotes(
+                                  artifact,
+                                  key === "replace" ? "replace" : "append"
+                                )
+                              }
+                            }}
+                          >
+                            <Tooltip
+                              title={t(
+                                "playground:studio.saveToNotesAction",
+                                "Save to notes"
+                              )}
+                            >
+                              <button
+                                type="button"
+                                className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
+                                aria-label={t(
+                                  "playground:studio.saveToNotesAction",
+                                  "Save to notes"
+                                )}
+                              >
+                                <StickyNote className="h-4 w-4" />
+                              </button>
+                            </Tooltip>
+                          </Dropdown>
+                        )}
                         <Tooltip title={t("common:delete", "Delete")}>
                           <button
                             type="button"
-                            onClick={() => removeArtifact(artifact.id)}
+                            onClick={() => handleDeleteArtifact(artifact)}
                             className="rounded p-1 text-text-muted hover:bg-error/10 hover:text-error"
+                            aria-label={t("common:delete", "Delete")}
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
@@ -750,7 +1577,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       </div>
 
       {/* Quick Notes Section - Collapsible, fills remaining height */}
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-[220px] flex-1 flex-col">
         {notesExpanded ? (
           <QuickNotesSection onCollapse={() => setNotesExpanded(false)} />
         ) : (
@@ -770,13 +1597,398 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   )
 }
 
+const downloadBlobFile = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+const MindMapArtifactViewer: React.FC<{
+  title: string
+  content: string
+}> = ({ title, content }) => {
+  const [zoom, setZoom] = useState(1)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const mermaidCode = React.useMemo(() => extractMermaidCode(content), [content])
+  const canRenderMermaid = React.useMemo(
+    () => isLikelyMermaidDiagram(mermaidCode),
+    [mermaidCode]
+  )
+
+  const handleExportSvg = () => {
+    const svg = containerRef.current?.querySelector("svg")
+    if (!svg) return
+    const svgBlob = new Blob([svg.outerHTML], {
+      type: "image/svg+xml;charset=utf-8"
+    })
+    downloadBlobFile(svgBlob, `${title || "mind-map"}.svg`)
+  }
+
+  const handleExportPng = async () => {
+    if (!containerRef.current) return
+    const html2canvas = (await import("html2canvas")).default
+    const canvas = await html2canvas(containerRef.current, {
+      backgroundColor: "#ffffff",
+      scale: 2
+    })
+    canvas.toBlob((blob) => {
+      if (!blob) return
+      downloadBlobFile(blob, `${title || "mind-map"}.png`)
+    }, "image/png")
+  }
+
+  if (!canRenderMermaid) {
+    return (
+      <div className="flex max-h-[70vh] flex-col gap-3">
+        <div className="rounded border border-warning/40 bg-warning/10 p-3 text-sm text-text">
+          Unable to render this mind map as a diagram. Showing raw output instead.
+        </div>
+        <div className="max-h-[56vh] overflow-auto whitespace-pre-wrap rounded border border-border bg-surface p-4 text-sm">
+          {content}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex max-h-[70vh] flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="small"
+          icon={<ZoomOut className="h-3.5 w-3.5" />}
+          onClick={() => setZoom((prev) => Math.max(0.5, Number((prev - 0.1).toFixed(2))))}
+        >
+          Zoom out
+        </Button>
+        <span className="text-xs text-text-muted">{Math.round(zoom * 100)}%</span>
+        <Button
+          size="small"
+          icon={<ZoomIn className="h-3.5 w-3.5" />}
+          onClick={() => setZoom((prev) => Math.min(2.5, Number((prev + 0.1).toFixed(2))))}
+        >
+          Zoom in
+        </Button>
+        <Button size="small" onClick={() => setZoom(1)}>
+          Reset
+        </Button>
+        <Button size="small" onClick={handleExportSvg}>
+          Export SVG
+        </Button>
+        <Button size="small" onClick={() => void handleExportPng()}>
+          Export PNG
+        </Button>
+      </div>
+
+      <div className="rounded border border-border bg-surface2/40 p-2 text-xs text-text-muted">
+        Scroll to pan the diagram when zoomed in.
+      </div>
+
+      <div className="max-h-[56vh] overflow-auto rounded border border-border bg-surface p-4">
+        <div
+          ref={containerRef}
+          style={{ transform: `scale(${zoom})`, transformOrigin: "top left" }}
+          className="inline-block min-w-full"
+        >
+          <Mermaid code={mermaidCode} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const DataTableArtifactViewer: React.FC<{
+  title: string
+  content: string
+}> = ({ title, content }) => {
+  const [query, setQuery] = useState("")
+  const tableData = React.useMemo(() => parseMarkdownTable(content), [content])
+
+  const filteredRows = React.useMemo(() => {
+    if (!tableData) return []
+    const normalized = query.trim().toLowerCase()
+    if (!normalized) return tableData.rows
+    return tableData.rows.filter((row) =>
+      row.some((cell) => cell.toLowerCase().includes(normalized))
+    )
+  }, [query, tableData])
+
+  const columns = React.useMemo(() => {
+    if (!tableData) return []
+    return tableData.headers.map((header, index) => ({
+      title: header || `Column ${index + 1}`,
+      dataIndex: `col_${index}`,
+      key: `col_${index}`,
+      sorter: (a: Record<string, string>, b: Record<string, string>) =>
+        String(a[`col_${index}`] || "").localeCompare(
+          String(b[`col_${index}`] || ""),
+          undefined,
+          { sensitivity: "base", numeric: true }
+        )
+    }))
+  }, [tableData])
+
+  const dataSource = React.useMemo(() => {
+    return filteredRows.map((row, rowIndex) => {
+      const record: Record<string, string> = { key: String(rowIndex) }
+      row.forEach((cell, cellIndex) => {
+        record[`col_${cellIndex}`] = cell
+      })
+      return record
+    })
+  }, [filteredRows])
+
+  const handleDownloadCsv = () => {
+    if (!tableData) return
+    const csv = markdownTableToCsv(tableData)
+    const csvBlob = new Blob([csv], { type: "text/csv;charset=utf-8" })
+    downloadBlobFile(csvBlob, `${title || "data-table"}.csv`)
+  }
+
+  if (!tableData) {
+    return (
+      <div className="max-h-[70vh] overflow-y-auto whitespace-pre-wrap rounded border border-border bg-surface p-3 text-sm">
+        {content}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex max-h-[70vh] flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Filter table rows"
+          prefix={<Search className="h-4 w-4 text-text-muted" />}
+          className="w-72"
+        />
+        <Button size="small" onClick={handleDownloadCsv}>
+          Export CSV
+        </Button>
+      </div>
+      <AntTable
+        columns={columns}
+        dataSource={dataSource}
+        pagination={{ pageSize: 10, size: "small" }}
+        size="small"
+        scroll={{ x: true, y: 420 }}
+      />
+    </div>
+  )
+}
+
+const FlashcardArtifactEditor: React.FC<{
+  cards: FlashcardDraft[]
+  onSave: (cards: FlashcardDraft[]) => void
+}> = ({ cards, onSave }) => {
+  const [draftCards, setDraftCards] = useState<FlashcardDraft[]>(cards)
+
+  const updateCard = (
+    index: number,
+    patch: Partial<FlashcardDraft>
+  ) => {
+    setDraftCards((previous) =>
+      previous.map((card, cardIndex) =>
+        cardIndex === index ? { ...card, ...patch } : card
+      )
+    )
+  }
+
+  const removeCard = (index: number) => {
+    setDraftCards((previous) => previous.filter((_card, cardIndex) => cardIndex !== index))
+  }
+
+  return (
+    <div className="flex max-h-[70vh] flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-text-muted">
+          Edit generated flashcards before reusing them.
+        </p>
+        <Button
+          size="small"
+          icon={<Plus className="h-3.5 w-3.5" />}
+          onClick={() =>
+            setDraftCards((previous) => [...previous, { front: "", back: "" }])
+          }
+        >
+          Add card
+        </Button>
+      </div>
+
+      <div className="max-h-[54vh] space-y-3 overflow-y-auto pr-1">
+        {draftCards.map((card, index) => (
+          <div key={`flashcard-${index}`} className="rounded border border-border bg-surface2/30 p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-medium text-text-muted">Card {index + 1}</span>
+              <Button danger size="small" onClick={() => removeCard(index)}>
+                Remove
+              </Button>
+            </div>
+            <Input.TextArea
+              value={card.front}
+              onChange={(event) => updateCard(index, { front: event.target.value })}
+              rows={2}
+              placeholder="Front (question or term)"
+              className="mb-2"
+            />
+            <Input.TextArea
+              value={card.back}
+              onChange={(event) => updateCard(index, { back: event.target.value })}
+              rows={3}
+              placeholder="Back (answer or definition)"
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="flex justify-end">
+        <Button
+          type="primary"
+          icon={<Save className="h-3.5 w-3.5" />}
+          onClick={() =>
+            onSave(
+              draftCards.filter(
+                (card) => card.front.trim().length > 0 && card.back.trim().length > 0
+              )
+            )
+          }
+        >
+          Save changes
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+const QuizArtifactEditor: React.FC<{
+  questions: QuizQuestionDraft[]
+  onSave: (questions: QuizQuestionDraft[]) => void
+}> = ({ questions, onSave }) => {
+  const [draftQuestions, setDraftQuestions] = useState<QuizQuestionDraft[]>(questions)
+
+  const updateQuestion = (
+    index: number,
+    patch: Partial<QuizQuestionDraft>
+  ) => {
+    setDraftQuestions((previous) =>
+      previous.map((question, questionIndex) =>
+        questionIndex === index ? { ...question, ...patch } : question
+      )
+    )
+  }
+
+  const removeQuestion = (index: number) => {
+    setDraftQuestions((previous) =>
+      previous.filter((_question, questionIndex) => questionIndex !== index)
+    )
+  }
+
+  return (
+    <div className="flex max-h-[70vh] flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-text-muted">
+          Edit generated quiz questions and answers.
+        </p>
+        <Button
+          size="small"
+          icon={<Plus className="h-3.5 w-3.5" />}
+          onClick={() =>
+            setDraftQuestions((previous) => [
+              ...previous,
+              { question: "", options: [], answer: "", explanation: "" }
+            ])
+          }
+        >
+          Add question
+        </Button>
+      </div>
+
+      <div className="max-h-[54vh] space-y-3 overflow-y-auto pr-1">
+        {draftQuestions.map((question, index) => (
+          <div key={`quiz-${index}`} className="rounded border border-border bg-surface2/30 p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-medium text-text-muted">
+                Question {index + 1}
+              </span>
+              <Button danger size="small" onClick={() => removeQuestion(index)}>
+                Remove
+              </Button>
+            </div>
+            <Input.TextArea
+              value={question.question}
+              onChange={(event) =>
+                updateQuestion(index, { question: event.target.value })
+              }
+              rows={2}
+              placeholder="Question prompt"
+              className="mb-2"
+            />
+            <Input.TextArea
+              value={question.options.join("\n")}
+              onChange={(event) =>
+                updateQuestion(index, {
+                  options: event.target.value
+                    .split("\n")
+                    .map((option) => option.trim())
+                    .filter(Boolean)
+                })
+              }
+              rows={3}
+              placeholder="Options (one per line)"
+              className="mb-2"
+            />
+            <Input
+              value={question.answer}
+              onChange={(event) =>
+                updateQuestion(index, { answer: event.target.value })
+              }
+              placeholder="Correct answer"
+              className="mb-2"
+            />
+            <Input.TextArea
+              value={question.explanation || ""}
+              onChange={(event) =>
+                updateQuestion(index, { explanation: event.target.value })
+              }
+              rows={2}
+              placeholder="Explanation (optional)"
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="flex justify-end">
+        <Button
+          type="primary"
+          icon={<Save className="h-3.5 w-3.5" />}
+          onClick={() =>
+            onSave(
+              draftQuestions.filter(
+                (question) =>
+                  question.question.trim().length > 0 &&
+                  question.answer.trim().length > 0
+              )
+            )
+          }
+        >
+          Save changes
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Output Generation Functions
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function generateSummary(
   mediaIds: number[],
-  workspaceTag?: string
+  workspaceTag?: string,
+  abortSignal?: AbortSignal
 ): Promise<{ serverId?: number; content?: string }> {
   // Use RAG to get content and generate summary via chat
   const ragResponse = await tldwClient.ragSearch(
@@ -785,7 +1997,8 @@ async function generateSummary(
       media_ids: mediaIds,
       top_k: 20,
       enable_generation: true,
-      enable_citations: true
+      enable_citations: true,
+      signal: abortSignal
     }
   )
 
@@ -796,7 +2009,8 @@ async function generateSummary(
 
 async function generateReport(
   mediaIds: number[],
-  workspaceTag?: string
+  workspaceTag?: string,
+  abortSignal?: AbortSignal
 ): Promise<{ serverId?: number; content?: string }> {
   const ragResponse = await tldwClient.ragSearch(
     `Generate a detailed report with the following sections:
@@ -811,7 +2025,8 @@ Use the provided sources to create a comprehensive report.`,
       media_ids: mediaIds,
       top_k: 30,
       enable_generation: true,
-      enable_citations: true
+      enable_citations: true,
+      signal: abortSignal
     }
   )
 
@@ -822,7 +2037,8 @@ Use the provided sources to create a comprehensive report.`,
 
 async function generateTimeline(
   mediaIds: number[],
-  workspaceTag?: string
+  workspaceTag?: string,
+  abortSignal?: AbortSignal
 ): Promise<{ serverId?: number; content?: string }> {
   const ragResponse = await tldwClient.ragSearch(
     `Extract and organize all events, dates, and chronological information into a timeline format.
@@ -834,7 +2050,8 @@ List events in chronological order.`,
       media_ids: mediaIds,
       top_k: 30,
       enable_generation: true,
-      enable_citations: true
+      enable_citations: true,
+      signal: abortSignal
     }
   )
 
@@ -844,27 +2061,71 @@ List events in chronological order.`,
 }
 
 async function generateQuizFromMedia(
-  mediaId: number,
-  workspaceTag?: string
-): Promise<{ serverId?: number; content?: string }> {
-  const response = await generateQuiz({
-    media_id: mediaId,
-    num_questions: 10,
-    question_types: ["multiple_choice", "true_false"],
-    difficulty: "mixed",
-    workspace_tag: workspaceTag || undefined
-  })
+  mediaIds: number[],
+  workspaceTag?: string,
+  abortSignal?: AbortSignal
+): Promise<{ serverId?: number; content?: string; data?: Record<string, unknown> }> {
+  const uniqueMediaIds = Array.from(new Set(mediaIds))
+  if (uniqueMediaIds.length === 0) {
+    throw new Error("No media selected for quiz generation")
+  }
+
+  const generationResponses: Array<{ mediaId: number; response: any }> = []
+  for (const mediaId of uniqueMediaIds) {
+    const response = await generateQuiz(
+      {
+        media_id: mediaId,
+        num_questions: Math.max(3, Math.ceil(10 / uniqueMediaIds.length)),
+        question_types: ["multiple_choice", "true_false"],
+        difficulty: "mixed",
+        workspace_tag: workspaceTag || undefined
+      },
+      { signal: abortSignal }
+    )
+    generationResponses.push({ mediaId, response })
+  }
+
+  const mergedQuestions = generationResponses.flatMap(({ mediaId, response }) =>
+    (response.questions || []).map((question: any) => ({
+      question: String(question.question_text || "").trim(),
+      options: Array.isArray(question.options)
+        ? question.options.map((option: unknown) => String(option))
+        : [],
+      answer: String(question.correct_answer || "").trim(),
+      explanation: question.explanation
+        ? String(question.explanation)
+        : undefined,
+      sourceMediaId: mediaId
+    }))
+  )
+
+  const limitedQuestions = mergedQuestions.slice(0, 20)
+  const content = formatQuizQuestionsContent(
+    limitedQuestions.map((question) => ({
+      question: question.question,
+      options: question.options,
+      answer: question.answer,
+      explanation: question.explanation
+    })),
+    generationResponses[0]?.response?.quiz?.name || "Workspace Quiz"
+  )
 
   return {
-    serverId: response.quiz.id,
-    content: formatQuizContent(response)
+    serverId: generationResponses[0]?.response?.quiz?.id,
+    content,
+    data: {
+      questions: limitedQuestions,
+      sourceMediaIds: uniqueMediaIds
+    }
   }
 }
 
 async function generateFlashcards(
-  mediaId: number,
-  workspaceTag?: string
-): Promise<{ serverId?: number; content?: string }> {
+  mediaIds: number[],
+  preferredDeckId: number | undefined,
+  workspaceTag?: string,
+  abortSignal?: AbortSignal
+): Promise<{ serverId?: number; content?: string; data?: Record<string, unknown> }> {
   // First, get content via RAG
   const ragResponse = await tldwClient.ragSearch(
     `Extract key concepts, definitions, and important facts that would make good flashcards.
@@ -874,9 +2135,10 @@ Back: [Answer or definition]
 
 Generate 10-15 flashcards.`,
     {
-      media_ids: [mediaId],
+      media_ids: mediaIds,
       top_k: 20,
-      enable_generation: true
+      enable_generation: true,
+      signal: abortSignal
     }
   )
 
@@ -889,11 +2151,16 @@ Generate 10-15 flashcards.`,
   }
 
   // Ensure we have a deck
-  const decks = await listDecks()
+  const decks = await listDecks({ signal: abortSignal })
   let deckId: number | undefined
 
-  if (decks.length === 0) {
-    const newDeck = await createDeck({ name: "Workspace Flashcards" })
+  if (preferredDeckId && decks.some((deck) => deck.id === preferredDeckId)) {
+    deckId = preferredDeckId
+  } else if (decks.length === 0) {
+    const newDeck = await createDeck(
+      { name: "Workspace Flashcards" },
+      { signal: abortSignal }
+    )
     deckId = newDeck.id
   } else {
     deckId = decks[0].id
@@ -909,8 +2176,8 @@ Generate 10-15 flashcards.`,
         front: card.front,
         back: card.back,
         source_ref_type: "media",
-        source_ref_id: String(mediaId)
-      })
+        source_ref_id: mediaIds.join(",")
+      }, { signal: abortSignal })
       createdCount += 1
     } catch (error) {
       if (firstCreateError == null) {
@@ -933,13 +2200,19 @@ Generate 10-15 flashcards.`,
       : `Created ${createdCount} flashcards`
 
   return {
-    content: `${summaryLine}\n\n${content}`
+    content: `${summaryLine}\n\n${content}`,
+    data: {
+      flashcards,
+      deckId,
+      sourceMediaIds: mediaIds
+    }
   }
 }
 
 async function generateMindMap(
-  mediaIds: number[]
-): Promise<{ serverId?: number; content?: string }> {
+  mediaIds: number[],
+  abortSignal?: AbortSignal
+): Promise<{ serverId?: number; content?: string; data?: Record<string, unknown> }> {
   const ragResponse = await tldwClient.ragSearch(
     `Analyze the content and create a mind map in Mermaid format.
 Use the following structure:
@@ -958,18 +2231,25 @@ Identify the central theme and 3-5 main branches with their sub-topics.`,
     {
       media_ids: mediaIds,
       top_k: 20,
-      enable_generation: true
+      enable_generation: true,
+      signal: abortSignal
     }
   )
 
+  const content =
+    ragResponse?.generation || ragResponse?.answer || "Mind map generation failed"
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Mind map generation failed"
+    content,
+    data: {
+      mermaid: extractMermaidCode(content)
+    }
   }
 }
 
 async function generateAudioOverview(
   mediaIds: number[],
-  audioSettings: import("@/types/workspace").AudioGenerationSettings
+  audioSettings: import("@/types/workspace").AudioGenerationSettings,
+  abortSignal?: AbortSignal
 ): Promise<{ serverId?: number; content?: string; audioUrl?: string; audioFormat?: string }> {
   // First generate a spoken overview script
   const ragResponse = await tldwClient.ragSearch(
@@ -982,7 +2262,8 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
     {
       media_ids: mediaIds,
       top_k: 15,
-      enable_generation: true
+      enable_generation: true,
+      signal: abortSignal
     }
   )
 
@@ -1006,7 +2287,8 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
       model: audioSettings.model,
       voice: audioSettings.voice,
       responseFormat: audioSettings.format,
-      speed: audioSettings.speed
+      speed: audioSettings.speed,
+      signal: abortSignal
     })
 
     // Determine MIME type based on format
@@ -1030,6 +2312,9 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
       audioFormat: audioSettings.format
     }
   } catch (ttsError) {
+    if (isAbortLikeError(ttsError)) {
+      throw ttsError
+    }
     // If TTS fails, fall back to returning just the script
     console.error("TTS generation failed:", ttsError)
     return {
@@ -1039,7 +2324,8 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
 }
 
 async function generateSlidesFromApi(
-  mediaId: number
+  mediaId: number,
+  abortSignal?: AbortSignal
 ): Promise<{
   serverId?: number
   content?: string
@@ -1048,7 +2334,9 @@ async function generateSlidesFromApi(
 }> {
   try {
     // Use the Slides API to generate a real presentation
-    const presentation = await tldwClient.generateSlidesFromMedia(mediaId)
+    const presentation = await tldwClient.generateSlidesFromMedia(mediaId, {
+      signal: abortSignal
+    })
 
     // Format slides as readable content
     let content = `# ${presentation.title}\n\n`
@@ -1074,14 +2362,18 @@ async function generateSlidesFromApi(
       presentationVersion: presentation.version
     }
   } catch (error) {
+    if (isAbortLikeError(error)) {
+      throw error
+    }
     // Fallback to RAG-based generation if API fails
     console.error("Slides API failed, falling back to RAG:", error)
-    return generateSlidesFallback([mediaId])
+    return generateSlidesFallback([mediaId], abortSignal)
   }
 }
 
 async function generateSlidesFallback(
-  mediaIds: number[]
+  mediaIds: number[],
+  abortSignal?: AbortSignal
 ): Promise<{ serverId?: number; content?: string }> {
   const ragResponse = await tldwClient.ragSearch(
     `Create a presentation outline with 8-12 slides:
@@ -1101,7 +2393,8 @@ Include:
     {
       media_ids: mediaIds,
       top_k: 25,
-      enable_generation: true
+      enable_generation: true,
+      signal: abortSignal
     }
   )
 
@@ -1112,8 +2405,9 @@ Include:
 
 async function generateDataTable(
   mediaIds: number[],
-  workspaceTag?: string
-): Promise<{ serverId?: number; content?: string }> {
+  workspaceTag?: string,
+  abortSignal?: AbortSignal
+): Promise<{ serverId?: number; content?: string; data?: Record<string, unknown> }> {
   const ragResponse = await tldwClient.ragSearch(
     `Extract structured data from the content and format it as a markdown table.
 Identify:
@@ -1128,12 +2422,18 @@ Format as:
     {
       media_ids: mediaIds,
       top_k: 25,
-      enable_generation: true
+      enable_generation: true,
+      signal: abortSignal
     }
   )
 
+  const content =
+    ragResponse?.generation || ragResponse?.answer || "Data table generation failed"
+  const parsedTable = parseMarkdownTable(content)
+
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Data table generation failed"
+    content,
+    data: parsedTable ? { table: parsedTable } : undefined
   }
 }
 
@@ -1141,32 +2441,84 @@ Format as:
 // Helper Functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-function formatQuizContent(response: { quiz: any; questions: any[] }): string {
-  let content = `Quiz: ${response.quiz.name}\n`
-  content += `${response.quiz.description || ""}\n\n`
-  content += `Total Questions: ${response.questions.length}\n\n`
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
 
-  response.questions.forEach((q, idx) => {
-    content += `Q${idx + 1}: ${q.question_text}\n`
-    if (q.options) {
-      q.options.forEach((opt: string, optIdx: number) => {
-        content += `  ${String.fromCharCode(65 + optIdx)}. ${opt}\n`
-      })
-    }
-    content += `Answer: ${q.correct_answer}\n`
-    if (q.explanation) {
-      content += `Explanation: ${q.explanation}\n`
-    }
-    content += "\n"
-  })
+function extractMermaidCode(content: string): string {
+  const fencedMatch = content.match(/```(?:mermaid)?\s*([\s\S]*?)```/i)
+  if (fencedMatch?.[1]) {
+    return fencedMatch[1].trim()
+  }
+  return content.trim()
+}
 
-  return content
+function isLikelyMermaidDiagram(code: string): boolean {
+  const firstLine = code
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0)
+  if (!firstLine) return false
+  return /^(mindmap|graph|flowchart|sequenceDiagram|stateDiagram(?:-v2)?|gantt)\b/i.test(
+    firstLine
+  )
+}
+
+function parseTableCells(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim())
+}
+
+function parseMarkdownTable(content: string): MarkdownTableData | null {
+  const lines = content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("|"))
+
+  if (lines.length < 2) return null
+  const separatorIndex = lines.findIndex((line) =>
+    /^\|(?:\s*:?-{3,}:?\s*\|)+\s*$/.test(line)
+  )
+  if (separatorIndex <= 0) return null
+
+  const headers = parseTableCells(lines[separatorIndex - 1]).filter(Boolean)
+  if (headers.length === 0) return null
+
+  const rows = lines
+    .slice(separatorIndex + 1)
+    .map((line) => parseTableCells(line))
+    .filter((row) => row.some((cell) => cell.length > 0))
+    .map((row) => {
+      if (row.length === headers.length) return row
+      if (row.length < headers.length) {
+        return [...row, ...new Array(headers.length - row.length).fill("")]
+      }
+      return row.slice(0, headers.length)
+    })
+
+  if (rows.length === 0) return null
+  return { headers, rows }
+}
+
+function markdownTableToCsv(table: MarkdownTableData): string {
+  const escapeCsv = (value: string) => {
+    if (/[",\n]/.test(value)) {
+      return `"${value.replace(/"/g, '""')}"`
+    }
+    return value
+  }
+  const headerLine = table.headers.map(escapeCsv).join(",")
+  const rows = table.rows.map((row) => row.map(escapeCsv).join(","))
+  return [headerLine, ...rows].join("\n")
 }
 
 function parseFlashcards(
   content: string
-): Array<{ front: string; back: string }> {
-  const cards: Array<{ front: string; back: string }> = []
+): FlashcardDraft[] {
+  const cards: FlashcardDraft[] = []
   const lines = content.split("\n")
   let currentFront = ""
   let currentBack = ""
@@ -1189,6 +2541,135 @@ function parseFlashcards(
   }
 
   return cards
+}
+
+function formatFlashcardsContent(cards: FlashcardDraft[]): string {
+  return cards
+    .map((card) => `Front: ${card.front}\nBack: ${card.back}`)
+    .join("\n\n")
+}
+
+function parseQuizQuestions(content: string): QuizQuestionDraft[] {
+  const questions: QuizQuestionDraft[] = []
+  const lines = content.split("\n")
+  let current: QuizQuestionDraft | null = null
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    if (!line) continue
+
+    const questionMatch = line.match(/^Q\d+:\s*(.+)$/i)
+    if (questionMatch) {
+      if (current && current.question) {
+        questions.push(current)
+      }
+      current = {
+        question: questionMatch[1].trim(),
+        options: [],
+        answer: "",
+        explanation: ""
+      }
+      continue
+    }
+
+    if (!current) continue
+
+    const optionMatch = line.match(/^(?:[-*]\s*)?[A-Z]\.\s*(.+)$/)
+    if (optionMatch) {
+      current.options.push(optionMatch[1].trim())
+      continue
+    }
+
+    if (line.toLowerCase().startsWith("answer:")) {
+      current.answer = line.substring("answer:".length).trim()
+      continue
+    }
+
+    if (line.toLowerCase().startsWith("explanation:")) {
+      current.explanation = line.substring("explanation:".length).trim()
+    }
+  }
+
+  if (current && current.question) {
+    questions.push(current)
+  }
+  return questions
+}
+
+function formatQuizQuestionsContent(
+  questions: QuizQuestionDraft[],
+  title: string
+): string {
+  let content = `Quiz: ${title}\n`
+  content += `Total Questions: ${questions.length}\n\n`
+  questions.forEach((question, index) => {
+    content += `Q${index + 1}: ${question.question}\n`
+    question.options.forEach((option, optionIndex) => {
+      content += `  ${String.fromCharCode(65 + optionIndex)}. ${option}\n`
+    })
+    content += `Answer: ${question.answer}\n`
+    if (question.explanation && question.explanation.trim().length > 0) {
+      content += `Explanation: ${question.explanation}\n`
+    }
+    content += "\n"
+  })
+  return content
+}
+
+function getArtifactFlashcards(artifact: GeneratedArtifact): FlashcardDraft[] {
+  const flashcardsFromData = isRecord(artifact.data) &&
+    Array.isArray(artifact.data.flashcards)
+      ? artifact.data.flashcards
+          .map((entry) => {
+            if (!isRecord(entry)) return null
+            const front = String(entry.front || "").trim()
+            const back = String(entry.back || "").trim()
+            if (!front || !back) return null
+            return { front, back }
+          })
+          .filter((entry): entry is FlashcardDraft => entry !== null)
+      : []
+
+  if (flashcardsFromData.length > 0) {
+    return flashcardsFromData
+  }
+
+  const parsed = parseFlashcards(artifact.content || "")
+  if (parsed.length > 0) return parsed
+  return [{ front: "", back: "" }]
+}
+
+function getArtifactQuizQuestions(artifact: GeneratedArtifact): QuizQuestionDraft[] {
+  const questionsFromData = isRecord(artifact.data) &&
+    Array.isArray(artifact.data.questions)
+      ? artifact.data.questions
+          .map((entry) => {
+            if (!isRecord(entry)) return null
+            const question = String(
+              entry.question || entry.question_text || ""
+            ).trim()
+            const options = Array.isArray(entry.options)
+              ? entry.options.map((option) => String(option).trim()).filter(Boolean)
+              : []
+            const answer = String(
+              entry.answer || entry.correct_answer || ""
+            ).trim()
+            const explanation = entry.explanation
+              ? String(entry.explanation)
+              : ""
+            if (!question) return null
+            return { question, options, answer, explanation }
+          })
+          .filter((entry): entry is QuizQuestionDraft => entry !== null)
+      : []
+
+  if (questionsFromData.length > 0) {
+    return questionsFromData
+  }
+
+  const parsed = parseQuizQuestions(artifact.content || "")
+  if (parsed.length > 0) return parsed
+  return [{ question: "", options: [], answer: "", explanation: "" }]
 }
 
 function getFileExtension(type: ArtifactType): string {

@@ -96,6 +96,8 @@ type MessageActionsBarProps = {
   onCopy: () => void | Promise<void>
   canReply: boolean
   onReply: () => void
+  canSaveToWorkspaceNotes?: boolean
+  onSaveToWorkspaceNotes?: () => void
   canSaveToNotes: boolean
   canSaveToFlashcards: boolean
   canGenerateDocument: boolean
@@ -158,6 +160,8 @@ export function MessageActionsBar({
   onCopy,
   canReply,
   onReply,
+  canSaveToWorkspaceNotes = false,
+  onSaveToWorkspaceNotes,
   canSaveToNotes,
   canSaveToFlashcards,
   canGenerateDocument,
@@ -306,7 +310,16 @@ export function MessageActionsBar({
         )
       }
     }
-    if (isBot && canSaveToNotes) {
+    if (canSaveToWorkspaceNotes && onSaveToWorkspaceNotes) {
+      items.push(
+        <OverflowMenuItem
+          key="save-workspace-note"
+          icon={<StickyNote className="w-3.5 h-3.5" />}
+          label={t("saveToNotes", "Save to Notes")}
+          onClick={onSaveToWorkspaceNotes}
+        />
+      )
+    } else if (isBot && canSaveToNotes) {
       items.push(
         <OverflowMenuItem
           key="save-note"
@@ -389,7 +402,8 @@ export function MessageActionsBar({
     return items
   }, [
     canReply, onReply, isBot, onNewBranch, temporaryChat,
-    hideContinue, isLastMessage, onContinue, onRunSteeredContinue, canSaveToNotes,
+    hideContinue, isLastMessage, onContinue, onRunSteeredContinue,
+    canSaveToWorkspaceNotes, onSaveToWorkspaceNotes, canSaveToNotes,
     messageSteeringMode, onMessageSteeringModeChange,
     messageSteeringForceNarrate, onMessageSteeringForceNarrateChange,
     onClearMessageSteering,

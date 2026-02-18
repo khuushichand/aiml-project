@@ -22,7 +22,7 @@ Finding IDs: `C-04` through `C-07`
 - Component tests asserting section headers and grouped field locations.
 - Regression test ensuring create/edit forms both render identical section structure.
 - Integration test verifying form submit payload still maps all advanced fields correctly.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Add Inline Field Guidance for Overlapping Concepts
 **Goal**: Clarify role boundaries between key text fields without requiring docs lookup.
@@ -34,7 +34,7 @@ Finding IDs: `C-04` through `C-07`
 - Component tests for help text/tooltips presence and accessible names.
 - i18n coverage test for all new helper copy keys.
 - UX QA checklist confirming examples align with backend prompt assembly behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Increase Gallery Card Information Density
 **Goal**: Make gallery scanning viable without opening each character.
@@ -46,7 +46,7 @@ Finding IDs: `C-04` through `C-07`
 - Component tests for description/tag rendering and truncation.
 - Visual regression snapshots for desktop and mobile breakpoints.
 - Interaction tests for click/select actions after layout change.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Resolve Mood Image Expectation Gap
 **Goal**: Remove ambiguity around mood-image support status.
@@ -57,7 +57,7 @@ Finding IDs: `C-04` through `C-07`
 **Tests**:
 - Doc/UI consistency checklist for character feature matrix.
 - Component test ensuring placeholder visibility when selected implementation path is UI placeholder.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

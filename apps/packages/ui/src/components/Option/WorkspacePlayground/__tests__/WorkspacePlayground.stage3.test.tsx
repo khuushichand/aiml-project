@@ -1,0 +1,259 @@
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { WorkspacePlayground } from "../index"
+
+const testState = {
+  isMobile: false,
+  leftPaneCollapsed: false,
+  rightPaneCollapsed: false,
+  workspaceId: "workspace-1",
+  initializeWorkspace: vi.fn(),
+  addSources: vi.fn(),
+  setSelectedSourceIds: vi.fn(),
+  captureToCurrentNote: vi.fn(),
+  selectedSourceIds: [] as string[],
+  generatedArtifacts: [] as Array<{ id: string }>,
+  setLeftPaneCollapsed: vi.fn(),
+  setRightPaneCollapsed: vi.fn(),
+  focusSourceById: vi.fn(() => true),
+  focusChatMessageById: vi.fn(() => true),
+  focusWorkspaceNote: vi.fn(),
+  sources: [] as Array<{
+    id: string
+    mediaId: number
+    title: string
+    type: "pdf" | "video" | "audio" | "website" | "document" | "text"
+    addedAt: Date
+    url?: string
+  }>,
+  workspaceChatSessions: {} as Record<string, { messages: any[] }>,
+  currentNote: {
+    id: 7,
+    title: "",
+    content: "",
+    keywords: [] as string[],
+    isDirty: false
+  }
+}
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (
+      key: string,
+      defaultValueOrOptions?:
+        | string
+        | {
+            defaultValue?: string
+          }
+    ) => {
+      if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
+      if (defaultValueOrOptions?.defaultValue) return defaultValueOrOptions.defaultValue
+      return key
+    }
+  })
+}))
+
+vi.mock("@/hooks/useMediaQuery", () => ({
+  useMobile: () => testState.isMobile
+}))
+
+vi.mock("@/store/workspace", () => ({
+  useWorkspaceStore: (selector: (state: typeof testState) => unknown) =>
+    selector(testState)
+}))
+
+vi.mock("@/utils/workspace-playground-prefill", () => ({
+  consumeWorkspacePlaygroundPrefill: vi.fn().mockResolvedValue(null),
+  buildKnowledgeQaSeedNote: vi.fn().mockReturnValue("")
+}))
+
+vi.mock("../WorkspaceHeader", () => ({
+  WorkspaceHeader: () => <div data-testid="workspace-header" />
+}))
+
+vi.mock("../SourcesPane", () => ({
+  SourcesPane: () => <div data-testid="workspace-sources-pane">Sources</div>
+}))
+
+vi.mock("../ChatPane", () => ({
+  ChatPane: () => <div data-testid="workspace-chat-pane">Chat</div>
+}))
+
+vi.mock("../StudioPane", () => ({
+  StudioPane: () => <div data-testid="workspace-studio-pane">Studio</div>
+}))
+
+if (!(globalThis as any).ResizeObserver) {
+  ;(globalThis as any).ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+}
+
+describe("WorkspacePlayground stage 3 global navigation", () => {
+  const originalMatchMedia = window.matchMedia
+
+  beforeAll(() => {
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query.includes("min-width: 1024px"),
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn()
+      }))
+    })
+  })
+
+  afterAll(() => {
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: originalMatchMedia
+    })
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    testState.isMobile = false
+    testState.leftPaneCollapsed = false
+    testState.rightPaneCollapsed = false
+    testState.workspaceId = "workspace-1"
+    testState.selectedSourceIds = []
+    testState.generatedArtifacts = []
+    testState.sources = []
+    testState.workspaceChatSessions = {}
+    testState.currentNote = {
+      id: 7,
+      title: "",
+      content: "",
+      keywords: [],
+      isDirty: false
+    }
+  })
+
+  it("opens and closes workspace search with keyboard shortcuts", async () => {
+    render(<WorkspacePlayground />)
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true })
+
+    expect(
+      await screen.findByRole("dialog", { name: "Search workspace" })
+    ).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: "Escape" })
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Search workspace" })
+      ).not.toBeInTheDocument()
+    })
+  })
+
+  it("routes source search selection to source focus", async () => {
+    testState.sources = [
+      {
+        id: "source-climate",
+        mediaId: 101,
+        title: "Climate Action Report",
+        type: "pdf",
+        addedAt: new Date("2026-02-18T09:00:00.000Z")
+      }
+    ]
+
+    render(<WorkspacePlayground />)
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    const searchInput = await screen.findByPlaceholderText(
+      "Search sources, chat, and notes..."
+    )
+    fireEvent.change(searchInput, { target: { value: "climate" } })
+
+    fireEvent.click(await screen.findByRole("button", { name: /Climate Action Report/ }))
+
+    await waitFor(() => {
+      expect(testState.focusSourceById).toHaveBeenCalledWith("source-climate")
+    })
+  })
+
+  it("routes chat and note selections to their focus targets", async () => {
+    testState.workspaceChatSessions = {
+      "workspace-1": {
+        messages: [
+          {
+            id: "assistant-msg-1",
+            isBot: true,
+            name: "Assistant",
+            message: "Retrieval confidence is moderate for source B.",
+            sources: []
+          }
+        ]
+      }
+    }
+    testState.currentNote = {
+      id: 3,
+      title: "Confidence tracker",
+      content: "Track confidence changes over time.",
+      keywords: ["confidence"],
+      isDirty: false
+    }
+
+    render(<WorkspacePlayground />)
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true })
+    const searchInput = await screen.findByPlaceholderText(
+      "Search sources, chat, and notes..."
+    )
+
+    fireEvent.change(searchInput, { target: { value: "moderate" } })
+    fireEvent.click(await screen.findByRole("button", { name: /Assistant message/ }))
+
+    await waitFor(() => {
+      expect(testState.focusChatMessageById).toHaveBeenCalledWith(
+        "msg:assistant-msg-1"
+      )
+    })
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true })
+    const noteSearchInput = await screen.findByPlaceholderText(
+      "Search sources, chat, and notes..."
+    )
+
+    fireEvent.change(noteSearchInput, { target: { value: "confidence tracker" } })
+    fireEvent.click(await screen.findByRole("button", { name: /Confidence tracker/ }))
+
+    await waitFor(() => {
+      expect(testState.focusWorkspaceNote).toHaveBeenCalledWith("title")
+    })
+  })
+
+  it("shows a brief transition cue when workspace id changes", () => {
+    vi.useFakeTimers()
+
+    const { rerender } = render(<WorkspacePlayground />)
+    expect(
+      screen.queryByTestId("workspace-switch-transition")
+    ).not.toBeInTheDocument()
+
+    act(() => {
+      testState.workspaceId = "workspace-2"
+      rerender(<WorkspacePlayground />)
+    })
+
+    expect(screen.getByTestId("workspace-switch-transition")).toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+
+    expect(
+      screen.queryByTestId("workspace-switch-transition")
+    ).not.toBeInTheDocument()
+
+    vi.useRealTimers()
+  })
+})

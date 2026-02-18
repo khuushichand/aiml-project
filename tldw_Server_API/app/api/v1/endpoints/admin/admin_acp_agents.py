@@ -1,0 +1,261 @@
+"""Admin endpoints for ACP session management, agent configuration, and permission policies.
+
+Provides cross-user visibility into agent sessions, CRUD for custom agent
+configurations, and tool permission policy management.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query, status
+from loguru import logger
+
+from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
+    ACPAgentConfigCreate,
+    ACPAgentConfigListResponse,
+    ACPAgentConfigResponse,
+    ACPPermissionPolicyCreate,
+    ACPPermissionPolicyListResponse,
+    ACPPermissionPolicyResponse,
+    ACPSessionInfo,
+    ACPSessionListResponse,
+    ACPSessionUsageResponse,
+    ACPTokenUsage,
+)
+from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
+
+router = APIRouter(tags=["admin-acp"])
+
+_NONCRITICAL = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
+
+# ---------------------------------------------------------------------------
+# ACP Session Admin Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/acp/sessions", response_model=ACPSessionListResponse)
+async def admin_list_acp_sessions(
+    user_id: int | None = Query(default=None, description="Filter by user ID"),
+    status_filter: str | None = Query(default=None, alias="status"),
+    agent_type: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> ACPSessionListResponse:
+    """Admin cross-user view of all ACP sessions."""
+    store = await get_acp_session_store()
+
+    has_ws_fn = _get_ws_checker()
+    records, total = await store.list_sessions(
+        user_id=user_id,
+        status=status_filter,
+        agent_type=agent_type,
+        limit=limit,
+        offset=offset,
+    )
+    sessions = [
+        ACPSessionInfo(**rec.to_info_dict(
+            has_websocket=has_ws_fn(rec.session_id),
+        ))
+        for rec in records
+    ]
+    return ACPSessionListResponse(sessions=sessions, total=total)
+
+
+@router.get("/acp/sessions/{session_id}/usage", response_model=ACPSessionUsageResponse)
+async def admin_acp_session_usage(session_id: str) -> ACPSessionUsageResponse:
+    """Get token usage for any ACP session (admin view)."""
+    store = await get_acp_session_store()
+    rec = await store.get_session(session_id)
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+    return ACPSessionUsageResponse(
+        session_id=rec.session_id,
+        user_id=rec.user_id,
+        agent_type=rec.agent_type,
+        usage=ACPTokenUsage(**rec.usage.to_dict()),
+        message_count=rec.message_count,
+        created_at=rec.created_at,
+        last_activity_at=rec.last_activity_at,
+    )
+
+
+@router.post("/acp/sessions/{session_id}/close")
+async def admin_close_acp_session(session_id: str) -> dict[str, str]:
+    """Force-close an ACP session (admin action)."""
+    store = await get_acp_session_store()
+    rec = await store.get_session(session_id)
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+    # Try to close on the runner client as well
+    try:
+        from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import get_runner_client
+        client = await get_runner_client()
+        await client.close_session(session_id)
+    except _NONCRITICAL:
+        pass
+    await store.close_session(session_id)
+    return {"status": "ok", "session_id": session_id}
+
+
+# ---------------------------------------------------------------------------
+# Agent Configuration CRUD
+# ---------------------------------------------------------------------------
+
+@router.get("/acp/agents", response_model=ACPAgentConfigListResponse)
+async def admin_list_agent_configs(
+    org_id: int | None = Query(default=None),
+    team_id: int | None = Query(default=None),
+    enabled_only: bool = Query(default=False),
+) -> ACPAgentConfigListResponse:
+    """List all custom agent configurations."""
+    store = await get_acp_session_store()
+    configs = await store.list_agent_configs(org_id=org_id, team_id=team_id, enabled_only=enabled_only)
+    return ACPAgentConfigListResponse(
+        agents=[ACPAgentConfigResponse(**c.to_dict()) for c in configs],
+        total=len(configs),
+    )
+
+
+@router.post("/acp/agents", response_model=ACPAgentConfigResponse, status_code=status.HTTP_201_CREATED)
+async def admin_create_agent_config(payload: ACPAgentConfigCreate) -> ACPAgentConfigResponse:
+    """Create a new custom agent configuration."""
+    store = await get_acp_session_store()
+    config = await store.create_agent_config(payload.model_dump())
+    return ACPAgentConfigResponse(**config.to_dict())
+
+
+@router.get("/acp/agents/{config_id}", response_model=ACPAgentConfigResponse)
+async def admin_get_agent_config(config_id: int) -> ACPAgentConfigResponse:
+    """Get a specific agent configuration."""
+    store = await get_acp_session_store()
+    config = await store.get_agent_config(config_id)
+    if not config:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent_config_not_found")
+    return ACPAgentConfigResponse(**config.to_dict())
+
+
+@router.put("/acp/agents/{config_id}", response_model=ACPAgentConfigResponse)
+async def admin_update_agent_config(config_id: int, payload: ACPAgentConfigCreate) -> ACPAgentConfigResponse:
+    """Update an agent configuration."""
+    store = await get_acp_session_store()
+    config = await store.update_agent_config(config_id, payload.model_dump())
+    if not config:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent_config_not_found")
+    return ACPAgentConfigResponse(**config.to_dict())
+
+
+@router.delete("/acp/agents/{config_id}")
+async def admin_delete_agent_config(config_id: int) -> dict[str, str]:
+    """Delete an agent configuration."""
+    store = await get_acp_session_store()
+    deleted = await store.delete_agent_config(config_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent_config_not_found")
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Permission Policy CRUD
+# ---------------------------------------------------------------------------
+
+@router.get("/acp/permission-policies", response_model=ACPPermissionPolicyListResponse)
+async def admin_list_permission_policies(
+    org_id: int | None = Query(default=None),
+    team_id: int | None = Query(default=None),
+) -> ACPPermissionPolicyListResponse:
+    """List tool permission policies."""
+    store = await get_acp_session_store()
+    policies = await store.list_permission_policies(org_id=org_id, team_id=team_id)
+    return ACPPermissionPolicyListResponse(
+        policies=[
+            ACPPermissionPolicyResponse(
+                id=p.id,
+                name=p.name,
+                description=p.description,
+                rules=[{"tool_pattern": r.tool_pattern, "tier": r.tier} for r in p.rules],
+                org_id=p.org_id,
+                team_id=p.team_id,
+                priority=p.priority,
+                created_at=p.created_at,
+                updated_at=p.updated_at,
+            )
+            for p in policies
+        ],
+        total=len(policies),
+    )
+
+
+@router.post("/acp/permission-policies", response_model=ACPPermissionPolicyResponse, status_code=status.HTTP_201_CREATED)
+async def admin_create_permission_policy(payload: ACPPermissionPolicyCreate) -> ACPPermissionPolicyResponse:
+    """Create a new tool permission policy."""
+    store = await get_acp_session_store()
+    policy = await store.create_permission_policy(payload.model_dump())
+    return ACPPermissionPolicyResponse(
+        id=policy.id,
+        name=policy.name,
+        description=policy.description,
+        rules=[{"tool_pattern": r.tool_pattern, "tier": r.tier} for r in policy.rules],
+        org_id=policy.org_id,
+        team_id=policy.team_id,
+        priority=policy.priority,
+        created_at=policy.created_at,
+        updated_at=policy.updated_at,
+    )
+
+
+@router.put("/acp/permission-policies/{policy_id}", response_model=ACPPermissionPolicyResponse)
+async def admin_update_permission_policy(policy_id: int, payload: ACPPermissionPolicyCreate) -> ACPPermissionPolicyResponse:
+    """Update a permission policy."""
+    store = await get_acp_session_store()
+    policy = await store.update_permission_policy(policy_id, payload.model_dump())
+    if not policy:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="policy_not_found")
+    return ACPPermissionPolicyResponse(
+        id=policy.id,
+        name=policy.name,
+        description=policy.description,
+        rules=[{"tool_pattern": r.tool_pattern, "tier": r.tier} for r in policy.rules],
+        org_id=policy.org_id,
+        team_id=policy.team_id,
+        priority=policy.priority,
+        created_at=policy.created_at,
+        updated_at=policy.updated_at,
+    )
+
+
+@router.delete("/acp/permission-policies/{policy_id}")
+async def admin_delete_permission_policy(policy_id: int) -> dict[str, str]:
+    """Delete a permission policy."""
+    store = await get_acp_session_store()
+    deleted = await store.delete_permission_policy(policy_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="policy_not_found")
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _get_ws_checker():
+    """Return a function to check WebSocket connections, best-effort."""
+    try:
+        from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
+            _runner_client,
+            _sandbox_client,
+        )
+        active_client = _sandbox_client or _runner_client
+        if active_client and hasattr(active_client, "has_websocket_connections"):
+            return active_client.has_websocket_connections
+    except _NONCRITICAL:
+        pass
+    return lambda _sid: False

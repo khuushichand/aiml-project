@@ -5,6 +5,7 @@
 
 import { createWithEqualityFn } from "zustand/traditional"
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware"
+import type { ChatHistory, Message } from "@/store/option"
 import type {
   AddSourceModalState,
   AddSourceTab,
@@ -42,45 +43,17 @@ const createMemoryStorage = (): StateStorage => ({
 })
 
 /**
- * Date fields that need to be revived from ISO strings
+ * Custom storage adapter for localStorage with SSR-safe fallback.
+ * Date revival is handled in `onRehydrateStorage`.
  */
-const DATE_FIELDS = new Set([
-  "workspaceCreatedAt",
-  "addedAt",
-  "createdAt",
-  "completedAt"
-])
-
-/**
- * Custom JSON parse reviver that converts ISO date strings back to Date objects
- */
-const dateReviver = (key: string, value: unknown): unknown => {
-  if (DATE_FIELDS.has(key) && typeof value === "string") {
-    const date = new Date(value)
-    return isNaN(date.getTime()) ? value : date
-  }
-  return value
-}
-
-/**
- * Custom storage that handles Date serialization/deserialization
- */
-const createWorkspaceStorage = (): StateStorage => {
+export const createWorkspaceStorage = (): StateStorage => {
   if (typeof window === "undefined") {
     return createMemoryStorage()
   }
 
   return {
     getItem: (name: string): string | null => {
-      const value = localStorage.getItem(name)
-      if (!value) return null
-      try {
-        // Parse with date reviver
-        const parsed = JSON.parse(value, dateReviver)
-        return JSON.stringify(parsed)
-      } catch {
-        return value
-      }
+      return localStorage.getItem(name)
     },
     setItem: (name: string, value: string): void => {
       localStorage.setItem(name, value)
@@ -107,6 +80,7 @@ interface SourcesState {
   sources: WorkspaceSource[]
   selectedSourceIds: string[]
   sourceSearchQuery: string
+  sourceFocusTarget: { sourceId: string; token: number } | null
   sourcesLoading: boolean
   sourcesError: string | null
 }
@@ -120,12 +94,15 @@ interface StudioState {
 }
 
 interface UIState {
+  storeHydrated: boolean
   leftPaneCollapsed: boolean
   rightPaneCollapsed: boolean
   addSourceModalOpen: boolean
   addSourceModalTab: AddSourceTab
   addSourceProcessing: boolean
   addSourceError: string | null
+  chatFocusTarget: { messageId: string; token: number } | null
+  noteFocusTarget: { field: "title" | "content"; token: number } | null
 }
 
 interface AudioSettingsState {
@@ -157,6 +134,25 @@ interface WorkspaceSnapshotsState {
   workspaceSnapshots: Record<string, WorkspaceSnapshot>
 }
 
+export interface WorkspaceChatSession {
+  messages: Message[]
+  history: ChatHistory
+  historyId: string | null
+  serverChatId: string | null
+}
+
+interface WorkspaceChatSessionsState {
+  workspaceChatSessions: Record<string, WorkspaceChatSession>
+}
+
+type CaptureNoteMode = "append" | "replace"
+
+interface CaptureToNoteInput {
+  title?: string
+  content: string
+  mode?: CaptureNoteMode
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Action Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -181,6 +177,9 @@ interface SourcesActions {
   deselectAllSources: () => void
   setSelectedSourceIds: (ids: string[]) => void
   setSourceSearchQuery: (query: string) => void
+  focusSourceById: (id: string) => boolean
+  focusSourceByMediaId: (mediaId: number) => boolean
+  clearSourceFocusTarget: () => void
   setSourcesLoading: (loading: boolean) => void
   setSourcesError: (error: string | null) => void
   getSelectedSources: () => WorkspaceSource[]
@@ -209,6 +208,7 @@ interface StudioActions {
   updateNoteTitle: (title: string) => void
   updateNoteKeywords: (keywords: string[]) => void
   clearCurrentNote: () => void
+  captureToCurrentNote: (input: CaptureToNoteInput) => void
   loadNote: (note: { id: number; title: string; content: string; keywords?: string[]; version?: number }) => void
 }
 
@@ -222,6 +222,10 @@ interface UIActions {
   setAddSourceModalTab: (tab: AddSourceTab) => void
   setAddSourceProcessing: (processing: boolean) => void
   setAddSourceError: (error: string | null) => void
+  focusChatMessageById: (messageId: string) => boolean
+  clearChatFocusTarget: () => void
+  focusWorkspaceNote: (field?: "title" | "content") => void
+  clearNoteFocusTarget: () => void
 }
 
 interface AudioSettingsActions {
@@ -248,6 +252,15 @@ interface WorkspaceListActions {
   getSavedWorkspaces: () => SavedWorkspace[]
   /** Get archived workspaces sorted by last accessed */
   getArchivedWorkspaces: () => SavedWorkspace[]
+  /** Save chat session state for a workspace */
+  saveWorkspaceChatSession: (
+    workspaceId: string,
+    session: WorkspaceChatSession
+  ) => void
+  /** Retrieve chat session state for a workspace */
+  getWorkspaceChatSession: (workspaceId: string) => WorkspaceChatSession | null
+  /** Clear chat session state for a workspace */
+  clearWorkspaceChatSession: (workspaceId: string) => void
 }
 
 interface ResetActions {
@@ -267,6 +280,7 @@ export type WorkspaceState = WorkspaceIdentityState &
   AudioSettingsState &
   WorkspaceListState &
   WorkspaceSnapshotsState &
+  WorkspaceChatSessionsState &
   WorkspaceIdentityActions &
   SourcesActions &
   StudioActions &
@@ -299,6 +313,7 @@ const initialSourcesState: SourcesState = {
   sources: [],
   selectedSourceIds: [],
   sourceSearchQuery: "",
+  sourceFocusTarget: null,
   sourcesLoading: false,
   sourcesError: null
 }
@@ -312,12 +327,15 @@ const initialStudioState: StudioState = {
 }
 
 const initialUIState: UIState = {
+  storeHydrated: false,
   leftPaneCollapsed: false,
   rightPaneCollapsed: false,
   addSourceModalOpen: false,
   addSourceModalTab: "upload",
   addSourceProcessing: false,
-  addSourceError: null
+  addSourceError: null,
+  chatFocusTarget: null,
+  noteFocusTarget: null
 }
 
 const initialAudioSettingsState: AudioSettingsState = {
@@ -333,6 +351,10 @@ const initialWorkspaceSnapshotsState: WorkspaceSnapshotsState = {
   workspaceSnapshots: {}
 }
 
+const initialWorkspaceChatSessionsState: WorkspaceChatSessionsState = {
+  workspaceChatSessions: {}
+}
+
 const initialState = {
   ...initialIdentityState,
   ...initialSourcesState,
@@ -340,7 +362,8 @@ const initialState = {
   ...initialUIState,
   ...initialAudioSettingsState,
   ...initialWorkspaceListState,
-  ...initialWorkspaceSnapshotsState
+  ...initialWorkspaceSnapshotsState,
+  ...initialWorkspaceChatSessionsState
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -377,6 +400,9 @@ interface PersistedWorkspaceState {
 
   // Workspace snapshots keyed by workspace ID
   workspaceSnapshots: Record<string, WorkspaceSnapshot>
+
+  // Workspace chat sessions keyed by workspace ID
+  workspaceChatSessions: Record<string, WorkspaceChatSession>
 }
 
 const MAX_SAVED_WORKSPACES = 10
@@ -561,6 +587,15 @@ const sortByLastAccessedDesc = (workspaces: SavedWorkspace[]): SavedWorkspace[] 
     (a, b) =>
       new Date(b.lastAccessedAt).getTime() - new Date(a.lastAccessedAt).getTime()
   )
+
+const cloneWorkspaceChatSession = (
+  session: WorkspaceChatSession
+): WorkspaceChatSession => ({
+  messages: session.messages.map((message) => ({ ...message })),
+  history: session.history.map((entry) => ({ ...entry })),
+  historyId: session.historyId,
+  serverChatId: session.serverChatId
+})
 
 const createFallbackWorkspaceSnapshot = (): WorkspaceSnapshot => {
   const replacementId = generateWorkspaceId()
@@ -815,6 +850,36 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
 
     setSourceSearchQuery: (query) => set({ sourceSearchQuery: query }),
 
+    focusSourceById: (id) => {
+      const state = get()
+      const sourceExists = state.sources.some((source) => source.id === id)
+      if (!sourceExists) return false
+
+      set((current) => ({
+        sourceFocusTarget: {
+          sourceId: id,
+          token: (current.sourceFocusTarget?.token ?? 0) + 1
+        }
+      }))
+      return true
+    },
+
+    focusSourceByMediaId: (mediaId) => {
+      const state = get()
+      const source = state.sources.find((entry) => entry.mediaId === mediaId)
+      if (!source) return false
+
+      set((current) => ({
+        sourceFocusTarget: {
+          sourceId: source.id,
+          token: (current.sourceFocusTarget?.token ?? 0) + 1
+        }
+      }))
+      return true
+    },
+
+    clearSourceFocusTarget: () => set({ sourceFocusTarget: null }),
+
     setSourcesLoading: (loading) => set({ sourcesLoading: loading }),
 
     setSourcesError: (error) => set({ sourcesError: error }),
@@ -900,6 +965,35 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     clearCurrentNote: () =>
       set({ currentNote: { ...DEFAULT_WORKSPACE_NOTE } }),
 
+    captureToCurrentNote: ({ title, content, mode = "append" }) =>
+      set((state) => {
+        const trimmedContent = content.trim()
+        if (!trimmedContent) return state
+
+        const cleanedTitle = (title || "").trim().slice(0, 120)
+        const heading = cleanedTitle ? `## ${cleanedTitle}\n\n` : ""
+        const captureBlock = `${heading}${trimmedContent}`
+        const existingContent = state.currentNote.content.trim()
+        const resolvedMode: CaptureNoteMode =
+          mode === "replace" ? "replace" : "append"
+
+        const nextContent =
+          resolvedMode === "replace" || existingContent.length === 0
+            ? captureBlock
+            : `${existingContent}\n\n---\n\n${captureBlock}`
+        const nextTitle =
+          state.currentNote.title.trim() || cleanedTitle || state.currentNote.title
+
+        return {
+          currentNote: {
+            ...state.currentNote,
+            title: nextTitle,
+            content: nextContent,
+            isDirty: true
+          }
+        }
+      }),
+
     loadNote: (note) =>
       set({
         currentNote: {
@@ -947,6 +1041,30 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
       set({ addSourceProcessing: processing }),
 
     setAddSourceError: (error) => set({ addSourceError: error }),
+
+    focusChatMessageById: (messageId) => {
+      const normalizedMessageId = messageId.trim()
+      if (!normalizedMessageId) return false
+      set((state) => ({
+        chatFocusTarget: {
+          messageId: normalizedMessageId,
+          token: (state.chatFocusTarget?.token ?? 0) + 1
+        }
+      }))
+      return true
+    },
+
+    clearChatFocusTarget: () => set({ chatFocusTarget: null }),
+
+    focusWorkspaceNote: (field = "content") =>
+      set((state) => ({
+        noteFocusTarget: {
+          field,
+          token: (state.noteFocusTarget?.token ?? 0) + 1
+        }
+      })),
+
+    clearNoteFocusTarget: () => set({ noteFocusTarget: null }),
 
     // ─────────────────────────────────────────────────────────────────────────
     // Audio Settings Actions
@@ -1264,12 +1382,15 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         )
         const { [id]: _removedWorkspace, ...remainingSnapshots } =
           state.workspaceSnapshots
+        const { [id]: _removedChatSession, ...remainingChatSessions } =
+          state.workspaceChatSessions
 
         if (state.workspaceId !== id) {
           return {
             savedWorkspaces: nextSavedWorkspaces,
             archivedWorkspaces: nextArchivedWorkspaces,
-            workspaceSnapshots: remainingSnapshots
+            workspaceSnapshots: remainingSnapshots,
+            workspaceChatSessions: remainingChatSessions
           }
         }
 
@@ -1294,7 +1415,8 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
             workspaceSnapshots: {
               ...remainingSnapshots,
               [fallbackSnapshot.workspaceId]: fallbackSnapshot
-            }
+            },
+            workspaceChatSessions: remainingChatSessions
           }
         }
 
@@ -1307,7 +1429,8 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           workspaceSnapshots: {
             ...remainingSnapshots,
             [replacementSnapshot.workspaceId]: replacementSnapshot
-          }
+          },
+          workspaceChatSessions: remainingChatSessions
         }
       })
     },
@@ -1320,6 +1443,33 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     getArchivedWorkspaces: () => {
       const state = get()
       return sortByLastAccessedDesc(state.archivedWorkspaces)
+    },
+
+    saveWorkspaceChatSession: (workspaceId, session) => {
+      if (!workspaceId) return
+      set((state) => ({
+        workspaceChatSessions: {
+          ...state.workspaceChatSessions,
+          [workspaceId]: cloneWorkspaceChatSession(session)
+        }
+      }))
+    },
+
+    getWorkspaceChatSession: (workspaceId) => {
+      const state = get()
+      const session = state.workspaceChatSessions[workspaceId]
+      return session ? cloneWorkspaceChatSession(session) : null
+    },
+
+    clearWorkspaceChatSession: (workspaceId) => {
+      if (!workspaceId) return
+      set((state) => {
+        const { [workspaceId]: _removedSession, ...remainingSessions } =
+          state.workspaceChatSessions
+        return {
+          workspaceChatSessions: remainingSessions
+        }
+      })
     },
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1390,7 +1540,10 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           archivedWorkspaces: state.archivedWorkspaces,
 
           // Workspace snapshots
-          workspaceSnapshots: persistedSnapshots
+          workspaceSnapshots: persistedSnapshots,
+
+          // Workspace chat sessions
+          workspaceChatSessions: state.workspaceChatSessions
         }
       },
       // Rehydrate dates properly and handle migration
@@ -1430,6 +1583,7 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
             )
           }
           state.workspaceSnapshots = hydratedSnapshots
+          state.workspaceChatSessions = state.workspaceChatSessions || {}
 
           // Ensure active workspace snapshot exists and use it as canonical source
           if (state.workspaceId) {
@@ -1452,6 +1606,8 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
               createSavedWorkspaceEntry(activeSnapshot)
             )
           }
+
+          state.storeHydrated = true
         }
       }
     }

@@ -34,6 +34,7 @@ import { useConfirmDanger } from '@/components/Common/confirm-danger'
 import { bgRequest } from '@/services/background-proxy'
 import type { MediaResultItem } from './types'
 import { getTextStats } from '@/utils/text-stats'
+import { formatRelativeTime } from '@/utils/dateFormatters'
 import {
   type MediaNavigationFormat,
   MEDIA_DISPLAY_MODE_FORMAT_TO_LABEL
@@ -47,7 +48,13 @@ import {
 } from '@/utils/media-navigation-target'
 import { applyMediaNavigationTarget } from '@/utils/media-navigation-target-actions'
 import { useSetting } from '@/hooks/useSetting'
-import { MEDIA_COLLAPSED_SECTIONS_SETTING } from '@/services/settings/ui-settings'
+import { useMediaReadingProgress } from '@/hooks/useMediaReadingProgress'
+import {
+  MEDIA_COLLAPSED_SECTIONS_SETTING,
+  MEDIA_TEXT_SIZE_PRESET_SETTING,
+  type MediaTextSizePreset
+} from '@/services/settings/ui-settings'
+import { estimateReadingTimeMinutes } from './mediaMetadataUtils'
 
 // Lazy load ContentEditModal for code splitting
 const ContentEditModal = React.lazy(() =>
@@ -74,9 +81,204 @@ const shouldForceHardBreaks = (text: string, mediaType?: string) => {
   return !looksLikeMarkdown(text)
 }
 
+const TEXT_SIZE_CONTROL_OPTIONS: Array<{
+  value: MediaTextSizePreset
+  label: string
+  className: string
+  markdownSize: 'xs' | 'sm' | 'base'
+  richClass: string
+}> = [
+  {
+    value: 's',
+    label: 'S',
+    className: 'text-xs leading-relaxed',
+    markdownSize: 'xs',
+    richClass: 'prose-xs'
+  },
+  {
+    value: 'm',
+    label: 'M',
+    className: 'text-sm leading-relaxed',
+    markdownSize: 'sm',
+    richClass: 'prose-sm'
+  },
+  {
+    value: 'l',
+    label: 'L',
+    className: 'text-base leading-relaxed',
+    markdownSize: 'base',
+    richClass: 'prose'
+  }
+]
+
+const LEADING_TRANSCRIPT_TIMESTAMP_PATTERN =
+  /^(\s*)(?:\[(\d{1,2}:\d{2}(?::\d{2})?)\]|(\d{1,2}:\d{2}(?::\d{2})?))(\s*[-–—:]?\s*)(.*)$/
+
+const parseTimestampToSeconds = (value: string): number | null => {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const parts = trimmed.split(':').map((part) => Number(part))
+  if (parts.some((part) => !Number.isFinite(part) || part < 0)) return null
+  if (parts.length === 2) {
+    const [minutes, seconds] = parts
+    return Math.floor(minutes * 60 + seconds)
+  }
+  if (parts.length === 3) {
+    const [hours, minutes, seconds] = parts
+    return Math.floor(hours * 3600 + minutes * 60 + seconds)
+  }
+  return null
+}
+
+const resolveMediaMimeType = (mediaType: string, mediaDetail: any): string => {
+  const candidates = [
+    mediaDetail?.file_mime_type,
+    mediaDetail?.mime_type,
+    mediaDetail?.metadata?.mime_type,
+    mediaDetail?.metadata?.content_type
+  ]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim()
+    }
+  }
+  if (mediaType === 'video') return 'video/mp4'
+  if (mediaType === 'audio') return 'audio/mpeg'
+  return 'application/octet-stream'
+}
+
+export const shouldShowMediaDeveloperTools = (
+  env: Record<string, unknown> | null | undefined
+): boolean => {
+  if (!env || typeof env !== 'object') return false
+  const mode = String((env as Record<string, unknown>).MODE || '').toLowerCase()
+  return Boolean((env as Record<string, unknown>).DEV) || mode === 'development'
+}
+
 const firstNonEmptyString = (...vals: any[]): string => {
   for (const v of vals) {
     if (typeof v === 'string' && v.trim().length > 0) return v
+  }
+  return ''
+}
+
+const firstValidDateString = (...vals: any[]): string | null => {
+  for (const v of vals) {
+    if (typeof v !== 'string') continue
+    const trimmed = v.trim()
+    if (!trimmed) continue
+    const asDate = new Date(trimmed)
+    if (!Number.isNaN(asDate.getTime())) {
+      return trimmed
+    }
+  }
+  return null
+}
+
+const SAFE_METADATA_PRIORITY_KEYS = [
+  'doi',
+  'pmid',
+  'pmcid',
+  'arxiv_id',
+  'journal',
+  'license'
+] as const
+
+const SAFE_METADATA_LABELS: Record<string, string> = {
+  doi: 'DOI',
+  pmid: 'PMID',
+  pmcid: 'PMCID',
+  arxiv_id: 'arXiv',
+  journal: 'Journal',
+  license: 'License'
+}
+
+const toDisplayMetadataLabel = (key: string): string => {
+  if (SAFE_METADATA_LABELS[key]) return SAFE_METADATA_LABELS[key]
+  return key
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase())
+}
+
+const normalizeVectorProcessingStatus = (value: unknown): string | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value >= 1) return 'completed'
+    if (value < 0) return 'failed'
+    return 'pending'
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const lowered = value.trim().toLowerCase()
+    if (['1', 'true', 'complete', 'completed', 'done', 'success'].includes(lowered)) {
+      return 'completed'
+    }
+    if (['-1', 'false', 'failed', 'error'].includes(lowered)) {
+      return 'failed'
+    }
+    if (['0', 'pending', 'queued', 'in_progress', 'in-progress'].includes(lowered)) {
+      return 'pending'
+    }
+    return lowered
+  }
+  return null
+}
+
+const normalizeChunkingStatus = (value: unknown): string | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value >= 1) return 'completed'
+    if (value < 0) return 'failed'
+    return 'pending'
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const lowered = value.trim().toLowerCase()
+    if (['1', 'true', 'complete', 'completed', 'done', 'success'].includes(lowered)) {
+      return 'completed'
+    }
+    if (['-1', 'false', 'failed', 'error'].includes(lowered)) {
+      return 'failed'
+    }
+    if (['0', 'pending', 'queued', 'in_progress', 'in-progress'].includes(lowered)) {
+      return 'pending'
+    }
+    return lowered
+  }
+  return null
+}
+
+const processingStatusClass = (status: string): string => {
+  if (status.includes('fail') || status.includes('error')) {
+    return 'bg-danger/10 text-danger'
+  }
+  if (status.includes('complete') || status.includes('success') || status === 'done') {
+    return 'bg-success/10 text-success'
+  }
+  return 'bg-warn/10 text-warn'
+}
+
+const formatProcessingStatus = (status: string): string =>
+  status
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (match) => match.toUpperCase())
+
+const toDisplayMetadataValue = (value: unknown): string => {
+  if (value == null) return ''
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => toDisplayMetadataValue(entry))
+      .filter((entry) => entry.length > 0)
+      .join(', ')
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return ''
+    }
   }
   return ''
 }
@@ -305,6 +507,9 @@ export function ContentViewer({
   const [collapsedSections, setCollapsedSections] = useSetting(
     MEDIA_COLLAPSED_SECTIONS_SETTING
   )
+  const [textSizePreset, setTextSizePreset] = useSetting(
+    MEDIA_TEXT_SIZE_PRESET_SETTING
+  )
   const [analysisModalOpen, setAnalysisModalOpen] = useState(false)
   const [editingKeywords, setEditingKeywords] = useState<string[]>([])
   const [savingKeywords, setSavingKeywords] = useState(false)
@@ -322,8 +527,18 @@ export function ContentViewer({
   const [diffRightText, setDiffRightText] = useState('')
   const [diffLeftLabel, setDiffLeftLabel] = useState('')
   const [diffRightLabel, setDiffRightLabel] = useState('')
+  const [diffMetadataSummary, setDiffMetadataSummary] = useState<{
+    left: string[]
+    right: string[]
+    changed: string[]
+  } | null>(null)
   const [contentEditModalOpen, setContentEditModalOpen] = useState(false)
   const [editingContentText, setEditingContentText] = useState('')
+  const [metadataDetailsExpanded, setMetadataDetailsExpanded] = useState(false)
+  const [showBackToTop, setShowBackToTop] = useState(false)
+  const [embeddedMediaUrl, setEmbeddedMediaUrl] = useState<string | null>(null)
+  const [embeddedMediaLoading, setEmbeddedMediaLoading] = useState(false)
+  const [embeddedMediaError, setEmbeddedMediaError] = useState<string | null>(null)
   const [deletingItem, setDeletingItem] = useState(false)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const lastSanitizationTelemetryKeyRef = useRef<string>('')
@@ -334,6 +549,166 @@ export function ContentViewer({
   const pageRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const contentBodyRef = useRef<HTMLDivElement | null>(null)
   const contentScrollContainerRef = useRef<HTMLDivElement | null>(null)
+  const mediaPlayerRef = useRef<HTMLMediaElement | null>(null)
+  const embeddedMediaObjectUrlRef = useRef<string | null>(null)
+
+  const resolvedTextSizePreset: MediaTextSizePreset = useMemo(() => {
+    const normalized = String(textSizePreset || '').toLowerCase()
+    if (normalized === 's' || normalized === 'l') return normalized
+    return 'm'
+  }, [textSizePreset])
+  const textSizeControl =
+    TEXT_SIZE_CONTROL_OPTIONS.find(
+      (option) => option.value === resolvedTextSizePreset
+    ) || TEXT_SIZE_CONTROL_OPTIONS[1]
+  const contentBodyTypographyClass = textSizeControl.className
+  const markdownPreviewSize = textSizeControl.markdownSize
+  const richTextTypographyClass = textSizeControl.richClass
+  const selectedMediaId = selectedMedia?.id != null ? String(selectedMedia.id) : null
+  const isAwaitingSelectionUpdate =
+    !!pendingDeleteId && !!selectedMediaId && pendingDeleteId === selectedMediaId
+  const mediaType = String(
+    selectedMedia?.meta?.type || mediaDetail?.type || mediaDetail?.media_type || ''
+  )
+    .toLowerCase()
+    .trim()
+  const isPlayableMediaType = mediaType === 'audio' || mediaType === 'video'
+  const hasOriginalFile = Boolean(
+    mediaDetail?.has_original_file ??
+      mediaDetail?.hasOriginalFile ??
+      selectedMedia?.raw?.has_original_file ??
+      selectedMedia?.raw?.hasOriginalFile
+  )
+  const shouldShowEmbeddedPlayer =
+    selectedMedia?.kind === 'media' && isPlayableMediaType && hasOriginalFile
+  const embeddedMediaMimeType = useMemo(
+    () => resolveMediaMimeType(mediaType, mediaDetail),
+    [mediaDetail, mediaType]
+  )
+  const showDeveloperTools = useMemo(() => {
+    try {
+      const runtimeEnv = (import.meta as any)?.env || {}
+      return shouldShowMediaDeveloperTools(runtimeEnv)
+    } catch {
+      return false
+    }
+  }, [])
+
+  useMediaReadingProgress({
+    mediaId: selectedMedia?.id ?? null,
+    mediaKind: selectedMedia?.kind ?? null,
+    mediaDetail,
+    contentLength: content.length,
+    scrollContainerRef: contentScrollContainerRef,
+    hasNavigationTarget: Boolean(navigationTarget)
+  })
+
+  useEffect(() => {
+    const container = contentScrollContainerRef.current
+    if (!container) {
+      setShowBackToTop(false)
+      return
+    }
+
+    const updateVisibility = () => {
+      setShowBackToTop(container.scrollTop >= 500)
+    }
+
+    updateVisibility()
+    container.addEventListener('scroll', updateVisibility, { passive: true })
+    return () => {
+      container.removeEventListener('scroll', updateVisibility)
+    }
+  }, [content.length, selectedMedia?.id])
+
+  const handleBackToTop = useCallback(() => {
+    const container = contentScrollContainerRef.current
+    if (!container) return
+    if (typeof container.scrollTo === 'function') {
+      container.scrollTo({ top: 0, behavior: 'smooth' })
+    } else {
+      container.scrollTop = 0
+    }
+    setShowBackToTop(false)
+  }, [])
+
+  useEffect(() => {
+    const revokeObjectUrl = () => {
+      if (
+        embeddedMediaObjectUrlRef.current &&
+        typeof URL !== 'undefined' &&
+        typeof URL.revokeObjectURL === 'function'
+      ) {
+        URL.revokeObjectURL(embeddedMediaObjectUrlRef.current)
+        embeddedMediaObjectUrlRef.current = null
+      }
+    }
+
+    mediaPlayerRef.current = null
+    setEmbeddedMediaError(null)
+    setEmbeddedMediaLoading(false)
+    setEmbeddedMediaUrl(null)
+    revokeObjectUrl()
+
+    if (!shouldShowEmbeddedPlayer || !selectedMediaId) {
+      return () => {
+        revokeObjectUrl()
+      }
+    }
+
+    let cancelled = false
+    setEmbeddedMediaLoading(true)
+
+    ;(async () => {
+      try {
+        const fileBuffer = await bgRequest<ArrayBuffer>({
+          path: `/api/v1/media/${selectedMediaId}/file` as any,
+          method: 'GET' as any,
+          responseType: 'arrayBuffer'
+        })
+        if (cancelled) return
+
+        const asArrayBuffer =
+          fileBuffer instanceof ArrayBuffer
+            ? fileBuffer
+            : fileBuffer && (fileBuffer as any).buffer instanceof ArrayBuffer
+              ? (fileBuffer as any).buffer
+              : null
+        if (!asArrayBuffer) {
+          throw new Error('No media file bytes returned')
+        }
+        if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+          throw new Error('Object URLs are unavailable in this environment')
+        }
+
+        const blob = new Blob([asArrayBuffer], { type: embeddedMediaMimeType })
+        const objectUrl = URL.createObjectURL(blob)
+        embeddedMediaObjectUrlRef.current = objectUrl
+        setEmbeddedMediaUrl(objectUrl)
+      } catch (error) {
+        if (cancelled) return
+        console.debug('Failed to load embedded media file', error)
+        setEmbeddedMediaError('Unable to load media preview.')
+      } finally {
+        if (!cancelled) {
+          setEmbeddedMediaLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      revokeObjectUrl()
+    }
+  }, [embeddedMediaMimeType, selectedMediaId, shouldShowEmbeddedPlayer])
+
+  const handleTranscriptTimestampSeek = useCallback((timestamp: string) => {
+    const seconds = parseTimestampToSeconds(timestamp)
+    if (seconds == null) return
+    const player = mediaPlayerRef.current
+    if (!player) return
+    player.currentTime = seconds
+  }, [])
 
   // Content length threshold for collapse (2500 chars)
   const CONTENT_COLLAPSE_THRESHOLD = 2500
@@ -355,6 +730,16 @@ export function ContentViewer({
         allowRichRendering
       }),
     [allowRichRendering, contentDisplayMode, resolvedContentFormat]
+  )
+  const transcriptLines = useMemo(
+    () => (content ? content.replace(/\r\n/g, '\n').split('\n') : []),
+    [content]
+  )
+  const hasClickableTranscriptTimestamps = useMemo(
+    () =>
+      shouldShowEmbeddedPlayer &&
+      transcriptLines.some((line) => LEADING_TRANSCRIPT_TIMESTAMP_PATTERN.test(line)),
+    [shouldShowEmbeddedPlayer, transcriptLines]
   )
   const richSanitization = useMemo(() => {
     if (effectiveRenderMode !== 'html' || !content) {
@@ -380,10 +765,6 @@ export function ContentViewer({
       label: MEDIA_DISPLAY_MODE_FORMAT_TO_LABEL[mode]
     }))
   }, [allowRichRendering])
-
-  const selectedMediaId = selectedMedia?.id != null ? String(selectedMedia.id) : null
-  const isAwaitingSelectionUpdate =
-    !!pendingDeleteId && !!selectedMediaId && pendingDeleteId === selectedMediaId
 
   useEffect(() => {
     if (!selectedMediaId || !navigationTarget) {
@@ -729,6 +1110,10 @@ export function ContentViewer({
   useEffect(() => {
     setActiveAnalysisIndex(0)
     setAnalysisExpanded(false)
+  }, [selectedMedia?.id])
+
+  useEffect(() => {
+    setMetadataDetailsExpanded(false)
   }, [selectedMedia?.id])
 
   useEffect(() => {
@@ -1103,6 +1488,168 @@ export function ContentViewer({
       paragraphCount
     }
   }, [content, mediaDetail])
+  const readingTimeMinutes = useMemo(
+    () =>
+      estimateReadingTimeMinutes({
+        wordCount,
+        charCount
+      }),
+    [charCount, wordCount]
+  )
+  const ingestedAt = useMemo(
+    () =>
+      firstValidDateString(
+        selectedMedia?.meta?.created_at,
+        mediaDetail?.created_at,
+        mediaDetail?.ingested_at,
+        mediaDetail?.metadata?.created_at,
+        selectedMedia?.raw?.created_at
+      ),
+    [
+      mediaDetail?.created_at,
+      mediaDetail?.ingested_at,
+      mediaDetail?.metadata?.created_at,
+      selectedMedia?.meta?.created_at,
+      selectedMedia?.raw?.created_at
+    ]
+  )
+  const lastModifiedAt = useMemo(
+    () =>
+      firstValidDateString(
+        mediaDetail?.updated_at,
+        mediaDetail?.last_modified,
+        mediaDetail?.last_modified_at,
+        mediaDetail?.modified_at,
+        mediaDetail?.metadata?.updated_at,
+        mediaDetail?.metadata?.last_modified,
+        selectedMedia?.raw?.updated_at,
+        selectedMedia?.raw?.last_modified
+      ),
+    [
+      mediaDetail?.last_modified,
+      mediaDetail?.last_modified_at,
+      mediaDetail?.metadata?.last_modified,
+      mediaDetail?.metadata?.updated_at,
+      mediaDetail?.modified_at,
+      mediaDetail?.updated_at,
+      selectedMedia?.raw?.last_modified,
+      selectedMedia?.raw?.updated_at
+    ]
+  )
+  const ingestedLabel = ingestedAt
+    ? formatRelativeTime(ingestedAt, t, { compact: true })
+    : null
+  const lastModifiedLabel = lastModifiedAt
+    ? formatRelativeTime(lastModifiedAt, t, { compact: true })
+    : null
+  const readingTimeLabel =
+    readingTimeMinutes != null
+      ? t('review:mediaPage.readingTime', {
+          defaultValue: `${readingTimeMinutes} min read`,
+          minutes: readingTimeMinutes
+        })
+      : null
+  const safeMetadata = useMemo(() => {
+    const fromDetail = mediaDetail?.safe_metadata
+    if (fromDetail && typeof fromDetail === 'object' && !Array.isArray(fromDetail)) {
+      return fromDetail as Record<string, unknown>
+    }
+    const fromRaw = selectedMedia?.raw?.safe_metadata
+    if (fromRaw && typeof fromRaw === 'object' && !Array.isArray(fromRaw)) {
+      return fromRaw as Record<string, unknown>
+    }
+    return {} as Record<string, unknown>
+  }, [mediaDetail?.safe_metadata, selectedMedia?.raw?.safe_metadata])
+  const safeMetadataEntries = useMemo(() => {
+    const entries = Object.entries(safeMetadata)
+      .map(([key, value]) => ({
+        key,
+        label: toDisplayMetadataLabel(key),
+        value: toDisplayMetadataValue(value)
+      }))
+      .filter((entry) => entry.value.length > 0)
+
+    const priorityEntries = SAFE_METADATA_PRIORITY_KEYS.flatMap((key) => {
+      const match = entries.find((entry) => entry.key === key)
+      return match ? [match] : []
+    })
+    const priorityKeySet = new Set<string>(SAFE_METADATA_PRIORITY_KEYS)
+    const remainingEntries = entries
+      .filter((entry) => !priorityKeySet.has(entry.key))
+      .sort((left, right) => left.label.localeCompare(right.label))
+
+    return [...priorityEntries, ...remainingEntries]
+  }, [safeMetadata])
+  const chunkingStatus = useMemo(() => {
+    const candidates = [
+      mediaDetail?.chunking_status,
+      mediaDetail?.processing?.chunking_status,
+      mediaDetail?.processing?.chunking,
+      selectedMedia?.raw?.chunking_status,
+      selectedMedia?.raw?.processing?.chunking_status
+    ]
+    for (const candidate of candidates) {
+      const normalized = normalizeChunkingStatus(candidate)
+      if (normalized) return normalized
+    }
+    return null
+  }, [
+    mediaDetail?.chunking_status,
+    mediaDetail?.processing?.chunking,
+    mediaDetail?.processing?.chunking_status,
+    selectedMedia?.raw?.chunking_status,
+    selectedMedia?.raw?.processing?.chunking_status
+  ])
+  const vectorProcessingStatus = useMemo(() => {
+    const candidates = [
+      mediaDetail?.vector_processing,
+      mediaDetail?.vector_processing_status,
+      mediaDetail?.processing?.vector_processing,
+      mediaDetail?.processing?.vector_processing_status,
+      selectedMedia?.raw?.vector_processing,
+      selectedMedia?.raw?.vector_processing_status,
+      selectedMedia?.raw?.processing?.vector_processing,
+      selectedMedia?.raw?.processing?.vector_processing_status
+    ]
+    for (const candidate of candidates) {
+      const normalized = normalizeVectorProcessingStatus(candidate)
+      if (normalized) return normalized
+    }
+    return null
+  }, [
+    mediaDetail?.processing?.vector_processing,
+    mediaDetail?.processing?.vector_processing_status,
+    mediaDetail?.vector_processing,
+    mediaDetail?.vector_processing_status,
+    selectedMedia?.raw?.processing?.vector_processing,
+    selectedMedia?.raw?.processing?.vector_processing_status,
+    selectedMedia?.raw?.vector_processing,
+    selectedMedia?.raw?.vector_processing_status
+  ])
+  const processingStatusBadges = useMemo(() => {
+    const badges: Array<{ key: 'chunking' | 'vector'; label: string; status: string }> = []
+    if (chunkingStatus) {
+      badges.push({
+        key: 'chunking',
+        label: t('review:mediaPage.chunkingStatusLabel', {
+          defaultValue: 'Chunking'
+        }),
+        status: chunkingStatus
+      })
+    }
+    if (vectorProcessingStatus) {
+      badges.push({
+        key: 'vector',
+        label: t('review:mediaPage.vectorStatusLabel', {
+          defaultValue: 'Vector'
+        }),
+        status: vectorProcessingStatus
+      })
+    }
+    return badges
+  }, [chunkingStatus, t, vectorProcessingStatus])
+  const hasDetailedMetadata =
+    processingStatusBadges.length > 0 || safeMetadataEntries.length > 0
 
   if (!selectedMedia || isAwaitingSelectionUpdate) {
     return (
@@ -1159,7 +1706,7 @@ export function ContentViewer({
   }
 
   return (
-    <div ref={contentRef} className="flex-1 flex flex-col bg-bg">
+    <div ref={contentRef} className="relative flex-1 flex flex-col bg-bg">
       {/* Compact Header */}
       <div className="px-4 py-2 border-b border-border bg-surface">
         <div className="flex flex-col md:flex-row items-center gap-3">
@@ -1254,7 +1801,10 @@ export function ContentViewer({
         ) : (
         <div className="max-w-4xl mx-auto">
           {/* Meta Row */}
-          <div className="flex items-center gap-3 flex-wrap text-xs text-text-muted mb-3">
+          <div
+            className="flex items-center gap-3 flex-wrap text-xs text-text-muted mb-3"
+            data-testid="media-metadata-bar"
+          >
             {selectedMedia.meta?.type && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-surface2 text-text capitalize font-medium">
                 {selectedMedia.meta.type}
@@ -1286,10 +1836,138 @@ export function ContentViewer({
                 </span>
               )
             })()}
+            {ingestedLabel && (
+              <span
+                className="inline-flex items-center gap-1 rounded bg-surface2 px-1.5 py-0.5"
+                data-testid="media-ingested-date"
+                title={ingestedAt || undefined}
+              >
+                {t('review:mediaPage.ingestedLabel', { defaultValue: 'Ingested' })}{' '}
+                {ingestedLabel}
+              </span>
+            )}
+            {lastModifiedLabel && (
+              <span
+                className="inline-flex items-center gap-1 rounded bg-surface2 px-1.5 py-0.5"
+                data-testid="media-last-modified-date"
+                title={lastModifiedAt || undefined}
+              >
+                {t('review:mediaPage.lastModifiedLabel', { defaultValue: 'Updated' })}{' '}
+                {lastModifiedLabel}
+              </span>
+            )}
             <span className="flex items-center gap-1">
               <FileText className="w-3 h-3" />
               {wordCount.toLocaleString()} {t('review:mediaPage.words', { defaultValue: 'words' })}
             </span>
+            {readingTimeLabel && (
+              <span
+                className="inline-flex items-center gap-1 rounded bg-surface2 px-1.5 py-0.5"
+                data-testid="media-reading-time"
+              >
+                {readingTimeLabel}
+              </span>
+            )}
+            {processingStatusBadges.map((badge) => (
+              <span
+                key={badge.key}
+                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 ${processingStatusClass(
+                  badge.status
+                )}`}
+                data-testid={`media-processing-status-${badge.key}`}
+                data-status={badge.status}
+              >
+                {badge.label}: {formatProcessingStatus(badge.status)}
+              </span>
+            ))}
+          </div>
+
+          <div className="mb-4 rounded-lg border border-border bg-surface">
+            <button
+              type="button"
+              onClick={() => setMetadataDetailsExpanded((prev) => !prev)}
+              className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-medium text-text hover:bg-surface2"
+              aria-expanded={metadataDetailsExpanded}
+              data-testid="metadata-details-toggle"
+            >
+              <span>
+                {t('review:mediaPage.metadataDetailsLabel', {
+                  defaultValue: 'Metadata details'
+                })}
+              </span>
+              <span className="text-text-muted">
+                {metadataDetailsExpanded
+                  ? t('review:mediaPage.hideMetadataDetails', {
+                      defaultValue: 'Hide'
+                    })
+                  : t('review:mediaPage.showMetadataDetails', {
+                      defaultValue: hasDetailedMetadata ? 'Show' : 'Open'
+                    })}
+              </span>
+            </button>
+            {metadataDetailsExpanded && (
+              <div
+                className="space-y-3 border-t border-border px-3 py-2 text-xs"
+                data-testid="metadata-details-panel"
+              >
+                <div className="space-y-1">
+                  <p className="font-medium text-text">
+                    {t('review:mediaPage.processingStatusLabel', {
+                      defaultValue: 'Processing status'
+                    })}
+                  </p>
+                  {processingStatusBadges.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {processingStatusBadges.map((badge) => (
+                        <span
+                          key={`detail-${badge.key}`}
+                          className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 ${processingStatusClass(
+                            badge.status
+                          )}`}
+                          data-testid={`metadata-processing-${badge.key}`}
+                          data-status={badge.status}
+                        >
+                          {badge.label}: {formatProcessingStatus(badge.status)}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-text-muted" data-testid="metadata-processing-empty">
+                      {t('review:mediaPage.processingStatusEmpty', {
+                        defaultValue: 'Processing status is not available for this item.'
+                      })}
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  <p className="font-medium text-text">
+                    {t('review:mediaPage.additionalMetadataLabel', {
+                      defaultValue: 'Additional metadata'
+                    })}
+                  </p>
+                  {safeMetadataEntries.length > 0 ? (
+                    <dl className="grid gap-1">
+                      {safeMetadataEntries.map((entry) => (
+                        <div
+                          key={entry.key}
+                          className="grid grid-cols-[minmax(0,150px)_1fr] gap-2 rounded bg-surface2 px-2 py-1"
+                          data-testid={`metadata-field-${entry.key}`}
+                        >
+                          <dt className="text-text-muted">{entry.label}</dt>
+                          <dd className="break-words text-text">{entry.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  ) : (
+                    <p className="text-text-muted" data-testid="metadata-safe-empty">
+                      {t('review:mediaPage.additionalMetadataEmpty', {
+                        defaultValue: 'No additional metadata is available for this item.'
+                      })}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Keywords - Compact */}
@@ -1297,6 +1975,7 @@ export function ContentViewer({
             <Select
               mode="tags"
               allowClear
+              data-testid="media-keywords-select"
               placeholder={
                 savingKeywords
                   ? t('review:mediaPage.savingKeywords', { defaultValue: 'Saving...' })
@@ -1353,6 +2032,43 @@ export function ContentViewer({
                     })}
                   />
                 ) : null}
+                <div
+                  className="inline-flex items-center rounded-md border border-border bg-surface p-0.5"
+                  role="group"
+                  aria-label={t('review:mediaPage.textSize', {
+                    defaultValue: 'Text size'
+                  })}
+                >
+                  {TEXT_SIZE_CONTROL_OPTIONS.map((option) => {
+                    const isActive = option.value === resolvedTextSizePreset
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          if (option.value === resolvedTextSizePreset) return
+                          void setTextSizePreset(option.value)
+                        }}
+                        className={`rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors ${
+                          isActive
+                            ? 'bg-primary text-white'
+                            : 'text-text-muted hover:bg-surface2 hover:text-text'
+                        }`}
+                        aria-pressed={isActive}
+                        aria-label={t('review:mediaPage.textSizeOption', {
+                          defaultValue: 'Text size {{size}}',
+                          size: option.label
+                        })}
+                        title={t('review:mediaPage.textSizeOption', {
+                          defaultValue: 'Text size {{size}}',
+                          size: option.label
+                        })}
+                      >
+                        {option.label}
+                      </button>
+                    )
+                  })}
+                </div>
                 {!isNote && content && (
                   <button
                     onClick={() => {
@@ -1396,6 +2112,47 @@ export function ContentViewer({
             </div>
             {!collapsedSections.content && (
               <div className="p-3 bg-surface animate-in fade-in slide-in-from-top-1 duration-150">
+                {shouldShowEmbeddedPlayer ? (
+                  <div className="mb-3 rounded-md border border-border bg-surface2 p-2">
+                    {embeddedMediaLoading ? (
+                      <div
+                        className="flex items-center gap-2 text-xs text-text-muted"
+                        data-testid="embedded-media-loading"
+                      >
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        {t('review:mediaPage.loadingMediaPreview', {
+                          defaultValue: 'Loading media preview...'
+                        })}
+                      </div>
+                    ) : embeddedMediaUrl ? (
+                      mediaType === 'video' ? (
+                        <video
+                          ref={(node) => {
+                            mediaPlayerRef.current = node
+                          }}
+                          src={embeddedMediaUrl}
+                          controls
+                          preload="metadata"
+                          className="w-full rounded"
+                          data-testid="embedded-video-player"
+                        />
+                      ) : (
+                        <audio
+                          ref={(node) => {
+                            mediaPlayerRef.current = node
+                          }}
+                          src={embeddedMediaUrl}
+                          controls
+                          preload="metadata"
+                          className="w-full"
+                          data-testid="embedded-audio-player"
+                        />
+                      )
+                    ) : embeddedMediaError ? (
+                      <p className="m-0 text-xs text-warn">{embeddedMediaError}</p>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div
                   ref={contentBodyRef}
                   className={`text-sm text-text leading-relaxed ${
@@ -1403,16 +2160,53 @@ export function ContentViewer({
                   }`}
                 >
                   {effectiveRenderMode === 'plain' ? (
-                    <pre className="whitespace-pre-wrap text-xs leading-relaxed text-text font-mono m-0">
-                      {content ||
-                        t('review:mediaPage.noContent', {
-                          defaultValue: 'No content available'
+                    hasClickableTranscriptTimestamps ? (
+                      <div
+                        className={`m-0 space-y-1 whitespace-pre-wrap text-text font-mono ${contentBodyTypographyClass}`}
+                      >
+                        {transcriptLines.map((line, lineIndex) => {
+                          const match = line.match(LEADING_TRANSCRIPT_TIMESTAMP_PATTERN)
+                          if (!match) {
+                            return (
+                              <div key={`line-${lineIndex}`}>
+                                {line.length > 0 ? line : '\u00A0'}
+                              </div>
+                            )
+                          }
+                          const timestamp = match[2] || match[3] || ''
+                          const tail = `${match[1] || ''}${match[4] || ''}${match[5] || ''}`
+                          return (
+                            <div key={`line-${lineIndex}`} className="flex flex-wrap items-start gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleTranscriptTimestampSeek(timestamp)}
+                                className="rounded border border-border bg-surface px-1.5 py-0.5 text-[11px] text-primary hover:bg-surface2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                aria-label={t('review:mediaPage.seekToTimestamp', {
+                                  defaultValue: 'Seek to {{timestamp}}',
+                                  timestamp
+                                })}
+                              >
+                                {timestamp}
+                              </button>
+                              <span className="flex-1 whitespace-pre-wrap break-words">{tail}</span>
+                            </div>
+                          )
                         })}
-                    </pre>
+                      </div>
+                    ) : (
+                      <pre
+                        className={`whitespace-pre-wrap text-text font-mono m-0 ${contentBodyTypographyClass}`}
+                      >
+                        {content ||
+                          t('review:mediaPage.noContent', {
+                            defaultValue: 'No content available'
+                          })}
+                      </pre>
+                    )
                   ) : effectiveRenderMode === 'html' ? (
                     content ? (
                       <div
-                        className="prose prose-sm break-words dark:prose-invert max-w-none prose-p:leading-relaxed"
+                        className={`${richTextTypographyClass} break-words dark:prose-invert max-w-none prose-p:leading-relaxed`}
                         dangerouslySetInnerHTML={{
                           __html: sanitizedRichContent
                         }}
@@ -1432,7 +2226,7 @@ export function ContentViewer({
                           defaultValue: 'No content available'
                         })
                       }
-                      size="sm"
+                      size={markdownPreviewSize}
                     />
                   )}
                   {/* Fade overlay when collapsed */}
@@ -1763,6 +2557,9 @@ export function ContentViewer({
             <div className="mb-2">
               <VersionHistoryPanel
                 mediaId={selectedMedia.id}
+                currentContent={content}
+                currentPrompt={derivedPrompt}
+                currentAnalysis={derivedAnalysisContent}
                 onVersionLoad={(vContent, vAnalysis, vPrompt, vNum) => {
                   // Update the analysis edit text with the loaded version
                   if (vAnalysis) {
@@ -1771,11 +2568,12 @@ export function ContentViewer({
                   }
                 }}
                 onRefresh={onRefreshMedia}
-                onShowDiff={(left, right, leftLabel, rightLabel) => {
+                onShowDiff={(left, right, leftLabel, rightLabel, metadataDiff) => {
                   setDiffLeftText(left)
                   setDiffRightText(right)
                   setDiffLeftLabel(leftLabel)
                   setDiffRightLabel(rightLabel)
+                  setDiffMetadataSummary(metadataDiff || null)
                   setDiffModalOpen(true)
                 }}
               />
@@ -1783,10 +2581,14 @@ export function ContentViewer({
           )}
 
           {/* Developer Tools */}
-          <DeveloperToolsSection
-            data={mediaDetail}
-            label={t('review:mediaPage.developerTools', { defaultValue: 'Developer Tools' })}
-          />
+          {showDeveloperTools ? (
+            <DeveloperToolsSection
+              data={mediaDetail}
+              label={t('review:mediaPage.developerTools', {
+                defaultValue: 'Developer Tools'
+              })}
+            />
+          ) : null}
           {selectedMedia && onDeleteItem && (
             <div className="mt-2">
               <button
@@ -1810,6 +2612,25 @@ export function ContentViewer({
         </div>
         )}
       </div>
+
+      {showBackToTop && (
+        <button
+          type="button"
+          onClick={handleBackToTop}
+          className="absolute bottom-4 right-4 z-20 inline-flex items-center gap-1 rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text shadow-sm hover:bg-surface2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          aria-label={t('review:mediaPage.backToTop', {
+            defaultValue: 'Back to top'
+          })}
+          title={t('review:mediaPage.backToTop', {
+            defaultValue: 'Back to top'
+          })}
+        >
+          <ChevronUp className="h-3.5 w-3.5" />
+          {t('review:mediaPage.backToTop', {
+            defaultValue: 'Back to top'
+          })}
+        </button>
+      )}
 
       {/* Analysis Generation Modal - only for media */}
       {selectedMedia && !isNote && (
@@ -1867,11 +2688,15 @@ export function ContentViewer({
       {/* Diff View Modal */}
       <DiffViewModal
         open={diffModalOpen}
-        onClose={() => setDiffModalOpen(false)}
+        onClose={() => {
+          setDiffModalOpen(false)
+          setDiffMetadataSummary(null)
+        }}
         leftText={diffLeftText}
         rightText={diffRightText}
         leftLabel={diffLeftLabel}
         rightLabel={diffRightLabel}
+        metadataDiff={diffMetadataSummary || undefined}
       />
     </div>
   )

@@ -23,7 +23,7 @@ Finding IDs: `2.1` through `2.9`
 - Component tests for column rendering and responsive hide/show behavior.
 - Integration tests for search + group filter composition.
 - Unit tests for group autocomplete normalization (case-insensitive dedupe).
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Faster Edit Flows with Advanced Options
 **Goal**: Minimize modal churn for common edits while keeping advanced controls available.
@@ -36,7 +36,7 @@ Finding IDs: `2.1` through `2.9`
 - Component tests for inline edit keyboard and blur-save behavior.
 - Integration tests for timed-effects create/update payload round-trip.
 - API test confirming regex safety validation errors are surfaced in UI model.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Bulk Operations and Processing Order Controls
 **Goal**: Enable efficient multi-entry maintenance for large dictionaries.
@@ -50,7 +50,13 @@ Finding IDs: `2.1` through `2.9`
 - Backend unit/integration tests for bulk endpoint validation and partial failures.
 - Component tests for selection model and bulk action dispatch.
 - Integration tests for reorder persistence and execution-order semantics.
-**Status**: Not Started
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Added backend `POST /dictionaries/entries/bulk` endpoint for `activate`, `deactivate`, `delete`, and `group` operations with partial-failure reporting.
+- Added frontend row selection + contextual bulk action bar (enable/disable/delete/set-group) and preserved failed selections on partial failure.
+- Added backend `PUT /dictionaries/{dictionary_id}/entries/reorder` endpoint and service-layer `sort_order` persistence for deterministic entry priority.
+- Added UI priority controls (per-entry move up/down) that persist order through the reorder endpoint.
+- Added Stage 3 component and endpoint tests for bulk action payloads, partial failures, and reorder dispatch.
 
 ## Stage 4: Replace Nested Modal Pattern
 **Goal**: Remove modal-within-modal friction and improve focus flow.

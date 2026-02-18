@@ -335,6 +335,41 @@ export interface TldwEmbeddingProvidersConfig {
   }[]
 }
 
+export type CharacterListSortBy =
+  | "name"
+  | "creator"
+  | "created_at"
+  | "updated_at"
+  | "last_used_at"
+  | "conversation_count"
+
+export type CharacterListSortOrder = "asc" | "desc"
+
+export interface CharacterListQueryParams {
+  page?: number
+  page_size?: number
+  query?: string
+  tags?: string[]
+  match_all_tags?: boolean
+  creator?: string
+  has_conversations?: boolean
+  created_from?: string
+  created_to?: string
+  updated_from?: string
+  updated_to?: string
+  sort_by?: CharacterListSortBy
+  sort_order?: CharacterListSortOrder
+  include_image_base64?: boolean
+}
+
+export interface CharacterListQueryResponse {
+  items: any[]
+  total: number
+  page: number
+  page_size: number
+  has_more: boolean
+}
+
 // Admin / RBAC types
 export interface AdminUserSummary {
   id: number
@@ -1211,18 +1246,25 @@ export class TldwApiClient {
   }
 
   async ragSearch(query: string, options?: any): Promise<any> {
-    const { timeoutMs, ...rest } = options || {}
+    const { timeoutMs, signal, ...rest } = options || {}
     try {
       return await bgRequest<any>({
         path: '/api/v1/rag/search',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: { query, ...rest },
-        timeoutMs
+        timeoutMs,
+        abortSignal: signal
       })
     } catch (error) {
       const status = (error as { status?: number } | null)?.status
       const message = error instanceof Error ? error.message : String(error ?? '')
+      const aborted =
+        (error as { name?: string } | null)?.name === 'AbortError' ||
+        /abort|cancel/i.test(message)
+      if (aborted) {
+        throw error
+      }
       const shouldRetryWithoutRerank =
         status === 500 &&
         rest?.enable_reranking !== false &&
@@ -1248,8 +1290,30 @@ export class TldwApiClient {
           enable_reranking: false,
           reranking_strategy: 'none'
         },
-        timeoutMs
+        timeoutMs,
+        abortSignal: signal
       })
+    }
+  }
+
+  async *ragSearchStream(
+    query: string,
+    options?: any
+  ): AsyncGenerator<any, void, unknown> {
+    const { timeoutMs, signal, ...rest } = options || {}
+    for await (const line of bgStream({
+      path: '/api/v1/rag/search/stream',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: { query, ...rest },
+      abortSignal: signal,
+      streamIdleTimeoutMs: timeoutMs
+    })) {
+      try {
+        yield JSON.parse(line)
+      } catch {
+        // Ignore malformed stream chunks
+      }
     }
   }
 
@@ -2061,6 +2125,53 @@ export class TldwApiClient {
       path: appendPathQuery(base, query),
       method: 'GET'
     })
+  }
+
+  async listCharactersPage(
+    params?: CharacterListQueryParams
+  ): Promise<CharacterListQueryResponse> {
+    const query = this.buildQuery(params as Record<string, any> | undefined)
+    const base = await this.resolveApiPath("characters.query", [
+      "/api/v1/characters/query",
+      "/api/v1/characters/query/"
+    ])
+    const response = await bgRequest<any>({
+      path: appendPathQuery(base, query),
+      method: "GET"
+    })
+
+    if (Array.isArray(response)) {
+      return {
+        items: response,
+        total: response.length,
+        page: Number(params?.page || 1),
+        page_size: Number(params?.page_size || response.length || 25),
+        has_more: false
+      }
+    }
+
+    const items = Array.isArray(response?.items) ? response.items : []
+    const total =
+      typeof response?.total === "number" && Number.isFinite(response.total)
+        ? response.total
+        : items.length
+    const page =
+      typeof response?.page === "number" && Number.isFinite(response.page)
+        ? response.page
+        : Number(params?.page || 1)
+    const pageSize =
+      typeof response?.page_size === "number" &&
+      Number.isFinite(response.page_size)
+        ? response.page_size
+        : Number(params?.page_size || 25)
+
+    return {
+      items,
+      total,
+      page,
+      page_size: pageSize,
+      has_more: Boolean(response?.has_more)
+    }
   }
 
   private getCharacterListIdentity(character: any, fallbackIndex: number): string {
@@ -3022,9 +3133,25 @@ export class TldwApiClient {
     })
   }
 
-  async attachWorldBookToCharacter(character_id: number | string, world_book_id: number | string): Promise<any> {
+  async attachWorldBookToCharacter(
+    character_id: number | string,
+    world_book_id: number | string,
+    options?: { enabled?: boolean; priority?: number }
+  ): Promise<any> {
     const cid = String(character_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/${cid}/world-books`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { world_book_id: Number(world_book_id) } })
+    const body: Record<string, any> = { world_book_id: Number(world_book_id) }
+    if (typeof options?.enabled === "boolean") {
+      body.enabled = options.enabled
+    }
+    if (typeof options?.priority === "number" && Number.isFinite(options.priority)) {
+      body.priority = options.priority
+    }
+    return await bgRequest<any>({
+      path: `/api/v1/characters/${cid}/world-books`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body
+    })
   }
 
   async detachWorldBookFromCharacter(character_id: number | string, world_book_id: number | string): Promise<any> {
@@ -3073,9 +3200,12 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: '/api/v1/chat/dictionaries', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
   }
 
-  async listDictionaries(include_inactive?: boolean): Promise<any> {
-    const qp = include_inactive ? `?include_inactive=true` : ''
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries${qp}`, method: 'GET' })
+  async listDictionaries(include_inactive?: boolean, include_usage?: boolean): Promise<any> {
+    const params = new URLSearchParams()
+    if (include_inactive) params.set('include_inactive', 'true')
+    if (include_usage) params.set('include_usage', 'true')
+    const qp = params.toString()
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries${qp ? `?${qp}` : ''}`, method: 'GET' })
   }
 
   async getDictionary(dictionary_id: number | string): Promise<any> {
@@ -3113,6 +3243,34 @@ export class TldwApiClient {
   async deleteDictionaryEntry(entry_id: number | string): Promise<any> {
     const eid = String(entry_id)
     return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/entries/${eid}`, method: 'DELETE' })
+  }
+
+  async bulkDictionaryEntries(payload: {
+    entry_ids: number[]
+    operation: "delete" | "activate" | "deactivate" | "group"
+    group_name?: string
+  }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/chat/dictionaries/entries/bulk",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async reorderDictionaryEntries(
+    dictionary_id: number | string,
+    payload: {
+      entry_ids: number[]
+    }
+  ): Promise<any> {
+    const id = String(dictionary_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chat/dictionaries/${id}/entries/reorder`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
   }
 
   async exportDictionaryMarkdown(dictionary_id: number | string): Promise<any> {
@@ -3521,6 +3679,7 @@ export class TldwApiClient {
       normalizationOptions?: Record<string, any>
       extraParams?: Record<string, any>
       stream?: boolean
+      signal?: AbortSignal
     }
   ): Promise<ArrayBuffer> {
     await this.ensureConfigForRequest(true)
@@ -3563,7 +3722,8 @@ export class TldwApiClient {
       method: "POST",
       headers: { Accept: accept },
       body,
-      responseType: "arrayBuffer"
+      responseType: "arrayBuffer",
+      abortSignal: options?.signal
     })
 
     const normalizeArrayBuffer = async (value: unknown): Promise<ArrayBuffer | null> => {
@@ -4839,6 +4999,7 @@ export class TldwApiClient {
       provider?: string
       model?: string
       temperature?: number
+      signal?: AbortSignal
     }
   ): Promise<{
     id: string
@@ -4864,7 +5025,8 @@ export class TldwApiClient {
     return await this.request<any>({
       path: "/api/v1/slides/generate/from-media",
       method: "POST",
-      body
+      body,
+      abortSignal: options?.signal
     })
   }
 

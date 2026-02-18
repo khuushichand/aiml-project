@@ -1,6 +1,7 @@
 export interface ParsedBulkEntry {
   keywords: string[]
   content: string
+  sourceLine: number
 }
 
 export interface BulkParseResult {
@@ -8,7 +9,7 @@ export interface BulkParseResult {
   errors: string[]
 }
 
-const SEPARATORS = ["=>", "->", "|", "\t"]
+export const SUPPORTED_BULK_SEPARATORS = ["=>", "->", "|", "\t"] as const
 
 export function parseBulkEntries(raw: string): BulkParseResult {
   const entries: ParsedBulkEntry[] = []
@@ -18,7 +19,7 @@ export function parseBulkEntries(raw: string): BulkParseResult {
     const trimmed = line.trim()
     if (!trimmed) return
 
-    const separator = SEPARATORS.find((sep) => trimmed.includes(sep))
+    const separator = SUPPORTED_BULK_SEPARATORS.find((sep) => trimmed.includes(sep))
     if (!separator) {
       errors.push(`Line ${index + 1}: missing separator (use "keywords -> content")`)
       return
@@ -36,7 +37,7 @@ export function parseBulkEntries(raw: string): BulkParseResult {
       return
     }
 
-    entries.push({ keywords, content: right })
+    entries.push({ keywords, content: right, sourceLine: index + 1 })
   })
 
   return { entries, errors }

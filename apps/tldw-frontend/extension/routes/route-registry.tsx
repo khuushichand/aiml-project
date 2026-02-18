@@ -7,6 +7,7 @@ import {
   BookMarked,
   BookOpen,
   BookText,
+  Bot,
   BrainCircuitIcon,
   CombineIcon,
   CpuIcon,
@@ -165,6 +166,7 @@ const OptionQuickIngestSettings = createSettingsRoute(
 )
 const OptionQuickChatPopout = lazy(() => import("./option-quick-chat-popout"))
 const OptionContentReview = lazy(() => import("./option-content-review"))
+const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
 const OptionChunkingPlayground = lazy(() => import("./option-chunking-playground"))
 const OptionDocumentation = lazy(() => import("./option-documentation"))
 const OptionQuiz = lazy(() => import("./option-quiz"))
@@ -578,6 +580,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   { kind: "options", path: "/stt", element: <OptionStt /> },
   { kind: "options", path: "/speech", element: <OptionSpeech /> },
   { kind: "options", path: "/evaluations", element: <OptionEvaluations /> },
+  {
+    kind: "options",
+    path: "/acp-playground",
+    element: <OptionACPPlayground />,
+    nav: {
+      group: "workspace",
+      labelToken: "settings:acpPlaygroundNav",
+      icon: Bot,
+      order: 11,
+      beta: true
+    }
+  },
   {
     kind: "options",
     path: "/admin/server",

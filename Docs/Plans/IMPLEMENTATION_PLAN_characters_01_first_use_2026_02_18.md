@@ -21,7 +21,7 @@ Finding IDs: `C-01` through `C-03`
 - Component test for `FeatureEmptyState` props rendering (icon/examples/secondary action).
 - Integration test validating `Import character` action opens import modal/flow.
 - i18n key coverage test for newly introduced onboarding strings.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Surface Templates Earlier in the Journey
 **Goal**: Remove hidden discoverability of starter templates.
@@ -33,7 +33,7 @@ Finding IDs: `C-01` through `C-03`
 - Component test for template cards rendering inside empty state.
 - Integration test for first-visit expanded template chooser behavior.
 - Unit test for persisted "template chooser seen" local-storage key handling.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Validate First-Run Flow End-to-End
 **Goal**: Ensure users can create/import and immediately understand next action.
@@ -45,7 +45,7 @@ Finding IDs: `C-01` through `C-03`
 - E2E test for empty state -> template create -> chat launch path.
 - E2E test for empty state -> import path.
 - QA checklist for copy clarity and route transitions.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

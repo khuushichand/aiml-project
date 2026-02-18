@@ -3,10 +3,14 @@ from __future__ import annotations
 import datetime
 
 import pytest
+from fastapi import HTTPException
 
 from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoints
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
+    BulkEntryOperation,
+    ChatDictionaryUpdate,
     DictionaryEntryCreate,
+    DictionaryEntryReorderRequest,
     DictionaryEntryUpdate,
 )
 from tldw_Server_API.app.core.Character_Chat.chat_dictionary import ChatDictionaryService
@@ -90,6 +94,121 @@ async def test_update_dictionary_entry_returns_latest_state(chacha_db: Character
 
 
 @pytest.mark.asyncio
+async def test_update_dictionary_entry_rejects_unsafe_regex_pattern(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Regex Guard Dictionary", None)
+    entry_id = service.add_entry(
+        dictionary_id,
+        pattern="hello.*",
+        replacement="hi",
+        type="regex",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await chat_endpoints.update_dictionary_entry(
+            entry_id,
+            DictionaryEntryUpdate(pattern="(.+)+"),
+            db=chacha_db,
+        )
+
+    assert exc_info.value.status_code == 400
+    detail = str(exc_info.value.detail).lower()
+    assert "dangerous regex pattern" in detail
+
+
+@pytest.mark.asyncio
+async def test_bulk_dictionary_entry_operations_reports_partial_failures(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Bulk Dictionary", None)
+    entry_a = service.add_entry(dictionary_id, pattern="a", replacement="A")
+    entry_b = service.add_entry(dictionary_id, pattern="b", replacement="B")
+
+    response = await chat_endpoints.bulk_dictionary_entry_operations(
+        BulkEntryOperation(
+            entry_ids=[entry_a, entry_b, 999999],
+            operation="activate",
+        ),
+        db=chacha_db,
+    )
+
+    assert response.success is False
+    assert response.affected_count == 2
+    assert response.failed_ids == [999999]
+
+
+@pytest.mark.asyncio
+async def test_bulk_dictionary_entry_operations_sets_group(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Bulk Group Dictionary", None)
+    entry_id = service.add_entry(dictionary_id, pattern="bp", replacement="blood pressure")
+
+    response = await chat_endpoints.bulk_dictionary_entry_operations(
+        BulkEntryOperation(
+            entry_ids=[entry_id],
+            operation="group",
+            group_name="reviewed",
+        ),
+        db=chacha_db,
+    )
+
+    assert response.success is True
+    assert response.affected_count == 1
+    updated_entry = service.get_entry(entry_id, active_only=False)
+    assert updated_entry is not None
+    assert updated_entry.get("group") == "reviewed"
+
+
+@pytest.mark.asyncio
+async def test_reorder_dictionary_entries_updates_execution_order(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Reorder Dictionary", None)
+    entry_a = service.add_entry(dictionary_id, pattern="a", replacement="A")
+    entry_b = service.add_entry(dictionary_id, pattern="b", replacement="B")
+    entry_c = service.add_entry(dictionary_id, pattern="c", replacement="C")
+
+    response = await chat_endpoints.reorder_dictionary_entries(
+        dictionary_id,
+        DictionaryEntryReorderRequest(entry_ids=[entry_c, entry_a, entry_b]),
+        db=chacha_db,
+    )
+
+    assert response.success is True
+    assert response.affected_count == 3
+    assert response.entry_ids == [entry_c, entry_a, entry_b]
+
+    ordered_entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
+    assert [int(entry["id"]) for entry in ordered_entries] == [entry_c, entry_a, entry_b]
+
+
+@pytest.mark.asyncio
+async def test_reorder_dictionary_entries_rejects_incomplete_entry_list(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Reorder Validation Dictionary", None)
+    entry_a = service.add_entry(dictionary_id, pattern="left", replacement="right")
+    _entry_b = service.add_entry(dictionary_id, pattern="up", replacement="down")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await chat_endpoints.reorder_dictionary_entries(
+            dictionary_id,
+            DictionaryEntryReorderRequest(entry_ids=[entry_a]),
+            db=chacha_db,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "every dictionary entry exactly once" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_list_chat_dictionaries_counts_inactive_entries(chacha_db: CharactersRAGDB):
     service = ChatDictionaryService(chacha_db)
     dictionary_id = service.create_dictionary("Inactive Dictionary", None)
@@ -104,3 +223,82 @@ async def test_list_chat_dictionaries_counts_inactive_entries(chacha_db: Charact
     dict_payload = dictionaries[dictionary_id]
     assert dict_payload.is_active is False
     assert dict_payload.entry_count == 1
+
+
+@pytest.mark.asyncio
+async def test_list_chat_dictionaries_includes_usage_summary(chacha_db: CharactersRAGDB):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_a = service.create_dictionary("Dictionary A", None)
+    dictionary_b = service.create_dictionary("Dictionary B", None)
+
+    character_id = chacha_db.add_character_card({"name": "Dictionary Usage Character"})
+    assert character_id is not None
+
+    active_chat_id = chacha_db.add_conversation(
+        {
+            "character_id": int(character_id),
+            "title": "Active Dictionary Chat",
+            "state": "in-progress",
+        }
+    )
+    resolved_chat_id = chacha_db.add_conversation(
+        {
+            "character_id": int(character_id),
+            "title": "Resolved Dictionary Chat",
+            "state": "resolved",
+        }
+    )
+
+    assert active_chat_id is not None
+    assert resolved_chat_id is not None
+
+    chacha_db.upsert_conversation_settings(
+        str(active_chat_id),
+        {"chat_dictionary_ids": [dictionary_a, dictionary_b]},
+    )
+    chacha_db.upsert_conversation_settings(
+        str(resolved_chat_id),
+        {"chatDictionaryId": dictionary_a},
+    )
+
+    response = await chat_endpoints.list_chat_dictionaries(
+        include_inactive=True,
+        include_usage=True,
+        db=chacha_db,
+    )
+
+    dictionaries = {d.id: d for d in response.dictionaries}
+    dictionary_a_payload = dictionaries[dictionary_a]
+    dictionary_b_payload = dictionaries[dictionary_b]
+
+    assert dictionary_a_payload.used_by_chat_count == 2
+    assert dictionary_a_payload.used_by_active_chat_count == 1
+    assert len(dictionary_a_payload.used_by_chat_refs) >= 1
+
+    assert dictionary_b_payload.used_by_chat_count == 1
+    assert dictionary_b_payload.used_by_active_chat_count == 1
+
+
+@pytest.mark.asyncio
+async def test_update_chat_dictionary_returns_409_on_version_conflict(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Versioned Dictionary", "desc")
+    baseline = service.get_dictionary(dictionary_id)
+    assert baseline is not None
+    assert int(baseline["version"]) == 1
+
+    service.update_dictionary(dictionary_id, description="edited in another session")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await chat_endpoints.update_chat_dictionary(
+            dictionary_id,
+            ChatDictionaryUpdate(name="Conflicting Update", version=1),
+            db=chacha_db,
+        )
+
+    assert exc_info.value.status_code == 409
+    detail = str(exc_info.value.detail).lower()
+    assert "modified by another session" in detail
+    assert "expected version 1" in detail

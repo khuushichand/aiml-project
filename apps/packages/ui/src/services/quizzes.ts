@@ -282,11 +282,15 @@ export async function getAttempt(attemptId: number): Promise<QuizAttempt> {
 
 // --- AI Generation ---
 
-export async function generateQuiz(request: QuizGenerateRequest): Promise<QuizGenerateResponse> {
+export async function generateQuiz(
+  request: QuizGenerateRequest,
+  options?: { signal?: AbortSignal }
+): Promise<QuizGenerateResponse> {
   return await bgRequest<QuizGenerateResponse, AllowedPath, "POST">({
     path: "/api/v1/quizzes/generate",
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: request
+    body: request,
+    abortSignal: options?.signal
   })
 }

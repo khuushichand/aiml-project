@@ -157,6 +157,14 @@ const SETTING_ENUM_OPTIONS: Partial<Record<RagKey, string[]>> = {
   sensitivity_level: ["public", "internal", "confidential", "restricted"],
 }
 
+const SOURCE_OPTIONS = [
+  { value: "media_db", label: "Documents & Media" },
+  { value: "notes", label: "Notes" },
+  { value: "characters", label: "Character Cards" },
+  { value: "chats", label: "Chat History" },
+  { value: "kanban", label: "Kanban" },
+] as const
+
 const AUTO_OPTION_EXCLUDED_KEYS = new Set<RagKey>(["query"])
 
 const AUTO_OPTION_KEYS = (settings: RagSettings): RagKey[] =>
@@ -212,12 +220,16 @@ function SettingsSection({
   updateSetting,
 }: SettingsSectionProps) {
   const Icon = config.icon
+  const contentId = `section-content-${config.id}`
 
   return (
     <div className="border border-border rounded-lg overflow-hidden">
       {/* Header */}
       <button
+        type="button"
         onClick={onToggle}
+        aria-expanded={isOpen}
+        aria-controls={contentId}
         className="flex items-center gap-3 w-full px-4 py-3 hover:bg-muted/50 transition-colors"
       >
         {isOpen ? (
@@ -234,7 +246,7 @@ function SettingsSection({
 
       {/* Content */}
       {isOpen && (
-        <div className="px-4 pb-4 pt-2 border-t border-border space-y-4">
+        <div id={contentId} className="px-4 pb-4 pt-2 border-t border-border space-y-4">
           <SectionContent
             sectionId={config.id}
             settings={settings}
@@ -557,15 +569,41 @@ function AutoOptionRow({
       />
     )
   } else if (Array.isArray(value)) {
-    control = (
-      <div className="w-60">
-        <AutoArrayInput
-          fieldKey={fieldKey}
-          values={value}
-          onChange={(next) => setValue(next)}
-        />
-      </div>
-    )
+    if (fieldKey === "sources") {
+      const selectedSources = value.filter(
+        (entry): entry is string => typeof entry === "string"
+      )
+      control = (
+        <div className="w-60 space-y-2 rounded-md border border-border bg-surface p-2">
+          {SOURCE_OPTIONS.map((source) => (
+            <label key={source.value} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={selectedSources.includes(source.value)}
+                onChange={(event) => {
+                  const nextSources = event.target.checked
+                    ? [...selectedSources, source.value]
+                    : selectedSources.filter((entry) => entry !== source.value)
+                  setValue(nextSources)
+                }}
+                className="rounded"
+              />
+              <span>{source.label}</span>
+            </label>
+          ))}
+        </div>
+      )
+    } else {
+      control = (
+        <div className="w-60">
+          <AutoArrayInput
+            fieldKey={fieldKey}
+            values={value}
+            onChange={(next) => setValue(next)}
+          />
+        </div>
+      )
+    }
   } else if (typeof value === "string" || value === null) {
     if (enumValues && enumValues.length > 0) {
       control = (

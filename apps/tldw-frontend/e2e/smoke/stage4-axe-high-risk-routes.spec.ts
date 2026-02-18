@@ -24,7 +24,8 @@ const HIGH_RISK_ROUTES: HighRiskRoute[] = [
   { path: "/collections", name: "Collections" },
   { path: "/data-tables", name: "Data Tables" },
   { path: "/watchlists", name: "Watchlists" },
-  { path: "/evaluations", name: "Evaluations" }
+  { path: "/evaluations", name: "Evaluations" },
+  { path: "/knowledge", name: "Knowledge QA" }
 ]
 
 const STAGE4_A11Y_RULES = [

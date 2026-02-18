@@ -1,6 +1,8 @@
 import { FileText, Loader2, Star } from 'lucide-react'
 import { Tooltip, Button } from 'antd'
 import { useTranslation } from 'react-i18next'
+import { formatRelativeTime } from '@/utils/dateFormatters'
+import { highlightMatches } from '@/components/Media/highlightMatches'
 
 interface Result {
   id: string | number
@@ -13,6 +15,7 @@ interface Result {
     source?: string | null
     duration?: number | null
     status?: any
+    created_at?: string
   }
 }
 
@@ -24,7 +27,10 @@ interface ResultsListProps {
   loadedCount: number
   isLoading?: boolean
   hasActiveFilters?: boolean
+  searchQuery?: string
+  onClearSearch?: () => void
   onClearFilters?: () => void
+  onOpenQuickIngest?: () => void
   favorites?: Set<string>
   onToggleFavorite?: (id: string) => void
 }
@@ -37,11 +43,15 @@ export function ResultsList({
   loadedCount,
   isLoading = false,
   hasActiveFilters = false,
+  searchQuery = '',
+  onClearSearch,
   onClearFilters,
+  onOpenQuickIngest,
   favorites,
   onToggleFavorite
 }: ResultsListProps) {
   const { t } = useTranslation(['review'])
+  const hasSearchQuery = searchQuery.trim().length > 0
 
   const buildInspectorTooltip = (result: Result) => {
     const title = result.title || `${result.kind} ${result.id}`
@@ -64,6 +74,12 @@ export function ResultsList({
       lines.push({
         label: t('mediaPage.source', 'Source'),
         value: result.meta.source
+      })
+    }
+    if (result.meta?.created_at) {
+      lines.push({
+        label: t('mediaPage.ingested', 'Ingested'),
+        value: formatRelativeTime(result.meta.created_at, t, { compact: true })
       })
     }
     if (result.snippet) {
@@ -149,21 +165,58 @@ export function ResultsList({
                 <p className="text-text-muted text-sm mb-2">
                   {t('mediaPage.noMatchingResults', 'No results match your filters')}
                 </p>
-                {onClearFilters && (
-                  <Button size="small" onClick={onClearFilters}>
-                    {t('mediaPage.clearFilters', 'Clear filters')}
-                  </Button>
-                )}
+                <p className="text-xs text-text-subtle mb-3">
+                  {t('mediaPage.noMatchingResultsHint', 'Try broadening your query or removing filters.')}
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  {hasSearchQuery && onClearSearch && (
+                    <Button size="small" onClick={onClearSearch}>
+                      {t('mediaPage.clearSearch', 'Clear search')}
+                    </Button>
+                  )}
+                  {onClearFilters && (
+                    <Button size="small" onClick={onClearFilters}>
+                      {t('mediaPage.clearFilters', 'Clear filters')}
+                    </Button>
+                  )}
+                  {onOpenQuickIngest && (
+                    <Button size="small" onClick={onOpenQuickIngest}>
+                      {t('mediaPage.openQuickIngest', 'Open Quick Ingest')}
+                    </Button>
+                  )}
+                </div>
               </>
             ) : (
-              <p className="text-text-muted text-sm">
-                {t('mediaPage.noResults', 'No results found')}
-              </p>
+              <>
+                <p className="text-text-muted text-sm mb-2">
+                  {t('mediaPage.noResults', 'No results found')}
+                </p>
+                <p className="text-xs text-text-subtle mb-3">
+                  {t('mediaPage.noResultsHint', 'Try broader terms, or ingest new content to search.')}
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  {hasSearchQuery && onClearSearch && (
+                    <Button size="small" onClick={onClearSearch}>
+                      {t('mediaPage.clearSearch', 'Clear search')}
+                    </Button>
+                  )}
+                  {onOpenQuickIngest && (
+                    <Button size="small" onClick={onOpenQuickIngest}>
+                      {t('mediaPage.openQuickIngest', 'Open Quick Ingest')}
+                    </Button>
+                  )}
+                </div>
+              </>
             )}
           </div>
         ) : (
-          results.map((result) => (
-            <div
+          results.map((result) => {
+            const relativeDate = result.meta?.created_at
+              ? formatRelativeTime(result.meta.created_at, t, { compact: true })
+              : null
+
+            return (
+              <div
               role="button"
               tabIndex={0}
               key={result.id}
@@ -214,42 +267,47 @@ export function ResultsList({
                       <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-primary/10 text-primaryStrong">
                         {result.kind.toUpperCase()}
                       </span>
-                    {result.meta?.type && (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-surface2 text-text capitalize">
-                        {result.meta.type}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-sm text-text truncate font-medium">
-                    {result.title || `${result.kind} ${result.id}`}
-                  </div>
-                  {result.snippet && (
-                    <div className="text-xs text-text-muted mt-0.5 line-clamp-1">
-                      {result.snippet}
-                    </div>
-                  )}
-                  {Array.isArray(result.keywords) && result.keywords.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {result.keywords.slice(0, 5).map((keyword, idx) => (
-                        <span
-                          key={idx}
-                          className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-surface2 text-text line-clamp-1 max-w-[120px]"
-                          title={keyword}
-                        >
-                          {keyword}
+                      {result.meta?.type && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-surface2 text-text capitalize">
+                          {result.meta.type}
                         </span>
-                      ))}
-                      {result.keywords.length > 5 && (
-                        <Tooltip
-                          title={t('mediaPage.moreTags', '+{{count}} more tags', { count: result.keywords.length - 5 })}
-                        >
-                          <span className="inline-flex items-center px-2 py-0.5 text-xs text-text-muted">
-                            +{result.keywords.length - 5}
-                          </span>
-                        </Tooltip>
+                      )}
+                      {relativeDate && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-surface2 text-text-muted">
+                          {relativeDate}
+                        </span>
                       )}
                     </div>
-                  )}
+                    <div className="text-sm text-text truncate font-medium">
+                      {result.title || `${result.kind} ${result.id}`}
+                    </div>
+                    {result.snippet && (
+                      <div className="text-xs text-text-muted mt-0.5 line-clamp-1">
+                        {highlightMatches(result.snippet, searchQuery)}
+                      </div>
+                    )}
+                    {Array.isArray(result.keywords) && result.keywords.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {result.keywords.slice(0, 5).map((keyword, idx) => (
+                          <span
+                            key={idx}
+                            className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-surface2 text-text line-clamp-1 max-w-[120px]"
+                            title={keyword}
+                          >
+                            {keyword}
+                          </span>
+                        ))}
+                        {result.keywords.length > 5 && (
+                          <Tooltip
+                            title={t('mediaPage.moreTags', '+{{count}} more tags', { count: result.keywords.length - 5 })}
+                          >
+                            <span className="inline-flex items-center px-2 py-0.5 text-xs text-text-muted">
+                              +{result.keywords.length - 5}
+                            </span>
+                          </Tooltip>
+                        )}
+                      </div>
+                    )}
                     {result.meta?.source && (
                       <div className="text-xs text-text-subtle mt-0.5">
                         {result.meta.source}
@@ -259,7 +317,8 @@ export function ResultsList({
                 </Tooltip>
               </div>
             </div>
-          ))
+            )
+          })
         )}
         {/* Loading indicator */}
         {isLoading && (

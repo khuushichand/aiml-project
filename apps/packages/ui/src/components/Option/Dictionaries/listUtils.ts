@@ -6,7 +6,16 @@ export type DictionaryListItem = {
   entry_count?: number | null
   regex_entries?: number | null
   regex_entry_count?: number | null
+  used_by_chat_count?: number | null
+  used_by_active_chat_count?: number | null
   updated_at?: string | Date | null
+}
+
+export type DictionaryConfirmationConfig = {
+  title: string
+  content: string
+  okText: string
+  cancelText: string
 }
 
 function safeText(value: unknown): string {
@@ -108,3 +117,59 @@ export function buildDuplicateDictionaryName(
   return `${cleanBase} (copy ${Date.now()})`
 }
 
+export function formatDictionaryUsageLabel(dictionary: DictionaryListItem): string {
+  const totalChats = Number(dictionary?.used_by_chat_count || 0)
+  if (totalChats <= 0) return "—"
+  const activeChats = Number(dictionary?.used_by_active_chat_count || 0)
+  if (activeChats > 0) return `${totalChats} chats (${activeChats} active)`
+  return `${totalChats} chats`
+}
+
+export function buildDictionaryDeactivationWarning(
+  dictionary: DictionaryListItem,
+  cancelText: string
+): DictionaryConfirmationConfig | null {
+  const activeChats = Number(dictionary?.used_by_active_chat_count || 0)
+  if (activeChats <= 0) return null
+
+  const totalChats = Number(dictionary?.used_by_chat_count || 0)
+  const activeLabel =
+    activeChats === 1 ? "1 active chat session" : `${activeChats} active chat sessions`
+  const totalLabel =
+    totalChats === 1 ? "1 linked chat session" : `${totalChats} linked chat sessions`
+
+  return {
+    title: "Deactivate dictionary?",
+    content: `This dictionary is currently used by ${activeLabel} (${totalLabel} total). Deactivating may change active conversations.`,
+    okText: "Deactivate",
+    cancelText,
+  }
+}
+
+export function buildDictionaryDeletionConfirmationCopy(dictionary: DictionaryListItem): string {
+  const linkedChats = Number(dictionary?.used_by_chat_count || 0)
+  const activeLinkedChats = Number(dictionary?.used_by_active_chat_count || 0)
+  if (activeLinkedChats > 0) {
+    return `Delete dictionary? This dictionary is linked to ${linkedChats} chat session(s), including ${activeLinkedChats} active session(s).`
+  }
+  if (linkedChats > 0) {
+    return `Delete dictionary? This dictionary is linked to ${linkedChats} chat session(s).`
+  }
+  return "Delete dictionary?"
+}
+
+export function isDictionaryVersionConflictError(error: unknown): boolean {
+  const message =
+    error instanceof Error && error.message
+      ? error.message.toLowerCase()
+      : String(error || "").toLowerCase()
+
+  if (!message) return false
+  if (message.includes("already exists")) return false
+
+  return (
+    message.includes("modified by another session") ||
+    message.includes("expected version") ||
+    (message.includes("conflict") && message.includes("version"))
+  )
+}

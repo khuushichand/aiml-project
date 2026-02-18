@@ -22,7 +22,7 @@ Finding IDs: `9.1` through `9.6`
 - Integration tests for private-mode mutating-action blocks.
 - Component tests for combined load-error alert rendering.
 - Integration test for stale deep-link handling.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Bulk Operation Partial-Success Handling
 **Goal**: Make bulk delete robust and informative under mixed outcomes.
@@ -33,7 +33,7 @@ Finding IDs: `9.1` through `9.6`
 **Tests**:
 - Unit tests for bulk-result aggregation logic.
 - Integration tests for mixed success/failure and retry path.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Structured Import Error Reporting
 **Goal**: Give users precise, actionable import failure diagnostics.
@@ -44,7 +44,7 @@ Finding IDs: `9.1` through `9.6`
 **Tests**:
 - Unit tests for error-classification mapper.
 - Integration tests for malformed JSON, wrong schema, and empty file fixtures.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Prompts Page Error Boundary
 **Goal**: Prevent single render/runtime exceptions from taking down entire page.
@@ -55,7 +55,7 @@ Finding IDs: `9.1` through `9.6`
 **Tests**:
 - Component tests injecting throw paths to verify fallback render.
 - Integration tests ensuring recovery action re-initializes page state.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

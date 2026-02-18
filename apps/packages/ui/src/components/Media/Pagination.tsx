@@ -10,6 +10,8 @@ interface PaginationProps {
   totalItems: number
   itemsPerPage: number
   currentItemsCount: number
+  pageSizeOptions?: number[]
+  onItemsPerPageChange?: (pageSize: number) => void
 }
 
 export function Pagination({
@@ -18,7 +20,9 @@ export function Pagination({
   onPageChange,
   totalItems,
   itemsPerPage,
-  currentItemsCount
+  currentItemsCount,
+  pageSizeOptions = [20, 50, 100],
+  onItemsPerPageChange
 }: PaginationProps) {
   const { t } = useTranslation(['review'])
   const [jumpToPage, setJumpToPage] = useState('')
@@ -141,6 +145,25 @@ export function Pagination({
             { count: currentItemsCount, total: totalItems }
           )}
         </div>
+        {onItemsPerPageChange && (
+          <div className="mt-2 flex items-center justify-center gap-1.5">
+            <label htmlFor="items-per-page-select" className="text-xs text-text-muted">
+              {t('mediaPage.itemsPerPage', 'Per page:')}
+            </label>
+            <select
+              id="items-per-page-select"
+              value={itemsPerPage}
+              onChange={(event) => onItemsPerPageChange(Number(event.target.value))}
+              className="rounded border border-border bg-surface2 px-2 py-0.5 text-xs text-text focus:outline-none focus:ring-2 focus:ring-focus"
+            >
+              {pageSizeOptions.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
     )
   }
@@ -258,6 +281,26 @@ export function Pagination({
           >
             {t('mediaPage.go', 'Go')}
           </button>
+        </div>
+      )}
+
+      {onItemsPerPageChange && (
+        <div className="mt-2 flex items-center justify-center gap-1.5">
+          <label htmlFor="items-per-page-select" className="text-xs text-text-muted">
+            {t('mediaPage.itemsPerPage', 'Per page:')}
+          </label>
+          <select
+            id="items-per-page-select"
+            value={itemsPerPage}
+            onChange={(event) => onItemsPerPageChange(Number(event.target.value))}
+            className="rounded border border-border bg-surface2 px-2 py-0.5 text-xs text-text focus:outline-none focus:ring-2 focus:ring-focus"
+          >
+            {pageSizeOptions.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
         </div>
       )}
     </div>

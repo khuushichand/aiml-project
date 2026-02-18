@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest"
 import {
+  buildDictionaryDeactivationWarning,
+  buildDictionaryDeletionConfirmationCopy,
   buildDuplicateDictionaryName,
   compareDictionaryActive,
   compareDictionaryEntryCount,
   compareDictionaryName,
   filterDictionariesBySearch,
+  isDictionaryVersionConflictError,
+  formatDictionaryUsageLabel,
   formatRelativeTimestamp
 } from "../listUtils"
 
@@ -77,5 +81,71 @@ describe("dictionary list utils", () => {
       "Chat Speak (copy)"
     )
   })
-})
 
+  it("formats used-by labels with active context", () => {
+    expect(
+      formatDictionaryUsageLabel({ used_by_chat_count: 0, used_by_active_chat_count: 0 })
+    ).toBe("—")
+    expect(
+      formatDictionaryUsageLabel({ used_by_chat_count: 2, used_by_active_chat_count: 0 })
+    ).toBe("2 chats")
+    expect(
+      formatDictionaryUsageLabel({ used_by_chat_count: 5, used_by_active_chat_count: 2 })
+    ).toBe("5 chats (2 active)")
+  })
+
+  it("builds deactivation warning only when active chats are linked", () => {
+    expect(
+      buildDictionaryDeactivationWarning(
+        { used_by_chat_count: 2, used_by_active_chat_count: 0 },
+        "Cancel"
+      )
+    ).toBeNull()
+
+    const warning = buildDictionaryDeactivationWarning(
+      { used_by_chat_count: 3, used_by_active_chat_count: 1 },
+      "Cancel"
+    )
+    expect(warning).not.toBeNull()
+    expect(warning?.title).toBe("Deactivate dictionary?")
+    expect(warning?.content).toContain("1 active chat session")
+    expect(warning?.content).toContain("3 linked chat sessions")
+  })
+
+  it("builds deletion confirmation copy with linked chat context", () => {
+    expect(
+      buildDictionaryDeletionConfirmationCopy({
+        used_by_chat_count: 0,
+        used_by_active_chat_count: 0
+      })
+    ).toBe("Delete dictionary?")
+
+    expect(
+      buildDictionaryDeletionConfirmationCopy({
+        used_by_chat_count: 2,
+        used_by_active_chat_count: 0
+      })
+    ).toContain("linked to 2 chat session(s)")
+
+    expect(
+      buildDictionaryDeletionConfirmationCopy({
+        used_by_chat_count: 4,
+        used_by_active_chat_count: 1
+      })
+    ).toContain("including 1 active session(s)")
+  })
+
+  it("detects optimistic-locking version conflicts without flagging name conflicts", () => {
+    expect(
+      isDictionaryVersionConflictError(
+        new Error("Dictionary was modified by another session. Expected version 2, current version 3.")
+      )
+    ).toBe(true)
+    expect(
+      isDictionaryVersionConflictError(new Error("409 conflict: expected version mismatch"))
+    ).toBe(true)
+    expect(
+      isDictionaryVersionConflictError(new Error("Dictionary name already exists"))
+    ).toBe(false)
+  })
+})

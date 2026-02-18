@@ -1,9 +1,10 @@
 import React from "react"
-import { Modal, Select, Empty, Skeleton, Space, Button } from "antd"
-import { useQuery } from "@tanstack/react-query"
+import { Modal, Select, Empty, Skeleton, Space, Button, Input, notification } from "antd"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { FolderOpen } from "lucide-react"
 import { getAvailableProjects } from "@/services/prompt-sync"
+import { createProject } from "@/services/prompt-studio"
 import { useServerOnline } from "@/hooks/useServerOnline"
 
 interface ProjectSelectorProps {
@@ -22,8 +23,10 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   loading = false
 }) => {
   const { t } = useTranslation(["settings", "common"])
+  const queryClient = useQueryClient()
   const isOnline = useServerOnline()
   const [selectedProjectId, setSelectedProjectId] = React.useState<number | null>(null)
+  const [newProjectName, setNewProjectName] = React.useState("")
 
   const { data: projects, isLoading } = useQuery({
     queryKey: ["prompt-studio", "projects-for-sync"],
@@ -40,7 +43,56 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
 
   const handleCancel = () => {
     setSelectedProjectId(null)
+    setNewProjectName("")
     onClose()
+  }
+
+  const { mutate: createProjectMutation, isPending: isCreatingProject } = useMutation({
+    mutationFn: async (name: string) => {
+      return await createProject({
+        name,
+        description: t(
+          "settings:managePrompts.sync.autoCreatedProjectDescription",
+          "Created from the Prompts sync selector."
+        )
+      })
+    },
+    onSuccess: async (response) => {
+      const project = (response as any)?.data?.data || (response as any)?.data
+      const projectId = project?.id
+      await queryClient.invalidateQueries({
+        queryKey: ["prompt-studio", "projects-for-sync"]
+      })
+      if (typeof projectId === "number") {
+        onSelect(projectId)
+        setSelectedProjectId(null)
+        setNewProjectName("")
+        return
+      }
+      notification.warning({
+        message: t("settings:managePrompts.sync.projectCreatedNoId", {
+          defaultValue: "Project created, but unavailable for selection"
+        })
+      })
+    },
+    onError: (error: any) => {
+      notification.error({
+        message: t("settings:managePrompts.sync.createProjectError", {
+          defaultValue: "Failed to create project"
+        }),
+        description:
+          error?.message ||
+          t("settings:managePrompts.notification.someError", {
+            defaultValue: "Something went wrong."
+          })
+      })
+    }
+  })
+
+  const handleCreateProject = () => {
+    const trimmed = newProjectName.trim()
+    if (!trimmed) return
+    createProjectMutation(trimmed)
   }
 
   return (
@@ -58,9 +110,28 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       ) : isLoading ? (
         <Skeleton active paragraph={{ rows: 3 }} />
       ) : !projects || projects.length === 0 ? (
-        <Empty
-          description={t("settings:managePrompts.sync.noProjects", "No projects available. Create a project in Prompt Studio first.")}
-        />
+        <div className="space-y-4">
+          <Empty
+            description={t("settings:managePrompts.sync.noProjects", "No projects available. Create a project in Prompt Studio first.")}
+          />
+          <div className="space-y-2">
+            <Input
+              value={newProjectName}
+              onChange={(event) => setNewProjectName(event.target.value)}
+              placeholder={t("settings:managePrompts.sync.newProjectPlaceholder", "Enter project name")}
+            />
+            <div className="flex justify-end">
+              <Button
+                type="primary"
+                onClick={handleCreateProject}
+                loading={isCreatingProject}
+                disabled={!newProjectName.trim()}
+              >
+                {t("settings:managePrompts.sync.createProject", "Create project")}
+              </Button>
+            </div>
+          </div>
+        </div>
       ) : (
         <div className="space-y-4">
           <p className="text-sm text-text-muted">

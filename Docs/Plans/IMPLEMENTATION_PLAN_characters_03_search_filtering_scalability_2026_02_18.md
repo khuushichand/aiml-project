@@ -23,7 +23,7 @@ Finding IDs: `C-08` through `C-12`
 - Unit tests for persisted page-size read/write behavior.
 - Component tests for sort/filter controls and reset behavior.
 - Integration tests for pagination correctness with changed page size.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Add Server-Side Search/Filter/Sort/Pagination Contract
 **Goal**: Remove client-side scaling bottlenecks and support advanced query dimensions.
@@ -35,7 +35,7 @@ Finding IDs: `C-08` through `C-12`
 - Backend unit/integration tests for new query params and default ordering.
 - API contract tests for pagination metadata and stable sorting.
 - Frontend integration tests verifying query-state-to-request mapping.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Introduce Tag Management Operations
 **Goal**: Make tags maintainable at scale for power users.
@@ -47,7 +47,7 @@ Finding IDs: `C-08` through `C-12`
 - Backend tests for rename/merge/delete semantics and conflict handling.
 - Component tests for tag manager interaction and validation states.
 - Integration tests for list refresh after tag mutation.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Performance Hardening and Rollout Safety
 **Goal**: Validate scalability improvements under realistic large datasets.
@@ -59,7 +59,7 @@ Finding IDs: `C-08` through `C-12`
 - Performance benchmark test for 200+ list rendering and interaction latency.
 - E2E test for server-driven pagination/filtering flow.
 - Monitoring checklist for API response size and query latency.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 

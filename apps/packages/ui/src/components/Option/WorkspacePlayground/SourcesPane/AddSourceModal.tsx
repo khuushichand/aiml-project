@@ -22,6 +22,7 @@ import {
   X
 } from "lucide-react"
 import { useWorkspaceStore } from "@/store/workspace"
+import { useMobile } from "@/hooks/useMediaQuery"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { AddSourceTab, WorkspaceSourceType } from "@/types/workspace"
 
@@ -84,6 +85,15 @@ const UploadTab: React.FC<{
   setError: (e: string | null) => void
 }> = ({ onAddSources, setProcessing, setError }) => {
   const { t } = useTranslation(["playground", "common"])
+  const isMobile = useMobile()
+  const draggerContainerRef = React.useRef<HTMLDivElement | null>(null)
+
+  const openFilePicker = React.useCallback(() => {
+    const fileInput = draggerContainerRef.current?.querySelector(
+      "input[type='file']"
+    ) as HTMLInputElement | null
+    fileInput?.click()
+  }, [])
 
   const handleUpload = async (file: File) => {
     setProcessing(true)
@@ -129,23 +139,37 @@ const UploadTab: React.FC<{
 
   return (
     <div className="space-y-4">
-      <Dragger {...uploadProps} className="bg-surface">
-        <p className="ant-upload-drag-icon">
-          <UploadIcon className="mx-auto h-12 w-12 text-primary" />
-        </p>
-        <p className="ant-upload-text">
-          {t(
-            "playground:sources.uploadDragText",
-            "Click or drag files to upload"
-          )}
-        </p>
-        <p className="ant-upload-hint text-text-muted">
-          {t(
-            "playground:sources.uploadHint",
-            "Supports PDF, documents, audio, and video files"
-          )}
-        </p>
-      </Dragger>
+      <div ref={draggerContainerRef}>
+        <Dragger {...uploadProps} className="bg-surface">
+          <p className="ant-upload-drag-icon">
+            <UploadIcon className="mx-auto h-12 w-12 text-primary" />
+          </p>
+          <p className="ant-upload-text">
+            {isMobile
+              ? t("playground:sources.uploadTapText", "Tap to select files")
+              : t(
+                  "playground:sources.uploadDragText",
+                  "Click or drag files to upload"
+                )}
+          </p>
+          <p className="ant-upload-hint text-text-muted">
+            {t(
+              "playground:sources.uploadHint",
+              "Supports PDF, documents, audio, and video files"
+            )}
+          </p>
+        </Dragger>
+      </div>
+      {isMobile && (
+        <Button
+          type="default"
+          className="w-full"
+          onClick={openFilePicker}
+          data-testid="mobile-browse-files-button"
+        >
+          {t("playground:sources.browseFiles", "Browse files")}
+        </Button>
+      )}
     </div>
   )
 }
@@ -703,6 +727,7 @@ function getSourceTypeFromMediaType(mediaType: string): WorkspaceSourceType {
  */
 export const AddSourceModal: React.FC = () => {
   const { t } = useTranslation(["playground", "common"])
+  const isMobile = useMobile()
 
   // Store state
   const isOpen = useWorkspaceStore((s) => s.addSourceModalOpen)
@@ -831,7 +856,18 @@ export const AddSourceModal: React.FC = () => {
       onCancel={closeModal}
       title={t("playground:sources.addSourceTitle", "Add Sources")}
       footer={null}
-      width={600}
+      width={isMobile ? "100%" : 600}
+      style={isMobile ? { top: 0, paddingBottom: 0 } : undefined}
+      styles={
+        isMobile
+          ? {
+              body: {
+                maxHeight: "70vh",
+                overflowY: "auto"
+              }
+            }
+          : undefined
+      }
       destroyOnHidden
     >
       <Spin spinning={isProcessing}>

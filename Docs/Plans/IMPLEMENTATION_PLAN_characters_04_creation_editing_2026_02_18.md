@@ -21,7 +21,7 @@ Finding IDs: `C-13` through `C-15`
 - Component tests for add/remove/reorder behaviors.
 - Unit tests for normalization/parsing from UI model to API payload.
 - Integration tests confirming create/edit/save round-trip preserves order.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Upgrade System Prompt Guidance
 **Goal**: Help users author effective system prompts without leaving the form.
@@ -33,7 +33,7 @@ Finding IDs: `C-13` through `C-15`
 - Component tests for show/hide example interactions.
 - Integration test for insert behavior and undo/cancel path.
 - i18n tests for new helper copy.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Extract Shared `CharacterForm` Component
 **Goal**: Eliminate create/edit divergence risk and reduce maintenance cost.
@@ -45,7 +45,7 @@ Finding IDs: `C-13` through `C-15`
 - Snapshot/component tests for create and edit mode parity.
 - Integration tests for create flow and edit flow after extraction.
 - Regression tests for form-draft persistence with shared component.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Hardening and Migration Cleanup
 **Goal**: Ship form refactor with low regression risk.

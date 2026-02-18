@@ -240,3 +240,126 @@ async def get_effective_config(
         values=values,
         unknown_sections=unknown_sections,
     )
+
+
+# ---------------------------------------------------------------------------
+# Config Profiles & Editing (Items 8, 10, 16)
+# ---------------------------------------------------------------------------
+
+from pydantic import BaseModel, Field
+
+
+class ConfigSectionUpdateRequest(BaseModel):
+    values: dict[str, str] = Field(..., description="Key-value pairs to set in the section")
+
+
+class ConfigProfileSaveRequest(BaseModel):
+    name: str = Field(..., description="Profile name")
+    description: str = Field(default="", description="Optional description")
+
+
+class ConfigImportRequest(BaseModel):
+    sections: dict[str, dict[str, str]] = Field(
+        ..., description="Sections to import (section_name -> {key: value})"
+    )
+
+
+@router.get("/profiles")
+async def list_config_profiles() -> dict[str, Any]:
+    """List saved config profiles."""
+    from tldw_Server_API.app.services.admin_config_profiles_service import get_config_profile_store
+    store = await get_config_profile_store()
+    profiles = await store.list_profiles()
+    return {"profiles": profiles}
+
+
+@router.post("/profiles/snapshot")
+async def snapshot_config_profile(payload: ConfigProfileSaveRequest) -> dict[str, Any]:
+    """Save the current config.txt as a named profile (snapshot)."""
+    from tldw_Server_API.app.services.admin_config_profiles_service import get_config_profile_store
+    store = await get_config_profile_store()
+    profile = await store.snapshot_current_config(payload.name, payload.description)
+    return {"status": "ok", "profile": {"name": profile["name"], "created_at": profile["created_at"]}}
+
+
+@router.get("/profiles/{profile_name}")
+async def get_config_profile(profile_name: str) -> dict[str, Any]:
+    """Get a specific config profile."""
+    from tldw_Server_API.app.services.admin_config_profiles_service import get_config_profile_store
+    store = await get_config_profile_store()
+    profile = await store.get_profile(profile_name)
+    if not profile:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="profile_not_found")
+    return profile
+
+
+@router.post("/profiles/{profile_name}/restore")
+async def restore_config_profile(profile_name: str) -> dict[str, Any]:
+    """Restore config.txt from a saved profile.
+
+    Creates a 'pre_restore' snapshot before applying changes.
+    """
+    from tldw_Server_API.app.services.admin_config_profiles_service import get_config_profile_store
+    store = await get_config_profile_store()
+    profile = await store.get_profile(profile_name)
+    if not profile:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="profile_not_found")
+
+    # Auto-snapshot before restore
+    await store.snapshot_current_config(
+        f"pre_restore_{profile_name}",
+        f"Auto-snapshot before restoring profile '{profile_name}'",
+    )
+
+    # Import profile sections
+    result = await store.import_config(profile.get("sections", {}))
+    return {"status": "ok", "restored_from": profile_name, **result}
+
+
+@router.delete("/profiles/{profile_name}")
+async def delete_config_profile(profile_name: str) -> dict[str, str]:
+    """Delete a config profile."""
+    from tldw_Server_API.app.services.admin_config_profiles_service import get_config_profile_store
+    store = await get_config_profile_store()
+    deleted = await store.delete_profile(profile_name)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="profile_not_found")
+    return {"status": "ok"}
+
+
+@router.put("/sections/{section}")
+async def update_config_section(section: str, payload: ConfigSectionUpdateRequest) -> dict[str, Any]:
+    """Update values in a config.txt section.
+
+    Creates an auto-snapshot before applying changes.
+    """
+    from tldw_Server_API.app.services.admin_config_profiles_service import get_config_profile_store
+    store = await get_config_profile_store()
+    # Auto-snapshot before edit
+    await store.snapshot_current_config(
+        f"pre_edit_{section}",
+        f"Auto-snapshot before editing section [{section}]",
+    )
+    updated = await store.update_config_section(section, payload.values)
+    return {"status": "ok", "section": section, "values": updated}
+
+
+@router.get("/export")
+async def export_config() -> dict[str, Any]:
+    """Export the current config.txt as JSON."""
+    from tldw_Server_API.app.services.admin_config_profiles_service import get_config_profile_store
+    store = await get_config_profile_store()
+    return await store.export_config()
+
+
+@router.post("/import")
+async def import_config(payload: ConfigImportRequest) -> dict[str, Any]:
+    """Import config sections from JSON, overwriting existing values.
+
+    Creates an auto-snapshot before applying changes.
+    """
+    from tldw_Server_API.app.services.admin_config_profiles_service import get_config_profile_store
+    store = await get_config_profile_store()
+    await store.snapshot_current_config("pre_import", "Auto-snapshot before config import")
+    result = await store.import_config(payload.sections)
+    return {"status": "ok", **result}

@@ -1,5 +1,15 @@
 import { Dropdown, MenuProps, Tooltip } from "antd"
-import { MoreHorizontal, Pen, MessageCircle, CopyIcon, Trash2, CloudUpload, CloudDownload, Unlink } from "lucide-react"
+import {
+  MoreHorizontal,
+  Pen,
+  MessageCircle,
+  CopyIcon,
+  Trash2,
+  CloudUpload,
+  CloudDownload,
+  Unlink,
+  AlertTriangle
+} from "lucide-react"
 import React from "react"
 import { useTranslation } from "react-i18next"
 import type { PromptSyncStatus } from "@/db/dexie/types"
@@ -16,6 +26,7 @@ interface PromptActionsMenuProps {
   onPushToServer?: () => void
   onPullFromServer?: () => void
   onUnlink?: () => void
+  onResolveConflict?: () => void
 }
 
 export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
@@ -29,14 +40,25 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
   onDelete,
   onPushToServer,
   onPullFromServer,
-  onUnlink
+  onUnlink,
+  onResolveConflict
 }) => {
   const { t } = useTranslation(["settings", "common", "option"])
 
   const isSynced = !!serverId || syncStatus === "synced"
+  const isConflict = syncStatus === "conflict"
   const canSync = !disabled && (onPushToServer || onPullFromServer)
 
   const syncItems: MenuProps["items"] = canSync ? [
+    ...(onResolveConflict && isConflict ? [{
+      key: "resolveConflict",
+      label: t("managePrompts.sync.resolveConflict", {
+        defaultValue: "Resolve conflict"
+      }),
+      icon: <AlertTriangle className="size-4" />,
+      onClick: onResolveConflict
+    }] : []),
+    ...(onResolveConflict && isConflict ? [{ type: "divider" as const }] : []),
     // Push to server option (for local or pending prompts)
     ...(onPushToServer && !isSynced ? [{
       key: "push",

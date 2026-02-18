@@ -15,6 +15,9 @@ export const FEATURE_FLAGS = {
   COMPACT_MESSAGES: "ff_compactMessages",
   CHAT_SIDEBAR: "ff_chatSidebar",
   COMPARE_MODE: "ff_compareMode",
+  KNOWLEDGE_QA_STREAMING: "ff_knowledgeQaStreaming",
+  KNOWLEDGE_QA_COMPARISON: "ff_knowledgeQaComparison",
+  KNOWLEDGE_QA_BRANCHING: "ff_knowledgeQaBranching",
   MEDIA_NAVIGATION_PANEL: "ff_mediaNavigationPanel",
   MEDIA_RICH_RENDERING: "ff_mediaRichRendering",
   MEDIA_ANALYSIS_DISPLAY_MODE_SELECTOR: "ff_mediaAnalysisDisplayModeSelector",
@@ -26,6 +29,9 @@ export type FeatureFlagKey = (typeof FEATURE_FLAGS)[keyof typeof FEATURE_FLAGS]
 
 const FEATURE_FLAG_DEFAULTS: Partial<Record<FeatureFlagKey, boolean>> = {
   [FEATURE_FLAGS.COMPARE_MODE]: false,
+  [FEATURE_FLAGS.KNOWLEDGE_QA_STREAMING]: true,
+  [FEATURE_FLAGS.KNOWLEDGE_QA_COMPARISON]: false,
+  [FEATURE_FLAGS.KNOWLEDGE_QA_BRANCHING]: false,
   [FEATURE_FLAGS.MEDIA_NAVIGATION_PANEL]: true,
   [FEATURE_FLAGS.MEDIA_RICH_RENDERING]: true,
   [FEATURE_FLAGS.MEDIA_ANALYSIS_DISPLAY_MODE_SELECTOR]: true,
@@ -72,6 +78,18 @@ export function useAllFeatureFlags() {
     FEATURE_FLAGS.COMPARE_MODE,
     FEATURE_FLAG_DEFAULTS[FEATURE_FLAGS.COMPARE_MODE] ?? true
   )
+  const [knowledgeQaStreaming, setKnowledgeQaStreaming] = useStorage(
+    FEATURE_FLAGS.KNOWLEDGE_QA_STREAMING,
+    FEATURE_FLAG_DEFAULTS[FEATURE_FLAGS.KNOWLEDGE_QA_STREAMING] ?? true
+  )
+  const [knowledgeQaComparison, setKnowledgeQaComparison] = useStorage(
+    FEATURE_FLAGS.KNOWLEDGE_QA_COMPARISON,
+    FEATURE_FLAG_DEFAULTS[FEATURE_FLAGS.KNOWLEDGE_QA_COMPARISON] ?? true
+  )
+  const [knowledgeQaBranching, setKnowledgeQaBranching] = useStorage(
+    FEATURE_FLAGS.KNOWLEDGE_QA_BRANCHING,
+    FEATURE_FLAG_DEFAULTS[FEATURE_FLAGS.KNOWLEDGE_QA_BRANCHING] ?? true
+  )
   const [mediaNavigationPanel, setMediaNavigationPanel] = useStorage(
     FEATURE_FLAGS.MEDIA_NAVIGATION_PANEL,
     FEATURE_FLAG_DEFAULTS[FEATURE_FLAGS.MEDIA_NAVIGATION_PANEL] ?? true
@@ -106,6 +124,9 @@ export function useAllFeatureFlags() {
       compactMessages,
       chatSidebar,
       compareMode,
+      knowledgeQaStreaming,
+      knowledgeQaComparison,
+      knowledgeQaBranching,
       mediaNavigationPanel,
       mediaRichRendering,
       mediaAnalysisDisplayModeSelector,
@@ -119,6 +140,9 @@ export function useAllFeatureFlags() {
       setCompactMessages,
       setChatSidebar,
       setCompareMode,
+      setKnowledgeQaStreaming,
+      setKnowledgeQaComparison,
+      setKnowledgeQaBranching,
       setMediaNavigationPanel,
       setMediaRichRendering,
       setMediaAnalysisDisplayModeSelector,
@@ -133,6 +157,9 @@ export function useAllFeatureFlags() {
       setCompactMessages(true)
       setChatSidebar(true)
       setCompareMode(true)
+      setKnowledgeQaStreaming(true)
+      setKnowledgeQaComparison(true)
+      setKnowledgeQaBranching(true)
       setMediaNavigationPanel(true)
       setMediaRichRendering(true)
       setMediaAnalysisDisplayModeSelector(true)
@@ -145,6 +172,9 @@ export function useAllFeatureFlags() {
       setCompactMessages,
       setChatSidebar,
       setCompareMode,
+      setKnowledgeQaStreaming,
+      setKnowledgeQaComparison,
+      setKnowledgeQaBranching,
       setMediaNavigationPanel,
       setMediaRichRendering,
       setMediaAnalysisDisplayModeSelector,
@@ -159,6 +189,9 @@ export function useAllFeatureFlags() {
       setCompactMessages(false)
       setChatSidebar(false)
       setCompareMode(false)
+      setKnowledgeQaStreaming(false)
+      setKnowledgeQaComparison(false)
+      setKnowledgeQaBranching(false)
       setMediaNavigationPanel(false)
       setMediaRichRendering(false)
       setMediaAnalysisDisplayModeSelector(false)
@@ -171,6 +204,9 @@ export function useAllFeatureFlags() {
       setCompactMessages,
       setChatSidebar,
       setCompareMode,
+      setKnowledgeQaStreaming,
+      setKnowledgeQaComparison,
+      setKnowledgeQaBranching,
       setMediaNavigationPanel,
       setMediaRichRendering,
       setMediaAnalysisDisplayModeSelector,
@@ -208,6 +244,18 @@ export function useChatSidebar() {
 
 export function useMediaNavigationPanel() {
   return useFeatureFlag(FEATURE_FLAGS.MEDIA_NAVIGATION_PANEL)
+}
+
+export function useKnowledgeQaStreaming() {
+  return useFeatureFlag(FEATURE_FLAGS.KNOWLEDGE_QA_STREAMING)
+}
+
+export function useKnowledgeQaComparison() {
+  return useFeatureFlag(FEATURE_FLAGS.KNOWLEDGE_QA_COMPARISON)
+}
+
+export function useKnowledgeQaBranching() {
+  return useFeatureFlag(FEATURE_FLAGS.KNOWLEDGE_QA_BRANCHING)
 }
 
 export function useMediaRichRendering() {

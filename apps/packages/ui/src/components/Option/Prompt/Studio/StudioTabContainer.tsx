@@ -1,12 +1,5 @@
-import { Segmented, Badge } from "antd"
-import {
-  FolderKanban,
-  FileText,
-  TestTube,
-  BarChart3,
-  Sparkles,
-  Activity
-} from "lucide-react"
+import { Segmented, Badge, Select, Tooltip } from "antd"
+import { FolderKanban, FileText, TestTube, BarChart3, Sparkles } from "lucide-react"
 import React, { useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { useSearchParams } from "react-router-dom"
@@ -16,6 +9,7 @@ import {
   type StudioSubTab
 } from "@/store/prompt-studio"
 import { hasPromptStudio, getPromptStudioStatus } from "@/services/prompt-studio"
+import { useMobile } from "@/hooks/useMediaQuery"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
@@ -37,10 +31,15 @@ const SUB_TAB_OPTIONS: StudioSubTab[] = [
 const isValidSubTab = (tab: string | null): tab is StudioSubTab =>
   tab !== null && SUB_TAB_OPTIONS.includes(tab as StudioSubTab)
 
+export const getStudioStatusRefetchInterval = (
+  status: { processing?: number } | null | undefined
+): number => (Number(status?.processing || 0) > 0 ? 5000 : 30000)
+
 export const StudioTabContainer: React.FC = () => {
   const { t } = useTranslation(["settings", "common", "option"])
   const [searchParams, setSearchParams] = useSearchParams()
   const isOnline = useServerOnline()
+  const isMobile = useMobile()
 
   const activeSubTab = usePromptStudioStore((s) => s.activeSubTab)
   const setActiveSubTab = usePromptStudioStore((s) => s.setActiveSubTab)
@@ -58,7 +57,8 @@ export const StudioTabContainer: React.FC = () => {
     queryKey: ["prompt-studio", "status"],
     queryFn: () => getPromptStudioStatus(),
     enabled: isOnline && hasStudio === true,
-    refetchInterval: 30000 // Refresh every 30 seconds
+    refetchInterval: (query) =>
+      getStudioStatusRefetchInterval((query.state.data as any)?.data?.data)
   })
 
   const status = (statusResponse as any)?.data?.data
@@ -80,6 +80,12 @@ export const StudioTabContainer: React.FC = () => {
       setSearchParams(newParams, { replace: true })
     }
   }, [activeSubTab, searchParams, setSearchParams])
+
+  useEffect(() => {
+    if (!selectedProjectId && activeSubTab !== "projects") {
+      setActiveSubTab("projects")
+    }
+  }, [selectedProjectId, activeSubTab, setActiveSubTab])
 
   const handleSubTabChange = (value: string | number) => {
     if (isValidSubTab(value as string)) {
@@ -147,76 +153,145 @@ export const StudioTabContainer: React.FC = () => {
     )
   }
 
+  const selectProjectFirstLabel = t("managePrompts.studio.selectProjectFirstShort", {
+    defaultValue: "Select a project first"
+  })
+
+  const projectsLabel = t("managePrompts.studio.tabs.projects", {
+    defaultValue: "Projects"
+  })
+  const promptsLabel = t("managePrompts.studio.tabs.prompts", {
+    defaultValue: "Prompts"
+  })
+  const testCasesLabel = t("managePrompts.studio.tabs.testCases", {
+    defaultValue: "Test Cases"
+  })
+  const evaluationsLabel = t("managePrompts.studio.tabs.evaluations", {
+    defaultValue: "Evaluations"
+  })
+  const optimizationsLabel = t("managePrompts.studio.tabs.optimizations", {
+    defaultValue: "Optimizations"
+  })
+
   const segmentedOptions = [
     {
       value: "projects",
       label: (
-        <span className="flex items-center gap-1.5">
-          <FolderKanban className="size-4" />
-          <span className="hidden sm:inline">
-            {t("managePrompts.studio.tabs.projects", { defaultValue: "Projects" })}
-          </span>
+        <span className="flex items-center gap-1.5" aria-label={projectsLabel}>
+          <FolderKanban className="size-4" aria-hidden="true" />
+          <span>{projectsLabel}</span>
         </span>
       )
     },
     {
       value: "prompts",
       label: (
-        <span className="flex items-center gap-1.5">
-          <FileText className="size-4" />
-          <span className="hidden sm:inline">
-            {t("managePrompts.studio.tabs.prompts", { defaultValue: "Prompts" })}
+        <Tooltip title={!selectedProjectId ? selectProjectFirstLabel : undefined}>
+          <span
+            className="flex items-center gap-1.5"
+            aria-label={
+              !selectedProjectId
+                ? `${promptsLabel} (${selectProjectFirstLabel})`
+                : promptsLabel
+            }
+            title={!selectedProjectId ? selectProjectFirstLabel : undefined}
+          >
+            <FileText className="size-4" aria-hidden="true" />
+            <span>{promptsLabel}</span>
           </span>
-        </span>
+        </Tooltip>
       ),
       disabled: !selectedProjectId
     },
     {
       value: "testCases",
       label: (
-        <span className="flex items-center gap-1.5">
-          <TestTube className="size-4" />
-          <span className="hidden sm:inline">
-            {t("managePrompts.studio.tabs.testCases", { defaultValue: "Test Cases" })}
+        <Tooltip title={!selectedProjectId ? selectProjectFirstLabel : undefined}>
+          <span
+            className="flex items-center gap-1.5"
+            aria-label={
+              !selectedProjectId
+                ? `${testCasesLabel} (${selectProjectFirstLabel})`
+                : testCasesLabel
+            }
+            title={!selectedProjectId ? selectProjectFirstLabel : undefined}
+          >
+            <TestTube className="size-4" aria-hidden="true" />
+            <span>{testCasesLabel}</span>
           </span>
-        </span>
+        </Tooltip>
       ),
       disabled: !selectedProjectId
     },
     {
       value: "evaluations",
       label: (
-        <span className="flex items-center gap-1.5">
-          <BarChart3 className="size-4" />
-          <span className="hidden sm:inline">
-            {t("managePrompts.studio.tabs.evaluations", { defaultValue: "Evaluations" })}
+        <Tooltip title={!selectedProjectId ? selectProjectFirstLabel : undefined}>
+          <span
+            className="flex items-center gap-1.5"
+            aria-label={
+              !selectedProjectId
+                ? `${evaluationsLabel} (${selectProjectFirstLabel})`
+                : evaluationsLabel
+            }
+            title={!selectedProjectId ? selectProjectFirstLabel : undefined}
+          >
+            <BarChart3 className="size-4" aria-hidden="true" />
+            <span>{evaluationsLabel}</span>
+            {status?.processing > 0 && (
+              <Badge
+                count={status.processing}
+                size="small"
+                style={{ backgroundColor: "rgb(var(--color-success))" }}
+              />
+            )}
           </span>
-          {status?.processing > 0 && (
-            <Badge
-              count={status.processing}
-              size="small"
-              style={{ backgroundColor: "rgb(var(--color-success))" }}
-            />
-          )}
-        </span>
+        </Tooltip>
       ),
       disabled: !selectedProjectId
     },
     {
       value: "optimizations",
       label: (
-        <span className="flex items-center gap-1.5">
-          <Sparkles className="size-4" />
-          <span className="hidden sm:inline">
-            {t("managePrompts.studio.tabs.optimizations", {
-              defaultValue: "Optimizations"
-            })}
+        <Tooltip title={!selectedProjectId ? selectProjectFirstLabel : undefined}>
+          <span
+            className="flex items-center gap-1.5"
+            aria-label={
+              !selectedProjectId
+                ? `${optimizationsLabel} (${selectProjectFirstLabel})`
+                : optimizationsLabel
+            }
+            title={!selectedProjectId ? selectProjectFirstLabel : undefined}
+          >
+            <Sparkles className="size-4" aria-hidden="true" />
+            <span>{optimizationsLabel}</span>
           </span>
-        </span>
+        </Tooltip>
       ),
       disabled: !selectedProjectId
     }
   ]
+
+  const mobileOptions = segmentedOptions.map((option) => {
+    const labelText =
+      option.value === "projects"
+        ? projectsLabel
+        : option.value === "prompts"
+          ? promptsLabel
+          : option.value === "testCases"
+            ? testCasesLabel
+            : option.value === "evaluations"
+              ? evaluationsLabel
+              : optimizationsLabel
+
+    return {
+      value: option.value,
+      disabled: option.disabled,
+      label: option.disabled
+        ? `${labelText} (${selectProjectFirstLabel})`
+        : labelText
+    }
+  })
 
   const renderContent = () => {
     switch (activeSubTab) {
@@ -239,23 +314,33 @@ export const StudioTabContainer: React.FC = () => {
     <div className="space-y-4" data-testid="studio-tab-container">
       {/* Header with sub-tabs and status */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <Segmented
-          value={activeSubTab}
-          onChange={handleSubTabChange}
-          options={segmentedOptions}
-          data-testid="studio-subtab-selector"
-        />
+        {isMobile ? (
+          <Select
+            value={activeSubTab}
+            onChange={handleSubTabChange}
+            options={mobileOptions}
+            className="w-full"
+            data-testid="studio-subtab-select-mobile"
+          />
+        ) : (
+          <Segmented
+            value={activeSubTab}
+            onChange={handleSubTabChange}
+            options={segmentedOptions}
+            data-testid="studio-subtab-selector"
+          />
+        )}
 
         <QueueHealthWidget status={status} />
       </div>
 
-      {/* Project context reminder for non-project tabs */}
-      {activeSubTab !== "projects" && !selectedProjectId && (
+      {/* Project context reminder */}
+      {!selectedProjectId && (
         <div className="p-4 bg-warn/10 border border-warn/30 rounded-md">
           <p className="text-sm text-warn">
-            {t("managePrompts.studio.selectProjectFirst", {
+            {t("managePrompts.studio.selectProjectFirstDetails", {
               defaultValue:
-                "Please select a project in the Projects tab to access this feature."
+                "Select a project in the Projects tab to unlock Prompts, Test Cases, Evaluations, and Optimizations."
             })}
           </p>
         </div>

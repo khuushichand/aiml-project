@@ -2,22 +2,30 @@
  * HistorySidebar - Past searches sidebar
  */
 
-import React, { useMemo, useState, useEffect } from "react"
+import React, { useMemo, useState, useEffect, useCallback } from "react"
 import {
   History,
   Search,
   FileText,
   Sparkles,
   Trash2,
+  Pin,
   ChevronLeft,
   ChevronRight,
   Settings,
+  Download,
 } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
-import { KNOWLEDGE_QA_KEYWORD } from "./constants"
 import { cn } from "@/lib/utils"
 import type { SearchHistoryItem } from "./types"
 import { useMobile } from "@/hooks/useMediaQuery"
+import { useAntdMessage } from "@/hooks/useAntdMessage"
+import {
+  buildGroupedHistorySections,
+  buildHistoryExportMarkdown,
+  filterHistoryItems,
+  isKnowledgeQaHistoryItem,
+} from "./historyUtils"
 
 type HistorySidebarProps = {
   className?: string
@@ -40,6 +48,25 @@ function formatTimestamp(timestamp: string): string {
   }
 }
 
+function triggerFileDownload(blob: Blob, filename: string) {
+  if (typeof window === "undefined") {
+    throw new Error("History export is only available in the browser")
+  }
+
+  const createObjectUrl = window.URL?.createObjectURL
+  const revokeObjectUrl = window.URL?.revokeObjectURL
+  if (typeof createObjectUrl !== "function" || typeof revokeObjectUrl !== "function") {
+    throw new Error("File download is unavailable in this browser")
+  }
+
+  const url = createObjectUrl(blob)
+  const link = document.createElement("a")
+  link.href = url
+  link.download = filename
+  link.click()
+  revokeObjectUrl(url)
+}
+
 // Skeleton loading component for history items
 function HistorySkeleton() {
   return (
@@ -59,50 +86,27 @@ function HistorySkeleton() {
   )
 }
 
-function groupByDate(items: SearchHistoryItem[]): Map<string, SearchHistoryItem[]> {
-  const groups = new Map<string, SearchHistoryItem[]>()
-
-  for (const item of items) {
-    const date = new Date(item.timestamp)
-    const now = new Date()
-    const diff = now.getTime() - date.getTime()
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-
-    let groupKey: string
-    if (days === 0) {
-      groupKey = "Today"
-    } else if (days === 1) {
-      groupKey = "Yesterday"
-    } else if (days < 7) {
-      groupKey = "This Week"
-    } else if (days < 30) {
-      groupKey = "This Month"
-    } else {
-      groupKey = "Older"
-    }
-
-    if (!groups.has(groupKey)) {
-      groups.set(groupKey, [])
-    }
-    groups.get(groupKey)!.push(item)
-  }
-
-  return groups
-}
+const EXPAND_HINT_SEEN_KEY = "knowledge_qa_history_expand_hint_seen"
 
 export function HistorySidebar({ className }: HistorySidebarProps) {
   const {
     searchHistory,
+    currentThreadId,
     historySidebarOpen,
     setHistorySidebarOpen,
     restoreFromHistory,
     deleteHistoryItem,
+    toggleHistoryPin,
     preset,
     setSettingsPanelOpen,
   } = useKnowledgeQA()
 
+  const message = useAntdMessage()
+
   // Initial loading state for better UX feedback
   const [isInitialLoad, setIsInitialLoad] = useState(true)
+  const [historyFilter, setHistoryFilter] = useState("")
+  const [showExpandHint, setShowExpandHint] = useState(false)
   const isMobile = useMobile()
 
   // Clear initial load state after brief delay or when history is available
@@ -116,19 +120,80 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
     }
   }, [searchHistory])
 
-  const filteredHistory = useMemo(() => {
-    return searchHistory.filter((item) => {
-      const keywords = Array.isArray(item.keywords) ? item.keywords : []
-      return keywords.some(
-        (kw) => String(kw).toLowerCase() === KNOWLEDGE_QA_KEYWORD.toLowerCase()
-      )
-    })
-  }, [searchHistory])
+  useEffect(() => {
+    if (isMobile || historySidebarOpen) {
+      setShowExpandHint(false)
+      return
+    }
+
+    try {
+      const seenHint = localStorage.getItem(EXPAND_HINT_SEEN_KEY) === "1"
+      if (seenHint) return
+      setShowExpandHint(true)
+      const timer = window.setTimeout(() => {
+        setShowExpandHint(false)
+        localStorage.setItem(EXPAND_HINT_SEEN_KEY, "1")
+      }, 5000)
+      return () => window.clearTimeout(timer)
+    } catch {
+      return
+    }
+  }, [historySidebarOpen, isMobile])
+
+  const knowledgeHistory = useMemo(
+    () => searchHistory.filter((item) => isKnowledgeQaHistoryItem(item)),
+    [searchHistory]
+  )
+
+  const visibleHistory = useMemo(
+    () => filterHistoryItems(knowledgeHistory, historyFilter),
+    [knowledgeHistory, historyFilter]
+  )
 
   const groupedHistory = useMemo(
-    () => groupByDate(filteredHistory),
-    [filteredHistory]
+    () => buildGroupedHistorySections(visibleHistory),
+    [visibleHistory]
   )
+
+  const handleExpandSidebar = useCallback(() => {
+    setHistorySidebarOpen(true)
+    setShowExpandHint(false)
+    try {
+      localStorage.setItem(EXPAND_HINT_SEEN_KEY, "1")
+    } catch {
+      // Ignore localStorage failures in private mode.
+    }
+  }, [setHistorySidebarOpen])
+
+  const handleExportAll = useCallback(() => {
+    if (knowledgeHistory.length === 0) {
+      message.open({
+        type: "info",
+        content: "No history entries available to export.",
+        duration: 3,
+      })
+      return
+    }
+
+    try {
+      const markdown = buildHistoryExportMarkdown(knowledgeHistory)
+      const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" })
+      const dateSuffix = new Date().toISOString().slice(0, 10)
+      triggerFileDownload(blob, `knowledge_qa_history_${dateSuffix}.md`)
+      message.open({
+        type: "success",
+        content: `Exported ${knowledgeHistory.length} history entries.`,
+        duration: 3,
+      })
+    } catch (error) {
+      console.error("Failed to export Knowledge QA history:", error)
+      message.open({
+        type: "error",
+        content: "History export failed. Please try again.",
+        duration: 4,
+      })
+    }
+  }, [knowledgeHistory, message])
 
   const renderExpandedContent = () => (
     <>
@@ -158,19 +223,64 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
         </button>
       </div>
 
+      <div className="px-4 py-2 border-b border-border">
+        <label htmlFor="knowledge-history-filter" className="sr-only">
+          Filter history
+        </label>
+        <div className="relative">
+          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
+          <input
+            id="knowledge-history-filter"
+            value={historyFilter}
+            onChange={(event) => setHistoryFilter(event.target.value)}
+            placeholder="Filter history"
+            className="w-full rounded-md border border-border bg-surface py-1.5 pl-8 pr-2 text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+            aria-label="Filter history"
+          />
+        </div>
+      </div>
+
       {/* History list */}
       <div className="flex-1 overflow-y-auto">
         {isInitialLoad ? (
           <HistorySkeleton />
-        ) : filteredHistory.length === 0 ? (
+        ) : visibleHistory.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-text-muted">
             <Search className="w-8 h-8 mx-auto mb-2 opacity-50" />
-            <p>No search history yet</p>
-            <p className="text-xs mt-1">Your searches will appear here</p>
+            <p>{historyFilter.trim().length > 0 ? "No matching history" : "No search history yet"}</p>
+            <p className="text-xs mt-1">
+              {historyFilter.trim().length > 0
+                ? "Try a different keyword"
+                : "Your searches will appear here"}
+            </p>
           </div>
         ) : (
           <div className="py-2">
-            {Array.from(groupedHistory.entries()).map(([group, items]) => (
+            {groupedHistory.pinned.length > 0 && (
+              <div className="mb-3">
+                <div className="px-4 py-1 text-xs font-medium text-text-muted uppercase tracking-wide">
+                  Pinned
+                </div>
+                <div className="space-y-1">
+                  {groupedHistory.pinned.map((item) => (
+                    <HistoryItem
+                      key={item.id}
+                      item={item}
+                      isActive={Boolean(
+                        currentThreadId &&
+                          (item.conversationId === currentThreadId || item.id === currentThreadId)
+                      )}
+                      alwaysShowActions={isMobile}
+                      onSelect={() => restoreFromHistory(item)}
+                      onDelete={() => deleteHistoryItem(item.id)}
+                      onTogglePin={() => toggleHistoryPin(item.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {Array.from(groupedHistory.groupedByDate.entries()).map(([group, items]) => (
               <div key={group} className="mb-3">
                 <div className="px-4 py-1 text-xs font-medium text-text-muted uppercase tracking-wide">
                   {group}
@@ -180,8 +290,14 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
                     <HistoryItem
                       key={item.id}
                       item={item}
+                      isActive={Boolean(
+                        currentThreadId &&
+                          (item.conversationId === currentThreadId || item.id === currentThreadId)
+                      )}
+                      alwaysShowActions={isMobile}
                       onSelect={() => restoreFromHistory(item)}
                       onDelete={() => deleteHistoryItem(item.id)}
+                      onTogglePin={() => toggleHistoryPin(item.id)}
                     />
                   ))}
                 </div>
@@ -191,8 +307,15 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
         )}
       </div>
 
-      {/* Settings button */}
-      <div className="px-4 py-3 border-t border-border">
+      {/* Footer actions */}
+      <div className="px-4 py-3 border-t border-border space-y-2">
+        <button
+          onClick={handleExportAll}
+          className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md hover:bg-muted transition-colors"
+        >
+          <Download className="w-4 h-4 text-text-muted" />
+          <span>Export All</span>
+        </button>
         <button
           onClick={() => setSettingsPanelOpen(true)}
           className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md hover:bg-muted transition-colors"
@@ -237,9 +360,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
                 className
               )}
             >
-              <div className="flex h-full flex-col">
-                {renderExpandedContent()}
-              </div>
+              <div className="flex h-full flex-col">{renderExpandedContent()}</div>
             </aside>
           </div>
         )}
@@ -255,16 +376,26 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
         data-testid="knowledge-history-desktop-collapsed"
       >
         <button
-          onClick={() => setHistorySidebarOpen(true)}
-          className="p-2 rounded-lg hover:bg-muted transition-colors"
-          title="Expand sidebar"
+          onClick={handleExpandSidebar}
+          className={cn(
+            "p-2 rounded-lg hover:bg-muted transition-colors",
+            showExpandHint ? "animate-pulse" : ""
+          )}
+          title="Expand history sidebar"
+          aria-label="Expand history sidebar"
         >
           <ChevronRight className="w-5 h-5 text-text-muted" />
         </button>
 
+        {showExpandHint ? (
+          <div className="mt-1 rounded bg-primary/10 px-2 py-1 text-[10px] text-primary" role="status">
+            Expand history sidebar
+          </div>
+        ) : null}
+
         <div className="mt-4 flex flex-col gap-2">
           <button
-            onClick={() => setHistorySidebarOpen(true)}
+            onClick={handleExpandSidebar}
             className="p-2 rounded-lg hover:bg-muted transition-colors"
             title="Search history"
           >
@@ -296,12 +427,18 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
 // Individual history item
 function HistoryItem({
   item,
+  isActive,
+  alwaysShowActions,
   onSelect,
   onDelete,
+  onTogglePin,
 }: {
   item: SearchHistoryItem
+  isActive: boolean
+  alwaysShowActions: boolean
   onSelect: () => void
   onDelete: () => void
+  onTogglePin: () => void
 }) {
   const [confirmDelete, setConfirmDelete] = React.useState(false)
 
@@ -323,15 +460,32 @@ function HistoryItem({
     }
   }
 
+  const handlePinClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onTogglePin()
+  }
+
+  const actionVisibilityClass =
+    alwaysShowActions || item.pinned || confirmDelete
+      ? "opacity-100"
+      : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+
   return (
     <div className="group relative px-2">
       <button
         onClick={onSelect}
-        className="flex items-start gap-2 w-full px-2 py-2 text-left rounded-md hover:bg-muted transition-colors"
+        aria-current={isActive ? "true" : undefined}
+        className={cn(
+          "flex items-start gap-2 w-full px-2 py-2 text-left rounded-md transition-colors",
+          isActive ? "bg-primary/10 border-l-2 border-primary" : "hover:bg-muted"
+        )}
       >
         <Search className="w-4 h-4 mt-0.5 text-text-muted flex-shrink-0" />
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 pr-12">
           <p className="text-sm truncate">{item.query}</p>
+          {item.answerPreview ? (
+            <p className="mt-0.5 text-xs text-text-muted line-clamp-1">{item.answerPreview}</p>
+          ) : null}
           <div className="flex items-center gap-2 mt-0.5 text-xs text-text-muted">
             <span className="flex items-center gap-1">
               <FileText className="w-3 h-3" />
@@ -347,24 +501,32 @@ function HistoryItem({
         </div>
       </button>
 
+      <button
+        onClick={handlePinClick}
+        aria-label={item.pinned ? "Unpin history item" : "Pin history item"}
+        className={cn(
+          "absolute right-7 top-1/2 -translate-y-1/2 rounded p-1 transition-all hover:bg-muted",
+          actionVisibilityClass
+        )}
+        title={item.pinned ? "Unpin" : "Pin"}
+      >
+        <Pin className={cn("w-3.5 h-3.5", item.pinned ? "text-primary" : "text-text-muted")} />
+      </button>
+
       {/* Delete button (shown on hover) - requires confirmation */}
       <button
         onClick={handleDeleteClick}
         onBlur={() => setConfirmDelete(false)}
         aria-label={confirmDelete ? "Click again to confirm deletion" : "Delete from history"}
         className={cn(
-          "absolute right-2 top-1/2 -translate-y-1/2 rounded transition-all",
+          "absolute right-2 top-1/2 -translate-y-1/2 rounded transition-all focus-visible:opacity-100",
           confirmDelete
             ? "px-2 py-1 text-xs font-medium bg-danger text-white opacity-100"
-            : "p-1 opacity-0 group-hover:opacity-100 hover:bg-danger/10 hover:text-danger"
+            : cn("p-1 hover:bg-danger/10 hover:text-danger", actionVisibilityClass)
         )}
         title={confirmDelete ? "Click to confirm delete" : "Delete from history"}
       >
-        {confirmDelete ? (
-          "Delete?"
-        ) : (
-          <Trash2 className="w-3.5 h-3.5" />
-        )}
+        {confirmDelete ? "Delete?" : <Trash2 className="w-3.5 h-3.5" />}
       </button>
     </div>
   )

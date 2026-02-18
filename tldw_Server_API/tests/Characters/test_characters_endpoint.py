@@ -527,6 +527,176 @@ class TestCharacterAPIIntegration:
         assert name_a in found_names
         assert name_b in found_names
 
+    def test_query_characters_integration(self, client: TestClient, test_db: CharactersRAGDB):
+        creator = f"Creator_{uuid.uuid4().hex[:6]}"
+        name_a = f"QueryA_{uuid.uuid4().hex[:6]}"
+        name_b = f"QueryB_{uuid.uuid4().hex[:6]}"
+        name_c = f"QueryC_{uuid.uuid4().hex[:6]}"
+
+        resp_a = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(name=name_a, creator=creator)
+        )
+        resp_b = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(name=name_b, creator=creator)
+        )
+        resp_c = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(name=name_c, creator="other")
+        )
+        assert resp_a.status_code == 201, resp_a.text
+        assert resp_b.status_code == 201, resp_b.text
+        assert resp_c.status_code == 201, resp_c.text
+
+        # Create one conversation to validate has_conversations filtering.
+        char_with_conversation = int(resp_a.json()["id"])
+        conv_id = test_db.add_conversation(
+            {"character_id": char_with_conversation, "title": f"Conv {uuid.uuid4().hex[:4]}"}
+        )
+        assert conv_id is not None
+
+        page_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/query?page=1&page_size=2&sort_by=name&sort_order=asc"
+        )
+        assert page_response.status_code == 200, page_response.text
+        page_data = page_response.json()
+        assert "items" in page_data
+        assert "total" in page_data
+        assert page_data["page"] == 1
+        assert page_data["page_size"] == 2
+        assert isinstance(page_data["has_more"], bool)
+        assert len(page_data["items"]) <= 2
+        assert page_data["total"] >= 3
+
+        creator_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/query?page=1&page_size=20&creator={creator}"
+        )
+        assert creator_response.status_code == 200, creator_response.text
+        creator_items = creator_response.json()["items"]
+        assert len(creator_items) >= 2
+        assert all((item.get("creator") or "").lower() == creator.lower() for item in creator_items)
+
+        has_conv_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/query?page=1&page_size=20&has_conversations=true"
+        )
+        assert has_conv_response.status_code == 200, has_conv_response.text
+        has_conv_ids = {
+            int(item["id"]) for item in has_conv_response.json()["items"] if "id" in item
+        }
+        assert char_with_conversation in has_conv_ids
+
+        no_conv_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/query?page=1&page_size=20&has_conversations=false"
+        )
+        assert no_conv_response.status_code == 200, no_conv_response.text
+        no_conv_ids = {
+            int(item["id"]) for item in no_conv_response.json()["items"] if "id" in item
+        }
+        assert char_with_conversation not in no_conv_ids
+
+    def test_manage_character_tags_operations_integration(self, client: TestClient, test_db: CharactersRAGDB):
+        char_a = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(
+                name=f"TagOpsA_{uuid.uuid4().hex[:6]}",
+                tags=["legacy", "shared"],
+            ),
+        )
+        char_b = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(
+                name=f"TagOpsB_{uuid.uuid4().hex[:6]}",
+                tags=["legacy"],
+            ),
+        )
+        char_c = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(
+                name=f"TagOpsC_{uuid.uuid4().hex[:6]}",
+                tags=["shared"],
+            ),
+        )
+        assert char_a.status_code == 201, char_a.text
+        assert char_b.status_code == 201, char_b.text
+        assert char_c.status_code == 201, char_c.text
+
+        char_a_id = int(char_a.json()["id"])
+        char_b_id = int(char_b.json()["id"])
+        char_c_id = int(char_c.json()["id"])
+
+        rename_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/tags/operations",
+            json={
+                "operation": "rename",
+                "source_tag": "legacy",
+                "target_tag": "modern",
+            },
+        )
+        assert rename_response.status_code == 200, rename_response.text
+        rename_data = rename_response.json()
+        assert rename_data["updated_count"] == 2
+        assert set(rename_data["updated_character_ids"]) == {char_a_id, char_b_id}
+
+        renamed_a = test_db.get_character_card_by_id(char_a_id)
+        renamed_b = test_db.get_character_card_by_id(char_b_id)
+        assert renamed_a is not None
+        assert renamed_b is not None
+        assert renamed_a["tags"] == ["modern", "shared"]
+        assert renamed_b["tags"] == ["modern"]
+
+        merge_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/tags/operations",
+            json={
+                "operation": "merge",
+                "source_tag": "modern",
+                "target_tag": "shared",
+            },
+        )
+        assert merge_response.status_code == 200, merge_response.text
+        merge_data = merge_response.json()
+        assert merge_data["updated_count"] == 2
+        assert set(merge_data["updated_character_ids"]) == {char_a_id, char_b_id}
+
+        merged_a = test_db.get_character_card_by_id(char_a_id)
+        merged_b = test_db.get_character_card_by_id(char_b_id)
+        assert merged_a is not None
+        assert merged_b is not None
+        assert merged_a["tags"] == ["shared"]
+        assert merged_b["tags"] == ["shared"]
+
+        delete_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/tags/operations",
+            json={
+                "operation": "delete",
+                "source_tag": "shared",
+            },
+        )
+        assert delete_response.status_code == 200, delete_response.text
+        delete_data = delete_response.json()
+        assert delete_data["updated_count"] >= 3
+        assert char_c_id in delete_data["updated_character_ids"]
+
+        deleted_a = test_db.get_character_card_by_id(char_a_id)
+        deleted_b = test_db.get_character_card_by_id(char_b_id)
+        deleted_c = test_db.get_character_card_by_id(char_c_id)
+        assert deleted_a is not None
+        assert deleted_b is not None
+        assert deleted_c is not None
+        assert deleted_a["tags"] == []
+        assert deleted_b["tags"] == []
+        assert deleted_c["tags"] == []
+
+    def test_manage_character_tags_requires_target_for_rename_integration(self, client: TestClient):
+        response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/tags/operations",
+            json={
+                "operation": "rename",
+                "source_tag": "legacy",
+            },
+        )
+        assert response.status_code == 422, response.text
+
     def test_update_character_integration(self, client: TestClient, test_db: CharactersRAGDB):
         create_payload = create_sample_character_payload("UpdateBase")
         create_response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=create_payload)

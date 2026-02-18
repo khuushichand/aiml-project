@@ -691,23 +691,34 @@ export class PageAssistDatabase {
       } as Prompt;
     });
 
+    let imported = 0;
+    let skipped = 0;
+    let failed = 0;
+
     // Use transaction for atomic batch operations
     await db.transaction('rw', db.prompts, async () => {
       if (replaceExisting) {
-        // Bulk put all prompts
+        // Replace mode should fully replace the existing prompt dataset.
+        await db.prompts.clear();
         await db.prompts.bulkPut(normalizedPrompts);
-      } else {
-        // Filter out existing prompts
-        const existingIds = new Set(
-          (await db.prompts.where('id').anyOf(normalizedPrompts.map(p => p.id)).toArray())
-            .map(p => p.id)
-        );
-        const newPrompts = normalizedPrompts.filter(p => !existingIds.has(p.id));
-        if (newPrompts.length > 0) {
-          await db.prompts.bulkPut(newPrompts);
-        }
+        imported = normalizedPrompts.length;
+        return;
       }
+
+      // Filter out existing prompts
+      const existingIds = new Set(
+        (await db.prompts.where('id').anyOf(normalizedPrompts.map(p => p.id)).toArray())
+          .map(p => p.id)
+      );
+      const newPrompts = normalizedPrompts.filter(p => !existingIds.has(p.id));
+      skipped = normalizedPrompts.length - newPrompts.length;
+      if (newPrompts.length > 0) {
+        await db.prompts.bulkPut(newPrompts);
+      }
+      imported = newPrompts.length;
     });
+
+    return { imported, skipped, failed };
   }
 
   async importSessionFilesV2(data: SessionFiles[], options: {

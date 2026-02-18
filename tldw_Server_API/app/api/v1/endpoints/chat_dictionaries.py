@@ -10,11 +10,15 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
+    BulkEntryOperation,
+    BulkOperationResponse,
     ChatDictionaryCreate,
     ChatDictionaryResponse,
     ChatDictionaryUpdate,
     ChatDictionaryWithEntries,
     DictionaryEntryCreate,
+    DictionaryEntryReorderRequest,
+    DictionaryEntryReorderResponse,
     DictionaryEntryResponse,
     DictionaryEntryUpdate,
     DictionaryListResponse,
@@ -87,6 +91,11 @@ def _entry_dict_to_response(
         type=entry_type,
         enabled=enabled,
         case_sensitive=case_sensitive,
+        priority=(
+            int(entry_data.get("sort_order"))
+            if entry_data.get("sort_order") is not None
+            else None
+        ),
         created_at=coerce_datetime(entry_data.get("created_at")),
         updated_at=coerce_datetime(entry_data.get("updated_at")),
     )
@@ -137,12 +146,26 @@ async def create_chat_dictionary(
 )
 async def list_chat_dictionaries(
     include_inactive: bool = Query(False, description="Include inactive dictionaries"),
+    include_usage: bool = Query(False, description="Include chat usage summary per dictionary"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> DictionaryListResponse:
     """List all chat dictionaries for the current user."""
     try:
         service = ChatDictionaryService(db)
         dictionaries = service.list_dictionaries_with_entry_counts(include_inactive=include_inactive)
+        if include_usage and dictionaries:
+            usage_summary = service.get_dictionary_usage_summary(
+                dictionary_ids=[int(item.get("id")) for item in dictionaries if item.get("id") is not None],
+            )
+            for item in dictionaries:
+                dictionary_id_raw = item.get("id")
+                if dictionary_id_raw is None:
+                    continue
+                dictionary_id = int(dictionary_id_raw)
+                usage = usage_summary.get(dictionary_id) or {}
+                item["used_by_chat_count"] = int(usage.get("used_by_chat_count", 0))
+                item["used_by_active_chat_count"] = int(usage.get("used_by_active_chat_count", 0))
+                item["used_by_chat_refs"] = usage.get("used_by_chat_refs", [])
 
         active_count = sum(1 for d in dictionaries if d.get("is_active", True))
         inactive_count = len(dictionaries) - active_count
@@ -217,6 +240,7 @@ async def update_chat_dictionary(
             name=update.name,
             description=update.description,
             is_active=update.is_active,
+            expected_version=update.version,
         )
 
         dict_data = service.get_dictionary(dictionary_id) if success else None
@@ -508,6 +532,113 @@ async def delete_dictionary_entry(
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/dictionaries/entries/bulk",
+    response_model=BulkOperationResponse,
+    summary="Bulk operations on dictionary entries",
+    description="Perform delete/activate/deactivate/group operations on multiple dictionary entries.",
+    tags=["chat-dictionaries"],
+)
+async def bulk_dictionary_entry_operations(
+    operation: BulkEntryOperation,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> BulkOperationResponse:
+    """Perform bulk operations on dictionary entries with partial-failure reporting."""
+    service = ChatDictionaryService(db)
+    try:
+        affected_count = 0
+        failed_ids: list[int] = []
+
+        for entry_id in operation.entry_ids:
+            try:
+                if operation.operation == "delete":
+                    success = service.delete_entry(entry_id)
+                elif operation.operation == "activate":
+                    success = service.update_entry(entry_id, enabled=True)
+                elif operation.operation == "deactivate":
+                    success = service.update_entry(entry_id, enabled=False)
+                elif operation.operation == "group":
+                    success = service.update_entry(entry_id, group=operation.group_name)
+                else:
+                    success = False
+
+                if success:
+                    affected_count += 1
+                else:
+                    failed_ids.append(entry_id)
+            except InputError as e:
+                logger.warning(
+                    f"Bulk operation '{operation.operation}' failed for entry {entry_id}: {e}"
+                )
+                failed_ids.append(entry_id)
+            except Exception as e:
+                logger.warning(
+                    f"Bulk operation '{operation.operation}' failed for entry {entry_id}: {e}"
+                )
+                failed_ids.append(entry_id)
+
+        message = (
+            f"Operation '{operation.operation}' completed: {affected_count} entries affected"
+        )
+        if failed_ids:
+            message += f", {len(failed_ids)} failed"
+
+        return BulkOperationResponse(
+            success=len(failed_ids) == 0,
+            affected_count=affected_count,
+            failed_ids=failed_ids,
+            message=message,
+        )
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"Error performing bulk entry operation: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.put(
+    "/dictionaries/{dictionary_id}/entries/reorder",
+    response_model=DictionaryEntryReorderResponse,
+    summary="Reorder dictionary entries",
+    description="Persist a new execution order for all entries in a dictionary.",
+    tags=["chat-dictionaries"],
+)
+async def reorder_dictionary_entries(
+    dictionary_id: int,
+    reorder_request: DictionaryEntryReorderRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> DictionaryEntryReorderResponse:
+    """Reorder entries for a dictionary using a full ordered list of entry IDs."""
+    service = ChatDictionaryService(db)
+    try:
+        dict_data = service.get_dictionary(dictionary_id)
+        if not dict_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+
+        affected_count = service.reorder_entries(dictionary_id, reorder_request.entry_ids)
+        ordered_entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
+        ordered_entry_ids = [
+            int(entry.get("id"))
+            for entry in ordered_entries
+            if entry.get("id") is not None
+        ]
+
+        return DictionaryEntryReorderResponse(
+            success=True,
+            dictionary_id=dictionary_id,
+            affected_count=affected_count,
+            entry_ids=ordered_entry_ids,
+            message=f"Reordered {affected_count} entries.",
+        )
+    except HTTPException:
+        raise
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"Error reordering dictionary entries: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.post(

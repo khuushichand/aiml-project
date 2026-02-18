@@ -42,6 +42,8 @@ from . import admin_settings as admin_settings_endpoints
 from . import admin_system as admin_system_endpoints
 from . import admin_tools as admin_tools_endpoints
 from . import admin_usage as admin_usage_endpoints
+from . import admin_acp_agents as admin_acp_agents_endpoints
+from . import admin_events_stream as admin_events_stream_endpoints
 from . import admin_user as admin_user_endpoints
 
 _ADMIN_NONCRITICAL_EXCEPTIONS = (
@@ -123,6 +125,8 @@ router.include_router(admin_personalization_endpoints.router)
 router.include_router(admin_bundle_ops_endpoints.router)
 router.include_router(admin_network_endpoints.router)
 router.include_router(admin_circuit_breakers_endpoints.router)
+router.include_router(admin_acp_agents_endpoints.router)
+router.include_router(admin_events_stream_endpoints.router)
 
 
 # Backend detection now standardized via core AuthNZ database helper

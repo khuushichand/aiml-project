@@ -1,0 +1,80 @@
+import React from "react"
+import { describe, expect, it, vi } from "vitest"
+import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { PromptActionsMenu } from "../PromptActionsMenu"
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (_key: string, options?: Record<string, any>) =>
+      options?.defaultValue ?? _key
+  })
+}))
+
+vi.mock("antd", () => ({
+  Dropdown: ({ menu, children }: any) => (
+    <div>
+      {children}
+      <div data-testid="mock-dropdown-menu">
+        {(menu?.items || [])
+          .filter((item: any) => item && item.type !== "divider")
+          .map((item: any) => (
+            <button
+              key={item.key}
+              data-testid={`menu-item-${item.key}`}
+              onClick={item.onClick}
+            >
+              {item.label}
+            </button>
+          ))}
+      </div>
+    </div>
+  ),
+  Tooltip: ({ children }: any) => <>{children}</>
+}))
+
+describe("PromptActionsMenu", () => {
+  it("shows resolve conflict action when prompt is in conflict state", async () => {
+    const user = userEvent.setup()
+    const onResolveConflict = vi.fn()
+
+    render(
+      <PromptActionsMenu
+        promptId="p1"
+        syncStatus="conflict"
+        serverId={11}
+        onEdit={vi.fn()}
+        onDuplicate={vi.fn()}
+        onUseInChat={vi.fn()}
+        onDelete={vi.fn()}
+        onPullFromServer={vi.fn()}
+        onUnlink={vi.fn()}
+        onResolveConflict={onResolveConflict}
+      />
+    )
+
+    const resolveItem = screen.getByTestId("menu-item-resolveConflict")
+    expect(resolveItem).toBeInTheDocument()
+
+    await user.click(resolveItem)
+    expect(onResolveConflict).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not show resolve conflict action for non-conflict prompts", () => {
+    render(
+      <PromptActionsMenu
+        promptId="p2"
+        syncStatus="synced"
+        serverId={12}
+        onEdit={vi.fn()}
+        onDuplicate={vi.fn()}
+        onUseInChat={vi.fn()}
+        onDelete={vi.fn()}
+        onPullFromServer={vi.fn()}
+        onUnlink={vi.fn()}
+      />
+    )
+
+    expect(screen.queryByTestId("menu-item-resolveConflict")).not.toBeInTheDocument()
+  })
+})

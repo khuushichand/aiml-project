@@ -23,7 +23,7 @@ Finding IDs: `1.1` through `1.9`
 - Component tests for sort comparators and active-filter behavior.
 - Integration tests for combined search + filter + pagination state.
 - E2E test covering list navigation with 50+ dictionaries.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 2: High-Frequency Actions and Context Signals
 **Goal**: Reduce clicks for common operations and improve list-level context.
@@ -36,7 +36,7 @@ Finding IDs: `1.1` through `1.9`
 - Component test for inline active toggle success and error rollback.
 - Unit test for timestamp formatting helper.
 - Integration test for duplicate action and name-collision handling.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Chat Relationship Visibility and Safe Deactivation
 **Goal**: Connect dictionaries to real chat usage so activation decisions are safe.
@@ -49,7 +49,7 @@ Finding IDs: `1.1` through `1.9`
 - API integration test for usage metadata inclusion.
 - Component test for conditional deactivation warning dialog.
 - E2E test validating warning appears when deactivating in-use dictionaries.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: CTA Hierarchy and UX Polish
 **Goal**: Preserve current good CTA placement while improving action clarity.
@@ -60,7 +60,7 @@ Finding IDs: `1.1` through `1.9`
 **Tests**:
 - Visual regression snapshot for header action area.
 - Accessibility test for CTA keyboard tab order and accessible names.
-**Status**: In Progress
+**Status**: Complete
 
 ## Dependencies
 

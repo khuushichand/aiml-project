@@ -22,7 +22,7 @@ Finding IDs: `4.1` through `4.4`
 - Form validation tests for required placeholder messaging.
 - Integration test confirming edit operation does not remove unrelated prompts.
 - Service unit test documenting and enforcing update contract semantics.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Copilot-to-Custom and Clipboard Actions
 **Goal**: Remove manual copy friction for prompt iteration workflows.
@@ -34,7 +34,7 @@ Finding IDs: `4.1` through `4.4`
 - Component tests for new action visibility and disabled/loading states.
 - Integration test for `Copy to Custom` data transfer to Custom tab drawer.
 - Clipboard action test with success/error feedback behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Copilot Search and Filter Parity
 **Goal**: Bring Copilot list discoverability closer to Custom tab standards.
@@ -45,7 +45,7 @@ Finding IDs: `4.1` through `4.4`
 **Tests**:
 - Unit tests for copilot filter predicate behavior.
 - Component tests for search input state and filtered table output.
-**Status**: Not Started
+**Status**: Complete
 
 ## Dependencies
 
