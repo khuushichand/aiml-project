@@ -835,10 +835,12 @@ export function ContentViewer({
   const [findQuery, setFindQuery] = useState('')
   const [findMatchOffsets, setFindMatchOffsets] = useState<number[]>([])
   const [activeFindMatchIndex, setActiveFindMatchIndex] = useState(-1)
+  const [contentSelectionAnnouncement, setContentSelectionAnnouncement] = useState('')
   const lastSanitizationTelemetryKeyRef = useRef<string>('')
   const lastAppliedNavigationTargetKeyRef = useRef<string>('')
   const lastAppliedNavigationTitleKeyRef = useRef<string>('')
   const lastAppliedNavigationPageKeyRef = useRef<string>('')
+  const lastContentSelectionAnnouncementKeyRef = useRef<string>('')
   const titleRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pageRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const rootContainerRef = useRef<HTMLDivElement | null>(null)
@@ -872,6 +874,13 @@ export function ContentViewer({
   const markdownPreviewSize = textSizeControl.markdownSize
   const richTextTypographyClass = textSizeControl.richClass
   const selectedMediaId = selectedMedia?.id != null ? String(selectedMedia.id) : null
+  const selectedMediaAnnouncementLabel = useMemo(() => {
+    if (!selectedMedia) return ''
+    const title = String(selectedMedia.title || '').trim()
+    if (title) return title
+    const kind = String(selectedMedia.kind || 'media').trim() || 'media'
+    return `${kind} ${selectedMedia.id}`
+  }, [selectedMedia])
   const isAwaitingSelectionUpdate =
     !!pendingDeleteId && !!selectedMediaId && pendingDeleteId === selectedMediaId
   const mediaType = String(
@@ -910,6 +919,24 @@ export function ContentViewer({
     hasNavigationTarget: Boolean(navigationTarget)
   })
   const progressPercent = mediaReadingProgress?.progressPercent
+
+  useEffect(() => {
+    if (!selectedMediaId || !selectedMediaAnnouncementLabel) {
+      lastContentSelectionAnnouncementKeyRef.current = ''
+      setContentSelectionAnnouncement('')
+      return
+    }
+
+    const stateLabel = isDetailLoading ? 'loading' : 'ready'
+    const announcementKey = `${selectedMediaId}:${stateLabel}`
+    if (lastContentSelectionAnnouncementKeyRef.current === announcementKey) return
+
+    lastContentSelectionAnnouncementKeyRef.current = announcementKey
+    const statusPrefix = isDetailLoading
+      ? t('review:mediaPage.contentAnnouncementLoading', { defaultValue: 'Loading' })
+      : t('review:mediaPage.contentAnnouncementShowing', { defaultValue: 'Showing' })
+    setContentSelectionAnnouncement(`${statusPrefix} ${selectedMediaAnnouncementLabel}`)
+  }, [isDetailLoading, selectedMediaAnnouncementLabel, selectedMediaId, t])
 
   useEffect(() => {
     const container = contentScrollContainerRef.current
@@ -2016,6 +2043,89 @@ export function ContentViewer({
     }
   }
 
+  const sourceUrlForScheduling = useMemo(() => {
+    const candidate = firstNonEmptyString(
+      selectedMedia?.raw?.url,
+      mediaDetail?.url,
+      mediaDetail?.source_url,
+      mediaDetail?.sourceUrl
+    )
+    if (!candidate) return ''
+    try {
+      const parsed = new URL(candidate)
+      if (!['http:', 'https:'].includes(parsed.protocol)) return ''
+      return candidate
+    } catch {
+      return ''
+    }
+  }, [
+    mediaDetail?.sourceUrl,
+    mediaDetail?.source_url,
+    mediaDetail?.url,
+    selectedMedia?.raw?.url
+  ])
+
+  const handleScheduleSourceRefresh = useCallback(async () => {
+    if (!selectedMedia || selectedMedia.kind === 'note' || !sourceUrlForScheduling) return
+    const sourceName =
+      selectedMedia.title?.trim() ||
+      t('review:mediaPage.untitled', { defaultValue: 'Untitled' })
+    const scheduleExpr = REINGEST_CRON_BY_PRESET[scheduleRefreshPreset]
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+
+    setScheduleRefreshSubmitting(true)
+    try {
+      const createdSource = await bgRequest<{ id?: number | string }>({
+        path: '/api/v1/watchlists/sources' as any,
+        method: 'POST' as any,
+        body: {
+          name: sourceName,
+          url: sourceUrlForScheduling,
+          source_type: 'site',
+          active: true,
+          tags: ['media-refresh']
+        }
+      })
+      const sourceId = Number(createdSource?.id)
+      if (!Number.isFinite(sourceId) || sourceId <= 0) {
+        throw new Error('Invalid watchlist source id')
+      }
+
+      await bgRequest({
+        path: '/api/v1/watchlists/jobs' as any,
+        method: 'POST' as any,
+        body: {
+          name: `Refresh: ${sourceName}`,
+          description: `Scheduled source refresh for media ${selectedMedia.id}`,
+          scope: { sources: [sourceId] },
+          schedule_expr: scheduleExpr,
+          timezone,
+          active: true,
+          output_prefs: {
+            ingest: {
+              persist_to_media_db: true
+            }
+          }
+        }
+      })
+      message.success(
+        t('review:mediaPage.scheduleRefreshSuccess', {
+          defaultValue: 'Scheduled source refresh monitor.'
+        })
+      )
+      setScheduleRefreshModalOpen(false)
+    } catch (error) {
+      console.error('Failed to schedule source refresh:', error)
+      message.error(
+        t('review:mediaPage.scheduleRefreshFailed', {
+          defaultValue: 'Unable to schedule source refresh.'
+        })
+      )
+    } finally {
+      setScheduleRefreshSubmitting(false)
+    }
+  }, [scheduleRefreshPreset, selectedMedia, sourceUrlForScheduling, t])
+
   // Get the first/selected analysis for creating note with analysis
   const activeAnalysis =
     existingAnalyses.length > 0
@@ -2034,6 +2144,7 @@ export function ContentViewer({
 
   // Check if viewing a note vs media
   const isNote = selectedMedia?.kind === 'note'
+  const canScheduleSourceRefresh = !isNote && sourceUrlForScheduling.length > 0
   const intelligenceSectionCollapsed = collapsedSections.intelligence ?? true
   const chatWithLabel = t('review:reviewPage.chatWithMedia', {
     defaultValue: 'Chat with this media'
@@ -2290,6 +2401,18 @@ export function ContentViewer({
           void handleReprocessMedia()
         }
       },
+      ...(canScheduleSourceRefresh
+        ? [
+            {
+              key: 'schedule-refresh',
+              label: t('review:mediaPage.scheduleSourceRefresh', {
+                defaultValue: 'Schedule source refresh'
+              }),
+              icon: <Clock className="w-4 h-4" />,
+              onClick: () => setScheduleRefreshModalOpen(true)
+            }
+          ]
+        : []),
       ...(onOpenInMultiReview
         ? [
             {
@@ -3065,6 +3188,14 @@ export function ContentViewer({
 
   return (
     <div ref={setRootContainerRef} className="relative flex-1 flex flex-col bg-bg">
+      <div
+        className="sr-only"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="content-selection-live-region"
+      >
+        {contentSelectionAnnouncement}
+      </div>
       {/* Compact Header */}
       <div className="px-4 py-2 border-b border-border bg-surface">
         <div className="flex flex-col md:flex-row items-center gap-3">
@@ -4196,6 +4327,99 @@ export function ContentViewer({
             defaultValue: 'Back to top'
           })}
         </button>
+      )}
+
+      {/* Schedule refresh modal */}
+      {selectedMedia && !isNote && (
+        <Modal
+          open={scheduleRefreshModalOpen}
+          onCancel={() => {
+            if (!scheduleRefreshSubmitting) {
+              setScheduleRefreshModalOpen(false)
+            }
+          }}
+          footer={null}
+          title={t('review:mediaPage.scheduleSourceRefresh', {
+            defaultValue: 'Schedule source refresh'
+          })}
+          destroyOnClose
+        >
+          <div className="space-y-3" data-testid="media-schedule-refresh-modal">
+            <p className="m-0 text-xs text-text-muted">
+              {t('review:mediaPage.scheduleSourceRefreshHint', {
+                defaultValue:
+                  'Create a watchlist monitor to re-fetch this source URL on a schedule.'
+              })}
+            </p>
+            <p className="m-0 rounded border border-border bg-surface2 px-2 py-1 text-[11px] text-text">
+              {sourceUrlForScheduling || t('review:mediaPage.scheduleSourceRefreshNoUrl', {
+                defaultValue: 'No source URL available for scheduling.'
+              })}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {(
+                ['hourly', 'daily', 'weekly'] as ReingestSchedulePreset[]
+              ).map((preset) => {
+                const isActive = scheduleRefreshPreset === preset
+                const label =
+                  preset === 'hourly'
+                    ? t('review:mediaPage.schedulePresetHourly', { defaultValue: 'Hourly' })
+                    : preset === 'daily'
+                      ? t('review:mediaPage.schedulePresetDaily', { defaultValue: 'Daily' })
+                      : t('review:mediaPage.schedulePresetWeekly', { defaultValue: 'Weekly' })
+                return (
+                  <button
+                    key={preset}
+                    type="button"
+                    className={`rounded border px-2 py-1 text-xs transition-colors ${
+                      isActive
+                        ? 'border-primary bg-primary text-white'
+                        : 'border-border bg-surface2 text-text hover:bg-surface'
+                    }`}
+                    onClick={() => setScheduleRefreshPreset(preset)}
+                    aria-pressed={isActive}
+                    data-testid={`media-schedule-refresh-preset-${preset}`}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+            <div className="text-xs text-text-muted" data-testid="media-schedule-refresh-cron">
+              {t('review:mediaPage.scheduleSourceRefreshCron', {
+                defaultValue: 'Cron: {{cron}}',
+                cron: REINGEST_CRON_BY_PRESET[scheduleRefreshPreset]
+              })}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded border border-border px-3 py-1.5 text-xs text-text hover:bg-surface2"
+                onClick={() => setScheduleRefreshModalOpen(false)}
+                disabled={scheduleRefreshSubmitting}
+              >
+                {t('common:cancel', { defaultValue: 'Cancel' })}
+              </button>
+              <button
+                type="button"
+                className="rounded border border-primary bg-primary px-3 py-1.5 text-xs text-white hover:bg-primaryStrong disabled:opacity-60"
+                onClick={() => {
+                  void handleScheduleSourceRefresh()
+                }}
+                disabled={scheduleRefreshSubmitting || !sourceUrlForScheduling}
+                data-testid="media-schedule-refresh-confirm"
+              >
+                {scheduleRefreshSubmitting
+                  ? t('review:mediaPage.scheduleSourceRefreshSubmitting', {
+                      defaultValue: 'Scheduling...'
+                    })
+                  : t('review:mediaPage.scheduleSourceRefreshConfirm', {
+                      defaultValue: 'Schedule'
+                    })}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Export Modal */}

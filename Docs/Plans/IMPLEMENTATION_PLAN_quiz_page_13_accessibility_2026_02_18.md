@@ -22,7 +22,7 @@ Finding IDs: `13.1` through `13.8`
 - Automated a11y checks (axe) for key tab views.
 - Component tests asserting required ARIA attributes.
 - Manual screen-reader spot checks for question group announcements.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Timer and Dynamic Content Announcements
 **Goal**: Make timed interactions perceivable for assistive-technology users.
@@ -34,7 +34,7 @@ Finding IDs: `13.1` through `13.8`
 - Unit tests for timer announcement cadence/threshold transitions.
 - Integration tests for live-region content updates during timed attempts.
 - Manual SR verification for last-minute warning behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Accessible Feedback and Undo Interactions
 **Goal**: Ensure status signals do not rely on color and transient actions remain reachable.
@@ -46,7 +46,7 @@ Finding IDs: `13.1` through `13.8`
 - Component tests for icon/text presence on correctness tags.
 - Keyboard interaction tests for undo actions.
 - Accessibility tests for progress semantics.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Form Validation and Focus Lifecycle Management
 **Goal**: Connect validation and modal interactions to predictable focus and screen-reader behavior.
@@ -63,3 +63,28 @@ Finding IDs: `13.1` through `13.8`
 ## Dependencies
 
 - Accessibility patterns should be consumed consistently by `IMPLEMENTATION_PLAN_quiz_page_01_take_quiz_tab_2026_02_18.md`, `IMPLEMENTATION_PLAN_quiz_page_03_create_quiz_tab_2026_02_18.md`, and `IMPLEMENTATION_PLAN_quiz_page_04_manage_quiz_tab_2026_02_18.md`.
+
+## Progress Notes (2026-02-18)
+
+- Stage 1 completed:
+  - Added semantic question grouping for radio-based quiz answering via `fieldset`/`legend` in `TakeQuizTab` (multiple-choice and true/false answer groups).
+  - Added semantic grouping for true/false authoring controls in `ManageTab` question modal.
+  - Added `aria-label` for icon-only remove-question control in `CreateTab`.
+  - Added explicit progress semantics (`role="progressbar"`, label and value attributes) for quiz completion progress in `TakeQuizTab`, plus progress labeling in `ResultsTab` attempt rows.
+  - Added timer display `aria-label` in `TakeQuizTab`.
+
+- Stage 2 completed:
+  - Added timer `aria-live` region strategy in `TakeQuizTab`:
+    - `polite` announcements at minute cadence during normal timing.
+    - `assertive` announcements in the danger window (last 60 seconds), with second-level announcements.
+  - Added live-region announcements for submission outcomes and queued submission status updates.
+  - Added tests in `TakeQuizTab.start-flow.test.tsx` for semantic grouping/progress labeling and assertive timer live-region behavior.
+
+- Stage 3 completed:
+  - Added icon redundancy for correct/incorrect tags in `TakeQuizTab` results review.
+  - Replaced transient toast-only undo affordances in `ManageTab` with inline persistent `Alert` banners containing focusable Undo actions for quiz/question deletions.
+  - Added/confirmed progress labeling semantics in active attempt and results views.
+  - Added `ManageTab.undo-accessibility.test.tsx` coverage validating inline undo banner visibility, focusability, and recovery path.
+
+- Validation:
+  - `cd apps/packages/ui && bunx vitest run src/components/Quiz/tabs/__tests__/ManageTab.undo-accessibility.test.tsx src/components/Quiz/tabs/__tests__/ResultsTab.details.test.tsx src/components/Quiz/tabs/__tests__/ResultsTab.filters-retake.test.tsx src/components/Quiz/tabs/__tests__/ResultsTab.export.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.empty-state.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.start-flow.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.navigation-guardrails.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.list-controls.test.tsx src/components/Quiz/tabs/__tests__/TakeQuizTab.submission-retry.test.tsx src/components/Quiz/hooks/__tests__/quizSubmissionQueue.test.ts`

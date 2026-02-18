@@ -14,61 +14,73 @@ if (typeof window.ResizeObserver === "undefined") {
   ;(globalThis as any).ResizeObserver = ResizeObserverMock
 }
 
-const { useQueryMock, useMutationMock, useQueryClientMock, notificationMock, tldwClientMock } =
-  vi.hoisted(() => ({
-    useQueryMock: vi.fn(),
-    useMutationMock: vi.fn(),
-    useQueryClientMock: vi.fn(),
-    notificationMock: {
-      success: vi.fn(),
-      info: vi.fn(),
-      warning: vi.fn(),
-      error: vi.fn(),
-      open: vi.fn(),
-      destroy: vi.fn()
-    },
-    tldwClientMock: {
-      initialize: vi.fn(async () => undefined),
-      getDictionary: vi.fn(async () => ({
-        id: 301,
-        name: "Mobile Entries",
-        description: "Dictionary for mobile entry editing"
-      })),
-      listDictionaryEntries: vi.fn(async () => ({
-        entries: [
-          {
-            id: 11,
-            dictionary_id: 301,
-            pattern: "BP",
-            replacement: "blood pressure",
-            type: "literal",
-            probability: 1,
-            enabled: true,
-            case_sensitive: false,
-            group: "clinical",
-            max_replacements: 0
-          }
-        ]
-      })),
-      updateDictionaryEntry: vi.fn(async () => ({})),
-      deleteDictionaryEntry: vi.fn(async () => ({})),
-      reorderDictionaryEntries: vi.fn(async () => ({})),
-      bulkDictionaryEntries: vi.fn(async () => ({
-        success: true,
-        affected_count: 1,
-        failed_ids: []
-      })),
-      addDictionaryEntry: vi.fn(async () => ({})),
-      updateDictionary: vi.fn(async () => ({})),
-      deleteDictionary: vi.fn(async () => ({})),
-      importDictionaryJSON: vi.fn(async () => ({})),
-      importDictionaryMarkdown: vi.fn(async () => ({})),
-      exportDictionaryJSON: vi.fn(async () => ({ name: "Mobile Entries", entries: [] })),
-      exportDictionaryMarkdown: vi.fn(async () => ({ content: "# dictionary" })),
-      validateDictionary: vi.fn(async () => ({ errors: [], warnings: [] })),
-      listChats: vi.fn(async () => [])
-    }
-  }))
+const {
+  useQueryMock,
+  useMutationMock,
+  useQueryClientMock,
+  notificationMock,
+  tldwClientMock
+} = vi.hoisted(() => ({
+  useQueryMock: vi.fn(),
+  useMutationMock: vi.fn(),
+  useQueryClientMock: vi.fn(),
+  notificationMock: {
+    success: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    open: vi.fn(),
+    destroy: vi.fn()
+  },
+  tldwClientMock: {
+    initialize: vi.fn(async () => undefined),
+    getDictionary: vi.fn(async () => ({
+      id: 401,
+      name: "Accessible Dictionary",
+      description: "Accessibility checks"
+    })),
+    listDictionaryEntries: vi.fn(async () => ({
+      entries: [
+        {
+          id: 21,
+          dictionary_id: 401,
+          pattern: "BP",
+          replacement: "blood pressure",
+          type: "literal",
+          probability: 1,
+          enabled: true,
+          case_sensitive: false,
+          max_replacements: 0
+        }
+      ]
+    })),
+    updateDictionary: vi.fn(async () => ({})),
+    validateDictionary: vi.fn(async () => ({ errors: [], warnings: [] })),
+    processDictionaryText: vi.fn(async () => ({
+      original_text: "BP",
+      processed_text: "blood pressure",
+      replacements: 1,
+      iterations: 1,
+      entries_used: ["BP"]
+    })),
+    addDictionaryEntry: vi.fn(async () => ({})),
+    updateDictionaryEntry: vi.fn(async () => ({})),
+    deleteDictionaryEntry: vi.fn(async () => ({})),
+    reorderDictionaryEntries: vi.fn(async () => ({})),
+    bulkDictionaryEntries: vi.fn(async () => ({
+      success: true,
+      affected_count: 1,
+      failed_ids: []
+    })),
+    importDictionaryJSON: vi.fn(async () => ({})),
+    importDictionaryMarkdown: vi.fn(async () => ({})),
+    exportDictionaryJSON: vi.fn(async () => ({ name: "Accessible Dictionary", entries: [] })),
+    exportDictionaryMarkdown: vi.fn(async () => ({ content: "# dictionary" })),
+    dictionaryStatistics: vi.fn(async () => ({})),
+    dictionaryActivity: vi.fn(async () => ({ events: [], total: 0, limit: 10, offset: 0 })),
+    listChats: vi.fn(async () => [])
+  }
+}))
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: useQueryMock,
@@ -178,24 +190,17 @@ const makeUseMutationResult = (opts: any) => ({
   isPending: false
 })
 
-const getDrawerTitles = () =>
-  Array.from(document.querySelectorAll(".ant-drawer-title"))
-    .map((node) => node.textContent?.trim() || "")
-    .filter(Boolean)
-
-const getModalTitles = () =>
-  Array.from(document.querySelectorAll(".ant-modal-title"))
-    .map((node) => node.textContent?.trim() || "")
-    .filter(Boolean)
-
-describe("DictionariesManager responsive stage-2", () => {
+describe("DictionariesManager accessibility stage-1", () => {
   beforeEach(() => {
     vi.clearAllMocks()
 
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: (query: string) => ({
-        matches: /max-width:\s*767px/.test(query),
+        matches:
+          /min-width:\s*576px/.test(query) ||
+          /min-width:\s*768px/.test(query) ||
+          /min-width:\s*992px/.test(query),
         media: query,
         onchange: null,
         addListener: () => undefined,
@@ -222,11 +227,12 @@ describe("DictionariesManager responsive stage-2", () => {
           status: "success",
           data: [
             {
-              id: 301,
-              name: "Mobile Entries",
-              description: "Compact test dictionary",
+              id: 401,
+              name: "Accessible Dictionary",
+              description: "Accessibility checks",
               is_active: true,
-              entry_count: 1
+              entry_count: 1,
+              version: 3
             }
           ]
         })
@@ -236,9 +242,9 @@ describe("DictionariesManager responsive stage-2", () => {
         return makeUseQueryResult({
           status: "success",
           data: {
-            id: 301,
-            name: "Mobile Entries",
-            description: "Compact test dictionary"
+            id: 401,
+            name: "Accessible Dictionary",
+            description: "Accessibility checks"
           }
         })
       }
@@ -248,15 +254,14 @@ describe("DictionariesManager responsive stage-2", () => {
           status: "success",
           data: [
             {
-              id: 11,
-              dictionary_id: 301,
+              id: 21,
+              dictionary_id: 401,
               pattern: "BP",
               replacement: "blood pressure",
               type: "literal",
               probability: 1,
               enabled: true,
               case_sensitive: false,
-              group: "clinical",
               max_replacements: 0
             }
           ]
@@ -274,20 +279,56 @@ describe("DictionariesManager responsive stage-2", () => {
     })
   })
 
-  it("uses a mobile drawer for entry editing instead of nested modal", async () => {
+  it("supports keyboard toggling of active dictionary switch from list view", async () => {
+    const user = userEvent.setup()
+    render(<DictionariesManager />)
+
+    const activeSwitch = screen.getByRole("switch", {
+      name: "Set dictionary Accessible Dictionary inactive"
+    })
+    activeSwitch.focus()
+
+    await user.keyboard("{Enter}")
+
+    await waitFor(() => {
+      expect(tldwClientMock.updateDictionary).toHaveBeenCalledWith(
+        401,
+        expect.objectContaining({
+          is_active: false,
+          version: 3
+        })
+      )
+    })
+  })
+
+  it("exposes collapse panel semantics and labelled regions for validation/preview", async () => {
     const user = userEvent.setup()
     render(<DictionariesManager />)
 
     await user.click(
-      screen.getByRole("button", { name: "Manage entries for Mobile Entries" })
+      screen.getByRole("button", {
+        name: "Manage entries for Accessible Dictionary"
+      })
     )
-    await screen.findByText("Manage Entries: Mobile Entries")
+    await screen.findByText("Manage Entries: Accessible Dictionary")
 
-    await user.click(screen.getByRole("button", { name: "Edit entry BP" }))
+    const validateToggle = screen
+      .getAllByRole("button", { name: /Validate dictionary/i })
+      .find((element) => element.hasAttribute("aria-expanded"))
+    expect(validateToggle).toBeDefined()
+    expect(validateToggle).toHaveAttribute("aria-expanded", "false")
 
-    await waitFor(() => {
-      expect(getDrawerTitles()).toContain("Edit Entry")
-    })
-    expect(getModalTitles()).not.toContain("Edit Entry")
+    await user.click(validateToggle!)
+    expect(validateToggle).toHaveAttribute("aria-expanded", "true")
+
+    expect(screen.getByTestId("dictionary-validation-panel")).toHaveAttribute("role", "region")
+
+    const previewToggle = screen
+      .getAllByRole("button", { name: /Preview transforms/i })
+      .find((element) => element.hasAttribute("aria-expanded"))
+    expect(previewToggle).toBeDefined()
+    await user.click(previewToggle!)
+    expect(previewToggle).toHaveAttribute("aria-expanded", "true")
+    expect(screen.getByTestId("dictionary-preview-panel")).toHaveAttribute("role", "region")
   }, 40000)
 })

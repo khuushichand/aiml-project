@@ -124,6 +124,8 @@ export function FilterPanel({
   favoritesCount = 0
 }: FilterPanelProps) {
   const { t } = useTranslation(['review'])
+  const [keywordSearchText, setKeywordSearchText] = useState('')
+  const [excludeKeywordSearchText, setExcludeKeywordSearchText] = useState('')
   const [expandedSections, setExpandedSections] = useState({
     mediaTypes: false,
     advanced: false,
@@ -167,6 +169,21 @@ export function FilterPanel({
     ],
     [t]
   )
+  const keywordSuggestionCount = useMemo(() => {
+    const normalizedQuery = keywordSearchText.trim().toLowerCase()
+    if (!normalizedQuery) return keywordOptions.length
+    return keywordOptions.filter((keyword) =>
+      String(keyword).toLowerCase().includes(normalizedQuery)
+    ).length
+  }, [keywordOptions, keywordSearchText])
+
+  const excludedKeywordSuggestionCount = useMemo(() => {
+    const normalizedQuery = excludeKeywordSearchText.trim().toLowerCase()
+    if (!normalizedQuery) return keywordOptions.length
+    return keywordOptions.filter((keyword) =>
+      String(keyword).toLowerCase().includes(normalizedQuery)
+    ).length
+  }, [excludeKeywordSearchText, keywordOptions])
 
   const dateRangeValue = useMemo<[Dayjs | null, Dayjs | null]>(() => {
     return [
@@ -686,12 +703,17 @@ export function FilterPanel({
         <Select
           mode="tags"
           allowClear
+          aria-label={t('review:mediaPage.filterByKeyword', {
+            defaultValue: 'Filter by keyword'
+          })}
+          aria-describedby="media-keyword-helper media-keyword-status media-keyword-source-mode"
           placeholder={t('review:mediaPage.filterByKeyword', {
             defaultValue: 'Filter by keyword'
           })}
           className="w-full"
           value={selectedKeywords}
           onSearch={(txt) => {
+            setKeywordSearchText(txt)
             if (onKeywordSearch) onKeywordSearch(txt)
           }}
           onChange={(vals) => {
@@ -699,16 +721,37 @@ export function FilterPanel({
           }}
           options={keywordOptions.map((k) => ({ label: k, value: k }))}
         />
-        <div className="text-xs text-text-muted">
+        <div
+          id="media-keyword-helper"
+          className="text-xs text-text-muted"
+        >
           {t('review:mediaPage.keywordHelper', {
             defaultValue:
               'Add keywords to narrow down results. Keywords are assigned when reviewing media.'
           })}
         </div>
+        <div
+          id="media-keyword-status"
+          className="sr-only"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="keyword-suggestions-status"
+        >
+          {`${keywordSuggestionCount} ${t('review:mediaPage.keywordSuggestionsAvailable', {
+            defaultValue: 'keyword suggestions available'
+          })}`}
+        </div>
         {keywordSourceMode === 'results' && (
-          <div className="text-xs text-text-subtle">
+          <div id="media-keyword-source-mode" className="text-xs text-text-subtle">
             {t('review:mediaPage.keywordSourceResultsScoped', {
               defaultValue: 'Suggestions shown here are from current results.'
+            })}
+          </div>
+        )}
+        {keywordSourceMode !== 'results' && (
+          <div id="media-keyword-source-mode" className="sr-only">
+            {t('review:mediaPage.keywordSourceEndpoint', {
+              defaultValue: 'Suggestions shown here are from your full keyword list.'
             })}
           </div>
         )}
@@ -729,12 +772,17 @@ export function FilterPanel({
         <Select
           mode="tags"
           allowClear
+          aria-label={t('review:mediaPage.excludeByKeyword', {
+            defaultValue: 'Exclude keyword'
+          })}
+          aria-describedby="media-exclude-keyword-helper media-exclude-keyword-status"
           placeholder={t('review:mediaPage.excludeByKeyword', {
             defaultValue: 'Exclude keyword'
           })}
           className="w-full"
           value={selectedExcludedKeywords}
           onSearch={(txt) => {
+            setExcludeKeywordSearchText(txt)
             if (onKeywordSearch) onKeywordSearch(txt)
           }}
           onChange={(vals) => {
@@ -742,6 +790,25 @@ export function FilterPanel({
           }}
           options={keywordOptions.map((k) => ({ label: k, value: k }))}
         />
+        <div
+          id="media-exclude-keyword-helper"
+          className="text-xs text-text-muted"
+        >
+          {t('review:mediaPage.excludeKeywordHelper', {
+            defaultValue: 'Use excluded keywords to remove items containing those terms.'
+          })}
+        </div>
+        <div
+          id="media-exclude-keyword-status"
+          className="sr-only"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="exclude-keyword-suggestions-status"
+        >
+          {`${excludedKeywordSuggestionCount} ${t('review:mediaPage.excludeKeywordSuggestionsAvailable', {
+            defaultValue: 'exclude keyword suggestions available'
+          })}`}
+        </div>
       </div>
     </div>
   )

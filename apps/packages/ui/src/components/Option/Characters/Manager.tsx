@@ -143,6 +143,13 @@ type CharacterImportResult = {
   message: string
 }
 
+type CharacterQuickChatMessage = {
+  id: string
+  role: "user" | "assistant"
+  content: string
+  timestamp: number
+}
+
 type CharacterImportOptions = {
   allowImageOnly?: boolean
   suppressNotifications?: boolean
@@ -512,6 +519,41 @@ const truncateText = (value?: string, max?: number) => {
   if (!value) return ""
   if (!max || value.length <= max) return value
   return `${value.slice(0, max)}...`
+}
+
+const buildCharacterSelectionPayload = (record: any) => ({
+  id: record.id || record.slug || record.name,
+  name: record.name || record.title || record.slug,
+  system_prompt:
+    record.system_prompt ||
+    record.systemPrompt ||
+    record.instructions ||
+    "",
+  greeting:
+    record.greeting ||
+    record.first_message ||
+    record.greet ||
+    "",
+  avatar_url:
+    record.avatar_url ||
+    validateAndCreateImageDataUrl(record.image_base64) ||
+    ""
+})
+
+const makeQuickChatMessageId = (): string => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+const resolveCharacterNumericId = (record: any): number | null => {
+  const raw = record?.id ?? record?.character_id ?? record?.characterId
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null
+  }
+  return parsed
 }
 
 const normalizeAlternateGreetings = (value: any): string[] => {
@@ -1044,6 +1086,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [chatsError, setChatsError] = React.useState<string | null>(null)
   const [loadingChats, setLoadingChats] = React.useState(false)
   const [resumingChatId, setResumingChatId] = React.useState<string | null>(null)
+  const [quickChatCharacter, setQuickChatCharacter] = React.useState<any | null>(null)
+  const [quickChatMessages, setQuickChatMessages] = React.useState<CharacterQuickChatMessage[]>([])
+  const [quickChatDraft, setQuickChatDraft] = React.useState("")
+  const [quickChatModelOverride, setQuickChatModelOverride] = React.useState<string | null>(null)
+  const [quickChatSessionId, setQuickChatSessionId] = React.useState<string | null>(null)
+  const [quickChatSending, setQuickChatSending] = React.useState(false)
+  const [quickChatError, setQuickChatError] = React.useState<string | null>(null)
   const [createFormDirty, setCreateFormDirty] = React.useState(false)
   const [editFormDirty, setEditFormDirty] = React.useState(false)
   const [showCreateSystemPromptExample, setShowCreateSystemPromptExample] = React.useState(false)
@@ -1173,6 +1222,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     clearError: clearGenerationError
   } = useCharacterGeneration()
   const [selectedGenModel] = useStorage<string | null>("characterGenModel", null)
+  const [selectedChatModel] = useStorage<string | null>("selectedModel", null)
   const [serverQueryRolloutFlag] = useStorage<boolean | null>(
     SERVER_QUERY_ROLLOUT_FLAG_KEY,
     true
@@ -1192,6 +1242,28 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     const modelData = generationModels.find((m) => m.model === selectedGenModel)
     return modelData?.provider
   }, [selectedGenModel, generationModels])
+
+  const quickChatModelOptions = React.useMemo(
+    () =>
+      (generationModels || [])
+        .filter((model) => typeof model.model === "string" && model.model.trim())
+        .map((model) => {
+          const modelName = model.model.trim()
+          return {
+            value: modelName,
+            label: model.provider
+              ? `${modelName} (${model.provider})`
+              : modelName
+          }
+        }),
+    [generationModels]
+  )
+
+  const activeQuickChatModel =
+    quickChatModelOverride ||
+    selectedChatModel ||
+    quickChatModelOptions[0]?.value ||
+    null
 
   const [generationPreviewData, setGenerationPreviewData] = React.useState<GeneratedCharacter | null>(null)
   const [generationPreviewField, setGenerationPreviewField] = React.useState<string | null>(null)
@@ -1325,8 +1397,34 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     [createForm, editForm, t]
   )
 
+  const closeQuickChat = React.useCallback(async (options?: { preserveSession?: boolean }) => {
+    const chatIdToDelete = quickChatSessionId
+    const shouldDeleteSession =
+      Boolean(chatIdToDelete) && options?.preserveSession !== true
+
+    setQuickChatCharacter(null)
+    setQuickChatMessages([])
+    setQuickChatDraft("")
+    setQuickChatSending(false)
+    setQuickChatError(null)
+    setQuickChatSessionId(null)
+
+    if (shouldDeleteSession && chatIdToDelete) {
+      try {
+        await tldwClient.deleteChat(chatIdToDelete, { hardDelete: true })
+      } catch {
+        // Best-effort cleanup of ephemeral quick-chat session.
+      }
+    }
+  }, [quickChatSessionId])
+
   // Keyboard shortcuts (H1)
-  const modalOpen = open || openEdit || conversationsOpen || generationPreviewOpen
+  const modalOpen =
+    open ||
+    openEdit ||
+    conversationsOpen ||
+    generationPreviewOpen ||
+    Boolean(quickChatCharacter)
   useCharacterShortcuts({
     modalOpen,
     onNewCharacter: () => {
@@ -1340,6 +1438,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         setGenerationPreviewOpen(false)
       } else if (conversationsOpen) {
         setConversationsOpen(false)
+      } else if (quickChatCharacter) {
+        void closeQuickChat()
       } else if (openEdit) {
         setOpenEdit(false)
         setShowEditSystemPromptExample(false)
@@ -1348,8 +1448,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         setShowCreateSystemPromptExample(false)
       }
     },
-    onTableView: () => setViewMode('table'),
-    onGalleryView: () => setViewMode('gallery'),
+    onTableView: () => setViewMode("table"),
+    onGalleryView: () => setViewMode("gallery"),
     enabled: true
   })
 
@@ -2575,7 +2675,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       // Skip if user is typing in an input/textarea or a modal is open
       const target = e.target as HTMLElement
       const isTyping = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
-      const modalOpen = open || openEdit || conversationsOpen
+      const modalOpen = open || openEdit || conversationsOpen || Boolean(quickChatCharacter)
 
       if (isTyping || modalOpen) return
 
@@ -2587,7 +2687,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [open, openEdit, conversationsOpen])
+  }, [conversationsOpen, open, openEdit, quickChatCharacter])
 
   React.useEffect(() => {
     setCurrentPage(1)
@@ -4127,30 +4227,214 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
   // Extracted action handlers for reuse between table and gallery views
   const handleChat = React.useCallback((record: any) => {
-    const id = record.id || record.slug || record.name
-    setSelectedCharacter({
-      id,
-      name: record.name || record.title || record.slug,
-      system_prompt:
-        record.system_prompt ||
-        record.systemPrompt ||
-        record.instructions ||
-        "",
-      greeting:
-        record.greeting ||
-        record.first_message ||
-        record.greet ||
-        "",
-      avatar_url:
-        record.avatar_url ||
-        validateAndCreateImageDataUrl(record.image_base64) ||
-        ""
-    })
+    setSelectedCharacter(buildCharacterSelectionPayload(record))
     navigate("/")
     setTimeout(() => {
       focusComposer()
     }, 0)
   }, [setSelectedCharacter, navigate])
+
+  const openQuickChat = React.useCallback((record: any) => {
+    const characterSelection = buildCharacterSelectionPayload(record)
+    setQuickChatCharacter(record)
+    setQuickChatDraft("")
+    setQuickChatError(null)
+    setQuickChatSessionId(null)
+    const greeting = characterSelection.greeting?.trim()
+    setQuickChatMessages(
+      greeting
+        ? [
+            {
+              id: makeQuickChatMessageId(),
+              role: "assistant",
+              content: greeting,
+              timestamp: Date.now()
+            }
+          ]
+        : []
+    )
+  }, [])
+
+  const sendQuickChatMessage = React.useCallback(async () => {
+    const trimmed = quickChatDraft.trim()
+    if (!trimmed || quickChatSending || !quickChatCharacter) return
+    if (!activeQuickChatModel) {
+      setQuickChatError(
+        t("settings:manageCharacters.quickChat.modelRequired", {
+          defaultValue: "Select a model to start quick chat."
+        })
+      )
+      return
+    }
+
+    const userMessage: CharacterQuickChatMessage = {
+      id: makeQuickChatMessageId(),
+      role: "user",
+      content: trimmed,
+      timestamp: Date.now()
+    }
+
+    const nextHistory = [...quickChatMessages, userMessage]
+    setQuickChatMessages(nextHistory)
+    setQuickChatDraft("")
+    setQuickChatSending(true)
+    setQuickChatError(null)
+
+    try {
+      let sessionId = quickChatSessionId
+      if (!sessionId) {
+        const characterId = resolveCharacterNumericId(quickChatCharacter)
+        if (!characterId) {
+          throw new Error(
+            t("settings:manageCharacters.quickChat.unsupportedCharacter", {
+              defaultValue:
+                "Quick chat is only available for server-synced characters."
+            })
+          )
+        }
+        const created = await tldwClient.createChat({
+          character_id: characterId,
+          state: "in-progress",
+          source: "characters-quick-chat",
+          title: t("settings:manageCharacters.quickChat.sessionTitle", {
+            defaultValue: "{{name}} quick chat",
+            name:
+              quickChatCharacter?.name ||
+              quickChatCharacter?.title ||
+              quickChatCharacter?.slug ||
+              t("settings:manageCharacters.preview.untitled", {
+                defaultValue: "Untitled character"
+              })
+          })
+        })
+        const rawId = (created as any)?.id ?? (created as any)?.chat_id ?? created
+        sessionId = rawId != null ? String(rawId) : ""
+        if (!sessionId) {
+          throw new Error(
+            t("settings:manageCharacters.quickChat.sessionCreateFailed", {
+              defaultValue: "Unable to start a quick chat session."
+            })
+          )
+        }
+        setQuickChatSessionId(sessionId)
+      }
+
+      const payload = await tldwClient.completeCharacterChatTurn(sessionId, {
+        append_user_message: trimmed,
+        include_character_context: true,
+        limit: 100,
+        save_to_db: true,
+        stream: false,
+        model: activeQuickChatModel
+      })
+      const assistantContent =
+        (typeof payload?.assistant_content === "string"
+          ? payload.assistant_content
+          : typeof payload?.content === "string"
+            ? payload.content
+            : typeof payload?.text === "string"
+              ? payload.text
+              : ""
+        ).trim()
+
+      if (!assistantContent) {
+        throw new Error(
+          t("settings:manageCharacters.quickChat.emptyResponse", {
+            defaultValue: "No response received from the model."
+          })
+        )
+      }
+
+      setQuickChatMessages((previous) => [
+        ...previous,
+        {
+          id: makeQuickChatMessageId(),
+          role: "assistant",
+          content: assistantContent,
+          timestamp: Date.now()
+        }
+      ])
+    } catch (error: any) {
+      const message =
+        error?.message ||
+        t("settings:manageCharacters.quickChat.error", {
+          defaultValue: "Quick chat failed. Please try again."
+        })
+      setQuickChatError(message)
+    } finally {
+      setQuickChatSending(false)
+    }
+  }, [
+    activeQuickChatModel,
+    quickChatCharacter,
+    quickChatDraft,
+    quickChatMessages,
+    quickChatSessionId,
+    quickChatSending,
+    t
+  ])
+
+  const handlePromoteQuickChat = React.useCallback(async () => {
+    if (!quickChatCharacter) return
+
+    const characterSelection = buildCharacterSelectionPayload(quickChatCharacter)
+    setSelectedCharacter(characterSelection)
+
+    const assistantName =
+      characterSelection.name ||
+      t("common:assistant", {
+        defaultValue: "Assistant"
+      })
+    const history = quickChatMessages.map((message) => ({
+      role: message.role,
+      content: message.content
+    }))
+    const mappedMessages = quickChatMessages.map((message) => ({
+      createdAt: message.timestamp,
+      isBot: message.role === "assistant",
+      role: message.role,
+      name:
+        message.role === "assistant"
+          ? assistantName
+          : t("common:you", { defaultValue: "You" }),
+      message: message.content,
+      sources: [],
+      images: []
+    }))
+
+    setHistoryId(null)
+    setServerChatId(quickChatSessionId)
+    setServerChatState("in-progress")
+    setServerChatTopic(null)
+    setServerChatClusterId(null)
+    setServerChatSource("characters-quick-chat")
+    setServerChatExternalRef(null)
+    setHistory(history)
+    setMessages(mappedMessages)
+
+    await closeQuickChat({ preserveSession: true })
+    navigate("/")
+    setTimeout(() => {
+      focusComposer()
+    }, 0)
+  }, [
+    closeQuickChat,
+    navigate,
+    quickChatCharacter,
+    quickChatMessages,
+    quickChatSessionId,
+    setHistory,
+    setHistoryId,
+    setMessages,
+    setSelectedCharacter,
+    setServerChatClusterId,
+    setServerChatExternalRef,
+    setServerChatId,
+    setServerChatSource,
+    setServerChatState,
+    setServerChatTopic,
+    t
+  ])
 
   const handleEdit = React.useCallback((record: any, triggerRef?: HTMLButtonElement | null) => {
     if (triggerRef) {
@@ -5442,6 +5726,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       menu={{
                         items: [
                           {
+                            key: 'quick-chat',
+                            icon: <MessageCircle className="w-4 h-4" />,
+                            label: t("settings:manageCharacters.actions.quickChat", {
+                              defaultValue: "Quick chat"
+                            }),
+                            onClick: () => openQuickChat(record)
+                          },
+                          {
                             key: 'conversations',
                             icon: <History className="w-4 h-4" />,
                             label: t("settings:manageCharacters.actions.viewConversations", {
@@ -5556,6 +5848,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         onChat={() => {
           if (previewCharacter) {
             handleChat(previewCharacter)
+            setPreviewCharacter(null)
+          }
+        }}
+        onQuickChat={() => {
+          if (previewCharacter) {
+            openQuickChat(previewCharacter)
             setPreviewCharacter(null)
           }
         }}
@@ -5679,6 +5977,128 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             ))}
           </div>
         )}
+      </Modal>
+
+      <Modal
+        title={t("settings:manageCharacters.quickChat.title", {
+          defaultValue: "Quick chat: {{name}}",
+          name:
+            quickChatCharacter?.name ||
+            quickChatCharacter?.title ||
+            quickChatCharacter?.slug ||
+            t("settings:manageCharacters.preview.untitled", {
+              defaultValue: "Untitled character"
+            })
+        })}
+        open={!!quickChatCharacter}
+        onCancel={() => {
+          void closeQuickChat()
+        }}
+        footer={null}
+        destroyOnHidden
+        width={560}
+        rootClassName="characters-motion-modal">
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-text-muted">
+              {t("settings:manageCharacters.quickChat.modelLabel", {
+                defaultValue: "Model"
+              })}
+            </span>
+            <Select
+              className="flex-1"
+              size="small"
+              showSearch
+              placeholder={t("settings:manageCharacters.quickChat.modelPlaceholder", {
+                defaultValue: "Select a model"
+              })}
+              options={quickChatModelOptions}
+              value={activeQuickChatModel || undefined}
+              optionFilterProp="label"
+              onChange={(value) => setQuickChatModelOverride(value || null)}
+              allowClear
+            />
+          </div>
+
+          {quickChatError && (
+            <Alert
+              type="warning"
+              showIcon
+              message={quickChatError}
+            />
+          )}
+
+          <div
+            className="max-h-72 min-h-[12rem] overflow-y-auto rounded-md border border-border bg-surface2/40 p-3 space-y-2"
+            role="log"
+            aria-live="polite">
+            {quickChatMessages.length === 0 ? (
+              <div className="text-sm text-text-subtle">
+                {t("settings:manageCharacters.quickChat.emptyState", {
+                  defaultValue:
+                    "Send a message to quickly test this character without leaving the page."
+                })}
+              </div>
+            ) : (
+              quickChatMessages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`flex ${
+                    message.role === "user" ? "justify-end" : "justify-start"
+                  }`}>
+                  <div
+                    className={`max-w-[85%] whitespace-pre-wrap rounded-md px-3 py-2 text-sm ${
+                      message.role === "user"
+                        ? "bg-primary text-white"
+                        : "bg-surface text-text border border-border"
+                    }`}>
+                    {message.content}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="flex gap-2">
+            <Input.TextArea
+              value={quickChatDraft}
+              onChange={(event) => setQuickChatDraft(event.target.value)}
+              placeholder={t("settings:manageCharacters.quickChat.placeholder", {
+                defaultValue: "Ask this character a quick question..."
+              })}
+              autoSize={{ minRows: 1, maxRows: 4 }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault()
+                  void sendQuickChatMessage()
+                }
+              }}
+              disabled={quickChatSending}
+            />
+            <Button
+              type="primary"
+              loading={quickChatSending}
+              onClick={() => {
+                void sendQuickChatMessage()
+              }}
+              disabled={!quickChatDraft.trim() || !activeQuickChatModel}>
+              {t("settings:manageCharacters.quickChat.send", {
+                defaultValue: "Send"
+              })}
+            </Button>
+          </div>
+          <div className="flex justify-end">
+            <Button
+              onClick={() => {
+                void handlePromoteQuickChat()
+              }}
+              disabled={!quickChatCharacter || quickChatSending}>
+              {t("settings:manageCharacters.quickChat.openFullChat", {
+                defaultValue: "Open full chat"
+              })}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       <Modal

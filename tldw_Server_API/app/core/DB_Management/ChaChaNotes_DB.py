@@ -10793,20 +10793,67 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def list_notes(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
-        # Using _list_generic_items but ensuring table name and order_by_col are correct for notes
-        return self._list_generic_items("notes", "last_modified DESC", limit, offset)
+    def list_notes(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        include_deleted: bool = False,
+        only_deleted: bool = False,
+    ) -> list[dict[str, Any]]:
+        """List notes ordered by most recently modified.
 
-    def count_notes(self) -> int:
-        """Return count of active (non-deleted) notes."""
-        query = "SELECT COUNT(*) AS cnt FROM notes WHERE deleted = 0"
+        By default this returns only active notes (`deleted = 0`).
+        Set `only_deleted=True` to list trash items, or `include_deleted=True`
+        to list both active and deleted notes.
+        """
+        where_clause = ""
+        params: list[Any] = []
+        if only_deleted:
+            where_clause = " WHERE deleted = ?"
+            params.append(True if self.backend_type == BackendType.POSTGRESQL else 1)
+        elif not include_deleted:
+            where_clause = " WHERE deleted = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+
+        query = (
+            f"SELECT * FROM notes{where_clause} "
+            "ORDER BY last_modified DESC "
+            "LIMIT ? OFFSET ?"
+        )
+        params.extend([limit, offset])
+        cursor = self.execute_query(query, tuple(params))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def list_deleted_notes(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        """List only soft-deleted notes (trash)."""
+        return self.list_notes(limit=limit, offset=offset, only_deleted=True)
+
+    def count_notes(self, include_deleted: bool = False, only_deleted: bool = False) -> int:
+        """Count notes by deletion scope.
+
+        Defaults to active-note count only.
+        """
+        where_clause = ""
+        params: list[Any] = []
+        if only_deleted:
+            where_clause = " WHERE deleted = ?"
+            params.append(True if self.backend_type == BackendType.POSTGRESQL else 1)
+        elif not include_deleted:
+            where_clause = " WHERE deleted = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+
+        query = f"SELECT COUNT(*) AS cnt FROM notes{where_clause}"
         try:
-            cursor = self.execute_query(query)
+            cursor = self.execute_query(query, tuple(params) if params else None)
             row = cursor.fetchone()
             return int(row["cnt"]) if row else 0
         except CharactersRAGDBError as exc:
             logger.error(f"Error counting notes: {exc}")
             raise
+
+    def count_deleted_notes(self) -> int:
+        """Return count of soft-deleted notes."""
+        return self.count_notes(only_deleted=True)
 
     def update_note(self, note_id: str, update_data: dict[str, Any], expected_version: int) -> bool | None:
         if not update_data:

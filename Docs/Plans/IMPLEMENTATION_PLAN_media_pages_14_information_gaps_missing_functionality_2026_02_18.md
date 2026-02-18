@@ -82,7 +82,7 @@ Finding IDs: `14.1` through `14.12`
 - Integration tests for stats aggregation and rendering.
 - Export contract tests for citation data format.
 - Scheduler/job tests for recurring re-ingestion setup and status reporting.
-**Status**: In Progress
+**Status**: Complete
 **Progress Notes (2026-02-18)**:
 - Added `MediaLibraryStatsPanel` to `/media` with:
   visible/total counts, visible word-count aggregation, top media-type distribution, and storage usage summary.
@@ -90,6 +90,9 @@ Finding IDs: `14.1` through `14.12`
 - Added regression coverage in `MediaLibraryStatsPanel.test.tsx` for metric rendering and storage loading/error states.
 - Added `BibTeX` export format in `ContentViewer` export modal, deriving citation fields from `safe_metadata` (DOI, authors, journal, year, URL).
 - Added export regression coverage to validate `.bib` output payload generation.
+- Added scheduled source refresh controls in `ContentViewer` for URL-backed media:
+  users can create a watchlist source + scheduled monitor (hourly/daily/weekly presets) directly from the media action menu.
+- Added regression coverage for the scheduled refresh flow (`sources` + `jobs` creation contract).
 
 ## Dependencies
 

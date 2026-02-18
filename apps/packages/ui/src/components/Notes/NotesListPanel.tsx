@@ -18,6 +18,7 @@ const truncateText = (value?: string | null, max?: number) => {
 }
 
 type NotesListPanelProps = {
+  listMode: 'active' | 'trash'
   isOnline: boolean
   isFetching: boolean
   demoEnabled: boolean
@@ -33,12 +34,14 @@ type NotesListPanelProps = {
   onResetEditor: () => void
   onOpenSettings: () => void
   onOpenHealth: () => void
+  onRestoreNote: (id: string | number, version?: number) => void
   onExportAllMd: () => void
   onExportAllCsv: () => void
   onExportAllJson: () => void
 }
 
 const NotesListPanel: React.FC<NotesListPanelProps> = ({
+  listMode,
   isOnline,
   isFetching,
   demoEnabled,
@@ -54,16 +57,18 @@ const NotesListPanel: React.FC<NotesListPanelProps> = ({
   onResetEditor,
   onOpenSettings,
   onOpenHealth,
+  onRestoreNote,
   onExportAllMd,
   onExportAllCsv,
   onExportAllJson
 }) => {
   const { t } = useTranslation(['option', 'settings'])
   const { checkOnce } = useConnectionActions()
+  const isTrashView = listMode === 'trash'
   const hasNotes = Array.isArray(notes) && notes.length > 0
   const startItem = hasNotes ? (page - 1) * pageSize + 1 : 0
   const endItem = hasNotes ? Math.min(page * pageSize, total) : 0
-  const exportDisabled = !isOnline || !hasNotes
+  const exportDisabled = !isOnline || !hasNotes || isTrashView
 
   const demoNotes = React.useMemo(() => getDemoNotes(t), [t])
 
@@ -73,7 +78,9 @@ const NotesListPanel: React.FC<NotesListPanelProps> = ({
       <div className="flex-shrink-0 px-4 py-2 border-b border-border bg-surface2">
         <div className="flex items-center justify-between">
           <span className="text-xs uppercase tracking-[0.14em] text-text-muted">
-            {t('option:notesSearch.resultsLabel', { defaultValue: 'Results' })}
+            {isTrashView
+              ? t('option:notesSearch.trashResultsLabel', { defaultValue: 'Trash' })
+              : t('option:notesSearch.resultsLabel', { defaultValue: 'Results' })}
           </span>
           <Dropdown
             menu={{
@@ -261,77 +268,129 @@ const NotesListPanel: React.FC<NotesListPanelProps> = ({
         <>
           <div className="divide-y divide-border">
             {notes.map((item) => (
-              <button
+              <div
                 key={String(item.id)}
-                type="button"
-                onClick={() => {
-                  onSelectNote(item.id)
-                }}
-                className={`w-full py-3 text-left hover:bg-surface2 transition-colors ${
-                  selectedId === item.id
-                    ? 'bg-surface2 border-l-4 border-l-primary px-3'
-                    : 'px-4'
+                className={`w-full py-3 text-left transition-colors ${
+                  isTrashView
+                    ? 'px-4'
+                    : selectedId === item.id
+                      ? 'bg-surface2 border-l-4 border-l-primary px-3'
+                      : 'px-4 hover:bg-surface2'
                 }`}
+                data-testid={isTrashView ? `notes-trash-row-${String(item.id)}` : undefined}
               >
-                <div className="w-full">
-                  <div className="text-sm font-medium text-text truncate">
-                    {truncateText(
-                      item.title || `Note ${item.id}`,
-                      MAX_TITLE_LENGTH
-                    )}
-                  </div>
-                  {item.content && (
-                    <div className="text-xs text-text-muted truncate mt-1">
-                      {truncateText(
-                        String(item.content),
-                        MAX_PREVIEW_LENGTH
+                {!isTrashView && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectNote(item.id)
+                    }}
+                    className="w-full text-left"
+                  >
+                    <div className="w-full">
+                      <div className="text-sm font-medium text-text truncate">
+                        {truncateText(
+                          item.title || `Note ${item.id}`,
+                          MAX_TITLE_LENGTH
+                        )}
+                      </div>
+                      {item.content && (
+                        <div className="text-xs text-text-muted truncate mt-1">
+                          {truncateText(
+                            String(item.content),
+                            MAX_PREVIEW_LENGTH
+                          )}
+                        </div>
                       )}
-                    </div>
-                  )}
-                  {Array.isArray(item.keywords) && item.keywords.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {item.keywords.slice(0, 5).map((keyword, idx) => (
-                        <span
-                          key={`${keyword}-${idx}`}
-                          className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-surface2 text-text"
-                        >
-                          {keyword}
-                        </span>
-                      ))}
-                      {item.keywords.length > 5 && (
-                        <Tooltip
-                          title={t('option:notesSearch.moreTagsTooltip', {
-                            defaultValue: '+{{count}} more tags',
-                            count: item.keywords.length - 5
+                      {Array.isArray(item.keywords) && item.keywords.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {item.keywords.slice(0, 5).map((keyword, idx) => (
+                            <span
+                              key={`${keyword}-${idx}`}
+                              className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-surface2 text-text"
+                            >
+                              {keyword}
+                            </span>
+                          ))}
+                          {item.keywords.length > 5 && (
+                            <Tooltip
+                              title={t('option:notesSearch.moreTagsTooltip', {
+                                defaultValue: '+{{count}} more tags',
+                                count: item.keywords.length - 5
+                              })}
+                            >
+                              <span className="inline-flex items-center px-2 py-0.5 text-xs text-text-muted">
+                                +{item.keywords.length - 5}
+                              </span>
+                            </Tooltip>
+                          )}
+                        </div>
+                      )}
+                      {item.conversation_id && (
+                        <div className="text-xs text-primary mt-1">
+                          {t('option:notesSearch.linkedConversation', {
+                            defaultValue: 'Linked to conversation'
                           })}
-                        >
-                          <span className="inline-flex items-center px-2 py-0.5 text-xs text-text-muted">
-                            +{item.keywords.length - 5}
-                          </span>
-                        </Tooltip>
+                          {': '}
+                          {String(item.conversation_id)}
+                          {item.message_id ? ` · msg ${String(item.message_id)}` : ''}
+                        </div>
+                      )}
+                      <div className="text-xs text-text-subtle mt-1">
+                        {item.updated_at
+                          ? (() => {
+                              const d = new Date(item.updated_at)
+                              return isNaN(d.getTime()) ? '' : d.toLocaleString()
+                            })()
+                          : ''}
+                      </div>
+                    </div>
+                  </button>
+                )}
+                {isTrashView && (
+                  <div className="w-full">
+                    <div className="text-sm font-medium text-text truncate">
+                      {truncateText(
+                        item.title || `Note ${item.id}`,
+                        MAX_TITLE_LENGTH
                       )}
                     </div>
-                  )}
-                  {item.conversation_id && (
-                    <div className="text-xs text-primary mt-1">
-                      {t('option:notesSearch.linkedConversation', {
-                        defaultValue: 'Linked to conversation'
-                      })}
-                      {': '}
-                      {String(item.conversation_id)}
-                      {item.message_id ? ` · msg ${String(item.message_id)}` : ''}
+                    {item.content && (
+                      <div className="text-xs text-text-muted truncate mt-1">
+                        {truncateText(
+                          String(item.content),
+                          MAX_PREVIEW_LENGTH
+                        )}
+                      </div>
+                    )}
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <div className="text-xs text-text-subtle">
+                        {t('option:notesSearch.trashedAtLabel', {
+                          defaultValue: 'Deleted'
+                        })}
+                        {item.updated_at
+                          ? (() => {
+                              const d = new Date(item.updated_at)
+                              return isNaN(d.getTime())
+                                ? ''
+                                : ` · ${d.toLocaleString()}`
+                            })()
+                          : ''}
+                      </div>
+                      <Button
+                        size="small"
+                        type="primary"
+                        onClick={() => onRestoreNote(item.id, item.version)}
+                        data-testid={`notes-restore-${String(item.id)}`}
+                      >
+                        {t('option:notesSearch.restoreAction', {
+                          defaultValue: 'Restore'
+                        })}
+                      </Button>
                     </div>
-                  )}
-                  <div className="text-xs text-text-subtle mt-1">
-                    {item.updated_at
-                      ? (() => {
-                          const d = new Date(item.updated_at)
-                          return isNaN(d.getTime()) ? '' : d.toLocaleString()
-                        })()
-                      : ''}
                   </div>
-                </div>
-              </button>
+                )}
+              </div>
             ))}
           </div>
         </>
@@ -343,27 +402,46 @@ const NotesListPanel: React.FC<NotesListPanelProps> = ({
                 Getting started
               </span>
               <span>
-                {t('option:notesEmpty.title', { defaultValue: 'No notes yet' })}
+                {isTrashView
+                  ? t('option:notesSearch.emptyTrashTitle', {
+                      defaultValue: 'Trash is empty'
+                    })
+                  : t('option:notesEmpty.title', { defaultValue: 'No notes yet' })}
               </span>
             </span>
           }
-          description={t('option:notesEmpty.description', {
-            defaultValue:
-              'Capture and organize free-form notes connected to your tldw insights.'
-          })}
-          examples={[
-            t('option:notesEmpty.exampleCreate', {
-              defaultValue:
-                'Create a new note for a recent meeting or transcript.'
-            }),
-            t('option:notesEmpty.exampleLink', {
-              defaultValue:
-                'Save review outputs into Notes so you can revisit them later.'
-            })
-          ]}
-          primaryActionLabel={t('option:notesEmpty.primaryCta', {
-            defaultValue: 'Create note'
-          })}
+          description={isTrashView
+            ? t('option:notesSearch.emptyTrashDescription', {
+                defaultValue: 'Deleted notes will appear here until restored.'
+              })
+            : t('option:notesEmpty.description', {
+                defaultValue:
+                  'Capture and organize free-form notes connected to your tldw insights.'
+              })}
+          examples={isTrashView
+            ? [
+                t('option:notesSearch.emptyTrashExample', {
+                  defaultValue:
+                    'Restore a note from trash to return it to your active notes list.'
+                })
+              ]
+            : [
+                t('option:notesEmpty.exampleCreate', {
+                  defaultValue:
+                    'Create a new note for a recent meeting or transcript.'
+                }),
+                t('option:notesEmpty.exampleLink', {
+                  defaultValue:
+                    'Save review outputs into Notes so you can revisit them later.'
+                })
+              ]}
+          primaryActionLabel={isTrashView
+            ? t('option:notesSearch.switchToActiveNotes', {
+                defaultValue: 'Back to notes'
+              })
+            : t('option:notesEmpty.primaryCta', {
+                defaultValue: 'Create note'
+              })}
           onPrimaryAction={onResetEditor}
         />
       )}

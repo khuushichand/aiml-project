@@ -1,4 +1,5 @@
 import React from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import {
   Alert,
   Button,
@@ -12,13 +13,19 @@ import {
 } from "antd"
 import { useTranslation } from "react-i18next"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
+import { useUndoNotification } from "@/hooks/useUndoNotification"
+import { processInChunks } from "@/utils/chunk-processing"
 import {
   useDecksQuery,
   useImportFlashcardsMutation,
   useImportLimitsQuery
 } from "../hooks"
 import { FileDropZone } from "../components"
-import type { FlashcardsImportError } from "@/services/flashcards"
+import {
+  deleteFlashcard,
+  getFlashcard,
+  type FlashcardsImportError
+} from "@/services/flashcards"
 
 const { Text } = Typography
 
@@ -27,6 +34,13 @@ interface ImportResultSummary {
   skipped: number
   errors: FlashcardsImportError[]
 }
+
+interface ImportedCardReference {
+  uuid: string
+}
+
+const IMPORT_UNDO_SECONDS = 30
+const IMPORT_UNDO_CHUNK_SIZE = 50
 
 const normalizeImportErrors = (value: unknown): FlashcardsImportError[] => {
   if (!Array.isArray(value)) return []
@@ -49,11 +63,28 @@ const normalizeImportErrors = (value: unknown): FlashcardsImportError[] => {
     .filter((item): item is FlashcardsImportError => item !== null)
 }
 
+const normalizeImportedItems = (value: unknown): ImportedCardReference[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null
+      const row = entry as Record<string, unknown>
+      const uuid = row.uuid
+      if (typeof uuid !== "string" || uuid.trim().length === 0) return null
+      return {
+        uuid
+      }
+    })
+    .filter((item): item is ImportedCardReference => item !== null)
+}
+
 /**
  * Import panel for CSV/TSV flashcard import.
  */
 const ImportPanel: React.FC = () => {
+  const qc = useQueryClient()
   const message = useAntdMessage()
+  const { showUndoNotification } = useUndoNotification()
   const { t } = useTranslation(["option", "common"])
   const limitsQuery = useImportLimitsQuery()
   const importMutation = useImportFlashcardsMutation()
@@ -63,6 +94,15 @@ const ImportPanel: React.FC = () => {
   const [hasHeader, setHasHeader] = React.useState<boolean>(true)
   const [lastResult, setLastResult] = React.useState<ImportResultSummary | null>(null)
 
+  const invalidateFlashcardQueries = React.useCallback(async () => {
+    await qc.invalidateQueries({
+      predicate: (query) =>
+        Array.isArray(query.queryKey) &&
+        typeof query.queryKey[0] === "string" &&
+        query.queryKey[0].startsWith("flashcards:")
+    })
+  }, [qc])
+
   const handleImport = async () => {
     try {
       const result = await importMutation.mutateAsync({
@@ -70,7 +110,11 @@ const ImportPanel: React.FC = () => {
         delimiter,
         hasHeader
       })
-      const imported = typeof result.imported === "number" ? result.imported : result.items?.length ?? 0
+      const importedItems = normalizeImportedItems(result.items)
+      const imported =
+        typeof result.imported === "number"
+          ? result.imported
+          : importedItems.length
       const errors = normalizeImportErrors(result.errors)
       const skipped = errors.length
 
@@ -97,6 +141,46 @@ const ImportPanel: React.FC = () => {
           })
         )
         setContent("")
+      }
+
+      if (importedItems.length > 0) {
+        showUndoNotification({
+          title:
+            errors.length > 0
+              ? t("option:flashcards.importUndoTitlePartial", {
+                  defaultValue: "Partial import completed"
+                })
+              : t("option:flashcards.importUndoTitle", {
+                  defaultValue: "Import completed"
+                }),
+          description: t("option:flashcards.importUndoHint", {
+            defaultValue:
+              "Undo within {{seconds}}s to remove {{count}} imported cards.",
+            seconds: IMPORT_UNDO_SECONDS,
+            count: importedItems.length
+          }),
+          duration: IMPORT_UNDO_SECONDS,
+          onUndo: async () => {
+            let failedRollbacks = 0
+            await processInChunks(importedItems, IMPORT_UNDO_CHUNK_SIZE, async (chunk) => {
+              const results = await Promise.allSettled(
+                chunk.map(async (item) => {
+                  const latest = await getFlashcard(item.uuid)
+                  await deleteFlashcard(item.uuid, latest.version)
+                })
+              )
+              failedRollbacks += results.filter((result) => result.status === "rejected").length
+            })
+            await invalidateFlashcardQueries()
+            if (failedRollbacks > 0) {
+              throw new Error(
+                t("option:flashcards.importUndoPartialFailure", {
+                  defaultValue: "Some imported cards could not be rolled back."
+                })
+              )
+            }
+          }
+        })
       }
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Import failed"

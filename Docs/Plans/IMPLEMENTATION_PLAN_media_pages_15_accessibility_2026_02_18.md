@@ -21,7 +21,11 @@ Finding IDs: `15.1` through `15.11`
 - Accessibility-focused component tests for live region updates.
 - Integration tests for list selection and content-area announcement changes.
 - Regression tests ensuring no repeated announcement spam on minor rerenders.
-**Status**: Not Started
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Added a dedicated `aria-live="polite"` + `aria-atomic="true"` region in `ContentViewer` to announce loading/ready transitions for the active media item.
+- Implemented de-duplication keyed by `mediaId + loadingState` to prevent repeated announcement spam during minor rerenders.
+- Added `ContentViewer.stage15.accessibility.test.tsx` coverage for loading/ready announcements, pointer/keyboard/programmatic selection changes, and rerender de-duplication.
 
 ## Stage 2: Input and Touch Accessibility Improvements
 **Goal**: Improve control discoverability and usable target sizing.
@@ -33,7 +37,11 @@ Finding IDs: `15.1` through `15.11`
 - Component tests for favorite button sizing classes.
 - Manual + automated screen-reader verification checklist for keyword select.
 - Accessibility integration tests for filter interaction announcements where feasible.
-**Status**: Not Started
+**Status**: Complete
+**Progress Notes (2026-02-18)**:
+- Verified favorite-button touch target uses `p-1.5` sizing in `ResultsList` (44px-friendly baseline retained).
+- Added explicit ARIA labeling/description wiring for include/exclude keyword selects in `FilterPanel`.
+- Added polite `aria-live` result-count announcements for keyword suggestions (include and exclude) with focused test coverage in `FilterPanel.test.tsx`.
 
 ## Stage 3: Contrast Verification and Token Adjustments
 **Goal**: Replace visual-only assumptions with measured contrast compliance.

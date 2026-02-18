@@ -43,7 +43,17 @@ Finding IDs: `9.1` through `9.5`
 - E2E tests at 375px and 768px for full entry lifecycle.
 - Component tests for drawer open/close and focus behavior.
 - Visual regression checks for entry manager layout snapshots.
-**Status**: Not Started
+**Status**: Complete
+**Completion Notes (2026-02-18)**:
+- Switched breakpoint detection in dictionary manager to the shared `useMobile()` hook for reactive viewport handling.
+- Kept entry-management in a full-width drawer on mobile and replaced mobile entry editing modal with a dedicated full-width drawer panel.
+- Preserved desktop behavior: entry editing still uses the modal flow in non-mobile breakpoints.
+- Added responsive regression coverage in `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.responsiveStage2.test.tsx`.
+- Verified no regressions in surrounding container flows via:
+  - `Manager.responsiveStage1.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+  - `Manager.entryStage4.test.tsx`
+  - `Manager.entryStage2.test.tsx`
 
 ## Stage 3: Preview and Validation Controls Under Width Constraints
 **Goal**: Keep validation/preview tools usable in constrained containers.
@@ -56,7 +66,17 @@ Finding IDs: `9.1` through `9.5`
 - Component tests for responsive grid fallback behavior.
 - Mobile viewport tests for preview panel layout integrity.
 - Regression tests confirming add-entry grid still collapses correctly.
-**Status**: Not Started
+**Status**: Complete
+**Completion Notes (2026-02-18)**:
+- Updated preview saved-case controls to stack by default and align horizontally only from `sm` upward.
+- Hardened preview settings layout to `grid-cols-1` with `md:grid-cols-2` and added `min-w-0` safeguards to avoid cramped horizontal overflow in narrow containers.
+- Added explicit responsive test hooks (`data-testid`) for preview layout verification.
+- Added coverage in `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.responsiveStage3.test.tsx`.
+- Revalidated responsive workflow tests:
+  - `Manager.responsiveStage1.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+  - `Manager.responsiveStage3.test.tsx`
+  - `Manager.entryStage4.test.tsx`
 
 ## Dependencies
 

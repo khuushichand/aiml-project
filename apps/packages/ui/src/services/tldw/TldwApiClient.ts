@@ -2638,6 +2638,19 @@ export class TldwApiClient {
     return this.normalizeChatSummary(res)
   }
 
+  async completeCharacterChatTurn(
+    chat_id: string | number,
+    payload: Record<string, any>
+  ): Promise<any> {
+    const cid = String(chat_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chats/${cid}/complete-v2`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
   async getChat(chat_id: string | number): Promise<ServerChatSummary> {
     const cid = String(chat_id)
     const res = await bgRequest<any>({

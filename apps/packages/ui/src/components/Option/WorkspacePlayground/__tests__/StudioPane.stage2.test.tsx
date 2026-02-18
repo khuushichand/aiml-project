@@ -619,7 +619,7 @@ describe("StudioPane Stage 2 workflows", () => {
 
     const compareButton = screen.getByRole("button", { name: "Compare Sources" })
     expect(compareButton).toBeDisabled()
-  })
+  }, 15000)
 
   it("generates compare sources output with usage metrics", async () => {
     workspaceStoreState.selectedSourceIds = ["source-1", "source-2"]

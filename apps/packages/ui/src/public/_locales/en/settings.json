@@ -1220,6 +1220,9 @@
   "manageCharacters_actions_chat": {
     "message": "Chat"
   },
+  "manageCharacters_actions_quickChat": {
+    "message": "Quick chat"
+  },
   "manageCharacters_actions_edit": {
     "message": "Edit"
   },
@@ -1255,6 +1258,9 @@
   },
   "manageCharacters_aria_chatWith": {
     "message": "Chat as {{name}}"
+  },
+  "manageCharacters_aria_quickChatWith": {
+    "message": "Quick chat with {{name}}"
   },
   "manageCharacters_aria_edit": {
     "message": "Edit character {{name}}"
@@ -1375,6 +1381,45 @@
   },
   "manageCharacters_import_previewInvalidYaml": {
     "message": "Malformed YAML content: {{message}}"
+  },
+  "manageCharacters_quickChat_title": {
+    "message": "Quick chat: {{name}}"
+  },
+  "manageCharacters_quickChat_modelLabel": {
+    "message": "Model"
+  },
+  "manageCharacters_quickChat_modelPlaceholder": {
+    "message": "Select a model"
+  },
+  "manageCharacters_quickChat_modelRequired": {
+    "message": "Select a model to start quick chat."
+  },
+  "manageCharacters_quickChat_sessionTitle": {
+    "message": "{{name}} quick chat"
+  },
+  "manageCharacters_quickChat_sessionCreateFailed": {
+    "message": "Unable to start a quick chat session."
+  },
+  "manageCharacters_quickChat_unsupportedCharacter": {
+    "message": "Quick chat is only available for server-synced characters."
+  },
+  "manageCharacters_quickChat_emptyState": {
+    "message": "Send a message to quickly test this character without leaving the page."
+  },
+  "manageCharacters_quickChat_placeholder": {
+    "message": "Ask this character a quick question..."
+  },
+  "manageCharacters_quickChat_send": {
+    "message": "Send"
+  },
+  "manageCharacters_quickChat_openFullChat": {
+    "message": "Open full chat"
+  },
+  "manageCharacters_quickChat_error": {
+    "message": "Quick chat failed. Please try again."
+  },
+  "manageCharacters_quickChat_emptyResponse": {
+    "message": "No response received from the model."
   },
   "manageCharacters_form_name_label": {
     "message": "Name"

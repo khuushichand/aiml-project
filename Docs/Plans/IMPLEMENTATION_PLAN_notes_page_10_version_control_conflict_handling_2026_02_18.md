@@ -23,7 +23,7 @@ Finding IDs: `10.1` through `10.7`
 - Integration tests for metadata updates across save cycles.
 - Formatting tests for locale-safe time rendering.
 - Regression tests for selected-note transitions.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Trash and Restore UX
 **Goal**: Expose backend soft-delete/restore in a recoverable workflow.
@@ -35,7 +35,7 @@ Finding IDs: `10.1` through `10.7`
 - Integration tests for delete -> trash visibility -> restore roundtrip.
 - Permission/edge tests for missing or already-restored notes.
 - UX tests for empty trash and bulk restore affordances if enabled.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Revision History Decision and Incremental Delivery
 **Goal**: Set clear path for note history and diff capabilities.
@@ -65,3 +65,23 @@ Finding IDs: `10.1` through `10.7`
 
 - Autosave/version metadata should align with Plan 02 editor lifecycle.
 - Delete/undo messaging standards should coordinate with Plan 13.
+
+## Progress Notes (2026-02-18)
+
+- Completed Stage 1 in `/apps/packages/ui/src/components/Notes/NotesManagerPage.tsx`:
+  - Added editor revision metadata summary showing current version and last-saved timestamp.
+  - Updated save flows to refresh metadata after create/update/autosave and reload paths.
+  - Preserved metadata across note switching and manual reload actions.
+- Stage 1 verification exists in `/apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage4.revision-attachments.test.tsx`:
+  - Verifies version + last-saved metadata rendering and update behavior.
+- Completed Stage 2 across backend and frontend:
+  - Added trash listing support in backend:
+    - `/tldw_Server_API/app/api/v1/endpoints/notes.py` (`GET /api/v1/notes/trash`)
+    - `/tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py` (`list_deleted_notes`, `count_deleted_notes`).
+  - Added Notes sidebar mode toggle (`Notes` / `Trash`) and trash-specific list rendering in:
+    - `/apps/packages/ui/src/components/Notes/NotesManagerPage.tsx`
+    - `/apps/packages/ui/src/components/Notes/NotesListPanel.tsx`
+  - Added restore action wiring to `POST /api/v1/notes/{id}/restore?expected_version={version}` with post-restore return to active mode and note-open navigation.
+- Added Stage 2 verification in `/apps/packages/ui/src/components/Notes/__tests__/NotesManagerPage.stage8.trash-restore.test.tsx`:
+  - Verifies trashed note restoration roundtrip and post-restore note opening.
+  - Verifies trash empty-state behavior.

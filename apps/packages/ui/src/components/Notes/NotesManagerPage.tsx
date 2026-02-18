@@ -193,6 +193,7 @@ const NotesManagerPage: React.FC = () => {
   const [query, setQuery] = React.useState('')
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(20)
+  const [listMode, setListMode] = React.useState<'active' | 'trash'>('active')
   const [total, setTotal] = React.useState(0)
   const [selectedId, setSelectedId] = React.useState<string | number | null>(null)
   const [title, setTitle] = React.useState('')
@@ -539,33 +540,7 @@ const NotesManagerPage: React.FC = () => {
   }
 
   const fetchNotes = async (): Promise<NoteListItem[]> => {
-    const q = query.trim()
-    const toks = keywordTokens.map((k) => k.toLowerCase())
-    // Prefer search when query or keyword filters are present
-    if (q || toks.length > 0) {
-      const { items, total } = await fetchFilteredNotesRaw(q, toks, page, pageSize)
-      setTotal(total)
-      return items.map((n: any) => {
-        const links = extractBacklink(n)
-        const keywords = extractKeywords(n)
-        return {
-          id: n?.id,
-          title: n?.title,
-          content: n?.content,
-          updated_at: n?.updated_at ?? n?.last_modified ?? n?.lastModified,
-          conversation_id: links.conversation_id,
-          message_id: links.message_id,
-          keywords,
-          version: toNoteVersion(n) ?? undefined
-        }
-      })
-    }
-    // Browse list with pagination when no filters
-    const res = await bgRequest<any>({ path: `/api/v1/notes/?page=${page}&results_per_page=${pageSize}` as any, method: 'GET' as any })
-    const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : [])
-    const pagination = res?.pagination
-    setTotal(Number(pagination?.total_items || items.length || 0))
-    return items.map((n: any) => {
+    const mapNoteListItem = (n: any): NoteListItem => {
       const links = extractBacklink(n)
       const keywords = extractKeywords(n)
       return {
@@ -573,23 +548,61 @@ const NotesManagerPage: React.FC = () => {
         title: n?.title,
         content: n?.content,
         updated_at: n?.updated_at ?? n?.last_modified ?? n?.lastModified,
+        deleted: Boolean(n?.deleted),
         conversation_id: links.conversation_id,
         message_id: links.message_id,
         keywords,
         version: toNoteVersion(n) ?? undefined
       }
-    })
+    }
+
+    if (listMode === 'trash') {
+      const params = new URLSearchParams()
+      params.set('limit', String(pageSize))
+      params.set('offset', String((page - 1) * pageSize))
+      params.set('include_keywords', 'true')
+      const res = await bgRequest<any>({
+        path: `/api/v1/notes/trash?${params.toString()}` as any,
+        method: 'GET' as any
+      })
+      const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : [])
+      const totalItems =
+        Number(
+          res?.total ??
+            res?.pagination?.total_items ??
+            res?.count ??
+            items.length ??
+            0
+        ) || 0
+      setTotal(totalItems)
+      return items.map(mapNoteListItem)
+    }
+
+    const q = query.trim()
+    const toks = keywordTokens.map((k) => k.toLowerCase())
+    // Prefer search when query or keyword filters are present
+    if (q || toks.length > 0) {
+      const { items, total } = await fetchFilteredNotesRaw(q, toks, page, pageSize)
+      setTotal(total)
+      return items.map(mapNoteListItem)
+    }
+    // Browse list with pagination when no filters
+    const res = await bgRequest<any>({ path: `/api/v1/notes/?page=${page}&results_per_page=${pageSize}` as any, method: 'GET' as any })
+    const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : [])
+    const pagination = res?.pagination
+    setTotal(Number(pagination?.total_items || items.length || 0))
+    return items.map(mapNoteListItem)
   }
 
   const { data, isFetching, refetch } = useQuery({
-    queryKey: ['notes', query, page, pageSize, keywordTokens.join('|')],
+    queryKey: ['notes', listMode, query, page, pageSize, keywordTokens.join('|')],
     queryFn: fetchNotes,
     placeholderData: keepPreviousData,
     enabled: isOnline
   })
 
   const filteredCount = Array.isArray(data) ? data.length : 0
-  const hasActiveFilters = query.trim().length > 0 || keywordTokens.length > 0
+  const hasActiveFilters = listMode === 'active' && (query.trim().length > 0 || keywordTokens.length > 0)
 
   const {
     data: noteNeighborsData,
@@ -902,7 +915,7 @@ const NotesManagerPage: React.FC = () => {
     } finally { setLoadingDetail(false) }
   }, [message])
 
-  const resetEditor = () => {
+  const resetEditor = React.useCallback(() => {
     setSelectedId(null)
     setTitle('')
     setContent('')
@@ -916,7 +929,7 @@ const NotesManagerPage: React.FC = () => {
     setSaveIndicator('idle')
     setEditorCursorIndex(null)
     setWikilinkSelectionIndex(0)
-  }
+  }, [])
 
   const confirmDiscardIfDirty = React.useCallback(async () => {
     if (!isDirty) return true
@@ -929,14 +942,31 @@ const NotesManagerPage: React.FC = () => {
     return ok
   }, [isDirty])
 
+  const switchListMode = React.useCallback(
+    async (nextMode: 'active' | 'trash') => {
+      if (nextMode === listMode) return
+      const ok = await confirmDiscardIfDirty()
+      if (!ok) return
+      resetEditor()
+      setListMode(nextMode)
+      setPage(1)
+      if (nextMode === 'trash') {
+        setQuery('')
+        setKeywordTokens([])
+      }
+    },
+    [confirmDiscardIfDirty, listMode, resetEditor]
+  )
+
   const handleNewNote = React.useCallback(async () => {
     const ok = await confirmDiscardIfDirty()
     if (!ok) return
+    if (listMode !== 'active') setListMode('active')
     resetEditor()
     setTimeout(() => {
       titleInputRef.current?.focus()
     }, 0)
-  }, [confirmDiscardIfDirty])
+  }, [confirmDiscardIfDirty, listMode, resetEditor])
 
   const handleSelectNote = React.useCallback(
     async (id: string | number) => {
@@ -1338,6 +1368,42 @@ const NotesManagerPage: React.FC = () => {
         handleVersionConflict(target)
       } else {
         message.error(String(e?.message || '') || 'Operation failed')
+      }
+    }
+  }
+
+  const restoreNote = async (id: string | number, version?: number) => {
+    const target = String(id)
+    let expectedVersion: number | null =
+      typeof version === 'number' && Number.isFinite(version) ? version : null
+
+    if (expectedVersion == null && Array.isArray(data)) {
+      const match = data.find((note) => String(note.id) === target)
+      if (typeof match?.version === 'number') expectedVersion = match.version
+    }
+    if (expectedVersion == null) {
+      message.error('Missing version; reload trash and try again')
+      return
+    }
+
+    try {
+      const restored = await bgRequest<any>({
+        path: `/api/v1/notes/${encodeURIComponent(target)}/restore?expected_version=${encodeURIComponent(
+          String(expectedVersion)
+        )}` as any,
+        method: 'POST' as any
+      })
+      message.success('Note restored')
+      setListMode('active')
+      setPage(1)
+      await refetch()
+      const restoredId = String(restored?.id || target)
+      await loadDetail(restoredId)
+    } catch (error: any) {
+      if (isVersionConflictError(error)) {
+        message.error('Restore conflict. Refresh trash and retry.')
+      } else {
+        message.error(String(error?.message || 'Could not restore note'))
       }
     }
   }
@@ -1805,6 +1871,7 @@ const NotesManagerPage: React.FC = () => {
 
   React.useEffect(() => {
     if (!isOnline) return
+    if (listMode !== 'active') return
     if (!pendingNoteId) return
     if (!Array.isArray(data)) return
     if (selectedId != null) return
@@ -1814,7 +1881,7 @@ const NotesManagerPage: React.FC = () => {
       setPendingNoteId(null)
       void clearSetting(LAST_NOTE_ID_SETTING)
     })()
-  }, [data, handleSelectNote, isOnline, pendingNoteId, selectedId])
+  }, [data, handleSelectNote, isOnline, listMode, pendingNoteId, selectedId])
 
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false)
 
@@ -1876,77 +1943,117 @@ const NotesManagerPage: React.FC = () => {
                 />
               </Tooltip>
             </div>
-            <div className="space-y-2">
-              <Input
-                allowClear
-                placeholder={t('option:notesSearch.placeholder', {
-                  defaultValue: 'Search notes...'
-                })}
-                prefix={(<SearchIcon className="w-4 h-4 text-text-subtle" />) as any}
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value)
-                  setPage(1)
-                }}
-                onPressEnter={() => {
-                  setPage(1)
-                }}
-              />
-              <Select
-                mode="tags"
-                allowClear
-                placeholder={t('option:notesSearch.keywordsPlaceholder', {
-                  defaultValue: 'Filter by keyword'
-                })}
-                className="w-full"
-                value={keywordTokens}
-                onSearch={handleKeywordFilterSearch}
-                onChange={handleKeywordFilterChange}
-                options={keywordOptions.map((k) => ({ label: k, value: k }))}
-              />
-              <div className="flex items-center justify-between gap-2">
-                <Button
-                  size="small"
-                  onClick={openKeywordPicker}
-                  disabled={!isOnline}
-                  className="text-xs"
-                >
-                  {t('option:notesSearch.keywordsBrowse', {
-                    defaultValue: 'Browse keywords'
-                  })}
-                </Button>
-                {availableKeywords.length > 0 && (
-                  <Typography.Text
-                    type="secondary"
-                    className="text-[11px] text-text-muted"
-                  >
-                    {t('option:notesSearch.keywordsBrowseCount', {
-                      defaultValue: '{{count}} available',
-                      count: availableKeywords.length
-                    })}
-                  </Typography.Text>
-                )}
-              </div>
-              {hasActiveFilters && (
-                <Button
-                  size="small"
-                  onClick={handleClearFilters}
-                  className="w-full text-xs"
-                >
-                  {t('option:notesSearch.clear', {
-                    defaultValue: 'Clear search & filters'
-                  })}
-                </Button>
-              )}
-            </div>
-          </div>
+	            <div className="space-y-2">
+	              <div className="grid grid-cols-2 gap-2">
+	                <Button
+	                  size="small"
+	                  type={listMode === 'active' ? 'primary' : 'default'}
+	                  onClick={() => {
+	                    void switchListMode('active')
+	                  }}
+	                  data-testid="notes-mode-active"
+	                >
+	                  {t('option:notesSearch.modeActive', {
+	                    defaultValue: 'Notes'
+	                  })}
+	                </Button>
+	                <Button
+	                  size="small"
+	                  type={listMode === 'trash' ? 'primary' : 'default'}
+	                  onClick={() => {
+	                    void switchListMode('trash')
+	                  }}
+	                  data-testid="notes-mode-trash"
+	                >
+	                  {t('option:notesSearch.modeTrash', {
+	                    defaultValue: 'Trash'
+	                  })}
+	                </Button>
+	              </div>
+	              {listMode === 'active' ? (
+	                <>
+	                  <Input
+	                    allowClear
+	                    placeholder={t('option:notesSearch.placeholder', {
+	                      defaultValue: 'Search notes...'
+	                    })}
+	                    prefix={(<SearchIcon className="w-4 h-4 text-text-subtle" />) as any}
+	                    value={query}
+	                    onChange={(e) => {
+	                      setQuery(e.target.value)
+	                      setPage(1)
+	                    }}
+	                    onPressEnter={() => {
+	                      setPage(1)
+	                    }}
+	                  />
+	                  <Select
+	                    mode="tags"
+	                    allowClear
+	                    placeholder={t('option:notesSearch.keywordsPlaceholder', {
+	                      defaultValue: 'Filter by keyword'
+	                    })}
+	                    className="w-full"
+	                    value={keywordTokens}
+	                    onSearch={handleKeywordFilterSearch}
+	                    onChange={handleKeywordFilterChange}
+	                    options={keywordOptions.map((k) => ({ label: k, value: k }))}
+	                  />
+	                  <div className="flex items-center justify-between gap-2">
+	                    <Button
+	                      size="small"
+	                      onClick={openKeywordPicker}
+	                      disabled={!isOnline}
+	                      className="text-xs"
+	                    >
+	                      {t('option:notesSearch.keywordsBrowse', {
+	                        defaultValue: 'Browse keywords'
+	                      })}
+	                    </Button>
+	                    {availableKeywords.length > 0 && (
+	                      <Typography.Text
+	                        type="secondary"
+	                        className="text-[11px] text-text-muted"
+	                      >
+	                        {t('option:notesSearch.keywordsBrowseCount', {
+	                          defaultValue: '{{count}} available',
+	                          count: availableKeywords.length
+	                        })}
+	                      </Typography.Text>
+	                    )}
+	                  </div>
+	                  {hasActiveFilters && (
+	                    <Button
+	                      size="small"
+	                      onClick={handleClearFilters}
+	                      className="w-full text-xs"
+	                    >
+	                      {t('option:notesSearch.clear', {
+	                        defaultValue: 'Clear search & filters'
+	                      })}
+	                    </Button>
+	                  )}
+	                </>
+	              ) : (
+	                <Typography.Text
+	                  type="secondary"
+	                  className="text-[11px] text-text-muted block"
+	                >
+	                  {t('option:notesSearch.trashHelpText', {
+	                    defaultValue: 'Restore notes from trash to edit them again.'
+	                  })}
+	                </Typography.Text>
+	              )}
+	            </div>
+	          </div>
 
           {/* Notes List Section */}
           <div className="flex-1 overflow-y-auto">
-            <NotesListPanel
-              isOnline={isOnline}
-              isFetching={isFetching}
-              demoEnabled={demoEnabled}
+	            <NotesListPanel
+	              listMode={listMode}
+	              isOnline={isOnline}
+	              isFetching={isFetching}
+	              demoEnabled={demoEnabled}
               capsLoading={capsLoading}
               capabilities={capabilities || null}
               notes={Array.isArray(data) ? data : undefined}
@@ -1957,16 +2064,25 @@ const NotesManagerPage: React.FC = () => {
               onSelectNote={(id) => {
                 void handleSelectNote(id)
               }}
-              onChangePage={(nextPage, nextPageSize) => {
-                setPage(nextPage)
-                setPageSize(nextPageSize)
-              }}
-              onResetEditor={resetEditor}
-              onOpenSettings={() => navigate('/settings/tldw')}
-              onOpenHealth={() => navigate('/settings/health')}
-              onExportAllMd={() => {
-                void exportAll()
-              }}
+	              onChangePage={(nextPage, nextPageSize) => {
+	                setPage(nextPage)
+	                setPageSize(nextPageSize)
+	              }}
+	              onResetEditor={() => {
+	                if (listMode === 'trash') {
+	                  void switchListMode('active')
+	                  return
+	                }
+	                resetEditor()
+	              }}
+	              onOpenSettings={() => navigate('/settings/tldw')}
+	              onOpenHealth={() => navigate('/settings/health')}
+	              onRestoreNote={(id, version) => {
+	                void restoreNote(id, version)
+	              }}
+	              onExportAllMd={() => {
+	                void exportAll()
+	              }}
               onExportAllCsv={() => {
                 void exportAllCSV()
               }}

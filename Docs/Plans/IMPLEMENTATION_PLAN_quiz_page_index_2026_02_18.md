@@ -54,4 +54,4 @@ This index maps all 13 quiz-page category plans into one execution order to redu
 - Rank 1 (`Take Quiz Tab`): complete.
 - Rank 2 (`Error Handling & Edge Cases`): complete.
 - Rank 3 (`Results & Analytics Tab`): complete.
-- Next in order: Rank 4 (`Accessibility`).
+- Rank 4 (`Accessibility`): Stage 1 through Stage 3 complete; Stage 4 next.

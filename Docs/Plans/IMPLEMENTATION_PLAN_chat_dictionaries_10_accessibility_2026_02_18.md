@@ -22,9 +22,21 @@ Finding IDs: `10.1` through `10.9`
 - All newly introduced controls include accessible names and focus styles.
 **Tests**:
 - Component tests for switch keyboard toggling (`Space`/`Enter`).
-- Accessibility tests asserting `aria-expanded`/`aria-controls` pairs.
+- Accessibility tests asserting `aria-expanded` states and labelled panel regions.
 - Keyboard navigation integration tests across primary dictionaries workflows.
-**Status**: Not Started
+**Status**: Complete
+**Completion Notes (2026-02-18)**:
+- Confirmed keyboard toggle support for dictionary active-state switch via `Enter` interaction in list view.
+- Added explicit region semantics to validation/preview collapse content:
+  - `data-testid="dictionary-validation-panel"` with `role="region"`
+  - `data-testid="dictionary-preview-panel"` with `role="region"`
+- Added targeted accessibility regression coverage in:
+  - `apps/packages/ui/src/components/Option/Dictionaries/__tests__/Manager.accessibilityStage1.test.tsx`
+- Revalidated responsive/entry interactions to ensure no keyboard regressions:
+  - `Manager.responsiveStage1.test.tsx`
+  - `Manager.responsiveStage2.test.tsx`
+  - `Manager.responsiveStage3.test.tsx`
+  - `Manager.entryStage4.test.tsx`
 
 ## Stage 2: Focus Management and Modal Interaction Integrity
 **Goal**: Guarantee predictable focus behavior in complex overlay workflows.

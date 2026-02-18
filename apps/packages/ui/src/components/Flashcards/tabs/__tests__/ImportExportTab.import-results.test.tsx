@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ImportExportTab } from "../ImportExportTab"
 import {
@@ -6,6 +6,7 @@ import {
   useImportFlashcardsMutation,
   useImportLimitsQuery
 } from "../../hooks"
+import { deleteFlashcard, getFlashcard } from "@/services/flashcards"
 
 const messageSpies = {
   success: vi.fn(),
@@ -16,9 +17,27 @@ const messageSpies = {
   open: vi.fn(),
   destroy: vi.fn()
 }
+const showUndoNotificationMock = vi.fn()
+const invalidateQueriesMock = vi.fn()
+
+vi.mock("@tanstack/react-query", async () => {
+  const actual = await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query")
+  return {
+    ...actual,
+    useQueryClient: () => ({
+      invalidateQueries: invalidateQueriesMock
+    })
+  }
+})
 
 vi.mock("@/hooks/useAntdMessage", () => ({
   useAntdMessage: () => messageSpies
+}))
+
+vi.mock("@/hooks/useUndoNotification", () => ({
+  useUndoNotification: () => ({
+    showUndoNotification: showUndoNotificationMock
+  })
 }))
 
 vi.mock("react-i18next", () => ({
@@ -50,6 +69,15 @@ vi.mock("../../hooks", () => ({
   useImportLimitsQuery: vi.fn()
 }))
 
+vi.mock("@/services/flashcards", async () => {
+  const actual = await vi.importActual<typeof import("@/services/flashcards")>("@/services/flashcards")
+  return {
+    ...actual,
+    getFlashcard: vi.fn(),
+    deleteFlashcard: vi.fn()
+  }
+})
+
 if (!(globalThis as any).ResizeObserver) {
   ;(globalThis as any).ResizeObserver = class ResizeObserver {
     observe() {}
@@ -61,6 +89,7 @@ if (!(globalThis as any).ResizeObserver) {
 describe("ImportExportTab import result details", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    invalidateQueriesMock.mockReset()
     vi.mocked(useDecksQuery).mockReturnValue({
       data: [],
       isLoading: false
@@ -100,4 +129,46 @@ describe("ImportExportTab import result details", () => {
       "Imported 2 cards, skipped 1 rows (1 errors)."
     )
   }, 15000)
+
+  it("offers undo rollback for the latest import batch", async () => {
+    const mutateAsync = vi.fn().mockResolvedValue({
+      imported: 2,
+      items: [
+        { uuid: "undo-u1", deck_id: 1 },
+        { uuid: "undo-u2", deck_id: 1 }
+      ],
+      errors: []
+    })
+    vi.mocked(useImportFlashcardsMutation).mockReturnValue({
+      mutateAsync,
+      isPending: false
+    } as any)
+    vi.mocked(getFlashcard)
+      .mockResolvedValueOnce({ uuid: "undo-u1", version: 7 } as any)
+      .mockResolvedValueOnce({ uuid: "undo-u2", version: 8 } as any)
+    vi.mocked(deleteFlashcard).mockResolvedValue(undefined as any)
+
+    render(<ImportExportTab />)
+
+    fireEvent.change(screen.getByTestId("flashcards-import-textarea"), {
+      target: {
+        value: "Deck\tFront\tBack\nBiology\tQuestion\tAnswer"
+      }
+    })
+    fireEvent.click(screen.getByTestId("flashcards-import-button"))
+
+    await waitFor(() => {
+      expect(showUndoNotificationMock).toHaveBeenCalledTimes(1)
+    })
+    const undoConfig = showUndoNotificationMock.mock.calls[0][0]
+    expect(undoConfig.duration).toBe(30)
+    expect(String(undoConfig.description)).toContain("Undo within 30s")
+
+    await undoConfig.onUndo()
+
+    expect(getFlashcard).toHaveBeenCalledTimes(2)
+    expect(deleteFlashcard).toHaveBeenCalledWith("undo-u1", 7)
+    expect(deleteFlashcard).toHaveBeenCalledWith("undo-u2", 8)
+    expect(invalidateQueriesMock).toHaveBeenCalled()
+  })
 })

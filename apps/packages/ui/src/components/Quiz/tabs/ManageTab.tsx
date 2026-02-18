@@ -1,5 +1,6 @@
 import React from "react"
 import {
+  Alert,
   Button,
   Card,
   Divider,
@@ -86,6 +87,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   } | null>(null)
   const [deletedQuizIds, setDeletedQuizIds] = React.useState<Set<number>>(new Set())
   const [deletedQuestionIds, setDeletedQuestionIds] = React.useState<Set<number>>(new Set())
+  const [pendingQuizUndoName, setPendingQuizUndoName] = React.useState<string | null>(null)
+  const [pendingQuestionUndoText, setPendingQuestionUndoText] = React.useState<string | null>(null)
 
   // Cleanup pending deletions on unmount
   React.useEffect(() => {
@@ -148,6 +151,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     clearTimeout(pendingQuizDeletion.current.timeoutId)
     const quiz = pendingQuizDeletion.current.quiz
     pendingQuizDeletion.current = null
+    setPendingQuizUndoName(null)
     setDeletedQuizIds((prev) => {
       const next = new Set(prev)
       next.delete(quiz.id)
@@ -162,6 +166,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     try {
       await deleteMutation.mutateAsync({ quizId: quiz.id, version: quiz.version })
       pendingQuizDeletion.current = null
+      setPendingQuizUndoName(null)
       setDeletedQuizIds((prev) => {
         const next = new Set(prev)
         next.delete(quiz.id)
@@ -176,6 +181,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         return next
       })
       pendingQuizDeletion.current = null
+      setPendingQuizUndoName(null)
       messageApi.error(
         t("option:quiz.deleteError", { defaultValue: "Failed to delete quiz" })
       )
@@ -192,6 +198,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
 
     // Optimistically hide the quiz from UI
     setDeletedQuizIds((prev) => new Set(prev).add(quiz.id))
+    setPendingQuizUndoName(quiz.name)
 
     // Schedule actual deletion
     const timeoutId = setTimeout(() => {
@@ -199,27 +206,6 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     }, UNDO_GRACE_PERIOD)
 
     pendingQuizDeletion.current = { quiz, timeoutId }
-
-    // Show toast with undo button
-    messageApi.open({
-      key: `delete-quiz-${quiz.id}`,
-      type: "info",
-      content: (
-        <span>
-          {t("option:quiz.quizDeleted", { defaultValue: "Quiz deleted" })}
-          <Button
-            type="link"
-            size="small"
-            icon={<UndoOutlined />}
-            onClick={handleUndoQuizDelete}
-            className="ml-2"
-          >
-            {t("option:quiz.undo", { defaultValue: "Undo" })}
-          </Button>
-        </span>
-      ),
-      duration: UNDO_GRACE_PERIOD / 1000
-    })
   }
 
   React.useEffect(() => {
@@ -407,6 +393,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     clearTimeout(pendingQuestionDeletion.current.timeoutId)
     const question = pendingQuestionDeletion.current.question
     pendingQuestionDeletion.current = null
+    setPendingQuestionUndoText(null)
     setDeletedQuestionIds((prev) => {
       const next = new Set(prev)
       next.delete(question.id)
@@ -425,6 +412,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         version: question.version
       })
       pendingQuestionDeletion.current = null
+      setPendingQuestionUndoText(null)
       setDeletedQuestionIds((prev) => {
         const next = new Set(prev)
         next.delete(question.id)
@@ -439,6 +427,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         return next
       })
       pendingQuestionDeletion.current = null
+      setPendingQuestionUndoText(null)
       messageApi.error(
         t("option:quiz.questionDeleteError", { defaultValue: "Failed to delete question." })
       )
@@ -456,6 +445,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
 
     // Optimistically hide the question from UI
     setDeletedQuestionIds((prev) => new Set(prev).add(question.id))
+    setPendingQuestionUndoText(question.question_text || t("option:quiz.question", { defaultValue: "Question" }))
 
     // Schedule actual deletion
     const quizId = editingQuiz.id
@@ -464,27 +454,6 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     }, UNDO_GRACE_PERIOD)
 
     pendingQuestionDeletion.current = { question, timeoutId }
-
-    // Show toast with undo button
-    messageApi.open({
-      key: `delete-question-${question.id}`,
-      type: "info",
-      content: (
-        <span>
-          {t("option:quiz.questionDeleted", { defaultValue: "Question deleted" })}
-          <Button
-            type="link"
-            size="small"
-            icon={<UndoOutlined />}
-            onClick={handleUndoQuestionDelete}
-            className="ml-2"
-          >
-            {t("option:quiz.undo", { defaultValue: "Undo" })}
-          </Button>
-        </span>
-      ),
-      duration: UNDO_GRACE_PERIOD / 1000
-    })
   }
 
   if (isLoading) {
@@ -498,6 +467,48 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   return (
     <div className="space-y-4">
       {contextHolder}
+
+      {pendingQuizUndoName && (
+        <Alert
+          type="info"
+          showIcon
+          title={t("option:quiz.quizDeletedUndoPrompt", {
+            defaultValue: "Quiz deleted: {{name}}",
+            name: pendingQuizUndoName
+          })}
+          action={(
+            <Button
+              type="link"
+              size="small"
+              icon={<UndoOutlined />}
+              onClick={handleUndoQuizDelete}
+            >
+              {t("option:quiz.undo", { defaultValue: "Undo" })}
+            </Button>
+          )}
+        />
+      )}
+
+      {pendingQuestionUndoText && (
+        <Alert
+          type="info"
+          showIcon
+          title={t("option:quiz.questionDeletedUndoPrompt", {
+            defaultValue: "Question deleted: {{question}}",
+            question: pendingQuestionUndoText
+          })}
+          action={(
+            <Button
+              type="link"
+              size="small"
+              icon={<UndoOutlined />}
+              onClick={handleUndoQuestionDelete}
+            >
+              {t("option:quiz.undo", { defaultValue: "Undo" })}
+            </Button>
+          )}
+        />
+      )}
 
       <div className="flex justify-between items-center">
         <Input

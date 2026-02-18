@@ -83,7 +83,7 @@ Finding IDs: `H3-1` through `H3-4`
 - Mutation tests for undo token lifecycle and expiration behavior.
 - Integration tests for edit undo and bulk-move undo flows.
 - Accessibility tests for timer announcements and undo affordances.
-**Status**: In Progress
+**Status**: Complete
 
 **Progress Notes (2026-02-18)**:
 - Added bounded undo support in Cards workflow for:
@@ -98,10 +98,16 @@ Finding IDs: `H3-1` through `H3-4`
 - Added integration tests validating:
   - undo notification is offered after edit and move mutations
   - invoking undo executes rollback mutation paths with expected payloads/version handling.
+- Added import rollback support:
+  - Import now offers a bounded undo window (`30s`) for each successful batch.
+  - Undo uses imported card UUIDs from API response, resolves latest versions, and deletes imported cards in chunks.
+  - Flashcard queries are invalidated after rollback to keep Cards/Review/metrics synchronized.
+- Added import undo test coverage:
+  - `ImportExportTab.import-results.test.tsx` now validates undo notification copy, duration, and rollback mutation behavior.
 - Validation:
   - `cd apps/packages/ui && bunx vitest run --config vitest.config.ts src/components/Flashcards/hooks/__tests__/useFlashcardShortcuts.test.ts src/components/Flashcards/components/__tests__/FlashcardCreateDrawer.cloze-help.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.reset-scheduling.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.save.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.scheduling-metadata.test.tsx src/components/Flashcards/components/__tests__/KeyboardShortcutsModal.rating-scale.test.tsx src/components/Flashcards/tabs/__tests__/ManageTab.scheduling-metadata.test.tsx src/components/Flashcards/tabs/__tests__/ManageTab.undo-stage3.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.analytics-summary.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.edit-in-review.test.tsx` (pass: `11` files, `18` tests)
-- Remaining Stage 3 gap:
-  - Import rollback/staging is not yet implemented.
+  - `cd apps/packages/ui && bunx vitest run --config vitest.config.ts src/components/Flashcards/tabs/__tests__/ImportExportTab.import-results.test.tsx` (pass: `1` file, `2` tests)
+  - `cd apps/packages/ui && bunx vitest run --config vitest.config.ts src/components/Flashcards/tabs/__tests__/ManageTab.undo-stage3.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.edit-in-review.test.tsx src/components/Flashcards/components/__tests__/FlashcardCreateDrawer.cloze-help.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.reset-scheduling.test.tsx src/components/Flashcards/components/__tests__/FlashcardEditDrawer.save.test.tsx` (pass: `5` files, `8` tests)
 
 ## Stage 4: Cram/Preview Study Mode
 **Goal**: Support intentional study sessions outside SRS due queue.

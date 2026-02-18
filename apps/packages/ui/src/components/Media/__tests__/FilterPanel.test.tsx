@@ -198,4 +198,57 @@ describe('FilterPanel', () => {
       screen.getByText('Suggestions shown here are from current results.')
     ).toBeInTheDocument()
   })
+
+  it('adds accessible descriptions and live suggestion counts for keyword selects', async () => {
+    const onKeywordSearch = vi.fn()
+
+    render(
+      <FilterPanel
+        mediaTypes={[]}
+        selectedMediaTypes={[]}
+        onMediaTypesChange={vi.fn()}
+        selectedKeywords={[]}
+        onKeywordsChange={vi.fn()}
+        selectedExcludedKeywords={[]}
+        onExcludedKeywordsChange={vi.fn()}
+        keywordOptions={['alpha', 'beta', 'gamma']}
+        onKeywordSearch={onKeywordSearch}
+      />
+    )
+
+    expect(screen.getByTestId('keyword-suggestions-status')).toHaveTextContent(
+      '3 keyword suggestions available'
+    )
+    expect(screen.getByTestId('exclude-keyword-suggestions-status')).toHaveTextContent(
+      '3 exclude keyword suggestions available'
+    )
+
+    const includeInput = screen.getByLabelText('Filter by keyword')
+    expect(includeInput).toHaveAttribute('aria-describedby')
+    expect(includeInput.getAttribute('aria-describedby')).toContain('media-keyword-helper')
+    expect(includeInput.getAttribute('aria-describedby')).toContain('media-keyword-status')
+
+    const excludeInput = screen.getByLabelText('Exclude keyword')
+    expect(excludeInput).toHaveAttribute('aria-describedby')
+    expect(excludeInput.getAttribute('aria-describedby')).toContain(
+      'media-exclude-keyword-helper'
+    )
+    expect(excludeInput.getAttribute('aria-describedby')).toContain(
+      'media-exclude-keyword-status'
+    )
+
+    fireEvent.change(includeInput, { target: { value: 'ga' } })
+    fireEvent.change(excludeInput, { target: { value: 'al' } })
+
+    await waitFor(() => {
+      expect(onKeywordSearch).toHaveBeenCalledWith('ga')
+      expect(onKeywordSearch).toHaveBeenCalledWith('al')
+    })
+    expect(screen.getByTestId('keyword-suggestions-status')).toHaveTextContent(
+      '1 keyword suggestions available'
+    )
+    expect(screen.getByTestId('exclude-keyword-suggestions-status')).toHaveTextContent(
+      '1 exclude keyword suggestions available'
+    )
+  })
 })

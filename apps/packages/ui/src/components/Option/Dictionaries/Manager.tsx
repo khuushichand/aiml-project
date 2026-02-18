@@ -3490,7 +3490,11 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
               "Validate dictionary"
             ),
             children: (
-              <div className="space-y-3">
+              <div
+                className="space-y-3"
+                role="region"
+                aria-label="Dictionary validation panel"
+                data-testid="dictionary-validation-panel">
                 <p className="text-xs text-text-muted">
                   {t(
                     "option:dictionariesTools.validateHelp",
@@ -3632,7 +3636,11 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
               "Preview transforms"
             ),
             children: (
-              <div className="space-y-3">
+              <div
+                className="space-y-3"
+                role="region"
+                aria-label="Dictionary preview panel"
+                data-testid="dictionary-preview-panel">
                 <p className="text-xs text-text-muted">
                   {t(
                     "option:dictionariesTools.previewHelp",
@@ -3663,7 +3671,9 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                       "Saved test cases"
                     )}
                   </div>
-                  <div className="flex flex-col gap-2 sm:flex-row">
+                  <div
+                    data-testid="dictionary-preview-case-controls"
+                    className="flex flex-col gap-2 sm:flex-row sm:items-center">
                     <Input
                       size="small"
                       value={previewCaseName}
@@ -3735,8 +3745,10 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                     </div>
                   )}
                 </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <div className="space-y-1">
+                <div
+                  data-testid="dictionary-preview-controls-grid"
+                  className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <div className="space-y-1 min-w-0">
                     <div className="text-xs font-medium text-text">
                       {t(
                         "option:dictionariesTools.tokenBudgetLabel",
@@ -3754,7 +3766,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                       }
                     />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-1 min-w-0">
                     <div className="text-xs font-medium text-text">
                       {t(
                         "option:dictionariesTools.maxIterationsLabel",
@@ -4592,7 +4604,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
           open={!!editingEntry}
           onCancel={closeEditEntryPanel}
           footer={null}
-          destroyOnClose>
+          destroyOnHidden>
           {editEntryFormContent}
         </Modal>
       )}

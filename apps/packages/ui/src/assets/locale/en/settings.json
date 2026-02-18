@@ -1420,6 +1420,7 @@
     },
     "actions": {
       "chat": "Chat",
+      "quickChat": "Quick chat",
       "edit": "Edit",
       "delete": "Delete",
       "duplicate": "Duplicate",
@@ -1442,6 +1443,7 @@
     },
     "aria": {
       "chatWith": "Chat as {{name}}",
+      "quickChatWith": "Quick chat with {{name}}",
       "edit": "Edit character {{name}}",
       "delete": "Delete character {{name}}",
       "duplicate": "Duplicate character {{name}}",
@@ -1494,6 +1496,21 @@
       "previewReadError": "Unable to read file contents for preview.",
       "previewInvalidJson": "Invalid JSON syntax: {{message}}",
       "previewInvalidYaml": "Malformed YAML content: {{message}}"
+    },
+    "quickChat": {
+      "title": "Quick chat: {{name}}",
+      "modelLabel": "Model",
+      "modelPlaceholder": "Select a model",
+      "modelRequired": "Select a model to start quick chat.",
+      "sessionTitle": "{{name}} quick chat",
+      "sessionCreateFailed": "Unable to start a quick chat session.",
+      "unsupportedCharacter": "Quick chat is only available for server-synced characters.",
+      "emptyState": "Send a message to quickly test this character without leaving the page.",
+      "placeholder": "Ask this character a quick question...",
+      "send": "Send",
+      "openFullChat": "Open full chat",
+      "error": "Quick chat failed. Please try again.",
+      "emptyResponse": "No response received from the model."
     },
     "form": {
       "name": {

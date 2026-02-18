@@ -64,12 +64,17 @@ const {
       has_more: false
     })),
     listChats: vi.fn(async () => []),
+    createChat: vi.fn(async () => ({ id: "quick-chat-session-default" })),
     createCharacter: vi.fn(async () => ({ id: "char-1" })),
     updateCharacter: vi.fn(async () => ({})),
     deleteCharacter: vi.fn(async () => ({})),
+    deleteChat: vi.fn(async () => undefined),
     restoreCharacter: vi.fn(async () => ({})),
     importCharacterFile: vi.fn(async () => ({ success: true })),
     exportCharacter: vi.fn(async () => ({})),
+    completeCharacterChatTurn: vi.fn(async () => ({
+      assistant_content: "Quick chat response"
+    })),
     listChatMessages: vi.fn(async () => []),
     getChat: vi.fn(async () => null)
   },
@@ -115,7 +120,11 @@ vi.mock("react-i18next", () => ({
     ) => {
       if (typeof fallbackOrOptions === "string") return fallbackOrOptions
       if (fallbackOrOptions && typeof fallbackOrOptions === "object") {
-        return fallbackOrOptions.defaultValue || key
+        const template = fallbackOrOptions.defaultValue || key
+        return template.replace(/\{\{(\w+)\}\}/g, (_, token: string) => {
+          const value = fallbackOrOptions[token]
+          return value == null ? `{{${token}}}` : String(value)
+        })
       }
       return key
     }
@@ -1617,6 +1626,220 @@ describe("CharactersManager first-use onboarding", () => {
       )
     })
     expect(exportCharacterToJSONMock).toHaveBeenCalledTimes(1)
+  }, 30000)
+
+  it("opens quick chat from table actions and sends a character-scoped prompt", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "101",
+      name: "Quick Chat Character",
+      system_prompt: "Stay concise and roleplay as this character.",
+      greeting: "Hello from quick chat",
+      description: "Quick test",
+      version: 1
+    }
+
+    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => {
+      if (key === "selectedModel") {
+        return ["mock-chat-model", vi.fn(), { isLoading: false }]
+      }
+      return [defaultValue ?? null, vi.fn(), { isLoading: false }]
+    })
+
+    tldwClientMock.createChat.mockResolvedValueOnce({
+      id: "quick-chat-session-1"
+    })
+    tldwClientMock.completeCharacterChatTurn.mockResolvedValueOnce({
+      assistant_content: "Character quick reply"
+    })
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({
+          data: [{ model: "mock-chat-model", provider: "openai" }]
+        })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    await user.click(await screen.findByText("Quick chat"))
+
+    const quickChatDialog = await screen.findByRole("dialog", {
+      name: "Quick chat: Quick Chat Character"
+    })
+
+    const modelCombobox = within(quickChatDialog).getByRole("combobox")
+    fireEvent.mouseDown(modelCombobox)
+    await user.click(await screen.findByText("mock-chat-model (openai)"))
+
+    const input = within(quickChatDialog).getByPlaceholderText(
+      "Ask this character a quick question..."
+    )
+    await user.type(input, "How do you help?")
+    await user.click(within(quickChatDialog).getByRole("button", { name: "Send" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.createChat).toHaveBeenCalledWith(
+        expect.objectContaining({
+          character_id: 101
+        })
+      )
+      expect(tldwClientMock.completeCharacterChatTurn).toHaveBeenCalledWith(
+        "quick-chat-session-1",
+        expect.objectContaining({
+          model: "mock-chat-model",
+          append_user_message: "How do you help?"
+        })
+      )
+    })
+    expect(navigateMock).not.toHaveBeenCalled()
+    expect(await screen.findByText("Character quick reply")).toBeInTheDocument()
+  }, 30000)
+
+  it("opens quick chat from gallery preview actions", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "202",
+      name: "Gallery Quick Chat Character",
+      system_prompt: "Gallery quick chat system prompt",
+      greeting: "Hi from gallery quick chat",
+      description: "Gallery entry",
+      version: 1
+    }
+
+    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => {
+      if (key === "selectedModel") {
+        return ["mock-chat-model", vi.fn(), { isLoading: false }]
+      }
+      return [defaultValue ?? null, vi.fn(), { isLoading: false }]
+    })
+
+    window.localStorage.setItem("characters-view-mode", "gallery")
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({
+          data: [{ model: "mock-chat-model", provider: "openai" }]
+        })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByText("Gallery Quick Chat Character"))
+    await user.click(await screen.findByRole("button", { name: "Quick chat" }))
+
+    const quickChatDialog = await screen.findByRole("dialog", {
+      name: "Quick chat: Gallery Quick Chat Character"
+    })
+    expect(
+      within(quickChatDialog).getByText("Hi from gallery quick chat")
+    ).toBeInTheDocument()
+  }, 30000)
+
+  it("promotes quick chat into full chat flow without route changes until promoted", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "303",
+      name: "Promote Quick Chat Character",
+      system_prompt: "Promotion prompt",
+      greeting: "Promotion greeting",
+      description: "Promotion test",
+      version: 1
+    }
+
+    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => {
+      if (key === "selectedModel") {
+        return ["mock-chat-model", vi.fn(), { isLoading: false }]
+      }
+      return [defaultValue ?? null, vi.fn(), { isLoading: false }]
+    })
+
+    tldwClientMock.createChat.mockResolvedValueOnce({
+      id: "quick-chat-session-promote"
+    })
+    tldwClientMock.completeCharacterChatTurn.mockResolvedValueOnce({
+      assistant_content: "Promotion reply"
+    })
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({
+          data: [{ model: "mock-chat-model", provider: "openai" }]
+        })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /More actions/i }))
+    await user.click(await screen.findByText("Quick chat"))
+
+    const quickChatDialog = await screen.findByRole("dialog", {
+      name: "Quick chat: Promote Quick Chat Character"
+    })
+    const modelCombobox = within(quickChatDialog).getByRole("combobox")
+    fireEvent.mouseDown(modelCombobox)
+    await user.click(await screen.findByText("mock-chat-model (openai)"))
+
+    await user.type(
+      within(quickChatDialog).getByPlaceholderText(
+        "Ask this character a quick question..."
+      ),
+      "Promote this thread"
+    )
+    await user.click(within(quickChatDialog).getByRole("button", { name: "Send" }))
+    await screen.findByText("Promotion reply")
+    expect(navigateMock).not.toHaveBeenCalled()
+
+    await user.click(
+      within(quickChatDialog).getByRole("button", { name: "Open full chat" })
+    )
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith("/")
+    })
+    expect(setSelectedCharacterMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "303"
+      })
+    )
+    expect(tldwClientMock.deleteChat).not.toHaveBeenCalled()
   }, 30000)
 
   it("keeps AI field generation affordances wired in create mode", async () => {

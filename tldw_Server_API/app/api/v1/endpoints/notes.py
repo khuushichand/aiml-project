@@ -660,6 +660,60 @@ async def list_notes(
 
 
 @router.get(
+    "/trash",
+    response_model=NotesListResponse,
+    summary="List soft-deleted notes for the current user",
+    tags=["notes"]
+)
+async def list_deleted_notes(
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        limit: int = Query(100, ge=1, le=1000, description="Number of trashed notes to return"),
+        offset: int = Query(0, ge=0, description="Offset for pagination"),
+        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note"),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.list")),
+):
+    """Returns only soft-deleted notes with the same list payload shape as `/notes/`."""
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.list")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.list",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
+
+        logger.debug(
+            f"User (DB client_id: {db.client_id}) listing deleted notes: limit={limit}, offset={offset}")
+        notes_data = db.list_deleted_notes(limit=limit, offset=offset)
+        if include_keywords:
+            try:
+                _attach_keywords_bulk(db, notes_data)
+            except _NOTES_NONCRITICAL_EXCEPTIONS as outer_err:
+                logger.warning(f"Attaching keywords for deleted notes list failed: {outer_err}")
+
+        total = None
+        try:
+            total = db.count_deleted_notes()
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            total = None
+
+        return {
+            "notes": notes_data,
+            "items": notes_data,
+            "results": notes_data,
+            "count": len(notes_data),
+            "limit": limit,
+            "offset": offset,
+            "total": total,
+        }
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "deleted notes list")
+
+
+@router.get(
     "/search",
     response_model=list[NoteResponse],
     summary="Search notes for the current user",

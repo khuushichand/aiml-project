@@ -1,6 +1,6 @@
 import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { DictionariesManager } from "../Manager"
 
@@ -14,61 +14,73 @@ if (typeof window.ResizeObserver === "undefined") {
   ;(globalThis as any).ResizeObserver = ResizeObserverMock
 }
 
-const { useQueryMock, useMutationMock, useQueryClientMock, notificationMock, tldwClientMock } =
-  vi.hoisted(() => ({
-    useQueryMock: vi.fn(),
-    useMutationMock: vi.fn(),
-    useQueryClientMock: vi.fn(),
-    notificationMock: {
-      success: vi.fn(),
-      info: vi.fn(),
-      warning: vi.fn(),
-      error: vi.fn(),
-      open: vi.fn(),
-      destroy: vi.fn()
-    },
-    tldwClientMock: {
-      initialize: vi.fn(async () => undefined),
-      getDictionary: vi.fn(async () => ({
-        id: 301,
-        name: "Mobile Entries",
-        description: "Dictionary for mobile entry editing"
-      })),
-      listDictionaryEntries: vi.fn(async () => ({
-        entries: [
-          {
-            id: 11,
-            dictionary_id: 301,
-            pattern: "BP",
-            replacement: "blood pressure",
-            type: "literal",
-            probability: 1,
-            enabled: true,
-            case_sensitive: false,
-            group: "clinical",
-            max_replacements: 0
-          }
-        ]
-      })),
-      updateDictionaryEntry: vi.fn(async () => ({})),
-      deleteDictionaryEntry: vi.fn(async () => ({})),
-      reorderDictionaryEntries: vi.fn(async () => ({})),
-      bulkDictionaryEntries: vi.fn(async () => ({
-        success: true,
-        affected_count: 1,
-        failed_ids: []
-      })),
-      addDictionaryEntry: vi.fn(async () => ({})),
-      updateDictionary: vi.fn(async () => ({})),
-      deleteDictionary: vi.fn(async () => ({})),
-      importDictionaryJSON: vi.fn(async () => ({})),
-      importDictionaryMarkdown: vi.fn(async () => ({})),
-      exportDictionaryJSON: vi.fn(async () => ({ name: "Mobile Entries", entries: [] })),
-      exportDictionaryMarkdown: vi.fn(async () => ({ content: "# dictionary" })),
-      validateDictionary: vi.fn(async () => ({ errors: [], warnings: [] })),
-      listChats: vi.fn(async () => [])
-    }
-  }))
+const {
+  useQueryMock,
+  useMutationMock,
+  useQueryClientMock,
+  notificationMock,
+  tldwClientMock
+} = vi.hoisted(() => ({
+  useQueryMock: vi.fn(),
+  useMutationMock: vi.fn(),
+  useQueryClientMock: vi.fn(),
+  notificationMock: {
+    success: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    open: vi.fn(),
+    destroy: vi.fn()
+  },
+  tldwClientMock: {
+    initialize: vi.fn(async () => undefined),
+    getDictionary: vi.fn(async () => ({
+      id: 302,
+      name: "Mobile Preview",
+      description: "Dictionary for preview controls"
+    })),
+    listDictionaryEntries: vi.fn(async () => ({
+      entries: [
+        {
+          id: 12,
+          dictionary_id: 302,
+          pattern: "BP",
+          replacement: "blood pressure",
+          type: "literal",
+          probability: 1,
+          enabled: true,
+          case_sensitive: false,
+          group: "clinical",
+          max_replacements: 0
+        }
+      ]
+    })),
+    updateDictionaryEntry: vi.fn(async () => ({})),
+    deleteDictionaryEntry: vi.fn(async () => ({})),
+    reorderDictionaryEntries: vi.fn(async () => ({})),
+    bulkDictionaryEntries: vi.fn(async () => ({
+      success: true,
+      affected_count: 1,
+      failed_ids: []
+    })),
+    addDictionaryEntry: vi.fn(async () => ({})),
+    updateDictionary: vi.fn(async () => ({})),
+    deleteDictionary: vi.fn(async () => ({})),
+    importDictionaryJSON: vi.fn(async () => ({})),
+    importDictionaryMarkdown: vi.fn(async () => ({})),
+    exportDictionaryJSON: vi.fn(async () => ({ name: "Mobile Preview", entries: [] })),
+    exportDictionaryMarkdown: vi.fn(async () => ({ content: "# dictionary" })),
+    validateDictionary: vi.fn(async () => ({ errors: [], warnings: [] })),
+    processDictionaryText: vi.fn(async () => ({
+      original_text: "BP reading",
+      processed_text: "blood pressure reading",
+      replacements: 1,
+      iterations: 1,
+      entries_used: ["BP"]
+    })),
+    listChats: vi.fn(async () => [])
+  }
+}))
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: useQueryMock,
@@ -178,17 +190,7 @@ const makeUseMutationResult = (opts: any) => ({
   isPending: false
 })
 
-const getDrawerTitles = () =>
-  Array.from(document.querySelectorAll(".ant-drawer-title"))
-    .map((node) => node.textContent?.trim() || "")
-    .filter(Boolean)
-
-const getModalTitles = () =>
-  Array.from(document.querySelectorAll(".ant-modal-title"))
-    .map((node) => node.textContent?.trim() || "")
-    .filter(Boolean)
-
-describe("DictionariesManager responsive stage-2", () => {
+describe("DictionariesManager responsive stage-3", () => {
   beforeEach(() => {
     vi.clearAllMocks()
 
@@ -222,9 +224,9 @@ describe("DictionariesManager responsive stage-2", () => {
           status: "success",
           data: [
             {
-              id: 301,
-              name: "Mobile Entries",
-              description: "Compact test dictionary",
+              id: 302,
+              name: "Mobile Preview",
+              description: "Responsive preview controls",
               is_active: true,
               entry_count: 1
             }
@@ -236,9 +238,9 @@ describe("DictionariesManager responsive stage-2", () => {
         return makeUseQueryResult({
           status: "success",
           data: {
-            id: 301,
-            name: "Mobile Entries",
-            description: "Compact test dictionary"
+            id: 302,
+            name: "Mobile Preview",
+            description: "Responsive preview controls"
           }
         })
       }
@@ -248,8 +250,8 @@ describe("DictionariesManager responsive stage-2", () => {
           status: "success",
           data: [
             {
-              id: 11,
-              dictionary_id: 301,
+              id: 12,
+              dictionary_id: 302,
               pattern: "BP",
               replacement: "blood pressure",
               type: "literal",
@@ -274,20 +276,24 @@ describe("DictionariesManager responsive stage-2", () => {
     })
   })
 
-  it("uses a mobile drawer for entry editing instead of nested modal", async () => {
+  it("stacks preview settings controls on mobile widths", async () => {
     const user = userEvent.setup()
     render(<DictionariesManager />)
 
     await user.click(
-      screen.getByRole("button", { name: "Manage entries for Mobile Entries" })
+      screen.getByRole("button", { name: "Manage entries for Mobile Preview" })
     )
-    await screen.findByText("Manage Entries: Mobile Entries")
+    await screen.findByText("Manage Entries: Mobile Preview")
 
-    await user.click(screen.getByRole("button", { name: "Edit entry BP" }))
+    await user.click(screen.getByRole("button", { name: "Run preview" }))
+    await screen.findByText("Token budget")
 
-    await waitFor(() => {
-      expect(getDrawerTitles()).toContain("Edit Entry")
-    })
-    expect(getModalTitles()).not.toContain("Edit Entry")
+    const previewCaseControls = screen.getByTestId("dictionary-preview-case-controls")
+    expect(previewCaseControls).toHaveClass("flex-col")
+    expect(previewCaseControls).toHaveClass("sm:flex-row")
+
+    const previewControlsGrid = screen.getByTestId("dictionary-preview-controls-grid")
+    expect(previewControlsGrid).toHaveClass("grid-cols-1")
+    expect(previewControlsGrid).toHaveClass("md:grid-cols-2")
   }, 40000)
 })

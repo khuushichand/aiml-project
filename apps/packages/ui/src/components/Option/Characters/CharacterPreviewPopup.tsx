@@ -18,8 +18,8 @@ interface CharacterPreviewPopupProps {
   } | null
   open: boolean
   onClose: () => void
-  onChat: () => void
   onQuickChat: () => void
+  onChat: () => void
   onEdit: () => void
   onDuplicate: () => void
   onExport: (format?: 'json' | 'png') => void
@@ -37,8 +37,8 @@ export function CharacterPreviewPopup({
   character,
   open,
   onClose,
-  onChat,
   onQuickChat,
+  onChat,
   onEdit,
   onDuplicate,
   onExport,
