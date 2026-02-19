@@ -40,6 +40,7 @@ from tldw_Server_API.app.api.v1.endpoints import characters_endpoint as characte
 BASE_URL_V1 = "/api/v1"
 # Ensure this matches the prefix in your app.include_router for the characters API
 CHARACTERS_ENDPOINT_PREFIX = "/api/v1/characters"
+CHARACTER_FOLDER_TAG_PREFIX = "__tldw_folder_id:"
 
 
 # --- Helper Functions / Fixtures for Integration Tests ---
@@ -751,6 +752,107 @@ class TestCharacterAPIIntegration:
         assert isinstance(include_item.get("image_base64"), str)
         assert len(include_item["image_base64"]) > 0
         assert include_item.get("image_present") is True
+
+    def test_query_characters_reserved_folder_tag_filters_integration(self, client: TestClient):
+        folder_a = f"{CHARACTER_FOLDER_TAG_PREFIX}alpha_{uuid.uuid4().hex[:6]}"
+        folder_b = f"{CHARACTER_FOLDER_TAG_PREFIX}beta_{uuid.uuid4().hex[:6]}"
+        shared_tag = f"shared_{uuid.uuid4().hex[:6]}"
+
+        response_a = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(
+                name=f"FolderA_{uuid.uuid4().hex[:6]}",
+                tags=[shared_tag, folder_a],
+            ),
+        )
+        response_b = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(
+                name=f"FolderB_{uuid.uuid4().hex[:6]}",
+                tags=[folder_a],
+            ),
+        )
+        response_c = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(
+                name=f"FolderC_{uuid.uuid4().hex[:6]}",
+                tags=[shared_tag, folder_b],
+            ),
+        )
+        assert response_a.status_code == 201, response_a.text
+        assert response_b.status_code == 201, response_b.text
+        assert response_c.status_code == 201, response_c.text
+
+        folder_only_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/query",
+            params=[
+                ("page", 1),
+                ("page_size", 50),
+                ("tags", folder_a),
+            ],
+        )
+        assert folder_only_response.status_code == 200, folder_only_response.text
+        folder_only_ids = {
+            int(item["id"])
+            for item in folder_only_response.json()["items"]
+            if "id" in item
+        }
+        assert int(response_a.json()["id"]) in folder_only_ids
+        assert int(response_b.json()["id"]) in folder_only_ids
+        assert int(response_c.json()["id"]) not in folder_only_ids
+
+        match_all_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/query",
+            params=[
+                ("page", 1),
+                ("page_size", 50),
+                ("tags", folder_a),
+                ("tags", shared_tag),
+                ("match_all_tags", "true"),
+            ],
+        )
+        assert match_all_response.status_code == 200, match_all_response.text
+        match_all_ids = {
+            int(item["id"])
+            for item in match_all_response.json()["items"]
+            if "id" in item
+        }
+        assert int(response_a.json()["id"]) in match_all_ids
+        assert int(response_b.json()["id"]) not in match_all_ids
+        assert int(response_c.json()["id"]) not in match_all_ids
+
+    def test_create_and_update_enforce_single_folder_token_integration(self, client: TestClient):
+        folder_1 = f"{CHARACTER_FOLDER_TAG_PREFIX}f1_{uuid.uuid4().hex[:6]}"
+        folder_2 = f"{CHARACTER_FOLDER_TAG_PREFIX}f2_{uuid.uuid4().hex[:6]}"
+        folder_3 = f"{CHARACTER_FOLDER_TAG_PREFIX}f3_{uuid.uuid4().hex[:6]}"
+        folder_4 = f"{CHARACTER_FOLDER_TAG_PREFIX}f4_{uuid.uuid4().hex[:6]}"
+
+        created = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(
+                name=f"FolderNormalize_{uuid.uuid4().hex[:6]}",
+                tags=["alpha", folder_1, folder_2, "beta"],
+            ),
+        )
+        assert created.status_code == 201, created.text
+        created_data = created.json()
+        created_tags = created_data.get("tags") or []
+        folder_tags_after_create = [tag for tag in created_tags if str(tag).startswith(CHARACTER_FOLDER_TAG_PREFIX)]
+        assert folder_tags_after_create == [folder_2]
+        assert "alpha" in created_tags
+        assert "beta" in created_tags
+
+        update_response = client.put(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{created_data['id']}?expected_version={created_data['version']}",
+            json={"tags": ["gamma", folder_3, folder_4]},
+        )
+        assert update_response.status_code == 200, update_response.text
+        updated_data = update_response.json()
+        updated_tags = updated_data.get("tags") or []
+        folder_tags_after_update = [tag for tag in updated_tags if str(tag).startswith(CHARACTER_FOLDER_TAG_PREFIX)]
+        assert folder_tags_after_update == [folder_4]
+        assert "gamma" in updated_tags
+        assert folder_3 not in updated_tags
 
     def test_manage_character_tags_operations_integration(self, client: TestClient, test_db: CharactersRAGDB):
         char_a = client.post(

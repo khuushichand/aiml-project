@@ -23,6 +23,12 @@ For the first-time OpenAI account-linking flow (operator prerequisites + user wa
 
 - `Docs/User_Guides/OpenAI_OAuth_First_Time_Setup.md`
 
+## Anthropic + Claude Code/SDK Setup
+
+For Anthropic setup with Claude Code/Claude SDK and current support limits (API-key based today, no Anthropic OAuth BYOK flow yet), see:
+
+- `Docs/User_Guides/Anthropic_ClaudeCode_ClaudeSDK_Setup.md`
+
 ## Provider Allowlist
 
 BYOK respects an allowlist at both write time and runtime:

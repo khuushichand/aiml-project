@@ -114,6 +114,18 @@ if (!(Element.prototype as any).scrollIntoView) {
   ;(Element.prototype as any).scrollIntoView = vi.fn()
 }
 
+const createApkgFile = (
+  sizeBytes: number,
+  name = "deck.apkg"
+): File & { arrayBuffer: () => Promise<ArrayBuffer> } => {
+  const bytes = new Uint8Array(sizeBytes)
+  const file = new File([bytes], name, {
+    type: "application/apkg"
+  }) as File & { arrayBuffer: () => Promise<ArrayBuffer> }
+  file.arrayBuffer = async () => Uint8Array.from(bytes).buffer
+  return file
+}
+
 describe("ImportExportTab import result details", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -409,9 +421,7 @@ describe("ImportExportTab import result details", () => {
     )
     fireEvent.click(screen.getByText("APKG (Anki)"))
 
-    const file = new File([new Uint8Array([80, 75, 3, 4])], "deck.apkg", {
-      type: "application/apkg"
-    })
+    const file = createApkgFile(4, "deck.apkg")
     fireEvent.change(screen.getByTestId("flashcards-import-apkg-input"), {
       target: { files: [file] }
     })
@@ -427,6 +437,78 @@ describe("ImportExportTab import result details", () => {
     expect(apkgMutateAsync.mock.calls[0][0].bytes).toBeInstanceOf(Uint8Array)
     expect(delimitedMutateAsync).not.toHaveBeenCalled()
     expect(jsonMutateAsync).not.toHaveBeenCalled()
+  })
+
+  it("requires confirmation before importing large APKG files", async () => {
+    const apkgMutateAsync = vi.fn().mockResolvedValue({
+      imported: 2,
+      items: [
+        { uuid: "apkg-large-u1", deck_id: 1 },
+        { uuid: "apkg-large-u2", deck_id: 1 }
+      ],
+      errors: []
+    })
+    vi.mocked(useImportFlashcardsApkgMutation).mockReturnValue({
+      mutateAsync: apkgMutateAsync,
+      isPending: false
+    } as any)
+
+    render(<ImportExportTab />)
+
+    const formatSelect = screen.getByTestId("flashcards-import-format")
+    fireEvent.mouseDown(
+      formatSelect.querySelector(".ant-select-selector") ?? formatSelect
+    )
+    fireEvent.click(screen.getByText("APKG (Anki)"))
+
+    const largeFile = createApkgFile(6 * 1024 * 1024, "large.apkg")
+    fireEvent.change(screen.getByTestId("flashcards-import-apkg-input"), {
+      target: { files: [largeFile] }
+    })
+
+    fireEvent.click(screen.getByTestId("flashcards-import-button"))
+
+    expect(screen.getByText("Confirm large import")).toBeInTheDocument()
+    expect(screen.getByText("Summary: file large.apkg, size 6291456 bytes, estimated 1536 cards.")).toBeInTheDocument()
+    expect(apkgMutateAsync).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId("flashcards-import-confirm-large"))
+
+    await waitFor(() => {
+      expect(apkgMutateAsync).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it("imports small APKG files without confirmation", async () => {
+    const apkgMutateAsync = vi.fn().mockResolvedValue({
+      imported: 1,
+      items: [{ uuid: "apkg-small-u1", deck_id: 1 }],
+      errors: []
+    })
+    vi.mocked(useImportFlashcardsApkgMutation).mockReturnValue({
+      mutateAsync: apkgMutateAsync,
+      isPending: false
+    } as any)
+
+    render(<ImportExportTab />)
+
+    const formatSelect = screen.getByTestId("flashcards-import-format")
+    fireEvent.mouseDown(
+      formatSelect.querySelector(".ant-select-selector") ?? formatSelect
+    )
+    fireEvent.click(screen.getByText("APKG (Anki)"))
+
+    const smallFile = createApkgFile(4, "small.apkg")
+    fireEvent.change(screen.getByTestId("flashcards-import-apkg-input"), {
+      target: { files: [smallFile] }
+    })
+
+    fireEvent.click(screen.getByTestId("flashcards-import-button"))
+
+    await waitFor(() => {
+      expect(apkgMutateAsync).toHaveBeenCalledTimes(1)
+    })
+    expect(screen.queryByText("Confirm large import")).not.toBeInTheDocument()
   })
 
   it("maps export options and filters to export params", async () => {
@@ -603,6 +685,105 @@ describe("ImportExportTab import result details", () => {
         reverse: false
       })
     )
+    await waitFor(() => {
+      expect(screen.queryByDisplayValue("Edited front")).not.toBeInTheDocument()
+    })
+  })
+
+  it("retains only failed generated drafts after partial save", async () => {
+    const generateMutateAsync = vi.fn().mockResolvedValue({
+      flashcards: [
+        { front: "Card A", back: "Back A", tags: ["a"], model_type: "basic" },
+        { front: "Card B", back: "Back B", tags: ["b"], model_type: "basic" },
+        { front: "Card C", back: "Back C", tags: ["c"], model_type: "basic" }
+      ],
+      count: 3
+    })
+    const createCardMutateAsync = vi
+      .fn()
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error("save failed"))
+      .mockResolvedValueOnce({})
+
+    vi.mocked(useGenerateFlashcardsMutation).mockReturnValue({
+      mutateAsync: generateMutateAsync,
+      isPending: false
+    } as any)
+    vi.mocked(useCreateFlashcardMutation).mockReturnValue({
+      mutateAsync: createCardMutateAsync,
+      isPending: false
+    } as any)
+
+    render(<ImportExportTab />)
+
+    fireEvent.change(screen.getByTestId("flashcards-generate-text"), {
+      target: { value: "Interleaved save case" }
+    })
+    fireEvent.click(screen.getByTestId("flashcards-generate-button"))
+
+    await waitFor(() => {
+      expect(generateMutateAsync).toHaveBeenCalledTimes(1)
+    })
+    expect(screen.getByDisplayValue("Card A")).toBeInTheDocument()
+    expect(screen.getByDisplayValue("Card B")).toBeInTheDocument()
+    expect(screen.getByDisplayValue("Card C")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("flashcards-generate-save-button"))
+
+    await waitFor(() => {
+      expect(createCardMutateAsync).toHaveBeenCalledTimes(3)
+    })
+    expect(messageSpies.warning).toHaveBeenCalledWith("Saved 2 cards; 1 failed.")
+
+    await waitFor(() => {
+      expect(screen.queryByDisplayValue("Card A")).not.toBeInTheDocument()
+      expect(screen.getByDisplayValue("Card B")).toBeInTheDocument()
+      expect(screen.queryByDisplayValue("Card C")).not.toBeInTheDocument()
+    })
+  })
+
+  it("keeps generated drafts when all generated-card saves fail", async () => {
+    const generateMutateAsync = vi.fn().mockResolvedValue({
+      flashcards: [
+        { front: "Fail A", back: "Back A", tags: ["a"], model_type: "basic" },
+        { front: "Fail B", back: "Back B", tags: ["b"], model_type: "basic" }
+      ],
+      count: 2
+    })
+    const createCardMutateAsync = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("save failed"))
+      .mockRejectedValueOnce(new Error("save failed"))
+
+    vi.mocked(useGenerateFlashcardsMutation).mockReturnValue({
+      mutateAsync: generateMutateAsync,
+      isPending: false
+    } as any)
+    vi.mocked(useCreateFlashcardMutation).mockReturnValue({
+      mutateAsync: createCardMutateAsync,
+      isPending: false
+    } as any)
+
+    render(<ImportExportTab />)
+
+    fireEvent.change(screen.getByTestId("flashcards-generate-text"), {
+      target: { value: "All fail case" }
+    })
+    fireEvent.click(screen.getByTestId("flashcards-generate-button"))
+
+    await waitFor(() => {
+      expect(generateMutateAsync).toHaveBeenCalledTimes(1)
+    })
+
+    fireEvent.click(screen.getByTestId("flashcards-generate-save-button"))
+
+    await waitFor(() => {
+      expect(createCardMutateAsync).toHaveBeenCalledTimes(2)
+    })
+    expect(messageSpies.error).toHaveBeenCalledWith("Failed to save generated cards.")
+
+    expect(screen.getByDisplayValue("Fail A")).toBeInTheDocument()
+    expect(screen.getByDisplayValue("Fail B")).toBeInTheDocument()
   })
 
   it("attaches source attribution when launched from deep-link intent", async () => {

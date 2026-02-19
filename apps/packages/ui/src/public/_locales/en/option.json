@@ -2762,6 +2762,39 @@
   "flashcards_reviewedToday": {
     "message": "{{count}} cards reviewed this session"
   },
+  "flashcards_retentionRate": {
+    "message": "Retention rate"
+  },
+  "flashcards_lapseRate": {
+    "message": "Lapse rate"
+  },
+  "flashcards_averageAnswerTime": {
+    "message": "Avg answer time"
+  },
+  "flashcards_studyStreak": {
+    "message": "Study streak"
+  },
+  "flashcards_studyStreakDays": {
+    "message": "{{count}} days"
+  },
+  "flashcards_deckProgress": {
+    "message": "Deck progress"
+  },
+  "flashcards_deckTotal": {
+    "message": "Total: {{count}}"
+  },
+  "flashcards_deckNew": {
+    "message": "New: {{count}}"
+  },
+  "flashcards_deckLearning": {
+    "message": "Learning: {{count}}"
+  },
+  "flashcards_deckDue": {
+    "message": "Due: {{count}}"
+  },
+  "flashcards_deckMature": {
+    "message": "Mature: {{count}}"
+  },
   "flashcards_createFirstCard": {
     "message": "Create a flashcard"
   },

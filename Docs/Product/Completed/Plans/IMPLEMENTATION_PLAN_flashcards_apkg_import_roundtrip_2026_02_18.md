@@ -23,3 +23,10 @@
 **Success Criteria**: Automated tests verify model/deck/tag/scheduling fidelity at acceptable parity level.
 **Tests**: Backend round-trip tests using exporter output as importer input.
 **Status**: Complete
+
+## Post-Completion Remediation (2026-02-19)
+
+- Follow-up plan: `Docs/Plans/IMPLEMENTATION_PLAN_flashcards_findings_remediation_2026_02_19.md` (Stage 4).
+- APKG import UX now includes large-import confirmation parity with other import modes:
+  - APKG large-file/estimated-item preflight confirmation before mutation execution.
+  - APKG-specific confirmation summary copy showing file name, file size, and estimated item count.

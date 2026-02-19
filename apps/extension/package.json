@@ -24,7 +24,7 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:sequential": "playwright test tests/e2e/real-server-workflows.spec.ts --workers=1",
     "test:e2e:watchlists": "playwright test tests/e2e/watchlists.spec.ts --reporter=line",
-    "test:e2e:watchlists:strict": "mkdir -p test-results && playwright test tests/e2e/watchlists.spec.ts --reporter=json > test-results/watchlists-e2e-report.json && node scripts/assert-playwright-no-skips.mjs test-results/watchlists-e2e-report.json",
+    "test:e2e:watchlists:strict": "rm -f .watchlists-e2e-report.json && PLAYWRIGHT_JSON_OUTPUT_NAME=.watchlists-e2e-report.json playwright test tests/e2e/watchlists.spec.ts --reporter=json && node scripts/assert-playwright-no-skips.mjs .watchlists-e2e-report.json && mkdir -p test-results && cp .watchlists-e2e-report.json test-results/watchlists-e2e-report.json",
     "test:e2e:perf": "playwright test tests/e2e/performance-*.spec.ts",
     "perf:bundle": "node scripts/report-bundle-size.mjs",
     "build:analyze": "cross-env ANALYZE=true TARGET=chrome wxt build",

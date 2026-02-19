@@ -592,6 +592,38 @@ describe("CharactersManager first-use onboarding", () => {
     expect(notificationMock.error).not.toHaveBeenCalled()
   })
 
+  it("degrades to an empty list with notification when query and legacy fallbacks both fail", async () => {
+    const routeConflictError = Object.assign(
+      new Error(
+        "Input should be a valid integer, unable to parse string as an integer (path.character_id)"
+      ),
+      { status: 422 }
+    )
+    tldwClientMock.listCharactersPage.mockRejectedValueOnce(routeConflictError)
+    tldwClientMock.listCharacters.mockRejectedValueOnce(
+      new Error("Legacy character listing unavailable")
+    )
+    tldwClientMock.listAllCharacters.mockRejectedValueOnce(
+      new Error("Legacy all-characters listing unavailable")
+    )
+
+    render(<CharactersManager />)
+
+    const listQuery = getListCharactersQueryOptions()
+    await expect(listQuery.queryFn()).resolves.toMatchObject({
+      items: [],
+      total: 0,
+      page: 1,
+      page_size: 10,
+      has_more: false
+    })
+    expect(notificationMock.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Error"
+      })
+    )
+  })
+
   it("pins character list query throwOnError to false", async () => {
     render(<CharactersManager />)
     const listQuery = getListCharactersQueryOptions()
@@ -1277,6 +1309,205 @@ describe("CharactersManager first-use onboarding", () => {
     await user.click(screen.getByRole("button", { name: "Clear filters" }))
 
     expect(await screen.findByText("No Chats")).toBeInTheDocument()
+  }, 30000)
+
+  it("serializes folder filter into reserved folder tag query params and clears it", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "folder-1",
+        name: "Folder Candidate",
+        system_prompt: "Prompt text",
+        version: 1
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "tldw:characterFolders") {
+        return makeUseQueryResult({
+          data: [{ id: 12, name: "Research" }],
+          status: "success"
+        })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    fireEvent.mouseDown(screen.getByLabelText("Filter characters by folder"))
+    await user.click(await screen.findByText("Research"))
+
+    await waitFor(() => {
+      const latestListQuery = getLatestListCharactersQueryOptions()
+      expect(latestListQuery.queryKey[1]).toMatchObject({
+        tags: ["__tldw_folder_id:12"],
+        match_all_tags: true
+      })
+    })
+
+    await user.click(screen.getByRole("button", { name: "Clear filters" }))
+
+    await waitFor(() => {
+      const latestListQuery = getLatestListCharactersQueryOptions()
+      expect(latestListQuery.queryKey[1].tags).toBeUndefined()
+      expect(latestListQuery.queryKey[1].match_all_tags).toBeUndefined()
+    })
+  }, 30000)
+
+  it("hides reserved folder tokens from tag table and tag-manager surfaces", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "folder-token-1",
+        name: "Folder Tagged",
+        tags: ["visible", "__tldw_folder_id:12"],
+        system_prompt: "Prompt text",
+        version: 2
+      }
+    ]
+
+    tldwClientMock.listCharactersPage.mockResolvedValue({
+      items: records,
+      total: records.length,
+      page: 1,
+      page_size: 100,
+      has_more: false
+    })
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    expect(await screen.findByText("visible")).toBeInTheDocument()
+    expect(screen.queryByText("__tldw_folder_id:12")).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Manage tags" }))
+    const tagDialog = await screen.findByRole("dialog")
+    expect(within(tagDialog).getByText("visible")).toBeInTheDocument()
+    expect(
+      within(tagDialog).queryByText("__tldw_folder_id:12")
+    ).not.toBeInTheDocument()
+  }, 30000)
+
+  it("replaces existing folder token when reassigning folder in edit mode", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "folder-edit-1",
+      name: "Folder Reassign",
+      system_prompt: "Prompt text",
+      description: "Description",
+      tags: ["alpha", "__tldw_folder_id:2"],
+      version: 5
+    }
+
+    useMutationMock.mockImplementation((opts: any) => ({
+      mutate: async (variables: any, callbacks?: any) => {
+        try {
+          const result = await opts?.mutationFn?.(variables)
+          opts?.onSuccess?.(result, variables, undefined)
+          callbacks?.onSuccess?.(result)
+        } catch (error) {
+          opts?.onError?.(error, variables, undefined)
+          callbacks?.onError?.(error)
+        }
+      },
+      mutateAsync: async (variables: any) => {
+        const result = await opts?.mutationFn?.(variables)
+        opts?.onSuccess?.(result, variables, undefined)
+        return result
+      },
+      isPending: false
+    }))
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "tldw:characterFolders") {
+        return makeUseQueryResult({
+          data: [
+            { id: 2, name: "Old Folder" },
+            { id: 9, name: "New Folder" }
+          ],
+          status: "success"
+        })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("button", { name: /Edit character/i }))
+
+    const saveButton = await waitFor(() => {
+      const candidate = screen
+        .getAllByRole("button", { name: "Save changes" })
+        .find((button) => button.getAttribute("type") === "submit")
+      expect(candidate).toBeDefined()
+      return candidate as HTMLElement
+    })
+    const editFormElement = saveButton.closest("form")
+    expect(editFormElement).not.toBeNull()
+    const editScope = within(editFormElement as HTMLElement)
+
+    await user.click(editScope.getByRole("button", { name: "Show advanced fields" }))
+    await user.click(editScope.getByRole("button", { name: "Metadata" }))
+
+    const folderField = editScope
+      .getByText("Folder")
+      .closest(".ant-form-item")
+    expect(folderField).not.toBeNull()
+    fireEvent.mouseDown(within(folderField as HTMLElement).getByRole("combobox"))
+    await user.click(await screen.findByText("New Folder"))
+    await user.click(saveButton)
+
+    await waitFor(() => {
+      expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
+        "folder-edit-1",
+        expect.objectContaining({
+          tags: ["alpha", "__tldw_folder_id:9"]
+        }),
+        5
+      )
+    })
   }, 30000)
 
   it("filters to favorited characters when favorites-only is enabled", async () => {

@@ -1,9 +1,0 @@
-prune tldw_Server_API/tests
-prune tldw_Server_API/models
-prune tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/models
-exclude tldw_Server_API/Config_Files/session_encryption.key
-exclude tldw_Server_API/Config_Files/session_encryption.key.lock
-global-exclude config.txt.backup_*
-
-global-exclude __pycache__/*
-global-exclude *.py[cod]

@@ -76,6 +76,7 @@ Top navigation groups features into tabs. Notable areas include:
   - Multi-user only: store per-user provider keys and optional org/team shared keys.
   - See `Docs/User_Guides/BYOK_User_Guide.md` for setup, endpoints, and policies.
   - OpenAI OAuth first-time setup: `Docs/User_Guides/OpenAI_OAuth_First_Time_Setup.md`.
+  - Anthropic + Claude Code/Claude SDK setup: `Docs/User_Guides/Anthropic_ClaudeCode_ClaudeSDK_Setup.md`.
 
 ## Tips
 

@@ -24,7 +24,7 @@ Components:
 - Batch import lacks explicit drag-drop flow and granular per-file runtime status.
 - Server-side query supports date-range/last-used dimensions not fully surfaced in UI.
 - UI claims 30-day restore window without clear backend retention enforcement.
-- Stage 10 C-32 remains favorites-focused; collection/folder path unresolved.
+- Stage 10 C-32 organization scope resolved with shipped single-folder support (reserved token model, API filtering, UI assignment/filtering).
 - Character test reliability differs between frontend and UI Vitest environments.
 
 ## Issue Plan Files
@@ -151,11 +151,23 @@ Components:
 **Tests**:
 - If implemented: backend + frontend tests for collection assignment/filtering.
 - If deferred: documentation consistency checklist and status corrections.
-**Status**: In Progress
+**Status**: Complete
 **Update (2026-02-19)**:
 - Decision recorded: ship **single-folder** character organization in v1 (no multi-folder).
 - Selected implementation path: reuse existing folder/keyword primitives and store one reserved folder token in character metadata/tags (no character schema migration in v1).
 - Detailed execution contract documented in `Docs/Plans/IMPLEMENTATION_PLAN_characters_gap_06_scope_resolution_c32_2026_02_19.md`.
+- Frontend implementation started in `apps/packages/ui/src/components/Option/Characters/Manager.tsx`:
+  - Added folder assign/reassign controls in create/edit metadata.
+  - Added folder filter mapped to reserved token query (`__tldw_folder_id:<collection_id>`).
+  - Added token-hiding behavior across tag-centric UI surfaces.
+- Added frontend integration coverage in `Manager.first-use.test.tsx` for folder filter/query mapping, token hiding, and single-folder reassignment semantics.
+- Verified local UI suite pass: `bunx vitest run src/components/Option/Characters/__tests__/Manager.first-use.test.tsx` (78 passing).
+- Enforced backend single-folder semantics in `tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py` so create/update paths persist at most one reserved folder token.
+- Added backend integration tests in `tldw_Server_API/tests/Characters/test_characters_endpoint.py` for reserved-folder query filtering and single-folder create/update normalization.
+- Verified backend tests pass with startup privilege metadata validation disabled in test context:
+  - `PRIVILEGE_METADATA_VALIDATE_ON_STARTUP=0 python -m pytest -q tldw_Server_API/tests/Characters/test_characters_endpoint.py -k "reserved_folder_tag_filters_integration or create_and_update_enforce_single_folder_token_integration"`
+- Updated world-book lorebook debug handoff links from deprecated `/playground` to `/chat` in `apps/packages/ui/src/components/Option/WorldBooks/Manager.tsx`, with assertion updates in `WorldBooksManager.crossFeatureStage3.test.tsx`.
+- Hardened Characters manager query error handling in `apps/packages/ui/src/components/Option/Characters/Manager.tsx` so unrecoverable list-query failures degrade to empty-state + notification instead of route-level crashes; added regression coverage in `Manager.first-use.test.tsx`.
 
 ## Stage 7: Unify Character Test Harness Across Frontend and UI Packages
 **Goal**: Make character test results consistent regardless of where tests are executed from.
@@ -187,4 +199,4 @@ Components:
 ## Completion Notes
 
 - This plan is focused on closing plan-vs-implementation mismatches identified during the 2026-02-19 audit.
-- Stage 1, Stage 2, Stage 3, Stage 4, Stage 5, and Stage 7 are complete; Stage 6 remains pending.
+- Stage 1, Stage 2, Stage 3, Stage 4, Stage 5, Stage 6, and Stage 7 are complete.

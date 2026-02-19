@@ -157,12 +157,53 @@ describe("ReviewTab analytics summary", () => {
     expect(screen.getByText("Reviewed today")).toBeInTheDocument()
     expect(screen.getByText("12")).toBeInTheDocument()
     expect(screen.getByText("87.5%")).toBeInTheDocument()
+    expect(screen.getByText("Lapse rate")).toBeInTheDocument()
+    expect(screen.getByText("12.5%")).toBeInTheDocument()
     expect(screen.getByText("1.9s")).toBeInTheDocument()
     expect(screen.getByText("6 days")).toBeInTheDocument()
     expect(screen.getByText("Deck progress")).toBeInTheDocument()
     expect(screen.getAllByText("Biology").length).toBeGreaterThan(0)
     expect(screen.getByText("Due: 6")).toBeInTheDocument()
     expect(screen.getByText("Mature: 22")).toBeInTheDocument()
+  })
+
+  it("renders a fallback for missing lapse rate", () => {
+    vi.mocked(useReviewAnalyticsSummaryQuery).mockReturnValue({
+      data: {
+        reviewed_today: 4,
+        retention_rate_today: 75,
+        lapse_rate_today: null,
+        avg_answer_time_ms_today: null,
+        study_streak_days: 2,
+        generated_at: "2026-02-18T12:00:00.000Z",
+        decks: [
+          {
+            deck_id: 9,
+            deck_name: "Biology",
+            total: 10,
+            new: 2,
+            learning: 2,
+            due: 2,
+            mature: 4
+          }
+        ]
+      },
+      isLoading: false
+    } as any)
+
+    render(
+      <ReviewTab
+        onNavigateToCreate={() => {}}
+        onNavigateToImport={() => {}}
+        reviewDeckId={9}
+        onReviewDeckChange={() => {}}
+        isActive
+      />
+    )
+
+    const lapseRateLabel = screen.getByText("Lapse rate")
+    expect(lapseRateLabel.parentElement).not.toBeNull()
+    expect(lapseRateLabel.parentElement).toHaveTextContent("—")
   })
 
   it("shows plain-language rating interval guidance in the review action area", () => {

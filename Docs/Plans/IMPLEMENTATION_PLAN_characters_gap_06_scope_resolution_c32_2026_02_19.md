@@ -31,7 +31,16 @@ Stage 10 closure is ambiguous because favorites are implemented while collection
 - Frontend tests for assign/clear folder and folder filtering.
 - Backend integration tests for query/filter behavior using folder token.
 - Regression tests ensuring reserved token does not leak into user-visible tag chips.
-**Status**: Not Started
+**Status**: Complete
+**Update (2026-02-19)**:
+- Implemented frontend single-folder contract in `Characters/Manager.tsx` using reserved token `__tldw_folder_id:<collection_id>`.
+- Added folder assignment control in character metadata (create/edit), one-folder replacement semantics, and folder filter in list controls.
+- Added token-hiding guards so reserved folder tokens do not appear in tag table chips, tag manager, or gallery preview tags.
+- Added/updated first-use integration coverage in `Manager.first-use.test.tsx` for folder filter serialization, reserved-token hiding, and folder reassignment replacement behavior.
+- Verified `Manager.first-use.test.tsx` passes locally (78 tests).
+- Enforced backend single-folder semantics in `ChaChaNotes_DB` tag write paths (`add_character_card` and `update_character_card`) so only one reserved folder token is persisted per character.
+- Added backend integration coverage in `tldw_Server_API/tests/Characters/test_characters_endpoint.py` for reserved-folder token query filtering and create/update single-folder normalization.
+- Verified targeted backend integration tests pass with startup privilege metadata validation disabled in test context (`PRIVILEGE_METADATA_VALIDATE_ON_STARTUP=0`).
 **Implementation Contract (v1)**:
 - Represent folder membership as one reserved token in character tags.
 - Enforce one-folder rule by replacing any prior folder token on save/update.
@@ -55,4 +64,8 @@ Stage 10 closure is ambiguous because favorites are implemented while collection
 **Tests**:
 - Cross-plan status audit.
 - Release note checklist review.
-**Status**: Not Started
+**Status**: Complete
+**Update (2026-02-19)**:
+- Completion criteria now map directly to shipped Stage 2A outcomes (single-folder assignment, folder filtering, and reserved-token hiding).
+- Cross-plan status audit completed: C-32 remediation plan Stage 6 now marked complete with backend+frontend implementation references.
+- Final closure artifacts referenced in this plan and in `IMPLEMENTATION_PLAN_characters_gap_remediation_2026_02_19.md`.

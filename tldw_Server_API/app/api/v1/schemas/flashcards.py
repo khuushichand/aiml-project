@@ -46,6 +46,10 @@ class Flashcard(BaseModel):
     is_cloze: bool
     tags_json: Optional[str] = None
     tags: list[str] = Field(default_factory=list)
+    source_ref_type: Optional[Literal['media', 'message', 'note', 'manual']] = None
+    source_ref_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    message_id: Optional[str] = None
     ef: float
     interval_days: int
     repetitions: int

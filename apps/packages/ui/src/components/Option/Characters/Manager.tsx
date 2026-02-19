@@ -67,6 +67,7 @@ import type { GeneratedCharacter, CharacterField } from "@/services/character-ge
 import { useStorage } from "@plasmohq/storage/hook"
 import { validateAndCreateImageDataUrl } from "@/utils/image-utils"
 import { exportCharacterToJSON, exportCharacterToPNG, exportCharactersToJSON } from "@/utils/character-export"
+import { fetchFolders } from "@/services/folder-api"
 import { useTranslation } from "react-i18next"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { useNavigate } from "react-router-dom"
@@ -114,6 +115,12 @@ const DEFAULT_ADVANCED_SECTION_STATE: AdvancedSectionState = {
   generationSettings: false,
   metadata: false
 }
+
+const CHARACTER_FOLDER_TOKEN_PREFIX = "__tldw_folder_id:"
+const CHARACTER_FOLDER_TOKEN_PREFIXES = [
+  CHARACTER_FOLDER_TOKEN_PREFIX,
+  "__tldw_folder:"
+] as const
 
 const normalizePageSize = (value: unknown): number => {
   const parsed =
@@ -207,6 +214,11 @@ type CharacterWorldBookOption = {
   id: number
   name: string
   enabled?: boolean
+}
+
+type CharacterFolderOption = {
+  id: number
+  name: string
 }
 
 const EMPTY_CHARACTER_WORLD_BOOK_DATA: {
@@ -309,6 +321,65 @@ const normalizeImportTags = (value: unknown): string[] => {
       .filter((tag) => tag.length > 0)
   }
   return []
+}
+
+const normalizeCharacterFolderId = (value: unknown): string | undefined => {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return String(Math.trunc(value))
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return undefined
+    const numeric = Number(trimmed)
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return String(Math.trunc(numeric))
+    }
+    return trimmed
+  }
+  return undefined
+}
+
+const parseCharacterFolderIdFromToken = (token: unknown): string | undefined => {
+  if (typeof token !== "string") return undefined
+  const normalized = token.trim()
+  if (!normalized) return undefined
+  for (const prefix of CHARACTER_FOLDER_TOKEN_PREFIXES) {
+    if (!normalized.startsWith(prefix)) continue
+    const rawFolderId = normalized.slice(prefix.length).trim()
+    if (!rawFolderId) return undefined
+    return normalizeCharacterFolderId(rawFolderId)
+  }
+  return undefined
+}
+
+const isCharacterFolderToken = (tag: unknown): boolean =>
+  typeof parseCharacterFolderIdFromToken(tag) === "string"
+
+const getCharacterVisibleTags = (tags: unknown): string[] =>
+  parseCharacterTags(tags).filter((tag) => !isCharacterFolderToken(tag))
+
+const getCharacterFolderIdFromTags = (tags: unknown): string | undefined => {
+  const parsedTags = parseCharacterTags(tags)
+  for (const tag of parsedTags) {
+    const folderId = parseCharacterFolderIdFromToken(tag)
+    if (folderId) return folderId
+  }
+  return undefined
+}
+
+const buildCharacterFolderToken = (folderId: unknown): string | undefined => {
+  const normalizedFolderId = normalizeCharacterFolderId(folderId)
+  if (!normalizedFolderId) return undefined
+  return `${CHARACTER_FOLDER_TOKEN_PREFIX}${normalizedFolderId}`
+}
+
+const applyCharacterFolderToTags = (
+  tags: unknown,
+  folderId: unknown
+): string[] => {
+  const visibleTags = getCharacterVisibleTags(tags)
+  const nextFolderToken = buildCharacterFolderToken(folderId)
+  return nextFolderToken ? [...visibleTags, nextFolderToken] : visibleTags
 }
 
 const countPopulatedImportFields = (record: Record<string, unknown>): number =>
@@ -959,7 +1030,7 @@ const CHARACTER_COMPARISON_FIELDS: CharacterComparisonFieldDefinition[] = [
   {
     field: "tags",
     label: "Tags",
-    getValue: (record) => parseCharacterTags(record?.tags).sort()
+    getValue: (record) => getCharacterVisibleTags(record?.tags).sort()
   },
   {
     field: "prompt_preset",
@@ -1390,6 +1461,10 @@ const hasAdvancedData = (record: any, extensionsValue: string): boolean => {
 }
 
 const buildCharacterPayload = (values: any): Record<string, any> => {
+  const tagsWithFolderAssignment = applyCharacterFolderToTags(
+    values.tags,
+    values.folder_id
+  )
   const payload: Record<string, any> = {
     name: values.name,
     description: values.description,
@@ -1400,9 +1475,7 @@ const buildCharacterPayload = (values: any): Record<string, any> => {
     first_message: values.greeting || values.first_message,
     message_example: values.message_example,
     creator_notes: values.creator_notes,
-    tags: Array.isArray(values.tags)
-      ? values.tags.filter((tag: string) => tag && tag.trim().length > 0)
-      : values.tags,
+    tags: tagsWithFolderAssignment,
     alternate_greetings: Array.isArray(values.alternate_greetings)
       ? values.alternate_greetings.filter((g: string) => g && g.trim().length > 0)
       : values.alternate_greetings,
@@ -1529,6 +1602,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const searchInputRef = React.useRef<InputRef>(null)
   const [searchTerm, setSearchTerm] = React.useState("")
   const [filterTags, setFilterTags] = React.useState<string[]>([])
+  const [folderFilterId, setFolderFilterId] = React.useState<string | undefined>(undefined)
   const [matchAllTags, setMatchAllTags] = React.useState(false)
   const [creatorFilter, setCreatorFilter] = React.useState<string | undefined>(undefined)
   const [createdFromDate, setCreatedFromDate] = React.useState("")
@@ -1750,6 +1824,49 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     () => resolveCharacterSelectionId(defaultCharacterSelection),
     [defaultCharacterSelection]
   )
+  const { data: characterFolderOptions = [], isFetching: characterFolderOptionsLoading } =
+    useQuery<CharacterFolderOption[]>({
+      queryKey: ["tldw:characterFolders"],
+      queryFn: async () => {
+        const response = await fetchFolders({ timeoutMs: 5000 })
+        if (!response.ok || !Array.isArray(response.data)) {
+          return []
+        }
+        return response.data
+          .map((folder: any) => {
+            const folderId = Number(folder?.id)
+            const folderName = String(folder?.name || "").trim()
+            if (!Number.isFinite(folderId) || folderId <= 0 || !folderName) {
+              return null
+            }
+            if (folder?.deleted) {
+              return null
+            }
+            return {
+              id: Math.trunc(folderId),
+              name: folderName
+            }
+          })
+          .filter((folder): folder is CharacterFolderOption => folder !== null)
+          .sort((left, right) => left.name.localeCompare(right.name))
+      },
+      staleTime: 60 * 1000,
+      throwOnError: false
+    })
+  const characterFolderOptionsById = React.useMemo(
+    () =>
+      new Map(
+        characterFolderOptions.map((folder) => [String(folder.id), folder.name])
+      ),
+    [characterFolderOptions]
+  )
+  const selectedFolderFilterLabel = React.useMemo(
+    () =>
+      folderFilterId
+        ? characterFolderOptionsById.get(folderFilterId) || folderFilterId
+        : undefined,
+    [characterFolderOptionsById, folderFilterId]
+  )
 
   const [generationPreviewData, setGenerationPreviewData] = React.useState<GeneratedCharacter | null>(null)
   const [generationPreviewField, setGenerationPreviewField] = React.useState<string | null>(null)
@@ -1824,7 +1941,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         description: template.description,
         system_prompt: template.system_prompt,
         greeting: template.greeting,
-        tags: template.tags
+        tags: template.tags,
+        folder_id: undefined
       })
       setCreateFormDirty(true)
       setShowTemplates(false)
@@ -2570,6 +2688,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               }
             )}
             options={tagOptionsWithCounts}
+            onChange={(value) => {
+              form.setFieldValue("tags", getCharacterVisibleTags(value))
+              markModeDirty(mode)
+            }}
             filterOption={(input, option) =>
               option?.value?.toString().toLowerCase().includes(input.toLowerCase()) ?? false
             }
@@ -2865,6 +2987,33 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   defaultValue: "Metadata"
                 }),
                 <>
+                  <Form.Item
+                    name="folder_id"
+                    label={t("settings:manageCharacters.folder.label", {
+                      defaultValue: "Folder"
+                    })}
+                    help={t("settings:manageCharacters.folder.help", {
+                      defaultValue:
+                        "Assign a single folder for organization. This does not change your visible tags."
+                    })}
+                  >
+                    <Select
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder={t(
+                        "settings:manageCharacters.folder.placeholder",
+                        {
+                          defaultValue: "Select folder"
+                        }
+                      )}
+                      options={characterFolderOptions.map((folder) => ({
+                        value: String(folder.id),
+                        label: folder.name
+                      }))}
+                      loading={characterFolderOptionsLoading}
+                    />
+                  </Form.Item>
                   <Form.Item
                     name="creator"
                     label={t("settings:manageCharacters.form.creator.label", {
@@ -3214,6 +3363,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     creatorFilter,
     debouncedSearchTerm,
     filterTags,
+    folderFilterId,
     hasConversationsOnly,
     matchAllTags
   ])
@@ -3697,6 +3847,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const hasFilters =
     searchTerm.trim().length > 0 ||
     (filterTags && filterTags.length > 0) ||
+    !!folderFilterId ||
     !!creatorFilter ||
     createdFromDate.trim().length > 0 ||
     createdToDate.trim().length > 0 ||
@@ -3840,6 +3991,24 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     () => toIsoBoundaryFromDateInput(updatedToDate, "end"),
     [updatedToDate]
   )
+  const folderFilterToken = React.useMemo(
+    () => buildCharacterFolderToken(folderFilterId),
+    [folderFilterId]
+  )
+  const effectiveFilterTags = React.useMemo(() => {
+    const merged = [...filterTags]
+    if (folderFilterToken) {
+      merged.push(folderFilterToken)
+    }
+    return Array.from(
+      new Set(
+        merged
+          .map((tag) => String(tag).trim())
+          .filter((tag) => tag.length > 0)
+      )
+    )
+  }, [filterTags, folderFilterToken])
+  const effectiveMatchAllTags = matchAllTags || Boolean(folderFilterToken)
   const useServerQuery =
     isServerQueryRolloutEnabled ||
     characterListScope === "deleted" ||
@@ -3849,8 +4018,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       page: currentPage,
       page_size: pageSize,
       query: debouncedSearchTerm.trim() || undefined,
-      tags: filterTags.length > 0 ? filterTags : undefined,
-      match_all_tags: filterTags.length > 0 ? matchAllTags : undefined,
+      tags: effectiveFilterTags.length > 0 ? effectiveFilterTags : undefined,
+      match_all_tags:
+        effectiveFilterTags.length > 0 ? effectiveMatchAllTags : undefined,
       creator: creatorFilter || undefined,
       has_conversations: hasConversationsOnly ? true : undefined,
       favorite_only: favoritesOnly ? true : undefined,
@@ -3871,10 +4041,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       creatorFilter,
       currentPage,
       debouncedSearchTerm,
-      filterTags,
+      effectiveFilterTags,
+      effectiveMatchAllTags,
       favoritesOnly,
       hasConversationsOnly,
-      matchAllTags,
       pageSize,
       serverSortBy,
       serverSortOrder,
@@ -3897,7 +4067,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     queryFn: async () => {
       const hasLegacyClientFilters =
         Boolean(debouncedSearchTerm.trim()) ||
-        filterTags.length > 0 ||
+        effectiveFilterTags.length > 0 ||
         Boolean(creatorFilter) ||
         hasConversationsOnly ||
         favoritesOnly
@@ -3907,8 +4077,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           limit: pageSize,
           offset,
           query: debouncedSearchTerm.trim() || undefined,
-          tags: filterTags.length > 0 ? filterTags : undefined,
-          match_all_tags: filterTags.length > 0 ? matchAllTags : undefined,
+          tags: effectiveFilterTags.length > 0 ? effectiveFilterTags : undefined,
+          match_all_tags:
+            effectiveFilterTags.length > 0 ? effectiveMatchAllTags : undefined,
           creator: creatorFilter || undefined,
           has_conversations: hasConversationsOnly ? true : undefined,
           favorite_only: favoritesOnly ? true : undefined,
@@ -3964,8 +4135,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         })
         const filtered = filterCharactersForWorkspace(allCharacters, {
           query: debouncedSearchTerm.trim() || undefined,
-          tags: filterTags,
-          matchAllTags,
+          tags: effectiveFilterTags,
+          matchAllTags: effectiveMatchAllTags,
           creator: creatorFilter
         })
         const withConversationFilter = hasConversationsOnly
@@ -4012,6 +4183,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         }
         return await loadLegacyCharacterList()
       }
+      const buildEmptyCharacterQueryResponse = () => ({
+        items: [],
+        total: 0,
+        page: currentPage,
+        page_size: pageSize,
+        has_more: false
+      })
 
       try {
         await tldwClient.initialize()
@@ -4045,7 +4223,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               defaultValue: "Something went wrong. Please try again later"
             })
         })
-        throw e
+        return buildEmptyCharacterQueryResponse()
       }
     },
     staleTime: 5 * 60 * 1000,
@@ -4478,7 +4656,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   // Tag usage data with counts for M3 improvements
   const tagUsageData = React.useMemo(() => {
     const source = Array.isArray(data) ? data : []
-    return buildTagUsage(source)
+    return buildTagUsage(
+      source.map((character: any) => ({
+        ...character,
+        tags: getCharacterVisibleTags(character?.tags)
+      }))
+    )
   }, [data])
 
   const allTags = React.useMemo(() => {
@@ -4504,7 +4687,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   }, [tagUsageData])
 
   const tagManagerTagUsageData = React.useMemo(
-    () => buildTagUsage(tagManagerCharacters),
+    () =>
+      buildTagUsage(
+        tagManagerCharacters.map((character: any) => ({
+          ...character,
+          tags: getCharacterVisibleTags(character?.tags)
+        }))
+      ),
     [tagManagerCharacters]
   )
 
@@ -4926,6 +5115,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     currentPage,
     debouncedSearchTerm,
     filterTags,
+    folderFilterId,
     favoritesOnly,
     hasConversationsOnly,
     matchAllTags,
@@ -5151,7 +5341,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
     for (const char of selectedChars) {
       try {
-        const existingTags: string[] = Array.isArray(char.tags) ? char.tags : []
+        const existingTags = parseCharacterTags(char.tags)
         const newTags = [...new Set([...existingTags, ...bulkTagsToAdd])]
         await tldwClient.updateCharacter(
           String(char.id || char.slug || char.name),
@@ -6156,12 +6346,15 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     const promptPreset = readPromptPresetFromExtensions(record.extensions)
     const defaultAuthorNote = readDefaultAuthorNoteFromRecord(record)
     const generationSettings = readGenerationSettingsFromRecord(record)
+    const visibleTags = getCharacterVisibleTags(record?.tags)
+    const assignedFolderId = getCharacterFolderIdFromTags(record?.tags)
     editWorldBooksInitializedRef.current = false
     editForm.setFieldsValue({
       name: record.name,
       description: record.description,
       avatar: createAvatarValue(record.avatar_url, record.image_base64),
-      tags: record.tags,
+      tags: visibleTags,
+      folder_id: assignedFolderId,
       greeting:
         record.greeting ||
         record.first_message ||
@@ -6202,11 +6395,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     const promptPreset = readPromptPresetFromExtensions(record.extensions)
     const defaultAuthorNote = readDefaultAuthorNoteFromRecord(record)
     const generationSettings = readGenerationSettingsFromRecord(record)
+    const visibleTags = getCharacterVisibleTags(record?.tags)
+    const assignedFolderId = getCharacterFolderIdFromTags(record?.tags)
     createForm.setFieldsValue({
       name: `${record.name || ""} (copy)`,
       description: record.description,
       avatar: createAvatarValue(record.avatar_url, record.image_base64),
-      tags: record.tags,
+      tags: visibleTags,
+      folder_id: assignedFolderId,
       greeting:
         record.greeting ||
         record.first_message ||
@@ -6498,9 +6694,34 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               options={tagFilterOptions}
               onChange={(value) =>
                 setFilterTags(
-                  (value as string[]).filter((v) => v && v.trim().length > 0)
+                  (value as string[]).filter(
+                    (v) =>
+                      v &&
+                      v.trim().length > 0 &&
+                      !isCharacterFolderToken(v)
+                  )
                 )
               }
+            />
+            <Select
+              allowClear
+              className="min-w-[10rem]"
+              placeholder={t("settings:manageCharacters.filter.folderPlaceholder", {
+                defaultValue: "Filter by folder"
+              })}
+              aria-label={t("settings:manageCharacters.filter.folderAriaLabel", {
+                defaultValue: "Filter characters by folder"
+              })}
+              value={folderFilterId}
+              options={characterFolderOptions.map((folder) => ({
+                value: String(folder.id),
+                label: folder.name
+              }))}
+              loading={characterFolderOptionsLoading}
+              onChange={(value) => {
+                const normalized = normalizeCharacterFolderId(value)
+                setFolderFilterId(normalized)
+              }}
             />
             <Select
               allowClear
@@ -6582,6 +6803,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 onClick={() => {
                   setSearchTerm("")
                   setFilterTags([])
+                  setFolderFilterId(undefined)
                   setMatchAllTags(false)
                   setCreatorFilter(undefined)
                   setCreatedFromDate("")
@@ -6862,6 +7084,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   onClick={() => {
                     setSearchTerm("")
                     setFilterTags([])
+                    setFolderFilterId(undefined)
                     setMatchAllTags(false)
                     setCreatorFilter(undefined)
                     setCreatedFromDate("")
@@ -6897,6 +7120,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         ({t("settings:manageCharacters.filter.matchAllLabel", { defaultValue: "all" })})
                       </span>
                     )}
+                  </span>
+                )}
+                {selectedFolderFilterLabel && (
+                  <span className="inline-flex items-center gap-1 rounded bg-surface2 px-2 py-0.5">
+                    {t("settings:manageCharacters.filter.activeFolder", {
+                      defaultValue: "Folder: {{folder}}",
+                      folder: selectedFolderFilterLabel
+                    })}
                   </span>
                 )}
                 {creatorFilter && (
@@ -7298,8 +7529,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               }),
               dataIndex: "tags",
               key: "tags",
-              render: (tags: string[]) => {
-                const all = tags || []
+              render: (tags: unknown) => {
+                const all = getCharacterVisibleTags(tags)
                 const visible = all.slice(0, MAX_TAGS_DISPLAYED)
                 const hasMore = all.length > MAX_TAGS_DISPLAYED
                 const hiddenCount = all.length - MAX_TAGS_DISPLAYED
@@ -7770,7 +8001,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               return (
                 <CharacterGalleryCard
                   key={charId}
-                  character={character}
+                  character={{
+                    ...character,
+                    tags: getCharacterVisibleTags(character?.tags)
+                  }}
                   onClick={() => setPreviewCharacter(character)}
                   conversationCount={conversationCounts?.[charId]}
                   isFavorite={isCharacterFavoriteRecord(character)}
@@ -7811,7 +8045,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
       {/* Character Preview Popup for Gallery View */}
       <CharacterPreviewPopup
-        character={previewCharacter}
+        character={
+          previewCharacter
+            ? {
+                ...previewCharacter,
+                tags: getCharacterVisibleTags(previewCharacter?.tags)
+              }
+            : null
+        }
         open={!!previewCharacter}
         onClose={() => setPreviewCharacter(null)}
         onChat={() => {
@@ -8491,7 +8732,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   onClick={() => {
                     const draft = applyCreateDraft()
                     if (draft) {
-                      createForm.setFieldsValue(draft)
+                      createForm.setFieldsValue({
+                        ...draft,
+                        tags: getCharacterVisibleTags(draft.tags),
+                        folder_id:
+                          normalizeCharacterFolderId(draft.folder_id) ??
+                          getCharacterFolderIdFromTags(draft.tags)
+                      })
                       setCreateFormDirty(true)
                       if (hasAdvancedData(draft, draft.extensions || '')) {
                         setShowCreateAdvanced(true)
@@ -8703,7 +8950,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   onClick={() => {
                     const draft = applyEditDraft()
                     if (draft) {
-                      editForm.setFieldsValue(draft)
+                      editForm.setFieldsValue({
+                        ...draft,
+                        tags: getCharacterVisibleTags(draft.tags),
+                        folder_id:
+                          normalizeCharacterFolderId(draft.folder_id) ??
+                          getCharacterFolderIdFromTags(draft.tags)
+                      })
                       setEditFormDirty(true)
                       if (hasAdvancedData(draft, draft.extensions || '')) {
                         setShowEditAdvanced(true)

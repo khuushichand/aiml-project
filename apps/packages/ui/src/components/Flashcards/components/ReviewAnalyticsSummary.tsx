@@ -49,7 +49,7 @@ export const ReviewAnalyticsSummary: React.FC<ReviewAnalyticsSummaryProps> = ({
 
   return (
     <Card className="mb-4" data-testid="flashcards-review-analytics-summary">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <div className="rounded border border-border p-2">
           <Text type="secondary" className="block text-xs">
             {t("option:flashcards.reviewedToday", { defaultValue: "Reviewed today" })}
@@ -64,6 +64,14 @@ export const ReviewAnalyticsSummary: React.FC<ReviewAnalyticsSummaryProps> = ({
           </Text>
           <Text strong className="text-lg">
             {formatPercent(summary.retention_rate_today)}
+          </Text>
+        </div>
+        <div className="rounded border border-border p-2">
+          <Text type="secondary" className="block text-xs">
+            {t("option:flashcards.lapseRate", { defaultValue: "Lapse rate" })}
+          </Text>
+          <Text strong className="text-lg">
+            {formatPercent(summary.lapse_rate_today)}
           </Text>
         </div>
         <div className="rounded border border-border p-2">

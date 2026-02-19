@@ -186,7 +186,7 @@ describe("WorldBooksManager cross-feature integration stage-3 discoverability", 
     })
     expect(discoverabilityLink).toHaveAttribute(
       "href",
-      "/playground?from=world-books&focus=lorebook-debug"
+      "/chat?from=world-books&focus=lorebook-debug"
     )
   })
 
@@ -212,7 +212,7 @@ describe("WorldBooksManager cross-feature integration stage-3 discoverability", 
       expect(screen.getByText("Token budget")).toBeInTheDocument()
       expect(screen.getByRole("link", { name: "Open chat lorebook debug panel" })).toHaveAttribute(
         "href",
-        "/playground?from=world-books&focus=lorebook-debug"
+        "/chat?from=world-books&focus=lorebook-debug"
       )
     },
     15000

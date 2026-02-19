@@ -262,6 +262,26 @@ NEXT_PUBLIC_API_VERSION=v1
 
 Open in browser: http://localhost:8080
 
+Access from another device on your network (for example, phone/tablet):
+
+```bash
+# API (from repo root)
+python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
+
+# tldw_Server_API/Config_Files/.env
+# ALLOWED_ORIGINS=http://YOUR_SERVER_IP:8080
+
+# apps/tldw-frontend/.env.local
+# NEXT_PUBLIC_API_URL=http://YOUR_SERVER_IP:8000
+
+# WebUI
+bun run dev -- -H 0.0.0.0 -p 8080
+```
+
+Then open: `http://YOUR_SERVER_IP:8080` from your mobile device (same LAN), and ensure server firewall/security group rules allow TCP 8000/8080.
+
+Security note: this is for trusted LAN testing. For internet-facing deployments, put API + WebUI behind HTTPS/reverse proxy and follow `Docs/Getting_Started/Production.md`.
+
 ---
 
 ## Common Issues

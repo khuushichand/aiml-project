@@ -6702,6 +6702,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return item
 
     _CHARACTER_CARD_JSON_FIELDS = ['alternate_greetings', 'tags', 'extensions']
+    _CHARACTER_FOLDER_TAG_PREFIX = "__tldw_folder_id:"
     _CHARACTER_EXEMPLAR_JSON_FIELDS = ['rhetorical', 'safety_allowed', 'safety_blocked']
     _ALLOWED_EXEMPLAR_SOURCE_TYPES = ('audio_transcript', 'video_transcript', 'article', 'other')
     _ALLOWED_EXEMPLAR_NOVELTY_HINTS = ('post_cutoff', 'unknown', 'pre_cutoff')
@@ -6787,7 +6788,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return self._ensure_json_string(field_value)
 
         alt_greetings_json = get_json_field_as_string(card_data.get('alternate_greetings'))
-        tags_json = get_json_field_as_string(card_data.get('tags'))
+        tags_field_value = card_data.get("tags")
+        if tags_field_value is not None:
+            tags_field_value = self._normalize_character_tags_for_operation(tags_field_value)
+        tags_json = get_json_field_as_string(tags_field_value)
         extensions_json = get_json_field_as_string(card_data.get('extensions'))
 
         base_query = """
@@ -7140,9 +7144,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error querying character cards: {e}")
             raise
 
-    @staticmethod
-    def _normalize_character_tags_for_operation(tags_value: Any) -> list[str]:
-        """Normalize mixed tag payloads to a deduplicated list preserving order."""
+    @classmethod
+    def _normalize_character_tags_for_operation(cls, tags_value: Any) -> list[str]:
+        """Normalize tags and enforce a single reserved character-folder token."""
         if tags_value is None:
             return []
 
@@ -7169,7 +7173,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 continue
             seen.add(tag_str)
             normalized.append(tag_str)
-        return normalized
+
+        # Enforce single-folder assignment semantics for reserved folder tokens.
+        # If multiple folder tokens are provided, keep only the most recent one.
+        folder_tag: str | None = None
+        non_folder_tags: list[str] = []
+        for tag in normalized:
+            if tag.startswith(cls._CHARACTER_FOLDER_TAG_PREFIX):
+                folder_tag = tag
+                continue
+            non_folder_tags.append(tag)
+        if folder_tag:
+            non_folder_tags.append(folder_tag)
+        return non_folder_tags
 
     @staticmethod
     def _apply_character_tag_operation_to_list(
@@ -7345,12 +7361,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 for key, value in card_data.items():
                     if key in self._CHARACTER_CARD_JSON_FIELDS:
                         set_clauses_sql.append(f"{key} = ?")
+                        normalized_value = value
+                        if key == "tags" and value is not None:
+                            normalized_value = self._normalize_character_tags_for_operation(value)
                         # Check if value is already a JSON string
-                        if isinstance(value, str):
+                        if isinstance(normalized_value, str):
                             # Assume it's already a JSON string if it's a string
-                            params_for_set_clause.append(value)
+                            params_for_set_clause.append(normalized_value)
                         else:
-                            params_for_set_clause.append(self._ensure_json_string(value))
+                            params_for_set_clause.append(self._ensure_json_string(normalized_value))
                         fields_updated_log.append(key)
                     elif key in updatable_direct_fields:
                         set_clauses_sql.append(f"{key} = ?")
@@ -12710,6 +12729,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         where_sql = " AND ".join(where_clauses)
         query = f"""
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
+                   f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
                    f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
             FROM flashcards f
@@ -12798,6 +12818,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         deleted_clause = "f.deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "f.deleted = 0"
         query = f"""
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
+                   f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
                    f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
               FROM flashcards f
@@ -13102,6 +13123,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Fetch a single flashcard by uuid (active only)."""
         query = """
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
+                   f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
                    f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
               FROM flashcards f

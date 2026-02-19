@@ -348,6 +348,67 @@ def test_get_flashcard_alias_path_returns_card(client_with_flashcards_db: TestCl
     assert data.get("tags") == ["t1"]
 
 
+def test_source_attribution_fields_present_in_flashcard_responses(client_with_flashcards_db: TestClient):
+    deck_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "SourceDeck"},
+        headers=AUTH_HEADERS,
+    )
+    assert deck_response.status_code == 200
+    deck_id = deck_response.json()["id"]
+
+    created_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "deck_id": deck_id,
+            "front": "Source Q",
+            "back": "Source A",
+            "source_ref_type": "media",
+            "source_ref_id": "42",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert created_response.status_code == 200
+    created = created_response.json()
+    card_uuid = created["uuid"]
+
+    assert created["source_ref_type"] == "media"
+    assert created["source_ref_id"] == "42"
+    assert "conversation_id" in created
+    assert "message_id" in created
+    assert created["conversation_id"] is None
+    assert created["message_id"] is None
+
+    list_response = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
+    assert list_response.status_code == 200
+    listed_items = list_response.json().get("items", [])
+    listed = next((item for item in listed_items if item.get("uuid") == card_uuid), None)
+    assert listed is not None
+    assert listed["source_ref_type"] == "media"
+    assert listed["source_ref_id"] == "42"
+    assert "conversation_id" in listed
+    assert "message_id" in listed
+
+    get_response = client_with_flashcards_db.get(f"/api/v1/flashcards/{card_uuid}", headers=AUTH_HEADERS)
+    assert get_response.status_code == 200
+    fetched = get_response.json()
+    assert fetched["source_ref_type"] == "media"
+    assert fetched["source_ref_id"] == "42"
+    assert "conversation_id" in fetched
+    assert "message_id" in fetched
+
+
+def test_openapi_flashcard_response_includes_source_fields():
+    openapi = fastapi_app.openapi()
+    flashcard_schema = openapi["components"]["schemas"]["Flashcard"]
+    properties = flashcard_schema.get("properties", {})
+
+    assert "source_ref_type" in properties
+    assert "source_ref_id" in properties
+    assert "conversation_id" in properties
+    assert "message_id" in properties
+
+
 def test_create_flashcard_normalizes_model_fields(client_with_flashcards_db: TestClient):
     r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "NormalizeDeck"}, headers=AUTH_HEADERS)
     deck_id = r.json()["id"]

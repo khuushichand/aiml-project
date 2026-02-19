@@ -98,6 +98,8 @@ interface TransferActionReporterProps {
 const IMPORT_UNDO_SECONDS = 30
 const IMPORT_UNDO_CHUNK_SIZE = 50
 const LARGE_IMPORT_CONFIRM_THRESHOLD_ROWS = 300
+const LARGE_IMPORT_CONFIRM_THRESHOLD_APKG_BYTES = 5 * 1024 * 1024
+const APKG_ESTIMATED_BYTES_PER_CARD = 4096
 const SUPPORTED_DELIMITERS: SupportedDelimiter[] = ["\t", ",", ";", "|"]
 const IMPORT_HELP_ANCHORS = {
   columns: "flashcards-import-help-columns",
@@ -425,13 +427,22 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
     [content]
   )
   const estimatedImportRows = Math.max(0, nonEmptyLineCount - (hasHeader ? 1 : 0))
+  const apkgFileSizeBytes = apkgFile?.size ?? 0
+  const estimatedApkgItems = apkgFile
+    ? Math.max(1, Math.round(apkgFileSizeBytes / APKG_ESTIMATED_BYTES_PER_CARD))
+    : 0
   const estimatedImportItems =
     importMode === "delimited"
       ? estimatedImportRows
       : importMode === "json"
         ? estimateJsonItemCount(content)
-        : 0
+        : estimatedApkgItems
   const importPayloadBytes = getUtf8ByteLength(content)
+  const requiresLargeImportConfirmation =
+    importMode === "apkg"
+      ? apkgFileSizeBytes >= LARGE_IMPORT_CONFIRM_THRESHOLD_APKG_BYTES ||
+        estimatedImportItems >= LARGE_IMPORT_CONFIRM_THRESHOLD_ROWS
+      : estimatedImportItems >= LARGE_IMPORT_CONFIRM_THRESHOLD_ROWS
 
   const invalidateFlashcardQueries = React.useCallback(async () => {
     await qc.invalidateQueries({
@@ -583,12 +594,12 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
   ])
 
   const handleImport = React.useCallback(() => {
-    if (estimatedImportItems >= LARGE_IMPORT_CONFIRM_THRESHOLD_ROWS) {
+    if (requiresLargeImportConfirmation) {
       setConfirmLargeImportOpen(true)
       return
     }
     void performImport()
-  }, [estimatedImportItems, performImport])
+  }, [performImport, requiresLargeImportConfirmation])
 
   const handleConfirmLargeImport = React.useCallback(() => {
     setConfirmLargeImportOpen(false)
@@ -975,7 +986,9 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
               defaultValue:
                 importMode === "delimited"
                   ? "This may create many cards at once. Review delimiter/header settings before confirming."
-                  : "This may create many cards at once. Review JSON structure before confirming."
+                  : importMode === "json"
+                    ? "This may create many cards at once. Review JSON structure before confirming."
+                    : "This APKG may expand into many cards. Review selected file details before confirming."
             })}
           </Text>
           {importMode === "delimited" ? (
@@ -991,7 +1004,7 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                 bytes: importPayloadBytes
               })}
             </Text>
-          ) : (
+          ) : importMode === "json" ? (
             <Text type="secondary" className="block">
               {t("option:flashcards.largeImportConfirmSummaryJson", {
                 defaultValue:
@@ -999,6 +1012,20 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                 format: detectedJsonImportFormat === "jsonl" ? "JSONL" : "JSON",
                 rows: nonEmptyLineCount,
                 bytes: importPayloadBytes
+              })}
+            </Text>
+          ) : (
+            <Text type="secondary" className="block">
+              {t("option:flashcards.largeImportConfirmSummaryApkg", {
+                defaultValue:
+                  "Summary: file {{fileName}}, size {{bytes}} bytes, estimated {{count}} cards.",
+                fileName:
+                  apkgFile?.name ||
+                  t("option:flashcards.importApkgUnknownFile", {
+                    defaultValue: "unknown.apkg"
+                  }),
+                bytes: apkgFileSizeBytes,
+                count: estimatedImportItems
               })}
             </Text>
           )}
@@ -1525,6 +1552,7 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
       const deckId = await resolveTargetDeckId()
       let created = 0
       let failed = 0
+      const successfulDraftIds = new Set<string>()
       for (const card of generatedCards) {
         try {
           await createMutation.mutateAsync({
@@ -1541,6 +1569,7 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
             source_ref_id: sourceContext?.sourceId || undefined
           })
           created += 1
+          successfulDraftIds.add(card.id)
         } catch {
           failed += 1
         }
@@ -1580,7 +1609,9 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
           status: "warning",
           message: warningCopy
         })
-        setGeneratedCards((prev) => prev.slice(created))
+        setGeneratedCards((prev) =>
+          prev.filter((card) => !successfulDraftIds.has(card.id))
+        )
         return
       }
 

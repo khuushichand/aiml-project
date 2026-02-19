@@ -367,6 +367,26 @@ NEXT_PUBLIC_API_VERSION=v1
 
 Open `http://localhost:8080`.
 
+Access from another device on your network (for example, phone/tablet):
+
+```bash
+# 1) Run API on all interfaces
+python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
+
+# 2) In tldw_Server_API/Config_Files/.env, allow the WebUI origin:
+# ALLOWED_ORIGINS=http://YOUR_SERVER_IP:8080
+
+# 3) In apps/tldw-frontend/.env.local, point WebUI to the server IP:
+# NEXT_PUBLIC_API_URL=http://YOUR_SERVER_IP:8000
+
+# 4) Run WebUI on all interfaces
+bun run dev -- -H 0.0.0.0 -p 8080
+```
+
+Then open `http://YOUR_SERVER_IP:8080` from your mobile device (same LAN), and ensure ports `8000` and `8080` are reachable on your server/firewall.
+
+Security note: avoid exposing this quickstart setup directly to the public internet. For internet-facing access, use HTTPS with a reverse proxy and follow `Docs/Getting_Started/Production.md`.
+
 ### Sidecar workers (optional)
 
 Run the API and Jobs workers as separate processes (recommended for heavier workloads or when using multiple Uvicorn workers):
@@ -433,6 +453,22 @@ bun run dev -- -p 8080
 # npm run dev -- -p 8080
 ```
 Open http://localhost:8080
+
+Access from another device on your network (for example, phone/tablet):
+```bash
+# API (from repo root)
+python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
+
+# tldw_Server_API/Config_Files/.env
+# ALLOWED_ORIGINS=http://YOUR_SERVER_IP:8080
+
+# apps/tldw-frontend/.env.local
+# NEXT_PUBLIC_API_URL=http://YOUR_SERVER_IP:8000
+
+# WebUI
+bun run dev -- -H 0.0.0.0 -p 8080
+```
+Then open `http://YOUR_SERVER_IP:8080` from your mobile device on the same network.
 
 Tip: http://127.0.0.1:8000/api/v1/config/quickstart redirects to your configured quickstart target.
 

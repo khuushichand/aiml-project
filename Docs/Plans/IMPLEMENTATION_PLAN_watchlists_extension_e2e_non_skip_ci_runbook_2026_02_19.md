@@ -15,7 +15,7 @@
 - Workflow uploads test artifacts and stops backend reliably.
 **Tests**:
 - Workflow YAML sanity check via local file inspection.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Local Runbook Canonical Path
 **Goal**: Document a canonical local command path that mirrors CI expectations.
@@ -25,7 +25,7 @@
 - Runbook includes a strict no-skip verification command.
 **Tests**:
 - Manual command verification against local environment.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Verification And Handoff
 **Goal**: Validate edits and capture any remaining follow-up.
@@ -34,4 +34,4 @@
 - Final handoff lists exact commands and what remains (if anything).
 **Tests**:
 - `git diff` review for edited files.
-**Status**: Not Started
+**Status**: Complete

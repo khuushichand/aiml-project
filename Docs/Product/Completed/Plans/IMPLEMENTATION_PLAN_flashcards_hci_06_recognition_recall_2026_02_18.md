@@ -93,3 +93,14 @@ Finding IDs: `H6-1` through `H6-2`
 - Stage 1 depends on source metadata being included in list/review API payloads.
 - Stage 2 hint placement should align with H8 minimalism constraints.
 - Stage 3 preference model should integrate with existing user settings persistence patterns.
+
+## Post-Completion Remediation (2026-02-19)
+
+- Follow-up plan: `Docs/Plans/IMPLEMENTATION_PLAN_flashcards_findings_remediation_2026_02_19.md` (Stage 1).
+- Closed the backend contract gap where source attribution fields were persisted but not returned in flashcard read responses.
+- Updated flashcard DB read projections (`list`, `get by uuid`, `get by uuids`) to include:
+  - `source_ref_type`
+  - `source_ref_id`
+  - `conversation_id`
+  - `message_id`
+- Added endpoint/OpenAPI contract tests confirming source attribution fields in create/list/get responses.

@@ -136,7 +136,7 @@ const MODAL_BODY_SCROLL_STYLE: React.CSSProperties = {
   maxHeight: "80vh",
   overflowY: "auto"
 }
-const LOREBOOK_DEBUG_ENTRYPOINT_HREF = "/playground?from=world-books&focus=lorebook-debug"
+const LOREBOOK_DEBUG_ENTRYPOINT_HREF = "/chat?from=world-books&focus=lorebook-debug"
 const LOREBOOK_METRIC_LABELS = {
   entriesMatched: "Entries matched",
   booksUsed: "Books used",

@@ -153,3 +153,14 @@ Finding IDs: `H7-1` through `H7-5`
 - Stage 3 and Stage 4 depend on stable `flashcard_generate` adapter contracts.
 - Stage 1 tag/sort behavior should align with existing query pagination constraints.
 - Stage 2 and Stage 3 UX copy should reuse H2/H10 language for consistency.
+
+## Post-Completion Remediation (2026-02-19)
+
+- Follow-up plan: `Docs/Plans/IMPLEMENTATION_PLAN_flashcards_findings_remediation_2026_02_19.md` (Stages 3 and 4).
+- Resolved generated-card partial-save retention bug in `ImportExportTab`:
+  - previous behavior removed drafts by aggregate success count;
+  - updated behavior removes only successfully saved drafts by stable draft ID, preserving failed drafts for retry.
+- Extended APKG import flow with large-import confirmation parity:
+  - APKG size-based estimated card count
+  - APKG large-file threshold gating
+  - APKG-specific confirm modal summary (file name, size, estimated items).

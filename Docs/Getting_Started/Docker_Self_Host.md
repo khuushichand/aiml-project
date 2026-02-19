@@ -35,6 +35,51 @@ On first start in `single_user` mode, this flow ensures a secure `SINGLE_USER_AP
 
 ---
 
+## Optional: Add the WebUI (Docker) + Mobile Access
+
+If you want a browser UI in addition to the API:
+
+```bash
+# From repo root
+make quickstart-docker-webui
+```
+
+This starts:
+- API on `http://localhost:8000`
+- WebUI on `http://localhost:8080`
+
+Access from another device on your network (for example, phone/tablet):
+
+1) Use your server IP (not localhost) for WebUI -> API calls.
+2) Allow the WebUI origin in backend CORS.
+3) Rebuild/start with the WebUI overlay.
+
+```bash
+# Example server IP on your LAN
+SERVER_IP=192.168.1.50
+
+# tldw_Server_API/Config_Files/.env
+# ALLOWED_ORIGINS=http://$SERVER_IP:8080
+
+# Build/start API + WebUI with browser-reachable API URL
+NEXT_PUBLIC_API_URL=http://$SERVER_IP:8000 \
+docker compose --env-file tldw_Server_API/Config_Files/.env \
+  -f Dockerfiles/docker-compose.yml \
+  -f Dockerfiles/docker-compose.webui.yml \
+  up -d --build
+```
+
+Open `http://$SERVER_IP:8080` from your mobile device (same LAN).  
+Make sure firewall/security-group rules allow TCP `8000` and `8080`.
+
+Important:
+- Do not set `NEXT_PUBLIC_API_URL` to `localhost` for remote/mobile browsers.
+- If `.env` already has `ALLOWED_ORIGINS`, append `http://$SERVER_IP:8080` (comma-separated) instead of replacing existing origins.
+- `NEXT_PUBLIC_API_URL` is injected at WebUI build time, so re-run with `--build` after changing it.
+- For internet-facing deployments, use HTTPS + reverse proxy and follow `./Production.md`.
+
+---
+
 ## What's Included
 
 The default `docker-compose.yml` starts:
